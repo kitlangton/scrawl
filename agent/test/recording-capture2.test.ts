@@ -8,7 +8,7 @@ import { AbsentDestinationAllocator, SqliteCaptureMappingStore } from '@apparent
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 import { createCapture2Host } from '@apparent/record/host/capture2';
 import type { CaptureRequest, CaptureResponse, CaptureTransport } from '@apparent/engine-sdk/capture';
-import { controlCapture2, discoverCapture2Sources, parseCapture2ControlArgs, parseCapture2RecordArgs, parseCapture2SourcesArgs, recordWithCapture2, retainPublicIdentity, type Capture2Clock, type Capture2HostFactory } from '../dist/recording/capture2.js';
+import { controlCapture2, discoverCapture2Sources, parseCapture2ControlArgs, parseCapture2RecordArgs, parseCapture2SourcesArgs, recordWithCapture2, retainPublicIdentity, type Capture2Clock, type Capture2HostFactory, type Capture2PublicOutput } from '../dist/recording/capture2.js';
 
 const source = { id: 'display-actual', generation: 'a'.repeat(32), kind: 'display' as const, displayId: 0, bounds: { x: 0, y: 0, width: 800, height: 600, scale: 1 } };
 const args = (out: string, ...extra: string[]) => ['--protocol', 'capture2', '--duration', '1', '--out', out, '--source', source.id, ...extra];
@@ -384,6 +384,83 @@ test('capture/2 control reports publication-shaped materials-ready as pending wi
     assert.equal(JSON.parse(output.join('')).state, 'materials-ready');
     assert.equal(JSON.parse(output.join('')).outcome, 'pending-saved-capability-unavailable');
     assert.equal(output.join('').includes(out), false);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('capture/2 inspect reports Saved only from an exact public Record fact and handoff binding', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-capture2-public-saved-'));
+  const requestId = '4be6ebdb-7f40-430a-92de-7ac3c43e9e2e';
+  const expectedPath = join(root, 'expected.apparent');
+  try {
+    await mkdir(expectedPath);
+    const controlRoot = join(root, 'control');
+    await retainPublicIdentity(controlRoot, requestId, expectedPath);
+    const publicCalls: string[] = [];
+    const exactOutput: Capture2PublicOutput = {
+      captureFacts: { readFacts: async () => { publicCalls.push('facts'); return { captures: [{ captureId: requestId, artifactId: 'public-artifact', phase: 'saved' }] }; } },
+      resolveHandoff: async identity => {
+        publicCalls.push(`resolve:${identity.captureId}:${identity.artifactId}`);
+        return { captureId: requestId, artifactId: 'public-artifact', handoff: { savedBundle: { status: 'saved', bundlePath: expectedPath } } };
+      },
+    };
+    const run = async (phase: string, publicationOutput?: Capture2PublicOutput, closeOutcome = 'eof-exited') => {
+      const hostCalls: string[] = [];
+      const host = {
+        inspect: async (id: string) => { hostCalls.push(`inspect:${id}`); return { requestId: id, phase, publication: { phase: 'saved', bundlePath: expectedPath } }; },
+        dispose: () => hostCalls.push('dispose'),
+      } as unknown as Capture2Host;
+      const factory: Capture2HostFactory = async () => ({ host, allocateDestination: async () => expectedPath, close: async () => closeOutcome, ...(publicationOutput ? { publicationOutput } : {}) });
+      const output: string[] = [], originalWrite = process.stdout.write;
+      process.stdout.write = ((chunk: string | Uint8Array) => { output.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString()); return true; }) as typeof process.stdout.write;
+      let code: number;
+      try { code = await controlCapture2(['--protocol', 'capture2', 'inspect', requestId], { executable: '/opt/apparent-engine', runtime: join(root, 'runtime'), controlRoot, factory }); }
+      finally { process.stdout.write = originalWrite; }
+      return { code, result: JSON.parse(output.join('')), hostCalls };
+    };
+
+    const saved = await run('processing', exactOutput);
+    assert.equal(saved.code, 0);
+    assert.deepEqual(saved.result, { requestId, state: 'saved', outcome: 'saved', bundlePath: expectedPath });
+    assert.deepEqual(publicCalls, ['facts', `resolve:${requestId}:public-artifact`]);
+    assert.deepEqual(saved.hostCalls, [`inspect:${requestId}`, 'dispose']);
+
+    const unverifiedClose = await run('processing', exactOutput, 'signal-requested-after-timeout');
+    assert.equal(unverifiedClose.code, 3);
+    assert.equal(unverifiedClose.result.outcome, 'close-unverified');
+    assert.equal('bundlePath' in unverifiedClose.result, false);
+    assert.deepEqual(publicCalls, ['facts', `resolve:${requestId}:public-artifact`]);
+
+    const mismatches: Array<{ name: string; output: Capture2PublicOutput }> = [
+      { name: 'wrong request', output: { ...exactOutput, captureFacts: { readFacts: async () => ({ captures: [{ captureId: 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaaa', artifactId: 'public-artifact', phase: 'saved' }] }) } } },
+      { name: 'wrong artifact', output: { ...exactOutput, resolveHandoff: async () => ({ captureId: requestId, artifactId: 'other-artifact', handoff: { savedBundle: { status: 'saved', bundlePath: expectedPath } } }) } },
+      { name: 'wrong path', output: { ...exactOutput, resolveHandoff: async () => ({ captureId: requestId, artifactId: 'public-artifact', handoff: { savedBundle: { status: 'saved', bundlePath: join(root, 'other.apparent') } } }) } },
+      { name: 'processing fact', output: { ...exactOutput, captureFacts: { readFacts: async () => ({ captures: [{ captureId: requestId, artifactId: 'public-artifact', phase: 'processing' }] }) } } },
+    ];
+    for (const mismatch of mismatches) {
+      const result = await run('processing', mismatch.output);
+      assert.equal(result.code, 3, mismatch.name);
+      assert.equal(result.result.state, 'processing', mismatch.name);
+      assert.equal(result.result.outcome, 'pending-saved-capability-unavailable', mismatch.name);
+      assert.equal('bundlePath' in result.result, false, mismatch.name);
+      assert.deepEqual(result.hostCalls, [`inspect:${requestId}`, 'dispose'], mismatch.name);
+    }
+
+    const noContext = await run('processing');
+    assert.equal(noContext.code, 3);
+    assert.equal(noContext.result.outcome, 'pending-saved-capability-unavailable');
+    assert.equal('bundlePath' in noContext.result, false);
+
+    let factReads = 0, resolverCalls = 0;
+    const unknownOutput: Capture2PublicOutput = {
+      captureFacts: { readFacts: async () => { factReads++; throw new Error('public facts unavailable'); } },
+      resolveHandoff: async () => { resolverCalls++; return null; },
+    };
+    const unknown = await run('unknown', unknownOutput);
+    assert.equal(unknown.code, 3);
+    assert.equal(unknown.result.outcome, 'uncertain');
+    assert.equal(factReads, 1);
+    assert.equal(resolverCalls, 0);
+    assert.deepEqual(unknown.hostCalls, [`inspect:${requestId}`, 'dispose']);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 

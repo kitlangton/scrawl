@@ -123,3 +123,5 @@ an unknown write returns exit 3 and must not be retried automatically. Wayland
 ownership can remain unknown even after a write. This does not prove paste,
 agent delivery, viewer opening or native Saved publication. It does not bypass
 native Host package, GUI artifact or platform acceptance gates.
+
+Cold `capture --protocol capture2 inspect <request-id>` can report `saved` and its bundle path only when Record’s persisted Saved facts and handoff resolver match the retained Agent request, artifact and canonical destination, and transport close is confirmed. Missing or mismatched output remains pending without a path. This read does not dispatch publication, process retained materials, copy text, or activate an installed route.

@@ -106,8 +106,9 @@ fn handle(
     runtime: &Path,
     registry: &JobRegistry,
     active: &mut Option<Active>,
+    native_available: bool,
 ) -> Result<Value> {
-    if !cfg!(target_os = "linux") {
+    if request.method == "derive" && !native_available {
         return Err("unavailable");
     }
     let authority = request.authority.as_ref().ok_or("malformed_request")?;
@@ -150,6 +151,7 @@ fn handle(
 }
 
 pub fn run(runtime: &Path) -> Result<()> {
+    let native_available = crate::job::decode_available();
     let store = Arc::new(SecureStore::open(runtime).map_err(|_| "source_mismatch")?);
     let registry = JobRegistry::open(store).map_err(native_error)?;
     let fd = std::io::stdout().as_raw_fd();
@@ -201,12 +203,12 @@ pub fn run(runtime: &Path) -> Result<()> {
             } else if request.method == "handshake" {
                 client = Some(request.client.clone());
                 Ok(
-                    json!({"channel":"media","protocolVersion":2,"implementation":"native","capabilities":{"retainedFrames":cfg!(target_os="linux"),"contactSheet":cfg!(target_os="linux"),"nativeJobAuthority":cfg!(target_os="linux")}}),
+                    json!({"channel":"media","protocolVersion":2,"implementation":"native","capabilities":{"retainedFrames":native_available,"contactSheet":native_available,"nativeJobAuthority":true}}),
                 )
             } else if client.is_none() {
                 Err("malformed_request")
             } else {
-                handle(&request, runtime, &registry, &mut active)
+                handle(&request, runtime, &registry, &mut active, native_available)
             }
         };
         transport::send(protocol::response(&request.rpc, result), protocol::MAX_LINE)?;
@@ -215,4 +217,66 @@ pub fn run(runtime: &Path) -> Result<()> {
         worker.stop(Checkpoint::OwnerLost)?;
     }
     outcome
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn missing_decoder_does_not_disable_authenticated_cold_controls() {
+        let root = std::env::temp_dir().canonicalize().unwrap().join(format!(
+            "media2-cold-control-{}",
+            apparent_capture_engine::new_id().unwrap()
+        ));
+        let runtime = Arc::new(SecureStore::create(&root).unwrap());
+        let captures = runtime.child("capture-v2").unwrap();
+        let capture_id = "a".repeat(32);
+        let owner_token = "b".repeat(64);
+        captures
+            .write_new(
+                &format!("{capture_id}.json"),
+                &serde_json::to_vec(&json!({"capture_id":capture_id,"owner_token":owner_token}))
+                    .unwrap(),
+            )
+            .unwrap();
+        let registry = JobRegistry::open(runtime.clone()).unwrap();
+        let mut active = None;
+        let mut request = Request {
+            rpc: "c".repeat(32),
+            client: "d".repeat(32),
+            method: "inspect".into(),
+            authority: Some(Authority {
+                capture_id,
+                owner_token,
+                job_id: "e".repeat(32),
+                request_sha256: "f".repeat(64),
+            }),
+            request_json: None,
+        };
+        assert_eq!(
+            handle(&request, &root, &registry, &mut active, false).unwrap_err(),
+            "job_not_found"
+        );
+        request.method = "cancel".into();
+        assert_eq!(
+            handle(&request, &root, &registry, &mut active, false).unwrap_err(),
+            "job_not_found"
+        );
+        request.authority.as_mut().unwrap().owner_token = "0".repeat(64);
+        assert_eq!(
+            handle(&request, &root, &registry, &mut active, false).unwrap_err(),
+            "permission_denied"
+        );
+        request.method = "derive".into();
+        assert_eq!(
+            handle(&request, &root, &registry, &mut active, false).unwrap_err(),
+            "unavailable"
+        );
+        assert!(active.is_none());
+        drop(registry);
+        drop(captures);
+        drop(runtime);
+        std::fs::remove_dir_all(root).unwrap();
+    }
 }

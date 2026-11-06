@@ -379,3 +379,22 @@ test("clipboard port requires saved artifact identity and suppresses late detach
   assert.equal((await pending).status, "outcome-unknown");
   assert.equal(client.current().captures[0]!.outcomes.some(o => o.kind === "copy"), false);
 });
+
+
+test("stopped processing failures and unknowns are visible without overriding active capture", async () => {
+  for (const phase of ["failed", "unknown"] as const) {
+    const { runtime } = runtimeFixture();
+    await runtime.dispatch({ type: "start", requestId: "processing-error" });
+    const client = createRecordCapabilityProvider({ runtime, providerEpoch: "processing-issues",
+      captureFacts: { readFacts: async () => ({ ...outputFacts(), captures: [{ captureId: "processing-error", delivery: "unknown", phase,
+        outcomes: [{ kind: "processing", at: "2026-11-06T12:00:00Z", ok: false, detail: "media-failed" }] }] }) },
+    });
+    try {
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(client.current().captures[0]?.phase, "recording", "output failures never replace active native ownership");
+      await runtime.dispatch({ type: "stop" });
+      assert.equal(client.current().captures[0]?.phase, phase);
+      assert.ok(client.current().captures[0]?.outcomes.some(outcome => outcome.kind === "processing" && !outcome.ok));
+    } finally { client.detach(); }
+  }
+});

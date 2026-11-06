@@ -51,6 +51,17 @@ pub struct DecodedSlot {
     pub file: SealedFile,
 }
 
+/// One already-decoded native frame. Platform decoders feed this into
+/// [`RetainedPreparation`] so PNG encoding, output sealing and receipt bytes
+/// stay identical across Linux and macOS.
+pub struct DecodedFrame {
+    pub actual_video_ms: u64,
+    pub clamped_to_end: bool,
+    pub width: u32,
+    pub height: u32,
+    pub rgba: Vec<u8>,
+}
+
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 struct Payload<'a> {
@@ -314,9 +325,176 @@ pub fn envelope_document(
 /// Output adapter owned by the authenticated provider. Implementations must
 /// exclusively create each relative path beneath the job's pinned output root,
 /// sync it before returning, and report its post-write identity and digest.
-#[cfg(all(target_os = "linux", feature = "linux-media"))]
+#[cfg(feature = "materials-media")]
 pub trait DerivativeOutputSink {
     fn write_new_synced(&mut self, relative_path: &str, bytes: &[u8]) -> Result<SealedFile>;
+}
+
+/// Shared streaming PNG and detached-receipt preparation for native decoders.
+/// Construction authenticates the pinned source against the caller's already
+/// authenticated material key/payload and returns its video clock offset.
+/// Feed frames in request order, including duplicates, then call `finish`.
+/// This is preparation only: the caller still owns the read lease, supervised
+/// execution, output-root sink, registry and durable receipt identity.
+pub struct RetainedPreparation {
+    key: MaterialsKey,
+    job_id: String,
+    receipt_id: String,
+    root: String,
+    video_offset_ms: u64,
+    requests: Vec<u64>,
+    next_index: usize,
+    total_pixels: u64,
+    slots: Vec<DecodedSlot>,
+}
+
+impl RetainedPreparation {
+    #[allow(clippy::too_many_arguments)]
+    pub fn new_pinned(
+        video: &File,
+        key: &MaterialsKey,
+        payload_bytes: &[u8],
+        expected_video_identity: &FileIdentity,
+        expected_root: &str,
+        expected_lease_id: &str,
+        job_id: &str,
+        receipt_id: &str,
+        root: &str,
+        requested_bundle_ms: &[u64],
+    ) -> Result<Self> {
+        let video_offset_ms = check_pinned_material(
+            video,
+            key,
+            payload_bytes,
+            expected_video_identity,
+            expected_root,
+            expected_lease_id,
+        )?;
+        ensure!(id(job_id) && id(receipt_id), "invalid derivative identity");
+        ensure!(
+            normalized_absolute(root),
+            "derivative root must be normalized and absolute"
+        );
+        ensure!(!requested_bundle_ms.is_empty() && requested_bundle_ms.len() <= 48);
+        ensure!(video_offset_ms <= 9_007_199_254_740_991);
+        ensure!(
+            requested_bundle_ms
+                .iter()
+                .all(|ms| *ms <= 9_007_199_254_740_991)
+        );
+        Ok(Self {
+            key: key.clone(),
+            job_id: job_id.to_owned(),
+            receipt_id: receipt_id.to_owned(),
+            root: root.to_owned(),
+            video_offset_ms,
+            requests: requested_bundle_ms.to_vec(),
+            next_index: 0,
+            total_pixels: 0,
+            slots: Vec::with_capacity(requested_bundle_ms.len()),
+        })
+    }
+
+    pub fn video_offset_ms(&self) -> u64 {
+        self.video_offset_ms
+    }
+
+    pub fn effective_video_times(&self) -> impl Iterator<Item = u64> + '_ {
+        self.requests
+            .iter()
+            .map(|ms| ms.saturating_sub(self.video_offset_ms))
+    }
+
+    pub fn push(
+        &mut self,
+        frame: DecodedFrame,
+        sink: &mut dyn DerivativeOutputSink,
+        checkpoint: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<()> {
+        checkpoint()?;
+        ensure!(
+            self.next_index < self.requests.len(),
+            "too many decoded frames"
+        );
+        ensure!(
+            frame.width > 0 && frame.height > 0 && frame.width <= 4096 && frame.height <= 4096,
+            "decoded frame dimensions exceed limits"
+        );
+        ensure!(frame.actual_video_ms <= 9_007_199_254_740_991);
+        let pixels = u64::from(frame.width) * u64::from(frame.height);
+        ensure!(
+            frame.rgba.len() as u64
+                == pixels
+                    .checked_mul(4)
+                    .ok_or_else(|| anyhow::anyhow!("frame size overflow"))?,
+            "decoded frame pixel data mismatch"
+        );
+        self.total_pixels = self
+            .total_pixels
+            .checked_add(pixels)
+            .ok_or_else(|| anyhow::anyhow!("frame pixel budget overflow"))?;
+        ensure!(
+            self.total_pixels <= 64_000_000,
+            "frame pixel budget exceeded"
+        );
+        let mut png_bytes = Vec::new();
+        {
+            let mut encoder = png::Encoder::new(&mut png_bytes, frame.width, frame.height);
+            encoder.set_color(png::ColorType::Rgba);
+            encoder.set_depth(png::BitDepth::Eight);
+            let mut writer = encoder.write_header()?;
+            writer.write_image_data(&frame.rgba)?;
+            writer.finish()?;
+        }
+        let index = self.next_index + 1;
+        let path = format!("frames/frame-{index:03}.png");
+        checkpoint()?;
+        let sealed = sink.write_new_synced(&path, &png_bytes)?;
+        verify_output(&sealed, &path, &png_bytes)?;
+        self.slots.push(DecodedSlot {
+            request_index: index,
+            requested_bundle_ms: self.requests[self.next_index],
+            actual_video_ms: frame.actual_video_ms,
+            clamped_to_end: frame.clamped_to_end,
+            width: frame.width,
+            height: frame.height,
+            file: sealed,
+        });
+        self.next_index += 1;
+        Ok(())
+    }
+
+    pub fn finish(
+        self,
+        sink: &mut dyn DerivativeOutputSink,
+        checkpoint: &mut dyn FnMut() -> Result<()>,
+    ) -> Result<(Vec<u8>, Vec<u8>)> {
+        ensure!(
+            self.next_index == self.requests.len(),
+            "decoded frame count mismatch"
+        );
+        let detached = payload_document(
+            &self.key,
+            &self.job_id,
+            &self.receipt_id,
+            &self.root,
+            self.video_offset_ms,
+            &self.requests,
+            &self.slots,
+        )?;
+        checkpoint()?;
+        let receipt = sink.write_new_synced("receipt.json", &detached)?;
+        verify_output(&receipt, "receipt.json", &detached)?;
+        let envelope = envelope_document(
+            &self.key,
+            &self.job_id,
+            &self.receipt_id,
+            &self.root,
+            &detached,
+            &receipt,
+        )?;
+        Ok((detached, envelope))
+    }
 }
 
 /// Decode retained frames from an already-open descriptor using Core's pinned
@@ -344,82 +522,46 @@ pub fn derive_linux(
     sink: &mut dyn DerivativeOutputSink,
     checkpoint: &mut dyn FnMut() -> Result<()>,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
+    ensure!((1..=4096).contains(&max_edge));
     checkpoint()?;
-    let video_offset_ms = check_pinned_material(
+    let mut preparation = RetainedPreparation::new_pinned(
         video,
         key,
         payload_bytes,
         expected_video_identity,
         expected_root,
         expected_lease_id,
-    )?;
-    ensure!((1..=4096).contains(&max_edge));
-    ensure!(!requested_bundle_ms.is_empty() && requested_bundle_ms.len() <= 48);
-    ensure!(
-        requested_bundle_ms
-            .iter()
-            .all(|ms| *ms <= 9_007_199_254_740_991)
-    );
-    checkpoint()?;
-    let reader = crate::linux::media::PinnedVideoReader::open(video)?;
-    let duration_ms = reader.duration_ms();
-    let mut slots = Vec::with_capacity(requested_bundle_ms.len());
-    let mut total_pixels = 0u64;
-    for (i, requested) in requested_bundle_ms.iter().copied().enumerate() {
-        checkpoint()?;
-        let effective = requested.saturating_sub(video_offset_ms);
-        let mut frame = reader.frame(effective, 16_384, 256 * 1024 * 1024)?;
-        checkpoint()?;
-        let (width, height, rgba) =
-            crate::linux::media::shrink_to_edge(frame.width, frame.height, frame.rgba, max_edge);
-        frame.width = width;
-        frame.height = height;
-        frame.rgba = rgba;
-        total_pixels = total_pixels
-            .checked_add(u64::from(frame.width) * u64::from(frame.height))
-            .ok_or_else(|| anyhow::anyhow!("frame pixel budget overflow"))?;
-        ensure!(total_pixels <= 64_000_000, "frame pixel budget exceeded");
-        checkpoint()?;
-        let mut png_bytes = Vec::new();
-        {
-            let mut encoder = png::Encoder::new(&mut png_bytes, frame.width, frame.height);
-            encoder.set_color(png::ColorType::Rgba);
-            encoder.set_depth(png::BitDepth::Eight);
-            let mut writer = encoder.write_header()?;
-            writer.write_image_data(&frame.rgba)?;
-            writer.finish()?;
-        }
-        let path = format!("frames/frame-{:03}.png", i + 1);
-        checkpoint()?;
-        let sealed = sink.write_new_synced(&path, &png_bytes)?;
-        verify_output(&sealed, &path, &png_bytes)?;
-        slots.push(DecodedSlot {
-            request_index: i + 1,
-            requested_bundle_ms: requested,
-            actual_video_ms: frame.t_ms,
-            clamped_to_end: effective >= duration_ms,
-            width: frame.width,
-            height: frame.height,
-            file: sealed,
-        });
-    }
-    let detached = payload_document(
-        key,
         job_id,
         receipt_id,
         root,
-        video_offset_ms,
         requested_bundle_ms,
-        &slots,
     )?;
     checkpoint()?;
-    let receipt = sink.write_new_synced("receipt.json", &detached)?;
-    verify_output(&receipt, "receipt.json", &detached)?;
-    let envelope = envelope_document(key, job_id, receipt_id, root, &detached, &receipt)?;
-    Ok((detached, envelope))
+    let reader = crate::linux::media::PinnedVideoReader::open(video)?;
+    let duration_ms = reader.duration_ms();
+    let effective_times = preparation.effective_video_times().collect::<Vec<_>>();
+    for requested in effective_times {
+        checkpoint()?;
+        let frame = reader.frame(requested, 16_384, 256 * 1024 * 1024)?;
+        checkpoint()?;
+        let (width, height, rgba) =
+            crate::linux::media::shrink_to_edge(frame.width, frame.height, frame.rgba, max_edge);
+        preparation.push(
+            DecodedFrame {
+                actual_video_ms: frame.t_ms,
+                clamped_to_end: requested >= duration_ms,
+                width,
+                height,
+                rgba,
+            },
+            sink,
+            checkpoint,
+        )?;
+    }
+    preparation.finish(sink, checkpoint)
 }
 
-#[cfg(all(target_os = "linux", feature = "linux-media"))]
+#[cfg(feature = "materials-media")]
 fn verify_output(sealed: &SealedFile, expected_path: &str, bytes: &[u8]) -> Result<()> {
     ensure!(
         sealed.relative_path == expected_path,
@@ -487,6 +629,108 @@ mod tests {
     use super::*;
     use std::io::Write;
     use std::os::unix::fs::MetadataExt;
+
+    #[cfg(feature = "materials-media")]
+    #[derive(Default)]
+    struct MemorySink {
+        files: std::collections::HashMap<String, Vec<u8>>,
+    }
+
+    #[cfg(feature = "materials-media")]
+    impl DerivativeOutputSink for MemorySink {
+        fn write_new_synced(&mut self, relative_path: &str, bytes: &[u8]) -> Result<SealedFile> {
+            ensure!(
+                !self.files.contains_key(relative_path),
+                "duplicate test output"
+            );
+            self.files.insert(relative_path.to_owned(), bytes.to_vec());
+            Ok(SealedFile {
+                relative_path: relative_path.to_owned(),
+                identity: FileIdentity {
+                    device: "1".into(),
+                    inode: self.files.len().to_string(),
+                    size: bytes.len() as u64,
+                    modified_ns: "1".into(),
+                },
+                sha256: hex(&Sha256::digest(bytes)),
+            })
+        }
+    }
+
+    #[test]
+    fn shared_frame_preparation_preserves_order_duplicates_clock_and_png_seals() {
+        let key = MaterialsKey {
+            capture_id: "a".repeat(32),
+            materials_id: "b".repeat(32),
+            revision: "c".repeat(64),
+        };
+        let requests = vec![0, 150, 150, 2_000];
+        let mut preparation = RetainedPreparation {
+            key,
+            job_id: "d".repeat(32),
+            receipt_id: "e".repeat(32),
+            root: "/out".into(),
+            video_offset_ms: 100,
+            requests,
+            next_index: 0,
+            total_pixels: 0,
+            slots: Vec::new(),
+        };
+        assert_eq!(
+            preparation.effective_video_times().collect::<Vec<_>>(),
+            [0, 50, 50, 1_900]
+        );
+        let mut sink = MemorySink::default();
+        for (actual_video_ms, red, clamped_to_end) in [
+            (0, 10, false),
+            (40, 20, false),
+            (40, 20, false),
+            (60, 30, true),
+        ] {
+            preparation
+                .push(
+                    DecodedFrame {
+                        actual_video_ms,
+                        clamped_to_end,
+                        width: 2,
+                        height: 1,
+                        rgba: vec![red, 0, 0, 255, red, 0, 0, 255],
+                    },
+                    &mut sink,
+                    &mut || Ok(()),
+                )
+                .unwrap();
+        }
+        let (payload_bytes, envelope_bytes) =
+            preparation.finish(&mut sink, &mut || Ok(())).unwrap();
+        let payload: Value = serde_json::from_slice(&payload_bytes).unwrap();
+        assert_eq!(payload["frames"].as_array().unwrap().len(), 4);
+        assert_eq!(payload["frames"][0]["effectiveVideoMs"], 0);
+        assert_eq!(payload["frames"][0]["clampedToStart"], true);
+        assert_eq!(payload["frames"][1]["requestIndex"], 2);
+        assert_eq!(payload["frames"][1]["actualVideoMs"], 40);
+        assert_eq!(payload["frames"][2]["requestedBundleMs"], 150);
+        assert_eq!(payload["frames"][3]["clampedToEnd"], true);
+        let first = sink.files.get("frames/frame-001.png").unwrap();
+        let second = sink.files.get("frames/frame-002.png").unwrap();
+        let duplicate = sink.files.get("frames/frame-003.png").unwrap();
+        assert_eq!(&first[..8], b"\x89PNG\r\n\x1a\n");
+        assert_ne!(first, second);
+        assert_eq!(second, duplicate);
+        let decoder = png::Decoder::new(std::io::Cursor::new(second));
+        let mut reader = decoder.read_info().unwrap();
+        assert_eq!((reader.info().width, reader.info().height), (2, 1));
+        let mut pixels = vec![0; reader.output_buffer_size().unwrap()];
+        reader.next_frame(&mut pixels).unwrap();
+        assert_eq!(pixels[0], 20);
+        assert_eq!(sink.files.get("receipt.json"), Some(&payload_bytes));
+        let envelope: Value = serde_json::from_slice(&envelope_bytes).unwrap();
+        assert_eq!(envelope["payload"], payload);
+        assert_eq!(
+            envelope["receiptFile"]["sha256"],
+            hex(&Sha256::digest(&payload_bytes))
+        );
+    }
 
     #[cfg(all(target_os = "linux", feature = "linux-media"))]
     struct TempDir(std::path::PathBuf);

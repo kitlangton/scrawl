@@ -26,6 +26,7 @@ export function createRecordPublicationOutput(client: CaptureClient, privateCont
   const providerEpoch = randomUUID();
   let revision = 0;
   let fingerprint = "";
+  let factsInitialized = false;
   const listeners = new Set<() => void>();
   const notify = () => {
     for (const listener of [...listeners]) if (listeners.has(listener)) {
@@ -57,8 +58,9 @@ export function createRecordPublicationOutput(client: CaptureClient, privateCont
         const captures: CaptureFact[] = saved.map(binding => ({ captureId: binding.output!.requestId, artifactId: binding.bundleId, delivery: "unknown", phase: "saved",
           outcomes: [{ kind: "save", ok: true, at: binding.savedObservedAt! }] }));
         const nextFingerprint = JSON.stringify(captures);
-        if (fingerprint && fingerprint !== nextFingerprint) revision++;
+        if (factsInitialized && fingerprint !== nextFingerprint) revision++;
         fingerprint = nextFingerprint;
+        factsInitialized = true;
         return structuredClone({ version: 1, providerEpoch, revision, captures, nextShortcutAdmission: { state: "unavailable" as const } });
       },
     },

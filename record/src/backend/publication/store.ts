@@ -7,6 +7,16 @@ import type { ProcessingInput } from "../processing/index.js";
 import type { PublicationReceipt } from "@apparent/engine-sdk/capture";
 
 export interface PublicationOutputMetadata { requestId: string; requestVideoProof: boolean; processing: ProcessingInput }
+export interface ProcessingCoordinatorRecord {
+  schema: 1;
+  captureId: string;
+  requestId: string;
+  materials: { captureId: string; materialsId: string; revision: string };
+  leaseId: string;
+  bundleId: string;
+  bundlePath: string;
+  plan: unknown;
+}
 
 export interface PublicationBinding {
   captureId: string;
@@ -23,7 +33,7 @@ export interface PublicationBinding {
   state: "reserved" | "dispatching" | "publishing" | "saved" | "failed" | "cancelled";
 }
 
-const version = 1;
+const version = 2;
 const id = /^[0-9a-f]{32}$/u;
 const hash = /^[0-9a-f]{64}$/u;
 function valid(value: PublicationBinding): boolean {
@@ -77,6 +87,42 @@ export class SqlitePublicationBindingStore {
     const db = await this.#open();
     try { return (db.prepare("SELECT binding_json FROM publication_binding ORDER BY capture_id").all() as Array<{binding_json: unknown}>).map(row => decode(row.binding_json)); }
     catch { throw hostError(); }
+    finally { try { db.close(); } catch { /* preserve result */ } }
+  }
+
+  async getProcessing(captureId: string): Promise<ProcessingCoordinatorRecord | undefined> {
+    if (!id.test(captureId)) throw hostError();
+    const db = await this.#open();
+    try {
+      const row = db.prepare("SELECT record_json FROM publication_processing WHERE capture_id = ?").get(captureId);
+      return row ? decodeProcessing(row.record_json) : undefined;
+    } catch { throw hostError(); }
+    finally { try { db.close(); } catch { /* preserve result */ } }
+  }
+
+  async listProcessing(): Promise<ProcessingCoordinatorRecord[]> {
+    const db = await this.#open();
+    try { return (db.prepare("SELECT record_json FROM publication_processing ORDER BY capture_id").all() as Array<{record_json: unknown}>).map(row => decodeProcessing(row.record_json)); }
+    catch { throw hostError(); }
+    finally { try { db.close(); } catch { /* preserve result */ } }
+  }
+
+  async reserveProcessing(value: ProcessingCoordinatorRecord): Promise<ProcessingCoordinatorRecord> {
+    if (!validProcessing(value)) throw hostError();
+    const db = await this.#open();
+    try {
+      db.exec("BEGIN IMMEDIATE");
+      const row = db.prepare("SELECT record_json FROM publication_processing WHERE capture_id = ? OR request_id = ?").get(value.captureId, value.requestId);
+      if (row) {
+        const existing = decodeProcessing(row.record_json);
+        if (JSON.stringify(existing) !== JSON.stringify(value)) throw hostError();
+        db.exec("COMMIT");
+        return existing;
+      }
+      db.prepare("INSERT INTO publication_processing (capture_id, request_id, record_json) VALUES (?, ?, ?)").run(value.captureId, value.requestId, JSON.stringify(value));
+      db.exec("COMMIT");
+      return structuredClone(value);
+    } catch { try { db.exec("ROLLBACK"); } catch { /* transaction may have completed */ } throw hostError(); }
     finally { try { db.close(); } catch { /* preserve result */ } }
   }
 
@@ -166,11 +212,35 @@ export class SqlitePublicationBindingStore {
       db = new DatabaseSync(this.#path);
       await initializePrivateSqlite(db);
       const current = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
-      if (current === 0) db.exec("CREATE TABLE IF NOT EXISTS publication_binding (capture_id TEXT PRIMARY KEY, publication_id TEXT NOT NULL UNIQUE, bundle_path TEXT NOT NULL UNIQUE, binding_json TEXT NOT NULL) STRICT; PRAGMA user_version = 1;");
-      else if (current !== version) throw hostError();
+      if (current === 0) {
+        db.exec("CREATE TABLE IF NOT EXISTS publication_binding (capture_id TEXT PRIMARY KEY, publication_id TEXT NOT NULL UNIQUE, bundle_path TEXT NOT NULL UNIQUE, binding_json TEXT NOT NULL) STRICT;");
+        db.exec("CREATE TABLE IF NOT EXISTS publication_processing (capture_id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, record_json TEXT NOT NULL) STRICT; PRAGMA user_version = 2;");
+      } else if (current === 1) {
+        db.exec("CREATE TABLE IF NOT EXISTS publication_processing (capture_id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE, record_json TEXT NOT NULL) STRICT; PRAGMA user_version = 2;");
+      } else if (current !== version) throw hostError();
       return db;
     } catch { try { db?.close(); } catch { /* sanitized */ } throw hostError(); }
   }
+}
+
+function validProcessing(value: ProcessingCoordinatorRecord): boolean {
+  try {
+    return !!value && value.schema === 1 && id.test(value.captureId) && value.requestId.length > 0 && Buffer.byteLength(value.requestId) <= 4096 && !value.requestId.includes("\0") &&
+      value.requestId !== value.captureId && value.materials.captureId === value.captureId && id.test(value.materials.materialsId) && hash.test(value.materials.revision) &&
+      id.test(value.leaseId) && typeof value.bundleId === "string" && value.bundleId.length > 0 && Buffer.byteLength(value.bundleId) <= 255 &&
+      !/[\\/\p{Cc}]/u.test(value.bundleId) && value.bundleId !== "." && value.bundleId !== ".." && typeof value.bundlePath === "string" && value.bundlePath.length <= 4096 &&
+      !value.bundlePath.includes("\0") && isAbsolute(value.bundlePath) && resolve(value.bundlePath) === value.bundlePath && value.plan !== undefined && Buffer.byteLength(JSON.stringify(value)) <= 2 * 1024 * 1024 &&
+      !JSON.stringify(value).includes('"ownerToken"');
+  } catch { return false; }
+}
+
+function decodeProcessing(raw: unknown): ProcessingCoordinatorRecord {
+  try {
+    if (typeof raw !== "string") throw new Error();
+    const value = JSON.parse(raw) as ProcessingCoordinatorRecord;
+    if (!validProcessing(value) || JSON.stringify(value) !== raw) throw new Error();
+    return structuredClone(value);
+  } catch { throw hostError(); }
 }
 
 function decode(raw: unknown): PublicationBinding {

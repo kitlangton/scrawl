@@ -1,7 +1,7 @@
 //! Internal retained-material native job port.
 //!
 //! Call only after authenticating the original capture owner and while holding
-//! the exact retained-material read lease. `execute_linux` keeps that lease
+//! the exact retained-material read lease. Retained execution keeps that lease
 //! borrowed through decode and receipt sealing. Its caller MUST run this work
 //! inside the existing supervised media job child; timeout and cancellation
 //! must kill and reap that child before dropping the lease. This module adds no
@@ -11,12 +11,12 @@ pub mod contact_sheet;
 mod registry;
 
 pub use registry::{
-    verify_completed, Binding, CancelObservation, CancelRequestOutcome, Checkpoint, FileIdentity,
-    JobClaim, JobIntent, JobOutcome, JobReference, JobRegistry, MaterialsKey, NativeReceipt,
-    OutputIdentity, SealedFile, SheetSeal, StoredJob, StoredJobState,
+    Binding, CancelObservation, CancelRequestOutcome, Checkpoint, FileIdentity, JobClaim,
+    JobIntent, JobOutcome, JobReference, JobRegistry, MaterialsKey, NativeReceipt, OutputIdentity,
+    SealedFile, SheetSeal, StoredJob, StoredJobState, verify_completed,
 };
 
-use crate::materials_media::contact_sheet::{compose, Layout, RgbaImage};
+use crate::materials_media::contact_sheet::{Layout, RgbaImage, compose};
 use apparent_capture_engine::{BundleLease, SecureStore};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -24,7 +24,7 @@ use sha2::{Digest, Sha256};
 use std::error::Error as StdError;
 use std::fs::File;
 use std::io::Read;
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 use std::os::unix::fs::MetadataExt;
 use std::sync::Arc;
 
@@ -64,7 +64,7 @@ pub(crate) fn execute_linux(
         JobOutcome::Owned(claim) => claim,
         existing => return Ok(existing),
     };
-    execute_pinned_linux(
+    execute_pinned(
         binding,
         original_request_bytes,
         source,
@@ -76,6 +76,7 @@ pub(crate) fn execute_linux(
         output_root,
         sink,
         layout,
+        derive_retained_linux,
         checkpoint,
     )
 }
@@ -96,7 +97,75 @@ pub(crate) fn execute_retained_linux(
     original_request_bytes: &[u8],
     output_root: Arc<SecureStore>,
     sink: &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
+    checkpoint: impl FnMut() -> Checkpoint,
+) -> Result<JobOutcome> {
+    execute_retained(
+        registry,
+        runtime,
+        capture_journal_directory,
+        capture_id,
+        owner_token,
+        materials,
+        lease_id,
+        original_request_bytes,
+        output_root,
+        sink,
+        checkpoint,
+        derive_retained_linux,
+    )
+}
+
+#[cfg(all(target_os = "macos", feature = "media"))]
+pub(crate) fn execute_retained_macos(
+    registry: &JobRegistry,
+    runtime: &apparent_capture_engine::Runtime,
+    capture_journal_directory: &std::path::Path,
+    capture_id: &str,
+    owner_token: &str,
+    materials: &crate::retained::MaterialKey,
+    lease_id: &str,
+    original_request_bytes: &[u8],
+    output_root: Arc<SecureStore>,
+    sink: &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
+    checkpoint: impl FnMut() -> Checkpoint,
+) -> Result<JobOutcome> {
+    execute_retained(
+        registry,
+        runtime,
+        capture_journal_directory,
+        capture_id,
+        owner_token,
+        materials,
+        lease_id,
+        original_request_bytes,
+        output_root,
+        sink,
+        checkpoint,
+        derive_retained_macos,
+    )
+}
+
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
+fn execute_retained(
+    registry: &JobRegistry,
+    runtime: &apparent_capture_engine::Runtime,
+    capture_journal_directory: &std::path::Path,
+    capture_id: &str,
+    owner_token: &str,
+    materials: &crate::retained::MaterialKey,
+    lease_id: &str,
+    original_request_bytes: &[u8],
+    output_root: Arc<SecureStore>,
+    sink: &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
     mut checkpoint: impl FnMut() -> Checkpoint,
+    derive: impl FnMut(
+        &Binding,
+        &File,
+        &[u8],
+        &apparent_capture_engine::materials_media::FileIdentity,
+        &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
+        &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<(Vec<u8>, Vec<u8>)>,
 ) -> Result<JobOutcome> {
     ensure!(
         original_request_bytes.len() <= 256 * 1024,
@@ -242,7 +311,7 @@ pub(crate) fn execute_retained_linux(
     };
     claim.bind_source(binding.clone())?;
     let identity = core_file_identity(&source.video.identity);
-    execute_pinned_linux(
+    execute_pinned(
         binding,
         original_request_bytes,
         &source.video_file,
@@ -254,11 +323,12 @@ pub(crate) fn execute_retained_linux(
         output_root,
         sink,
         layout,
+        derive,
         &mut checkpoint,
     )
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn core_file_identity(
     identity: &crate::retained::MaterialFileIdentity,
 ) -> apparent_capture_engine::materials_media::FileIdentity {
@@ -270,7 +340,7 @@ fn core_file_identity(
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn derived_receipt_id(request: &[u8]) -> String {
     let mut digest = Sha256::new();
     digest.update(b"apparent.media2-receipt-id/1\0");
@@ -281,7 +351,7 @@ fn derived_receipt_id(request: &[u8]) -> String {
         .collect()
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn check_material_source(
     lease: Option<&BundleLease>,
     source: Option<&crate::retained::RetainedMaterialSource>,
@@ -301,7 +371,115 @@ fn check_material_source(
 }
 
 #[cfg(all(target_os = "linux", feature = "media"))]
-fn execute_pinned_linux(
+fn derive_retained_linux(
+    binding: &Binding,
+    source: &File,
+    materials_payload: &[u8],
+    source_identity: &apparent_capture_engine::materials_media::FileIdentity,
+    sink: &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
+    checkpoint: &mut dyn FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+    let key = core_materials_key(binding);
+    apparent_capture_engine::materials_media::derive_linux(
+        source,
+        &key,
+        materials_payload,
+        source_identity,
+        &binding.materials_root,
+        &binding.lease_id,
+        &binding.job_id,
+        &binding.receipt_id,
+        &binding.output_root,
+        &binding.requested_bundle_ms,
+        binding.limits.max_edge,
+        sink,
+        checkpoint,
+    )
+}
+
+#[cfg(all(target_os = "macos", feature = "media"))]
+fn derive_retained_macos(
+    binding: &Binding,
+    source: &File,
+    materials_payload: &[u8],
+    source_identity: &apparent_capture_engine::materials_media::FileIdentity,
+    sink: &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
+    checkpoint: &mut dyn FnMut() -> anyhow::Result<()>,
+) -> anyhow::Result<(Vec<u8>, Vec<u8>)> {
+    use apparent_capture_engine::materials_media::{DecodedFrame, RetainedPreparation};
+
+    checkpoint()?;
+    let key = core_materials_key(binding);
+    let mut preparation = RetainedPreparation::new_pinned(
+        source,
+        &key,
+        materials_payload,
+        source_identity,
+        &binding.materials_root,
+        &binding.lease_id,
+        &binding.job_id,
+        &binding.receipt_id,
+        &binding.output_root,
+        &binding.requested_bundle_ms,
+    )?;
+    checkpoint()?;
+    let effective_times = preparation.effective_video_times().collect::<Vec<_>>();
+    let mut preparation_error = None;
+    let decode_result = crate::macos::decode(
+        source,
+        &effective_times,
+        binding.limits.max_edge,
+        binding.limits.max_total_pixels,
+        |decoded| match preparation.push(
+            DecodedFrame {
+                actual_video_ms: decoded.actual_ms,
+                clamped_to_end: decoded.clamped_to_end,
+                width: decoded.width,
+                height: decoded.height,
+                rgba: decoded.rgba,
+            },
+            sink,
+            checkpoint,
+        ) {
+            Ok(()) => Ok(()),
+            Err(error) => {
+                let code = match error.to_string().as_str() {
+                    "cancelled" => "cancelled",
+                    "deadline_exceeded" => "deadline_exceeded",
+                    "owner_lost" => "owner_lost",
+                    message
+                        if message.contains("limit")
+                            || message.contains("budget")
+                            || message.contains("dimensions")
+                            || message.contains("pixel data") =>
+                    {
+                        "limits_exceeded"
+                    }
+                    _ => "decode_failed",
+                };
+                preparation_error = Some(error);
+                Err(code)
+            }
+        },
+    );
+    if let Some(error) = preparation_error {
+        return Err(error.into());
+    }
+    decode_result.map_err(std::io::Error::other)?;
+    preparation.finish(sink, checkpoint)
+}
+
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
+fn core_materials_key(binding: &Binding) -> apparent_capture_engine::materials_media::MaterialsKey {
+    apparent_capture_engine::materials_media::MaterialsKey {
+        capture_id: binding.materials.capture_id.clone(),
+        materials_id: binding.materials.materials_id.clone(),
+        revision: binding.materials.revision.clone(),
+    }
+}
+
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
+fn execute_pinned(
     binding: Binding,
     original_request_bytes: &[u8],
     source: &File,
@@ -313,6 +491,14 @@ fn execute_pinned_linux(
     output_root: Arc<SecureStore>,
     sink: &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
     layout: Option<Layout>,
+    mut derive: impl FnMut(
+        &Binding,
+        &File,
+        &[u8],
+        &apparent_capture_engine::materials_media::FileIdentity,
+        &mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
+        &mut dyn FnMut() -> anyhow::Result<()>,
+    ) -> anyhow::Result<(Vec<u8>, Vec<u8>)>,
     mut checkpoint: impl FnMut() -> Checkpoint,
 ) -> Result<JobOutcome> {
     check_material_source(materials_lease, retained_source)?;
@@ -355,28 +541,15 @@ fn execute_pinned_linux(
         }
     };
     let result: Result<JobOutcome> = (|| {
-        let output_path = binding.output_root.clone();
-        let core_key = apparent_capture_engine::materials_media::MaterialsKey {
-            capture_id: binding.materials.capture_id.clone(),
-            materials_id: binding.materials.materials_id.clone(),
-            revision: binding.materials.revision.clone(),
-        };
         let mut frame_sink = FrameSink {
             output: sink,
             legacy_receipt: None,
         };
-        let (legacy_payload, _) = apparent_capture_engine::materials_media::derive_linux(
+        let (legacy_payload, _) = derive(
+            &binding,
             source,
-            &core_key,
             materials_payload,
             source_identity,
-            &binding.materials_root,
-            &binding.lease_id,
-            &binding.job_id,
-            &binding.receipt_id,
-            &output_path,
-            &binding.requested_bundle_ms,
-            binding.limits.max_edge,
             &mut frame_sink,
             &mut check,
         )?;
@@ -664,13 +837,13 @@ fn validate_source_binding(
     Ok(())
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 struct FrameSink<'a> {
     output: &'a mut dyn apparent_capture_engine::materials_media::DerivativeOutputSink,
     legacy_receipt: Option<Vec<u8>>,
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 impl apparent_capture_engine::materials_media::DerivativeOutputSink for FrameSink<'_> {
     fn write_new_synced(
         &mut self,
@@ -698,7 +871,7 @@ impl apparent_capture_engine::materials_media::DerivativeOutputSink for FrameSin
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn validate_legacy_frame_payload(
     bytes: &[u8],
     binding: &Binding,
@@ -796,7 +969,7 @@ fn validate_legacy_frame_payload(
     Ok(files)
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn decode_output_frames(output: &Arc<SecureStore>, files: &[SealedFile]) -> Result<Vec<RgbaImage>> {
     files
         .iter()
@@ -825,7 +998,7 @@ fn decode_output_frames(output: &Arc<SecureStore>, files: &[SealedFile]) -> Resu
         .collect()
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn read_sealed_file(output: &Arc<SecureStore>, seal: &SealedFile) -> Result<Vec<u8>> {
     use sha2::{Digest, Sha256};
     use std::os::unix::fs::MetadataExt;
@@ -863,7 +1036,7 @@ fn read_sealed_file(output: &Arc<SecureStore>, seal: &SealedFile) -> Result<Vec<
     Ok(bytes)
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn local_seal(file: apparent_capture_engine::materials_media::SealedFile) -> SealedFile {
     SealedFile {
         relative_path: file.relative_path,
@@ -877,7 +1050,7 @@ fn local_seal(file: apparent_capture_engine::materials_media::SealedFile) -> Sea
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn encode_png(image: &RgbaImage) -> Result<Vec<u8>> {
     let mut bytes = Vec::new();
     {
@@ -901,7 +1074,7 @@ fn digest_hex(bytes: &[u8]) -> String {
     result
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 fn leaf(path: &str) -> Result<String> {
     let mut parts = path.split('/');
     let parent = parts.next();
@@ -992,10 +1165,10 @@ mod tests {
         let movie_path = source_path.join("recording.mp4");
         // A decode-only producer must not require an encoder plugin at test time.
         std::fs::copy(
-            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                .join("core/tests/fixtures/tiny.mp4"),
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("core/tests/fixtures/tiny.mp4"),
             &movie_path,
-        ).unwrap();
+        )
+        .unwrap();
         let source = File::open(&movie_path).unwrap();
         let source_meta = source.metadata().unwrap();
         let source_bytes = std::fs::read(&movie_path).unwrap();
@@ -1125,21 +1298,20 @@ mod tests {
         let mut changed_limits = request.clone();
         changed_limits.limits.deadline_ms += 1;
         let changed_bytes = serde_json::to_vec(&changed_limits).unwrap();
-        assert!(validate_original_request(
-            &changed_bytes,
-            &binding,
-            Some(&layout),
-            &material_payload
-        )
-        .is_err());
+        assert!(
+            validate_original_request(&changed_bytes, &binding, Some(&layout), &material_payload)
+                .is_err()
+        );
         let pretty = serde_json::to_string_pretty(&changed_limits).unwrap();
-        assert!(validate_original_request(
-            pretty.as_bytes(),
-            &binding,
-            Some(&layout),
-            &material_payload
-        )
-        .is_err());
+        assert!(
+            validate_original_request(
+                pretty.as_bytes(),
+                &binding,
+                Some(&layout),
+                &material_payload
+            )
+            .is_err()
+        );
         let mut forged_source = binding.clone();
         forged_source.source_video.sha256 = "0".repeat(64);
         assert!(
@@ -1307,13 +1479,15 @@ mod tests {
                 .unwrap(),
             JobOutcome::ExistingFailed("cancelled")
         ));
-        assert!(runtime
-            .material_lease(
-                &binding.materials.materials_id,
-                apparent_capture_engine::LeaseKind::Maintenance
-            )
-            .unwrap()
-            .is_none());
+        assert!(
+            runtime
+                .material_lease(
+                    &binding.materials.materials_id,
+                    apparent_capture_engine::LeaseKind::Maintenance
+                )
+                .unwrap()
+                .is_none()
+        );
 
         // Frame output fits by itself, while the requested sheet pushes the
         // combined inventory over the caller's explicit output pixel budget.
@@ -1366,13 +1540,15 @@ mod tests {
             JobOutcome::ExistingFailed("failed")
         ));
         drop(lease);
-        assert!(runtime
-            .material_lease(
-                &binding.materials.materials_id,
-                apparent_capture_engine::LeaseKind::Maintenance
-            )
-            .unwrap()
-            .is_some());
+        assert!(
+            runtime
+                .material_lease(
+                    &binding.materials.materials_id,
+                    apparent_capture_engine::LeaseKind::Maintenance
+                )
+                .unwrap()
+                .is_some()
+        );
         drop(runtime);
         drop(registry);
         drop(sink);

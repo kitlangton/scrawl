@@ -244,6 +244,8 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     const readiness = options.runtime.state.readiness;
     return readiness.ready ? { ready: true } : { ready: false, reason: readiness.reason };
   };
+  const acceptedStoppedOutput = (fact: CaptureFact | undefined): boolean => fact?.phase === "saved" ||
+    ((fact?.phase === "failed" || fact?.phase === "unknown") && fact.outcomes.some(outcome => outcome.kind === "processing" && !outcome.ok));
   const snapshot = (): CapabilitySnapshot => {
     const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
     const merged = new Map<string, CaptureFact>();
@@ -255,7 +257,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       const fact = captureFromRuntime(runtimeCapture, runtimeObservedAt);
       if (fact) {
         const output = merged.get(fact.captureId);
-        const mayComplete = completionEligible.has(fact.captureId) && output?.phase === "saved";
+        const mayComplete = completionEligible.has(fact.captureId) && acceptedStoppedOutput(output);
         merged.set(fact.captureId, mayComplete ? mergeCapture(fact, output!) : mergeCapture(output, fact));
       }
     }
@@ -264,7 +266,7 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       const combined = output ? mergeCapture(live, output) : live;
       // Only stopped native materials can be completed by assembled output.
       // Retained output must never hide live or unresolved runtime ownership.
-      if (!completionEligible.has(live.captureId) || output?.phase !== "saved") combined.phase = live.phase;
+      if (!completionEligible.has(live.captureId) || !acceptedStoppedOutput(output)) combined.phase = live.phase;
       merged.set(live.captureId, combined);
     }
     const ready = engineReady();
@@ -383,7 +385,10 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
         if (!("captureId" in state) || state.captureId !== command.captureId) return refuse(command, "Engine runtime does not own this capture");
         if (command.type === "stop-capture" && state.phase !== "recording") return refuse(command, "Engine runtime cannot stop this phase");
         if (command.type === "cancel-capture" && !["starting", "recording"].includes(state.phase)) return refuse(command, "Engine runtime cannot cancel this phase");
-        if (command.type === "inspect-capture" && !["uncertain", "stop-failed"].includes(state.phase)) return refuse(command, "Engine runtime has no reconciliation pending");
+        const processingIssue = options.runtime.completionEligibleCaptureIds?.().includes(command.captureId) &&
+          acceptedStoppedOutput(current.captures.find(capture => capture.captureId === command.captureId && capture.phase !== "saved"));
+        if (command.type === "inspect-capture" && !["uncertain", "stop-failed"].includes(state.phase) && !processingIssue)
+          return refuse(command, "Engine runtime has no reconciliation pending");
         const action = command.type === "stop-capture" ? "stop" : command.type === "cancel-capture" ? "cancel" : "reconcile";
         usedRequests.add(command.requestId);
         try { await options.runtime.dispatch({ type: action }); publish(); return response("accepted"); }
