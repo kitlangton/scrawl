@@ -649,4 +649,3 @@
         assert!(selectable_window_at(&windows, -101.0, 50.0).is_none());
         assert!(selectable_window_at(&[], 0.0, 0.0).is_none());
     }
-

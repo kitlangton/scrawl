@@ -582,4 +582,3 @@ fn wrap_text_indented(
         let sheet = render_contact_sheet_for_duration(8000, &[]);
         assert!(sheet.width > 0 && sheet.height > 0);
     }
-

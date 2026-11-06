@@ -613,4 +613,3 @@
             assert_eq!(frames[0].1.width, 1728);
         }
     }
-
