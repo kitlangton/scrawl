@@ -162,7 +162,7 @@ function projectedShortcutTrial(facts: RecordNativeFacts): ShortcutTrialFact {
   return { state: "unavailable" };
 }
 
-function validPracticeOutcome(value: unknown, cursorKeys: Set<string>, noteReceipts: Set<string>): boolean {
+function validCausalOutcome(value: unknown, cursorKeys: Set<string>, noteReceipts: Set<string>): boolean {
   if (!value || typeof value !== "object" || Array.isArray(value)) return false;
   const outcome = value as Record<string, unknown>;
   if (outcome.kind === "note-save") {
@@ -206,13 +206,13 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
       if (!outcome || typeof outcome !== "object") return false;
       const fact = outcome as Record<string, unknown>;
       if (typeof fact.at !== "string" || typeof fact.ok !== "boolean") return false;
-      if (fact.kind === "note-save") return validPracticeOutcome(fact, cursorKeys, noteReceipts);
+      if (fact.kind === "note-save") return validCausalOutcome(fact, cursorKeys, noteReceipts);
       if (fact.kind === "picker") return fact.ok
         ? fact.surface === "screen" && ["display", "area", "window"].includes(String(fact.target))
         : ["cancelled", "failed", "unavailable"].includes(String(fact.reason));
       if (fact.kind === "accepted-stroke") return fact.ok
-        ? ["screen", "whiteboard"].includes(String(fact.surface)) && opaqueId(fact.strokeId) && validPracticeOutcome(fact, cursorKeys, noteReceipts)
-        : ["screen", "whiteboard"].includes(String(fact.surface)) && ["rejected", "failed"].includes(String(fact.reason)) && validPracticeOutcome(fact, cursorKeys, noteReceipts);
+        ? ["screen", "whiteboard"].includes(String(fact.surface)) && opaqueId(fact.strokeId) && validCausalOutcome(fact, cursorKeys, noteReceipts)
+        : ["screen", "whiteboard"].includes(String(fact.surface)) && ["rejected", "failed"].includes(String(fact.reason)) && validCausalOutcome(fact, cursorKeys, noteReceipts);
       if (fact.kind === "copy" && "evidence" in fact) return fact.ok === true && fact.evidence === "native-write-readback" &&
         typeof fact.artifactId === "string" && !!fact.artifactId.trim() && typeof fact.requestId === "string" && !!fact.requestId.trim() && typeof fact.digest === "string" && /^[0-9a-f]{64}$/u.test(fact.digest) &&
         Number.isSafeInteger(fact.byteLength) && Number(fact.byteLength) > 0;

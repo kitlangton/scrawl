@@ -58,7 +58,7 @@ export type AcceptedStrokeOutcome =
   | { kind: "accepted-stroke"; at: string; ok: false; surface: CaptureSurface; reason: "rejected" | "failed" };
 /** Success is emitted only after a non-empty note is durably saved. Its barrier
  * is the authoritative screen-stroke cursor read at that save, not arrival time. */
-export type PracticeNoteSaveOutcome =
+export type DurableNoteSaveOutcome =
   | { kind: "note-save"; at: string; ok: true; noteId: string; receiptId: string; screenStrokeBarrier: ScreenStrokeCursor }
   | { kind: "note-save"; at: string; ok: false; reason: "draft" | "empty" | "failed" | "cancelled" };
 export type GenericCaptureOutcomeKind = Exclude<CaptureOutcomeKind, "picker" | "accepted-stroke" | "note-save">;
@@ -79,7 +79,7 @@ export type CaptureOutcome =
   | { kind: GenericCaptureOutcomeKind; at: string; ok: boolean; detail?: string }
   | PickerOutcome
   | AcceptedStrokeOutcome
-  | PracticeNoteSaveOutcome
+  | DurableNoteSaveOutcome
   | ArtifactOpenOutcome
   | ClipboardCopyOutcome;
 export type DeliveryEnforcement = "local-only" | "host-default" | "unknown";

@@ -52,7 +52,7 @@ unavailable/unknown; never invent a consumed event. No production shortcut
 reservation producer exists yet. The fixture defaults to `unavailable` and refuses
 arm/cancel until its driver publishes a supported state.
 
-## Onboarding evidence contracts
+## Shortcut-trial and causal note/stroke evidence
 
 `shortcutTrial` is separate from `nextShortcutAdmission`: it represents a
 request-scoped physical shortcut test and never starts capture. Its binding
@@ -78,7 +78,7 @@ the note's barrier. Event timestamps and receipt arrival order do not establish
 this relation. Missing cursors remain unavailable for causal comparisons.
 
 These are public additive contracts, not claims that the producers exist.
-Production currently has no physical shortcut-trial producer, durable practice
+Production currently has no physical shortcut-trial producer, durable nonempty
 note receipt/barrier producer, or screen-stroke history cursor producer. Their
 host owners must supply authoritative scoped facts (and guarded begin/cancel
 dispatch for trial) before these capabilities can become available. Fixtures

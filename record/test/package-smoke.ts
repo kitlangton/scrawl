@@ -42,12 +42,12 @@ try {
     import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, type AbsentDestinationBinding } from '@apparent/record/host';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
-    import { createRecordCapabilityProvider, hasConfirmedArtifactOpen, type PracticeNoteSaveOutcome, type ScreenStrokeCursor, type ShortcutTrialFact } from '@apparent/record/capabilities';
+    import { createRecordCapabilityProvider, hasConfirmedArtifactOpen, type DurableNoteSaveOutcome, type ScreenStrokeCursor, type ShortcutTrialFact } from '@apparent/record/capabilities';
     import { createRecordNativePort, type NativeHostPortInput } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
     declare const cursor: ScreenStrokeCursor;
     declare const trial: ShortcutTrialFact;
-    declare const note: PracticeNoteSaveOutcome;
+    declare const note: DurableNoteSaveOutcome;
     void [cursor, trial, note];
     declare const destinations: AbsentDestinationAllocator;
     const exact: Promise<AbsentDestinationBinding> = destinations.reserveExact('request', '/home/user/output/requested.apparent');
