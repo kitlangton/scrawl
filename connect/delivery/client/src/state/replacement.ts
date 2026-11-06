@@ -92,7 +92,9 @@ export async function replacePrivateStateFile(directoryPath: string, name: strin
       owns = false;
       const observed = await consumePrivateFile(handle, { maximumBytes: length, signal }, resources, value => ({ length: value.length, hash: digest(value) }));
       check(); await sameParent();
-      if (observed.length !== length || observed.hash !== expectedHash || directoryIdentity(await lstat(finalPath, { bigint: true })) !== stageIdentity) throw new Error();
+      const after = await lstat(finalPath, { bigint: true });
+      if (observed.length !== length || observed.hash !== expectedHash || directoryIdentity(after) !== stageIdentity
+        || after.size !== fd.size || after.mtimeNs !== fd.mtimeNs || after.ctimeNs !== fd.ctimeNs) throw new Error();
     } finally { if (owns) await handle.close().catch(() => {}); }
     return { state: "committed" };
   } catch {

@@ -95,3 +95,17 @@ test("cancellation after an acknowledged replacement retains output and reports 
   assert.deepEqual(await replacePrivateStateFile(root, "record.test", bytes(), null, fence(), resources, { signal: controller.signal }), { state: "publication_uncertain" });
   assert.equal(await readFile(path.join(root, "record.test"), "utf8"), bytes().toString());
 }));
+
+test("changes during the ACL handoff invalidate otherwise matching readback", () => fixture(async root => {
+  let published = false;
+  const resources = port(async (parent, source, destination) => {
+    try { await rename(path.join(root, source), path.join(root, destination)); published = true; return { state: "replaced" }; }
+    finally { await parent.close(); }
+  });
+  resources.checkAcl = async handle => {
+    try { if (published) await writeFile(path.join(root, "record.test"), "modified after read"); return { state: "accepted" }; }
+    finally { await handle.close(); }
+  };
+  assert.deepEqual(await replacePrivateStateFile(root, "record.test", bytes(), null, fence(), resources), { state: "publication_uncertain" });
+  assert.equal(await readFile(path.join(root, "record.test"), "utf8"), "modified after read");
+}));
