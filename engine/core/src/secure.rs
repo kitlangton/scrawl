@@ -7,6 +7,17 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
+#[cfg(all(feature = "publication", target_os = "macos"))]
+unsafe extern "C" {
+    fn renameatx_np(
+        from_fd: i32,
+        from: *const libc::c_char,
+        to_fd: i32,
+        to: *const libc::c_char,
+        flags: u32,
+    ) -> i32;
+}
+
 pub(crate) fn invalid() -> io::Error {
     io::Error::other("unsafe or inconsistent engine state")
 }
@@ -75,6 +86,7 @@ pub struct Store {
     dir: File,
     path: PathBuf,
     parent: Option<std::sync::Arc<Store>>,
+    private: bool,
 }
 impl Store {
     /// Open or provision one 0700 directory beneath an already existing parent.
@@ -121,6 +133,23 @@ impl Store {
             dir,
             path: path.into(),
             parent: None,
+            private: true,
+        })
+    }
+    /// Open a pinned output parent whose full path has trusted ownership and no
+    /// group/other write access. Child Stores remain private 0700 directories.
+    #[cfg(feature = "publication")]
+    pub(crate) fn open_trusted_parent(path: &Path) -> io::Result<Self> {
+        let dir = trusted_directory(path)?;
+        let metadata = dir.metadata()?;
+        if metadata.mode() & 0o022 != 0 {
+            return Err(invalid());
+        }
+        Ok(Self {
+            dir,
+            path: path.into(),
+            parent: None,
+            private: false,
         })
     }
     /// Permanent private namespace, created only while the root transaction is held.
@@ -142,6 +171,7 @@ impl Store {
             dir,
             path: self.path.join(key),
             parent: Some(self.clone()),
+            private: true,
         });
         child.check()?;
         child.dir.sync_all()?;
@@ -156,7 +186,11 @@ impl Store {
         let current = directory(&self.path)?.metadata()?;
         if m.dev() != current.dev()
             || m.ino() != current.ino()
-            || m.mode() & 0o777 != 0o700
+            || if self.private {
+                m.mode() & 0o777 != 0o700
+            } else {
+                m.mode() & 0o022 != 0
+            }
             || m.uid() != unsafe { libc::geteuid() }
             || m.nlink() == 0
         {
@@ -168,6 +202,137 @@ impl Store {
     pub fn directory_file(&self) -> io::Result<File> {
         self.check()?;
         self.dir.try_clone()
+    }
+    #[cfg(feature = "publication")]
+    pub(crate) fn path(&self) -> &Path {
+        &self.path
+    }
+    /// Open a directory leaf without following symlinks and pin its identity.
+    #[cfg(feature = "publication")]
+    pub(crate) fn open_child_directory(&self, key: &str) -> io::Result<File> {
+        self.check()?;
+        let key = name(key)?;
+        cvt(unsafe {
+            libc::openat(
+                self.dir.as_raw_fd(),
+                key.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        })
+    }
+    #[cfg(feature = "publication")]
+    pub(crate) fn entry_exists(&self, key: &str) -> io::Result<bool> {
+        self.check()?;
+        let key = name(key)?;
+        let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
+        let rc = unsafe {
+            libc::fstatat(
+                self.dir.as_raw_fd(),
+                key.as_ptr(),
+                stat.as_mut_ptr(),
+                libc::AT_SYMLINK_NOFOLLOW,
+            )
+        };
+        if rc == 0 {
+            return Ok(true);
+        }
+        let error = io::Error::last_os_error();
+        if error.kind() == io::ErrorKind::NotFound {
+            Ok(false)
+        } else {
+            Err(error)
+        }
+    }
+    /// Remove one failed private snapshot leaf only if its named inode still
+    /// matches the pinned, single-link file opened by this Store.
+    #[cfg(feature = "publication")]
+    pub(crate) fn remove_owned_file(&self, key: &str) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        self.check()?;
+        let key_c = name(key)?;
+        let file = self.file(key, false)?;
+        let before = file.metadata()?;
+        if before.uid() != unsafe { libc::geteuid() }
+            || before.mode() & 0o777 != 0o600
+            || before.nlink() != 1
+        {
+            return Err(invalid());
+        }
+        let named = cvt(unsafe {
+            libc::openat(
+                self.dir.as_raw_fd(),
+                key_c.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        })?;
+        let after = named.metadata()?;
+        if before.dev() != after.dev() || before.ino() != after.ino() || after.nlink() != 1 {
+            return Err(invalid());
+        }
+        if unsafe { libc::unlinkat(self.dir.as_raw_fd(), key_c.as_ptr(), 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.dir.sync_all()
+    }
+    /// Rename a private directory to an absent sibling using the platform's
+    /// atomic exclusive primitive. `expected` pins the source inode being moved.
+    #[cfg(feature = "publication")]
+    pub(crate) fn rename_directory_noreplace(
+        &self,
+        from: &str,
+        to: &str,
+        expected: &File,
+    ) -> io::Result<()> {
+        use std::os::unix::fs::MetadataExt;
+        self.check()?;
+        let (from_name, to_name) = (name(from)?, name(to)?);
+        let expected_meta = expected.metadata()?;
+        if !expected_meta.is_dir()
+            || expected_meta.uid() != unsafe { libc::geteuid() }
+            || expected_meta.mode() & 0o777 != 0o700
+        {
+            return Err(invalid());
+        }
+        let source = self.open_child_directory(from)?;
+        let source_meta = source.metadata()?;
+        if source_meta.dev() != expected_meta.dev() || source_meta.ino() != expected_meta.ino() {
+            return Err(invalid());
+        }
+        #[cfg(target_os = "linux")]
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                self.dir.as_raw_fd(),
+                from_name.as_ptr(),
+                self.dir.as_raw_fd(),
+                to_name.as_ptr(),
+                1u32,
+            ) as i32
+        };
+        #[cfg(target_os = "macos")]
+        let rc = unsafe {
+            renameatx_np(
+                self.dir.as_raw_fd(),
+                from_name.as_ptr(),
+                self.dir.as_raw_fd(),
+                to_name.as_ptr(),
+                0x0000_0004,
+            )
+        };
+        if rc != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let published = self.open_child_directory(to)?;
+        let published_meta = published.metadata()?;
+        if published_meta.dev() != expected_meta.dev()
+            || published_meta.ino() != expected_meta.ino()
+        {
+            return Err(invalid());
+        }
+        match self.open_child_directory(from) {
+            Err(error) if error.kind() == io::ErrorKind::NotFound => self.dir.sync_all(),
+            _ => Err(invalid()),
+        }
     }
     pub fn directory_metadata(&self) -> io::Result<std::fs::Metadata> {
         self.check()?;
