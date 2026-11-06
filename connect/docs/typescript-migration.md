@@ -37,6 +37,13 @@ or deletion. This is an injected library capability, not installed adoption:
 credential loading/renewal, provider assembly and the production CLI route still
 use the authoritative legacy path until their separate acceptance gates pass.
 
+Stored credential wire decoding and a consuming private-descriptor reader are
+TypeScript capabilities with Linux/Mac native ACL consumer proof. Reading retains
+`authRequired` and does not authorize transport or mutate credentials. Trusted
+state-directory/path admission, fresh revocation/cancellation/generation checks,
+renewal journals and installed caller adoption remain parent integration work;
+the Rust client remains the sole credential and queue writer.
+
 
 Read with [hosted-client.md](hosted-client.md), [hosted-api.md](hosted-api.md),
 and [hosted-encryption.md](hosted-encryption.md). This is a source inventory,

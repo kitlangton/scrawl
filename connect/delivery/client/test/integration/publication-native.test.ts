@@ -3,7 +3,7 @@ import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -12,6 +12,7 @@ import * as ed25519 from "@noble/ed25519";
 import { encodeArchive, encryptAge, generateAgeIdentity, signEnvelope, splitAgeStream, type Context } from "../../src/recipient/crypto.ts";
 import { parseRecipientCommand, runRecipientCommand } from "../../src/cli/recipient.ts";
 import { publishRecipientCapture, RecipientPublicationError } from "../../src/recipient/publication.ts";
+import { readStoredCredentialHandle, CredentialReadError } from "../../src/credentials/private-read.ts";
 import type { RetrievedRecipientCapture } from "../../src/recipient/retrieve.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
@@ -206,4 +207,27 @@ test("Darwin ACL allow entries refuse publication and deny-only entries remain a
     assert.deepEqual(await resources.checkAcl(await import("node:fs/promises").then(fs => fs.open(root, constants.O_RDONLY | constants.O_DIRECTORY))), { state: "accepted" });
     assert.deepEqual(await publishRecipientCapture(capture(), destination, resources), { state: "committed", path: destination });
   } finally { execFileSync("/bin/chmod", ["-N", root]); }
+}));
+
+
+test("native credential reader consumes a private descriptor and preserves stored authorization facts", async () => fixture(async root => {
+  const file = path.join(root, "read.credential");
+  const server = "https://app.tryapparent.com/connect";
+  await writeFile(file, JSON.stringify({ server, scope: "read", token: "synthetic-private-token", generation: "b".repeat(32), authRequired: true }), { mode: 0o600 });
+  const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+  const credential = await readStoredCredentialHandle(handle, { scope: "read", approvedServer: server }, resources);
+  assert.equal(credential.token, "synthetic-private-token"); assert.equal(credential.authRequired, true);
+  await assert.rejects(handle.stat());
+}));
+
+test("native credential reader rejects Darwin file ACL grants before returning stored secrets", { skip: process.platform !== "darwin" }, async () => fixture(async root => {
+  const { execFileSync } = await import("node:child_process");
+  const file = path.join(root, "read.credential"), server = "https://app.tryapparent.com/connect";
+  await writeFile(file, JSON.stringify({ server, scope: "read", token: "synthetic-private-token", generation: "b".repeat(32) }), { mode: 0o600 });
+  try {
+    execFileSync("/bin/chmod", ["+a", "everyone allow read", file]);
+    const handle = await open(file, constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK);
+    await assert.rejects(readStoredCredentialHandle(handle, { scope: "read", approvedServer: server }, resources), error => error instanceof CredentialReadError && error.category === "unsafe_file");
+    await assert.rejects(handle.stat());
+  } finally { execFileSync("/bin/chmod", ["-N", file]); }
 }));
