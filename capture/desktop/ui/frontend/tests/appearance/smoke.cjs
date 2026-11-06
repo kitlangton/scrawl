@@ -10,7 +10,7 @@ test('Settings renderer and window follow Electron theme changes without reload'
   t.after(async()=>{await application.close();await fs.rm(home,{recursive:true,force:true});});
   const page = await application.firstWindow();
   await application.evaluate(({BrowserWindow, ipcMain}) => {
-    global.settingsStartupObservation = { paintObserved: false, mountedReceived: false, mountedAccepted: false };
+    global.settingsStartupObservation = { paintObserved: false, mountedReceived: false, mountedAccepted: false, frameReadyReceived: false, frameReadyAccepted: false };
     BrowserWindow.getAllWindows()[0].once('ready-to-show', () => { global.settingsStartupObservation.paintObserved = true; });
     // Observe the existing handler without replacing its authorization or result.
     const handlers = ipcMain._invokeHandlers;
@@ -19,6 +19,13 @@ test('Settings renderer and window follow Electron theme changes without reload'
       global.settingsStartupObservation.mountedReceived = true;
       const result = mounted(...args);
       global.settingsStartupObservation.mountedAccepted = true;
+      return result;
+    });
+    const frameReady = handlers?.get('apparent:settings-frame-ready');
+    if (typeof frameReady === 'function') handlers.set('apparent:settings-frame-ready', (...args) => {
+      global.settingsStartupObservation.frameReadyReceived = true;
+      const result = frameReady(...args);
+      global.settingsStartupObservation.frameReadyAccepted = true;
       return result;
     });
   });
@@ -35,6 +42,11 @@ test('Settings renderer and window follow Electron theme changes without reload'
       mountedBridge: typeof window.apparentSettingsMounted, shellPresent: !!document.querySelector('.settings-shell') }))));
     throw error;
   }
+  const startupObservation = await application.evaluate(() => global.settingsStartupObservation);
+  assert.equal(startupObservation.mountedReceived, true, 'The real Settings mount handler ran');
+  assert.equal(startupObservation.mountedAccepted, true, 'The Settings mount handler accepted the shipped preload');
+  assert.equal(startupObservation.frameReadyReceived, true, 'The shipped preload sent a post-commit frame acknowledgement');
+  assert.equal(startupObservation.frameReadyAccepted, true, 'The Settings host accepted the post-commit frame');
   // Playwright otherwise forces light media even when Electron follows the OS.
   await page.emulateMedia({colorScheme:null});
   const contentBounds = await page.locator('.apparent-window-content').boundingBox();

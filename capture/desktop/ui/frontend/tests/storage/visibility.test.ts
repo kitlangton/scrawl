@@ -67,7 +67,8 @@ function host(mode: string) {
   }, { filename });
   const mounted = () => handlers.get('apparent:settings-mounted')!({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
   const expire = () => { for (const timer of timers) if (timer.active) { timer.active = false; timer.callback(); } };
-  return { window: window!, lines, exits, written, mounted, expire, handlers };
+  const frameReady = () => handlers.get('apparent:settings-frame-ready')!({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
+  return { window: window!, lines, exits, written, mounted, frameReady, expire, handlers };
 }
 
 for (const mode of ['--settings-storage', '--settings-connect']) {
@@ -79,6 +80,7 @@ for (const mode of ['--settings-storage', '--settings-connect']) {
     assert.equal(window.options.resizable, false);
     assert.equal(window.options.fullscreenable, false);
     assert.equal(window.options.acceptFirstMouse, true, 'Inactive pane clicks match the native helper');
+    assert.equal(window.options.paintWhenInitiallyHidden, true, 'Hidden Settings must render to receive a first-frame confirmation');
     assert.equal(window.centers, 1, 'Center the final AppKit frame before presenting it');
     assert.equal(window.visible, false, 'Do not expose the empty initial document');
     lines.emit('line', JSON.stringify({ type: 'show' }));
@@ -100,6 +102,23 @@ for (const mode of ['--settings-storage', '--settings-connect']) {
     mounted();
     assert.equal(window.visible, false);
     window.emit('ready-to-show');
+    assert.equal(window.visible, true);
+  });
+
+  test(`${mode} recovers when Electron omits ready-to-show only after a renderer frame`, () => {
+    const { window, mounted, frameReady } = host(mode);
+    mounted();
+    assert.equal(window.visible, false, 'React mount alone must not present Settings');
+    frameReady();
+    assert.equal(window.visible, true, 'The post-commit frame acknowledgement recovers the missing native event');
+    assert.equal(window.focuses, 1);
+  });
+
+  test(`${mode} frame acknowledgement alone cannot present Settings`, () => {
+    const { window, mounted, frameReady } = host(mode);
+    frameReady();
+    assert.equal(window.visible, false, 'A first frame without the Settings mount is insufficient');
+    mounted();
     assert.equal(window.visible, true);
   });
 
@@ -150,4 +169,34 @@ test('readiness refuses another frame and unexpected arguments', () => {
   const ready = handlers.get('apparent:settings-mounted');
   assert.throws(() => ready!({ sender: window.webContents, senderFrame: { url: window.webContents.mainFrame.url } }), /Forbidden bridge/);
   assert.throws(() => ready!({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, true), /Forbidden bridge/);
+});
+
+test('first-frame acknowledgement refuses another frame and unexpected arguments', () => {
+  const { window, handlers } = host('--settings-storage');
+  const ready = handlers.get('apparent:settings-frame-ready');
+  assert.throws(() => ready!({ sender: window.webContents, senderFrame: { url: window.webContents.mainFrame.url } }), /Forbidden bridge/);
+  assert.throws(() => ready!({ sender: window.webContents, senderFrame: window.webContents.mainFrame }, true), /Forbidden bridge/);
+});
+
+test('Settings preloads acknowledge the mount only after two renderer frame callbacks', async () => {
+  for (const preload of ['storage.cjs', 'connect.cjs']) {
+    const callbacks: (() => void)[] = [];
+    const exposed: Record<string, (...args: any[]) => Promise<void>> = {};
+    const invoked: string[] = [];
+    const preloadSource = readFileSync(path.join(path.dirname(filename), 'preloads', preload), 'utf8');
+    vm.runInNewContext(preloadSource, {
+      require: () => ({
+        contextBridge: { exposeInMainWorld: (name: string, value: (...args: any[]) => Promise<void>) => { exposed[name] = value; } },
+        ipcRenderer: { invoke: async (channel: string) => { invoked.push(channel); } },
+      }),
+      requestAnimationFrame: (callback: () => void) => { callbacks.push(callback); },
+    }, { filename: preload });
+    const acknowledgement = exposed.apparentSettingsMounted();
+    assert.deepEqual(invoked, [], `${preload}: no readiness IPC before a frame`);
+    callbacks.shift()!();
+    assert.deepEqual(invoked, [], `${preload}: first callback is before the paint opportunity`);
+    callbacks.shift()!();
+    await acknowledgement;
+    assert.deepEqual(invoked, ['apparent:settings-mounted', 'apparent:settings-frame-ready'], `${preload}: mount then frame readiness`);
+  }
 });
