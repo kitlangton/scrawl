@@ -250,3 +250,19 @@ login, but refuses changed login identity, cancellation, pending revocation or
 `authRequired`. Neither function renews credentials, checks token expiry or
 establishes service authorization. The caller supplies an already approved
 server and retains the transport/authorization and installed-adoption gates.
+
+
+`./recipient-command/state` exposes `runRecipientCommandFromState`, composing the
+real private state snapshot, legacy `<login-id>.identity` reader, authenticated
+retrieval and native directory publisher. Identity files use the existing bounded
+version1 X25519/Ed25519 format and are loaded only for encrypted manifests.
+Missing/damaged keys are never replaced and never trigger plaintext fallback.
+Legacy plaintext still needs explicit caller policy; local inspect touches no
+state or resource. A changed local login/cancellation/revocation fence prevents
+publication, and the command disposes its signing seed and plaintext buffers.
+
+This is an actual command composition with injected admitted resources, not an
+installed command/router. Expired renewable access returns `renewal_required`;
+authoritative renewal journals, provider assembly and installed adoption remain
+separate gates. This path reads existing state and creates only the compatible
+empty lock file; Rust retains all credential/queue/config JSON mutation.

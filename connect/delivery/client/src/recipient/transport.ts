@@ -24,7 +24,7 @@ const TRANSPORT = /^\/v1\/captures\/([a-f0-9]{32})\/files\/(.+)$/;
 
 function error(category: RecipientTransportCategory): never { throw new RecipientTransportError(category); }
 
-function validateServer(server: string): string {
+export function normalizeRecipientServer(server: string): string {
   if (typeof server !== "string" || server.length > 2048 || /[^\x21-\x7e]|["'\\?#@]/.test(server)) error("invalid_server");
   const base = server.replace(/\/+$/, "");
   if (!/^https?:\/\//.test(base)) error("invalid_server");
@@ -70,7 +70,7 @@ export class RecipientTransport {
   get server(): string { return this.#server; }
 
   constructor(server: string, accessToken: string, options?: { signal?: AbortSignal; timeoutMs?: number }) {
-    this.#server = validateServer(server);
+    this.#server = normalizeRecipientServer(server);
     validateToken(accessToken);
     if (options?.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 60_000)) error("invalid_request");
     this.#accessToken = accessToken;

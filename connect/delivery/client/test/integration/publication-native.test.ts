@@ -10,6 +10,7 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import * as ed25519 from "@noble/ed25519";
 import { encodeArchive, encryptAge, generateAgeIdentity, signEnvelope, splitAgeStream, type Context } from "../../src/recipient/crypto.ts";
+import { runRecipientCommandFromState } from "../../src/cli/recipient-state.ts";
 import { parseRecipientCommand, runRecipientCommand } from "../../src/cli/recipient.ts";
 import { publishRecipientCapture, RecipientPublicationError } from "../../src/recipient/publication.ts";
 import { readCredentialSnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources } from "../../src/state/namespace.ts";
@@ -193,6 +194,18 @@ test("recipient CLI retrieves a synthetic encrypted capture and publishes throug
     assert.deepEqual(result, { ok: true, path: destination });
     assert.equal(await readFile(path.join(destination, "summary.md"), "utf8"), "synthetic CLI handoff\n");
     mode((await lstat(destination)).mode, 0o700, "CLI bundle");
+    const state = path.join(root, "state"); await mkdir(state, { mode: 0o700 });
+    const identityId = "f".repeat(32), expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    await writeFile(path.join(state, "read.credential"), JSON.stringify({ server: origin, scope: "read", token, generation: "a".repeat(32), refreshToken: "synthetic-refresh",
+      expiresAt, refreshExpiresAt: expiresAt + 3600, grantId: "reader", encryption_identity: identityId }), { mode: 0o600 });
+    await writeFile(path.join(state, `${identityId}.identity`), JSON.stringify({ version: 1, age: reader.identity, signing: Buffer.from(signingSeed).toString("hex") }), { mode: 0o600 });
+    const stateDestination = path.join(root, "state-cli.apparent");
+    const stateResult = await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", stateDestination]), {
+      directory: state, approvedServer: origin, resources, inspectLocal: async source => source,
+    });
+    assert.deepEqual(stateResult, { ok: true, path: stateDestination });
+    assert.equal(await readFile(path.join(stateDestination, "summary.md"), "utf8"), "synthetic CLI handoff\n");
+
   } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
 }));
 
