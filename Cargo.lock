@@ -214,6 +214,7 @@ dependencies = [
  "ab_glyph",
  "anyhow",
  "apparent-capture",
+ "apparent-capture-engine",
  "apparent-connect-client",
  "arboard",
  "ashpd 0.11.1",
@@ -264,6 +265,20 @@ dependencies = [
  "anyhow",
  "clap",
  "libc",
+ "serde_json",
+]
+
+[[package]]
+name = "apparent-capture-engine"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "flume 0.12.0",
+ "gstreamer",
+ "gstreamer-app",
+ "gstreamer-video",
+ "libc",
+ "serde",
  "serde_json",
 ]
 

@@ -1,10 +1,12 @@
 # Staged capture Engine
 
 This independently compiled Rust package implements admission, durable receipts and
-bundle maintenance exclusion. **No Desktop, timed recording, Agent or retention
-call path consumes it yet.** It does not record media, publish clipboard content,
-route captures, or certify a complete Apparent bundle. Package tests exercise
-real filesystem and process boundaries, not native capture or media behavior.
+bundle maintenance exclusion, plus an optional `linux-media` GStreamer recorder
+consumed by the existing Desktop Linux capture caller. That recorder is not the
+standalone capture-v1 provider. The package does not publish clipboard content,
+route captures, or certify a complete Apparent bundle. Package tests cover real
+filesystem/process boundaries and the synthetic Linux recorder source/EOS paths;
+they are not native desktop acceptance.
 
 ## Source and retained review
 
@@ -16,7 +18,8 @@ The repaired trust boundary's source approval and parent-supplied portability
 review 49 are retained for unchanged bytes, not claimed as new reviews.
 Historical Linux/macOS package proof covers these 22 tests, including two worker
 entrypoints. Later model/recording leaves and session-provider work are excluded.
-This port adds no root dependency, production caller, CI or hook-policy change.
+The original admission/lease port adds no production caller; its source approvals
+do not cover the optional Linux recorder added separately below.
 
 ## Caller contract
 
@@ -145,13 +148,15 @@ cargo fmt --manifest-path engine/core/Cargo.toml -- --check
 cargo tree --manifest-path engine/core/Cargo.toml --offline
 ```
 
-The package pins cached libc/serde/serde_json dependencies and has its own small,
-unmodified Cargo-generated lockfile. Root Cargo.toml/Cargo.lock remain unchanged;
-verification selectors and pre-push contracts now check the moved core and
-standalone provider while retaining root checks for legacy capture code.
-There are no Agent, GPUI, recorder or product dependencies. This move does not
-change the workspace/lock policy or line-cap rules. Applicable native-producer
-PR checks verify the moved package on Linux and macOS before merge.
+The package pins cached libc/serde/serde_json dependencies and keeps its own
+Cargo-generated lockfile. The optional `linux-media` feature pins the existing
+GStreamer versions and requires Rust 1.96 or newer; the default core retains its
+Rust 1.89 minimum. It is enabled only by the root Linux Desktop caller; macOS
+does not select it. The standalone `engine/` provider does not enable this core
+feature, so its default and `media` dependency closures remain separate. The
+default core build has no Agent, GPUI or recorder dependencies. Applicable
+native-producer checks verify the moved package on Linux and macOS before merge;
+the legacy Linux recorder also needs its focused guest capture proof.
 Historical macOS package build/process proof is retained
 for source-identical code, not a fresh run on this port. Native capture/media
 acceptance and both products' real integration remain separate gates.
