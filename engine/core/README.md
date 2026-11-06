@@ -157,6 +157,9 @@ feature, so its default and `media` dependency closures remain separate. The
 default core build has no Agent, GPUI or recorder dependencies. Applicable
 native-producer checks verify the moved package on Linux and macOS before merge;
 the legacy Linux recorder also needs its focused guest capture proof.
+File-decoder fixture tests (`linux::media::tests`) require working H.264/AAC
+GStreamer codecs and FFmpeg with libx264/AAC for fixture generation. They fail
+when those test prerequisites are missing; FFmpeg is not a production fallback.
 Historical macOS package build/process proof is retained
 for source-identical code, not a fresh run on this port. Native capture/media
 acceptance and both products' real integration remain separate gates.

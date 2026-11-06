@@ -16,16 +16,13 @@ use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, anyhow, bail, ensure};
 use gstreamer as gst;
-use gstreamer::prelude::*;
-use gstreamer_app as gst_app;
 
-use crate::capture::desktop::linux::helper::FrameTimes;
 use crate::capture::engine::runtime::{
     CANDIDATE_EDGE, CANDIDATE_EDGE_NO_VIDEO, Sampler, apparent_log,
 };
 use crate::shared::model::{CaptureMode, RgbaFrame};
 use apparent_capture_engine::linux::{
-    Recorder, Source, can_record_video, encode_synthetic, init_gstreamer, rgba_of,
+    Recorder, Source, can_record_video, encode_synthetic, init_gstreamer,
 };
 
 fn encoder_repair_for(distro: &str) -> &'static str {
@@ -113,7 +110,11 @@ pub fn encoder_check(movie: &Path) -> Result<()> {
         bail!("No H.264 encoder plugin is installed");
     }
     encode_synthetic(movie)?;
-    let frames = frames(movie, FrameTimes::At(&[0]), 0)?;
+    let frames = frames(
+        movie,
+        crate::capture::desktop::linux::helper::FrameTimes::At(&[0]),
+        0,
+    )?;
     ensure!(
         frames
             .first()
@@ -205,13 +206,12 @@ pub fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         CANDIDATE_EDGE_NO_VIDEO
     };
     let candidate = crate::capture::engine::runtime::capture_size(&target, edge);
-    let recorder =
-        super::portal::source_for(&target, &stopping).and_then(|source| {
-            Recorder::new(&source, out, candidate, movie, started_at)
-                .map_err(|error| anyhow!("{error:#}"))
-                // The source (a portal session) lives as long as the recording.
-                .map(|recorder| (recorder, source))
-        });
+    let recorder = super::portal::source_for(&target, &stopping).and_then(|source| {
+        Recorder::new(&source, out, candidate, movie, started_at)
+            .map_err(|error| anyhow!("{error:#}"))
+            // The source (a portal session) lives as long as the recording.
+            .map(|recorder| (recorder, source))
+    });
     let mut recorder = match recorder {
         Ok(recorder) => {
             apparent_log(format!(
@@ -329,213 +329,43 @@ pub fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
 
 // MARK: Reading movies
 
-/// A paused decoding pipeline that hands out frames at the times it's sought to.
-struct VideoReader {
-    pipeline: gst::Pipeline,
-    sink: gst_app::AppSink,
-    duration_ms: u64,
-}
-
-impl VideoReader {
-    fn open(movie: &Path, max_edge: u32) -> Result<Self> {
-        init_gstreamer()?;
-        let caps = if max_edge > 0 {
-            // Keep the aspect: scale to fit a max_edge square, never up.
-            "video/x-raw,format=RGBA,pixel-aspect-ratio=1/1".to_owned()
-        } else {
-            "video/x-raw,format=RGBA".to_owned()
-        };
-        let launch = format!(
-            "filesrc location=\"{}\" ! decodebin ! videoconvert ! {caps} ! appsink name=sink sync=false max-buffers=1",
-            movie.display().to_string().replace('"', "\\\"")
-        );
-        let pipeline = gst::parse::launch(&launch)?
-            .downcast::<gst::Pipeline>()
-            .map_err(|_| anyhow!("Not a pipeline"))?;
-        let sink = pipeline
-            .by_name("sink")
-            .context("No sink")?
-            .downcast::<gst_app::AppSink>()
-            .map_err(|_| anyhow!("Not an appsink"))?;
-        pipeline.set_state(gst::State::Paused)?;
-        let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(10));
-        result.with_context(|| format!("Could not open {}", movie.display()))?;
-        let duration_ms = pipeline
-            .query_duration::<gst::ClockTime>()
-            .map_or(0, gst::ClockTime::mseconds);
-        Ok(Self {
-            pipeline,
-            sink,
-            duration_ms,
-        })
-    }
-
-    /// The frame on screen at `ms`: the last one at or before it.
-    fn at(&self, ms: u64) -> Result<(u64, u32, u32, Vec<u8>)> {
-        let target = ms.min(self.duration_ms.saturating_sub(1));
-        self.pipeline.seek_simple(
-            gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
-            gst::ClockTime::from_mseconds(target),
-        )?;
-        let _ = self.pipeline.state(gst::ClockTime::from_seconds(10));
-        let sample = self
-            .sink
-            .try_pull_preroll(gst::ClockTime::from_seconds(10))
-            .context("No frame decoded")?;
-        let caps = sample.caps().context("No caps")?;
-        let info = gstreamer_video::VideoInfo::from_caps(caps)?;
-        let (w, h) = (info.width(), info.height());
-        let rgba = rgba_of(&sample, w, h).context("Short frame")?;
-        let t = sample
-            .buffer()
-            .and_then(gst::BufferRef::pts)
-            .map_or(target, gst::ClockTime::mseconds);
-        Ok((t, w, h, rgba))
-    }
-}
-
-impl Drop for VideoReader {
-    fn drop(&mut self) {
-        let _ = self.pipeline.set_state(gst::State::Null);
-    }
-}
-
-/// Box-filters RGBA down so its long edge is at most `max_edge` (0 keeps it).
-fn shrink_to_edge(width: u32, height: u32, rgba: Vec<u8>, max_edge: u32) -> (u32, u32, Vec<u8>) {
-    let long = width.max(height);
-    if max_edge == 0 || long <= max_edge {
-        return (width, height, rgba);
-    }
-    let scale = f64::from(max_edge) / f64::from(long);
-    let w = ((f64::from(width) * scale).round() as u32).max(1);
-    let h = ((f64::from(height) * scale).round() as u32).max(1);
-    let (sw, sh) = (width as usize, height as usize);
-    let mut out = vec![0_u8; w as usize * h as usize * 4];
-    for y in 0..h as usize {
-        let y0 = y * sh / h as usize;
-        let y1 = ((y + 1) * sh / h as usize).max(y0 + 1);
-        for x in 0..w as usize {
-            let x0 = x * sw / w as usize;
-            let x1 = ((x + 1) * sw / w as usize).max(x0 + 1);
-            let mut acc = [0_u32; 3];
-            let n = ((y1 - y0) * (x1 - x0)) as u32;
-            for sy in y0..y1 {
-                for px in rgba[(sy * sw + x0) * 4..(sy * sw + x1) * 4].chunks_exact(4) {
-                    acc[0] += u32::from(px[0]);
-                    acc[1] += u32::from(px[1]);
-                    acc[2] += u32::from(px[2]);
-                }
-            }
-            out[(y * w as usize + x) * 4..][..4].copy_from_slice(&[
-                (acc[0] / n) as u8,
-                (acc[1] / n) as u8,
-                (acc[2] / n) as u8,
-                255,
-            ]);
+pub fn frames(
+    movie: &Path,
+    times: crate::capture::desktop::linux::helper::FrameTimes,
+    max_edge: u32,
+) -> Result<Vec<crate::shared::model::RgbaFrame>> {
+    let times = match times {
+        crate::capture::desktop::linux::helper::FrameTimes::Every(ms) => {
+            apparent_capture_engine::linux::media::FrameTimes::Every(ms)
         }
-    }
-    (w, h, out)
-}
-
-pub fn frames(movie: &Path, times: FrameTimes, max_edge: u32) -> Result<Vec<RgbaFrame>> {
-    let video = VideoReader::open(movie, max_edge)?;
-    let (requested, sampled): (Vec<u64>, bool) = match times {
-        FrameTimes::At(times) => {
-            if times.is_empty() {
-                return Ok(Vec::new());
-            }
-            (times.to_vec(), false)
+        crate::capture::desktop::linux::helper::FrameTimes::At(times) => {
+            apparent_capture_engine::linux::media::FrameTimes::At(times)
         }
-        FrameTimes::Every(ms) => (
-            (0..video.duration_ms.max(1))
-                .step_by(ms.max(1) as usize)
-                .collect(),
-            true,
-        ),
     };
-    let mut out: Vec<RgbaFrame> = Vec::with_capacity(requested.len());
-    for want in requested {
-        let (t, w, h, rgba) = video.at(want)?;
-        let (w, h, rgba) = shrink_to_edge(w, h, rgba, max_edge);
-        let t = if sampled { t } else { want };
-        if sampled && out.last().is_some_and(|f| f.t_ms == t) {
-            continue;
-        }
-        out.push(RgbaFrame::new(t, w, h, rgba));
-    }
-    ensure!(
-        !out.is_empty(),
-        "No frames decoded from {}",
-        movie.display()
-    );
-    Ok(out)
-}
-
-pub fn probe(movie: &Path) -> Result<crate::capture::desktop::linux::helper::Probe> {
-    let video = VideoReader::open(movie, 0)?;
-    let caps = video
-        .sink
-        .static_pad("sink")
-        .and_then(|pad| pad.current_caps());
-    let info = caps
-        .as_ref()
-        .and_then(|caps| gstreamer_video::VideoInfo::from_caps(caps).ok());
-    let audio_tracks =
-        audio_samples(movie).map_or(0, |(_, samples)| u32::from(!samples.is_empty()));
-    Ok(crate::capture::desktop::linux::helper::Probe {
-        duration_ms: video.duration_ms,
-        width: info.as_ref().map_or(0, gstreamer_video::VideoInfo::width),
-        height: info.as_ref().map_or(0, gstreamer_video::VideoInfo::height),
-        audio_tracks,
-        fps: info.as_ref().map_or(0.0, |i| {
-            let f = i.fps();
-            f64::from(f.numer()) / f64::from(f.denom().max(1))
-        }),
+    apparent_capture_engine::linux::media::frames(movie, times, max_edge).map(|frames| {
+        frames
+            .into_iter()
+            .map(|f| crate::shared::model::RgbaFrame::new(f.t_ms, f.width, f.height, f.rgba))
+            .collect()
     })
 }
 
-/// The movie's first audio track, 16 kHz mono, with silence before its first sample so audio
-/// time is movie time.
-fn audio_samples(movie: &Path) -> Result<(u64, Vec<f32>)> {
-    init_gstreamer()?;
-    let launch = format!(
-        "filesrc location=\"{}\" ! decodebin ! audioconvert ! audioresample ! audio/x-raw,format=F32LE,rate=16000,channels=1,layout=interleaved ! appsink name=sink sync=false",
-        movie.display().to_string().replace('"', "\\\"")
-    );
-    let pipeline = gst::parse::launch(&launch)?
-        .downcast::<gst::Pipeline>()
-        .map_err(|_| anyhow!("Not a pipeline"))?;
-    let sink = pipeline
-        .by_name("sink")
-        .context("No sink")?
-        .downcast::<gst_app::AppSink>()
-        .map_err(|_| anyhow!("Not an appsink"))?;
-    pipeline.set_state(gst::State::Playing)?;
-    let mut samples: Vec<f32> = Vec::new();
-    let mut first_ms = None;
-    while let Some(sample) = sink.try_pull_sample(gst::ClockTime::from_seconds(10)) {
-        let Some(buffer) = sample.buffer() else {
-            continue;
-        };
-        if first_ms.is_none() {
-            let start = buffer.pts().map_or(0, gst::ClockTime::mseconds);
-            first_ms = Some(start);
-            samples.resize((start * 16) as usize, 0.0);
+pub fn probe(movie: &Path) -> Result<crate::capture::desktop::linux::helper::Probe> {
+    apparent_capture_engine::linux::media::probe(movie).map(|p| {
+        crate::capture::desktop::linux::helper::Probe {
+            duration_ms: p.duration_ms,
+            width: p.width,
+            height: p.height,
+            audio_tracks: p.audio_tracks,
+            fps: p.fps,
         }
-        let map = buffer.map_readable()?;
-        samples.extend(
-            map.chunks_exact(4)
-                .map(|b| f32::from_le_bytes([b[0], b[1], b[2], b[3]])),
-        );
-    }
-    let _ = pipeline.set_state(gst::State::Null);
-    Ok((first_ms.unwrap_or(0), samples))
+    })
 }
 
-/// Mixes a movie's audio to 16 kHz mono WAV, aligned to the movie's start.
+/// Retain Desktop's existing WAV writer and error context around Engine PCM extraction.
 pub fn export_audio(movie: &Path, wav: &Path) -> Result<()> {
-    let (_, samples) = audio_samples(movie)?;
-    ensure!(!samples.is_empty(), "{} has no audio", movie.display());
+    let (_, samples) = apparent_capture_engine::linux::media::audio_samples(movie)?;
+    anyhow::ensure!(!samples.is_empty(), "{} has no audio", movie.display());
     std::fs::write(
         wav,
         crate::capture::engine::runtime::audio::audio::encode_wav_16k(&samples)?,
@@ -608,15 +438,6 @@ mod tests {
         );
         assert!(!directory.join("encoder-check.mp4").exists());
         std::fs::remove_dir(directory).unwrap();
-    }
-
-    #[test]
-    fn frames_shrink_to_their_long_edge() {
-        let (w, h, rgba) = shrink_to_edge(4, 2, vec![255; 4 * 2 * 4], 2);
-        assert_eq!((w, h), (2, 1));
-        assert_eq!(rgba, vec![255; 2 * 4]);
-        let (w, h, _) = shrink_to_edge(4, 2, vec![0; 32], 0);
-        assert_eq!((w, h), (4, 2));
     }
 
     #[test]
