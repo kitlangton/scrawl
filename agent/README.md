@@ -60,9 +60,11 @@ produced it. The installer checks the package hash before npm, validates the
 entire native inventory against its manifest before and after copying, and
 requires the installed Agent 0.1.0 and a stable SDK 0.2.x, 0.3.x or qualified 0.4.x media export.
 It accepts plain patch releases in those lines and stable 0.4.x after media/1 contract qualification; other new minor lines and prereleases are refused.
-The media/1 handshake remains mandatory. SDK's
-capture/2 interface does not enable native recording in this installer. Node 22.18+ and
-an existing npm are required.
+The media/1 handshake remains mandatory. An exact dual `media/1` + `media/2`
+manifest is retained as part of the full runtime closure, while the launcher
+still uses only media/1. This does not activate media/2 or configure native
+recording; the SDK's capture/2 interface also does not enable recording in this
+installer. Node 22.18+ and an existing npm are required.
 
 ```sh
 node /absolute/path/to/extracted-agent-package/dist/install-local.js \

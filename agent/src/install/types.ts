@@ -5,7 +5,11 @@ export type NativeManifest = {
   sourceSha: string;
   target: 'linux-x64';
   rustTriple: 'x86_64-unknown-linux-gnu';
-  capabilities: ['media/1'];
+  capabilities: ['media/1'] | ['media/1', 'media/2'];
+  media2Launch?: {
+    argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'];
+    sharesCaptureRuntime: true;
+  };
   launch: {
     entry: 'apparent-engine-frames';
     argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'];

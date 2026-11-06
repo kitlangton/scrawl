@@ -54,11 +54,13 @@ installed Agent/SDK versions and media export, verifies every regular file,
 mode and hash in the native inventory before and after copying, then requires
 a media/1 handshake and confirmed worker close before writing a success
 receipt. The full root (entry, worker, libraries, plugins and manifest) is
-retained. The generated launcher sets the explicit media executable and a
-private runtime path; it does not configure capture-v1 recording or global
-`apparent` routing. Input archives and roots are never modified. Existing or
-symlinked prefix paths are refused; failed installs leave a private partial
-prefix without a success receipt. Same-UID processes share the trust boundary.
+retained, including the exact additive `media/1` + `media/2` manifest form.
+The installer still launches and handshakes through the existing media/1 entry
+and private runtime. It does not activate media/2 or configure capture-v1
+recording or global `apparent` routing. Input archives and roots are never
+modified. Existing or symlinked prefix paths are refused; failed installs leave
+a private partial prefix without a success receipt. Same-UID processes share
+the trust boundary.
 Manifest integrity is not provenance: callers must obtain both digests from a
 trusted upstream admission/receipt. The documented 463 artifact pair is an
 example and does not override current-tree admission/reuse requirements.
