@@ -21,7 +21,7 @@ async function admittedArtifact(scenario = "published") {
   await writeFile(join(source.directory, "manifest.json"), manifest, { mode: 0o644 });
   return {
     source,
-    options: { artifactDirectory: source.directory, trustedManifestSha256: hash(manifest), expectedSourceSha: "a".repeat(40), target },
+    options: { artifactDirectory: await realpath(source.directory), trustedManifestSha256: hash(manifest), expectedSourceSha: "a".repeat(40), target },
   };
 }
 
@@ -185,21 +185,23 @@ test('snapshots external admission identity before asynchronous filesystem work'
 });
 
 test('uses a canonical private stage even when the system temp directory is aliased', { skip: !supportedHost }, async () => {
-  const artifact = await admittedArtifact();
   const tempRoot = await mkdtemp(join(await realpath(tmpdir()), "installed-temp-alias-"));
   const prior = process.env.TMPDIR;
+  let artifact: Awaited<ReturnType<typeof admittedArtifact>> | undefined;
   let resources: Awaited<ReturnType<typeof createInstalledNativeResources>> | undefined;
   try {
     const actual = join(tempRoot, 'temp-parent');
     const alias = join(tempRoot, 'temp-alias');
     await mkdir(actual, { mode: 0o700 }); await symlink(actual, alias);
     process.env.TMPDIR = alias;
+    artifact = await admittedArtifact();
+    assert.equal(artifact.options.artifactDirectory, await realpath(artifact.source.directory), 'The privileged caller supplies the canonical admitted directory');
     resources = await createInstalledNativeResources(artifact.options);
     assert(resources.executable.startsWith(actual + '/'));
     assert.throws(() => { (resources as unknown as { sha256: string }).sha256 = '0'.repeat(64); }, TypeError);
   } finally {
     if (prior === undefined) delete process.env.TMPDIR; else process.env.TMPDIR = prior;
-    await resources?.close(); await artifact.source.close(); await rm(tempRoot, { recursive: true, force: true });
+    await resources?.close(); await artifact?.source.close(); await rm(tempRoot, { recursive: true, force: true });
   }
 });
 
