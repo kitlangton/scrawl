@@ -128,6 +128,15 @@ fn hash_file(fd: i32) -> io::Result<String> {
 fn error(code: &'static str) -> Value {
     json!({"code":code,"message":"Engine capture request failed"})
 }
+fn release_refusal(stage: &'static str) -> &'static str {
+    if matches!(
+        std::env::var("APPARENT_CAPTURE_TEST_RELEASE_DIAGNOSTICS").as_deref(),
+        Ok("1")
+    ) {
+        eprintln!("capture release refused: {stage}");
+    }
+    "source_mismatch"
+}
 fn response(rpc: &str, result: Result<Value, &'static str>) -> Value {
     let mut value = json!({"channel":"capture","protocolVersion":2,"rpcId":rpc});
     match result {
@@ -1105,7 +1114,13 @@ fn process_request(
             let shared = if let Some(x) = all.get(capture) {
                 x.clone()
             } else {
-                let mut j = read_journal(root, capture, owner)?;
+                let mut j = read_journal(root, capture, owner).map_err(|code| {
+                    if method == "releaseMaterials" && code == "source_mismatch" {
+                        release_refusal("journal-read")
+                    } else {
+                        code
+                    }
+                })?;
                 if ["starting", "recording", "stopping"].contains(&j.state.as_str()) {
                     if let Some(_owner) = runtime
                         .acquire_capture_owner(capture)
@@ -1253,15 +1268,17 @@ fn process_request(
                                 json!({"released":true,"captureId":capture,"materialsId":mid}),
                             );
                         }
-                        Err(_) => return Err("source_mismatch"),
+                        Err(_) => return Err(release_refusal("root-open")),
                     };
-                    let pm = pinned.directory_metadata().map_err(|_| "source_mismatch")?;
+                    let pm = pinned
+                        .directory_metadata()
+                        .map_err(|_| release_refusal("root-metadata"))?;
                     if Some(pm.dev()) != jnow.root_device
                         || Some(pm.ino()) != jnow.root_inode
                         || pm.uid() != unsafe { libc::geteuid() }
                         || pm.mode() & 0o777 != 0o700
                     {
-                        return Err("source_mismatch");
+                        return Err(release_refusal("root-identity"));
                     }
                     let expected = ["recording.mp4", "materials.json"];
                     let mut seen = Vec::new();
@@ -1271,33 +1288,62 @@ fn process_request(
                         let e = entry.map_err(|_| "internal")?;
                         let name = e.file_name().to_string_lossy().into_owned();
                         if !expected.contains(&name.as_str()) {
-                            return Err("source_mismatch");
+                            return Err(release_refusal("unknown-entry"));
                         }
-                        let f = pinned.file(&name, false).map_err(|_| "source_mismatch")?;
-                        pinned.validate(&f).map_err(|_| "source_mismatch")?;
-                        let m = f.metadata().map_err(|_| "source_mismatch")?;
+                        let f = pinned
+                            .file(&name, false)
+                            .map_err(|_| release_refusal("file-open"))?;
+                        pinned
+                            .validate(&f)
+                            .map_err(|_| release_refusal("file-validation"))?;
+                        let m = f.metadata().map_err(|_| release_refusal("file-metadata"))?;
                         let binding = if name == "recording.mp4" {
                             &jnow.release_movie
                         } else {
                             &jnow.release_payload
                         };
-                        if !m.is_file()
-                            || m.uid() != unsafe { libc::geteuid() }
-                            || m.mode() & 0o777 != 0o600
-                            || m.nlink() != 1
-                            || binding
-                                .as_ref()
-                                .and_then(|v| v["device"].as_str())
-                                .and_then(|x| x.parse::<u64>().ok())
-                                != Some(m.dev())
-                            || binding
-                                .as_ref()
-                                .and_then(|v| v["inode"].as_str())
-                                .and_then(|x| x.parse::<u64>().ok())
-                                != Some(m.ino())
-                            || binding.as_ref().and_then(|v| v["size"].as_u64()) != Some(m.len())
+                        if !m.is_file() {
+                            return Err(release_refusal("file-type"));
+                        }
+                        if m.uid() != unsafe { libc::geteuid() } || m.mode() & 0o777 != 0o600 {
+                            return Err(release_refusal("file-owner-mode"));
+                        }
+                        if m.nlink() != 1 {
+                            return Err(release_refusal("file-link-count"));
+                        }
+                        if binding.is_none() {
+                            return Err(release_refusal("file-binding-missing"));
+                        }
+                        if binding
+                            .as_ref()
+                            .and_then(|v| v["device"].as_str())
+                            .and_then(|x| x.parse::<u64>().ok())
+                            != Some(m.dev())
                         {
-                            return Err("source_mismatch");
+                            return Err(release_refusal(if name == "recording.mp4" {
+                                "movie-device"
+                            } else {
+                                "payload-device"
+                            }));
+                        }
+                        if binding
+                            .as_ref()
+                            .and_then(|v| v["inode"].as_str())
+                            .and_then(|x| x.parse::<u64>().ok())
+                            != Some(m.ino())
+                        {
+                            return Err(release_refusal(if name == "recording.mp4" {
+                                "movie-inode"
+                            } else {
+                                "payload-inode"
+                            }));
+                        }
+                        if binding.as_ref().and_then(|v| v["size"].as_u64()) != Some(m.len()) {
+                            return Err(release_refusal(if name == "recording.mp4" {
+                                "movie-size"
+                            } else {
+                                "payload-size"
+                            }));
                         }
                         seen.push(name);
                     }
@@ -1306,7 +1352,7 @@ fn process_request(
                         || jnow.release_movie.is_none()
                         || jnow.release_payload.is_none()
                     {
-                        return Err("source_mismatch");
+                        return Err(release_refusal("durable-binding-missing"));
                     }
                     for name in expected {
                         if seen.iter().any(|x| x == name) {
@@ -1322,13 +1368,14 @@ fn process_request(
                         .sync_all()
                         .map_err(|_| "internal")?;
                     let parent = pinned_dir(dir.parent().ok_or("internal")?)
-                        .map_err(|_| "source_mismatch")?;
-                    let leaf = std::ffi::CString::new(capture).map_err(|_| "source_mismatch")?;
+                        .map_err(|_| release_refusal("parent-open"))?;
+                    let leaf = std::ffi::CString::new(capture)
+                        .map_err(|_| release_refusal("directory-name"))?;
                     if unsafe {
                         libc::unlinkat(parent.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR)
                     } != 0
                     {
-                        return Err("source_mismatch");
+                        return Err(release_refusal("directory-unlink"));
                     }
                     parent.sync_all().map_err(|_| "internal")?;
                     let mut j = shared.journal.lock().map_err(|_| "internal")?;

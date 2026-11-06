@@ -178,15 +178,42 @@ function startInput(source: Awaited<ReturnType<CaptureClient["discoverSources"]>
   };
 }
 function observeEngineStderr(client: CaptureClient | Media2Client) {
-  if (process.env.APPARENT_CAPTURE_DEBUG_STDERR !== "1") return;
+  const verbose = process.env.APPARENT_CAPTURE_DEBUG_STDERR === "1";
+  if (!verbose && process.env.APPARENT_CAPTURE_TEST_RELEASE_DIAGNOSTICS !== "1") return;
   const child = (client as unknown as { transport: { child: {
     stderr: NodeJS.ReadableStream;
     on(event: "exit", listener: (code: number | null, signal: NodeJS.Signals | null) => void): void;
   } } }).transport.child;
-  child.stderr.on("data", (chunk: Buffer) => process.stderr.write(chunk));
+  const stages = new Set([
+    "root-open", "root-metadata", "root-identity", "unknown-entry", "file-open",
+    "file-validation", "file-metadata", "file-binding-missing", "file-type",
+    "file-owner-mode", "file-link-count", "file-identity", "durable-binding-missing",
+    "parent-open", "directory-name", "directory-unlink", "journal-read",
+    "movie-device", "movie-inode", "movie-size", "payload-device", "payload-inode", "payload-size",
+  ]);
+  let pending = "";
+  child.stderr.on("data", (chunk: Buffer) => {
+    if (verbose) { process.stderr.write(chunk); return; }
+    const lines = (pending + chunk.toString("utf8")).split("\n");
+    pending = (lines.pop() ?? "").slice(-160);
+    for (const raw of lines) {
+      const line = raw.endsWith("\r") ? raw.slice(0, -1) : raw;
+      const prefix = "capture release refused: ";
+      if (line.length <= 160 && line.startsWith(prefix) && stages.has(line.slice(prefix.length))) {
+        process.stderr.write(`${line}\n`);
+      }
+    }
+  });
   child.on("exit", (code, signal) => {
     process.stderr.write(`capture worker exited: code=${code} signal=${signal}\n`);
   });
+}
+function capturePeerClient(runtime: string) {
+  const executable = binary;
+  if (!executable) throw new Error("capture peer binary is unavailable");
+  const client = new CaptureClient(launchCaptureEngine(resolve(executable), runtime, 10_000));
+  observeEngineStderr(client);
+  return client;
 }
 
 test("SDK capture/2 records a selected X11 output, seals materials, and releases only by owner", { skip: !binary }, async () => {
@@ -209,8 +236,10 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
   const oldReleaseDelay = process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS;
   const oldReadinessUnavailable = process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
   const oldCancelCleanupBundle = process.env.APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID;
+  const oldReleaseDiagnostics = process.env.APPARENT_CAPTURE_TEST_RELEASE_DIAGNOSTICS;
   process.env.DISPLAY = display;
   delete process.env.WAYLAND_DISPLAY;
+  process.env.APPARENT_CAPTURE_TEST_RELEASE_DIAGNOSTICS = "1";
   const runtime = mkdtempSync(join(tmpdir(), "apparent-capture-runtime-"));
   chmodSync(runtime, 0o700);
   process.env.GST_DEBUG = "2";
@@ -225,8 +254,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     await delay(500);
     execFileSync(xsetrootCommand, ["-solid", "#cc2211"]);
     process.stderr.write("capture peer: Xvfb endpoint verified before starting Engine worker\n");
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
-    observeEngineStderr(client);
+    client = capturePeerClient(runtime);
     let hello;
     try {
       hello = await client.handshake(15_000);
@@ -273,7 +301,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
       await delay(180);
     }
     process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
-    const coldStopClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    const coldStopClient = capturePeerClient(runtime);
     try {
       const coldHello = await coldStopClient.handshake(15_000);
       assert.equal(coldHello.readiness, "unavailable", "cold control client has no new source readiness");
@@ -391,7 +419,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     // and muxer before exercising stdin-EOF finalization.
     await delay(160);
     assert.equal(await client.close(), "eof-exited", "stdin EOF drains and exits without a signal request");
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    client = capturePeerClient(runtime);
     await delay(100);
     await client.handshake(15_000);
     const recovered = await client.inspect({ captureId: third.captureId, ownerToken: third.ownerToken });
@@ -406,7 +434,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     await client.start(fourth);
     await until(client, { captureId: fourth.captureId, ownerToken: fourth.ownerToken }, ["recording"]);
     process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
-    const coldCancelClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    const coldCancelClient = capturePeerClient(runtime);
     try {
       const coldHello = await coldCancelClient.handshake(15_000);
       assert.equal(coldHello.readiness, "unavailable");
@@ -432,7 +460,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const childExit = new Promise<void>((resolveExit) => nativeChild.once("exit", resolveExit));
     assert.equal(nativeChild.kill("SIGKILL"), true);
     await childExit;
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    client = capturePeerClient(runtime);
     await delay(100);
     await client.handshake(15_000);
     const afterCrash = await client.inspect({ captureId: fifth.captureId, ownerToken: fifth.ownerToken });
@@ -451,7 +479,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const lostReleaseReply = await pendingRelease;
     assert.ok("error" in lostReleaseReply, "crash after durable release intent leaves the reply unknown to the caller");
     delete process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS;
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    client = capturePeerClient(runtime);
     await delay(100);
     await client.handshake(15_000);
     const pendingReplay = await client.inspect({ captureId: fifth.captureId, ownerToken: fifth.ownerToken });
@@ -468,7 +496,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const cancelCrash = startInput(postCrashSource, id(), token(), "cancel-ack-crash");
     await client.start(cancelCrash);
     await until(client, { captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken }, ["recording"]);
-    const coldCancellation = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    const coldCancellation = capturePeerClient(runtime);
     try {
       await coldCancellation.handshake(15_000);
       await coldCancellation.cancel({ captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken });
@@ -495,7 +523,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const cancelOwnerExit = new Promise<void>((resolveExit) => cancelOwner.once("exit", resolveExit));
     assert.equal(cancelOwner.kill("SIGKILL"), true, "crash after the durable cancellation acknowledgment");
     await cancelOwnerExit;
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    client = capturePeerClient(runtime);
     await delay(100);
     await client.handshake(15_000);
     let cancelledCrash: CaptureStatus;
@@ -518,7 +546,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const nextExit = new Promise<void>((resolveExit) => nextNativeChild.once("exit", resolveExit));
     assert.equal(nextNativeChild.kill("SIGKILL"), true);
     await nextExit;
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    client = capturePeerClient(runtime);
     await delay(100);
     await client.handshake(15_000);
     const failedCrash = await client.inspect({ captureId: sixth.captureId, ownerToken: sixth.ownerToken });
@@ -556,7 +584,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.equal(afterRelease.state, "cancelled");
     assert.equal(afterRelease.materials, undefined, "released terminal observation never exposes a missing manifest");
     await client.close();
-    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    client = capturePeerClient(runtime);
     await delay(100);
     await client.handshake(15_000);
     const replayRelease = await client.releaseMaterials({ captureId, ownerToken, materialsId: manifest.key.materialsId, leaseId: manifest.leaseId });
@@ -576,6 +604,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     if (oldReleaseDelay === undefined) delete process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS; else process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS = oldReleaseDelay;
     if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE; else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
     if (oldCancelCleanupBundle === undefined) delete process.env.APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID; else process.env.APPARENT_CAPTURE_TEST_CANCEL_CLEANUP_BUNDLE_ID = oldCancelCleanupBundle;
+    if (oldReleaseDiagnostics === undefined) delete process.env.APPARENT_CAPTURE_TEST_RELEASE_DIAGNOSTICS; else process.env.APPARENT_CAPTURE_TEST_RELEASE_DIAGNOSTICS = oldReleaseDiagnostics;
     if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
       try {
         const evidence = resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR);
