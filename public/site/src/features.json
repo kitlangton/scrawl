@@ -1214,7 +1214,7 @@
       "status": "main",
       "added": "2026-11-05",
       "platforms": ["mac", "linux"],
-      "note": "No screen, window, session, microphone, provider, UI, Engine or network is read or launched. Default output follows configured capture storage; --out requires a fresh absolute .apparent directory. PNG and semantic files are private, the manifest is published last, and synthetic provenance is explicit. --clipboard fails truthfully before output because native clipboard parity remains pending.",
+      "note": "No screen, window, session, microphone, provider, UI, Engine or network is read or launched. Default output follows configured capture storage; --out requires a fresh absolute .apparent directory. PNG and semantic files are private, the manifest is published last, and synthetic provenance is explicit. --clipboard requires a compatible already-running GUI before generation, copies only Record-formatted semantic text, and never launches the GUI or copies images. Refusal or unknown retains the valid bundle and reports its path; unknown exits 3 without retry. Native effect, GUI archive and installed activation remain separate platform gates.",
       "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
     },
     {
