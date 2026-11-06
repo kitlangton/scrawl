@@ -61,6 +61,21 @@ The package API has Linux/Mac native joined-consumer proof, not installed CLI
 adoption or writer-cutover proof.
 
 
+The next recipient adoption prerequisite adds a bounded private request to the
+existing writer for read-grant renewal and terminal rejection. The TypeScript
+transport prepares fresh authority for each GET, renews within 30 seconds,
+retries only a rejected GET once and delegates `authRequired` marking after a
+second 401. The writer pins server, generation, token and cancellation; it owns
+all journal/credential commits and cannot select upload scope or config effects.
+This is the temporary same-writer adapter permitted by step 2 below, not the
+zero-Rust target or installed adoption. Its source-bound joined Linux/Mac proof uses
+a synthetic service, the real writer executable and the native resource adapter;
+installed proof remains required. Published resource/provider assembly
+and the separate legacy writer launch/admission are also required before routing
+production consumers. Rust still owns renewal product behavior in this bridge;
+move it with the coordinated writer and remove the bridge at that cutover.
+
+
 Read with [hosted-client.md](hosted-client.md), [hosted-api.md](hosted-api.md),
 and [hosted-encryption.md](hosted-encryption.md). This is a source inventory,
 not proof that the TypeScript replacement or routing has been adopted.

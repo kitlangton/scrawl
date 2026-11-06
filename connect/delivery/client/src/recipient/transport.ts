@@ -3,7 +3,11 @@ import { assetPath } from "./manifest.ts";
 
 export type RecipientTransportCategory = "not_found" | "unauthorized" | "forbidden" | "slow_down" | "quota_exceeded"
   | "request_failed" | "response_too_large" | "invalid_response" | "invalid_server" | "invalid_request"
-  | "redirect_refused" | "cancelled" | "timeout";
+  | "redirect_refused" | "cancelled" | "timeout" | "auth_required" | "renewal_required"
+  | "state_unavailable" | "stale_snapshot" | "revocation_pending" | "offline";
+export type RecipientAuthorizationRequest = { state: "prepare" } | { state: "retry" | "reject"; token: string };
+export type RecipientAuthorization = (request: RecipientAuthorizationRequest, signal: AbortSignal) => Promise<
+  { state: "authorized"; token: string } | { state: "rejected" }>;
 
 /** Safe transport failure. The message and category never include response or request data. */
 export class RecipientTransportError extends Error {
@@ -67,15 +71,18 @@ export class RecipientTransport {
   #accessToken: string;
   #signal?: AbortSignal;
   #timeoutMs?: number;
+  #authorize?: RecipientAuthorization;
   get server(): string { return this.#server; }
 
-  constructor(server: string, accessToken: string, options?: { signal?: AbortSignal; timeoutMs?: number }) {
+  constructor(server: string, accessToken: string, options?: { signal?: AbortSignal; timeoutMs?: number; authorize?: RecipientAuthorization }) {
     this.#server = normalizeRecipientServer(server);
     validateToken(accessToken);
     if (options?.timeoutMs !== undefined && (!Number.isInteger(options.timeoutMs) || options.timeoutMs < 1 || options.timeoutMs > 60_000)) error("invalid_request");
     this.#accessToken = accessToken;
     this.#signal = options?.signal;
     this.#timeoutMs = options?.timeoutMs;
+    if (options?.authorize !== undefined && typeof options.authorize !== "function") error("invalid_request");
+    this.#authorize = options?.authorize;
   }
 
   getJson(route: string, maximumBytes = JSON_MAX): Promise<unknown> {
@@ -101,43 +108,74 @@ export class RecipientTransport {
     const timer = setTimeout(() => controller.abort("deadline"), this.#timeoutMs ?? defaultTimeout);
     let body: ReadableStream<Uint8Array> | null = null;
     try {
-      const response = await fetch(`${this.#server}${route}`, {
-        method: "GET", headers: { Authorization: `Bearer ${this.#accessToken}`, Accept: json ? "application/json" : "application/octet-stream" },
-        redirect: "manual", credentials: "omit", referrerPolicy: "no-referrer", signal: controller.signal,
-      });
-      body = response.body;
-      if (response.status >= 300 && response.status < 400) error("redirect_refused");
-      if (!response.ok) {
-        let category: RecipientTransportCategory = "request_failed";
-        if (response.status === 404) category = "not_found";
-        else if (response.status === 401) category = "unauthorized";
-        else if (response.status === 403) category = "forbidden";
-        else if (response.status === 429) category = "slow_down";
-        else if (response.status === 413 || response.status === 507) category = "quota_exceeded";
-        error(category);
-      }
-      if (!body) return new Uint8Array();
-      const reader = body.getReader();
-      const chunks: Uint8Array[] = [];
-      let total = 0;
-      try {
-        while (true) {
-          const item = await reader.read();
-          if (controller.signal.aborted) error(controller.signal.reason === "deadline" ? "timeout" : "cancelled");
-          if (item.done) break;
-          const chunk = item.value;
-          if (chunk.byteLength > maximumBytes - total) error("response_too_large");
-          total += chunk.byteLength;
-          chunks.push(chunk);
+      const authorize = async (request: RecipientAuthorizationRequest): Promise<string> => {
+        if (!this.#authorize) return this.#accessToken;
+        const result = await callAuthorization(request);
+        if (controller.signal.aborted) error(controller.signal.reason === "deadline" ? "timeout" : "cancelled");
+        if (result?.state !== "authorized") error("auth_required");
+        validateToken(result.token); return result.token;
+      };
+      const callAuthorization = async (request: RecipientAuthorizationRequest) => {
+        if (controller.signal.aborted) error(controller.signal.reason === "deadline" ? "timeout" : "cancelled");
+        let abort!: () => void;
+        const aborted = new Promise<never>((_resolve, reject) => {
+          abort = () => reject(new RecipientTransportError(controller.signal.reason === "deadline" ? "timeout" : "cancelled"));
+          controller.signal.addEventListener("abort", abort, { once: true });
+        });
+        try { return await Promise.race([this.#authorize!(request, controller.signal), aborted]); }
+        finally { controller.signal.removeEventListener("abort", abort); }
+      };
+      let token = await authorize({ state: "prepare" });
+      for (let attempt = 0; attempt < 2; attempt++) {
+        const response = await fetch(`${this.#server}${route}`, {
+          method: "GET", headers: { Authorization: `Bearer ${token}`, Accept: json ? "application/json" : "application/octet-stream" },
+          redirect: "manual", credentials: "omit", referrerPolicy: "no-referrer", signal: controller.signal,
+        });
+        body = response.body;
+        if (response.status === 401 && this.#authorize) {
+          if (body) { await body.cancel(); body = null; }
+          if (attempt === 0) {
+            const next = await authorize({ state: "retry", token });
+            if (next === token) error("auth_required");
+            token = next; continue;
+          }
+          await callAuthorization({ state: "reject", token });
+          error("auth_required");
         }
-      } finally { reader.releaseLock(); }
-      const output = new Uint8Array(total);
-      let offset = 0;
-      for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
-      return output;
+        if (response.status >= 300 && response.status < 400) error("redirect_refused");
+        if (!response.ok) {
+          let category: RecipientTransportCategory = "request_failed";
+          if (response.status === 404) category = "not_found";
+          else if (response.status === 401) category = "unauthorized";
+          else if (response.status === 403) category = "forbidden";
+          else if (response.status === 429) category = "slow_down";
+          else if (response.status === 413 || response.status === 507) category = "quota_exceeded";
+          error(category);
+        }
+        if (!body) return new Uint8Array();
+        const reader = body.getReader();
+        const chunks: Uint8Array[] = [];
+        let total = 0;
+        try {
+          while (true) {
+            const item = await reader.read();
+            if (controller.signal.aborted) error(controller.signal.reason === "deadline" ? "timeout" : "cancelled");
+            if (item.done) break;
+            const chunk = item.value;
+            if (chunk.byteLength > maximumBytes - total) error("response_too_large");
+            total += chunk.byteLength;
+            chunks.push(chunk);
+          }
+        } finally { reader.releaseLock(); }
+        const output = new Uint8Array(total);
+        let offset = 0;
+        for (const chunk of chunks) { output.set(chunk, offset); offset += chunk.byteLength; }
+        return output;
+      }
+      return error("request_failed");
     } catch (cause) {
-      if (cause instanceof RecipientTransportError) throw cause;
       if (controller.signal.aborted) error(controller.signal.reason === "deadline" ? "timeout" : "cancelled");
+      if (cause instanceof RecipientTransportError) throw cause;
       return error("request_failed");
     } finally {
       clearTimeout(timer);

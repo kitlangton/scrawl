@@ -1,5 +1,5 @@
 import { retrieveRecipientCapture, RecipientRetrievalError, type RecipientReadCredential, type RetrievedRecipientCapture } from "../recipient/retrieve.ts";
-import { RecipientTransportError } from "../recipient/transport.ts";
+import { RecipientTransportError, type RecipientAuthorization } from "../recipient/transport.ts";
 
 const ID = /^[a-f0-9]{32}$/;
 export type RecipientCommand =
@@ -19,6 +19,7 @@ export type RecipientCliDependencies = {
   cancelled?: AbortSignal;
   allowLegacyPlaintext?: boolean;
   resolveIdentity?: () => Promise<{ age: string; signing: Uint8Array }>;
+  authorize?: RecipientAuthorization;
 };
 export type RecipientCliResult = { ok: true; path: string } | { ok: false; error: CliFailure };
 
@@ -26,7 +27,7 @@ function invalid(message: string): never { throw new CliArgumentError(message); 
 export class CliArgumentError extends Error { readonly category = "invalid_arguments"; }
 const COMMAND_FAILURES = ["auth_required", "renewal_required", "encryption_identity_missing", "encryption_identity_unavailable",
   "state_unavailable", "stale_snapshot", "revocation_pending", "invalid_server", "cancelled", "destination_exists",
-  "publication_refused", "unsafe_directory", "unsafe_file", "operation_failed"] as const;
+  "publication_refused", "unsafe_directory", "unsafe_file", "operation_failed", "offline"] as const;
 export type RecipientCommandFailure = typeof COMMAND_FAILURES[number];
 /** Closed adapter errors; arbitrary diagnostics never reach CLI output. */
 export class RecipientCommandError extends Error {
@@ -89,6 +90,7 @@ export async function runRecipientCommand(command: RecipientCommand, dependencie
       signal: dependencies.cancelled,
       allowLegacyPlaintext: dependencies.allowLegacyPlaintext,
       resolveIdentity: dependencies.resolveIdentity,
+      authorize: dependencies.authorize,
     });
     if (dependencies.cancelled?.aborted) throw new RecipientRetrievalError("cancelled");
     return await publishVerified(retrieved, command.out, dependencies.publish);

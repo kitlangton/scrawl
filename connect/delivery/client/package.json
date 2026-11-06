@@ -8,6 +8,7 @@
     ".": "./dist/index.js",
     "./recipient-publication": "./dist/recipient/publication.js",
     "./recipient-command/state": "./dist/cli/recipient-state.js",
+    "./recipient-command/renewal": "./dist/state/renewal-owner.js",
     "./recipient-command": "./dist/cli/recipient.js",
     "./credentials": "./dist/credentials/index.js",
     "./state": "./dist/state/namespace.js",

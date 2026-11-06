@@ -19,6 +19,54 @@ function category(promise: Promise<unknown>, expected: string) {
   return assert.rejects(promise, (error: unknown) => error instanceof RecipientTransportError && error.category === expected && error.message === expected);
 }
 
+test("each GET prepares authorization and only its rejected token is retried once", async () => {
+  const headers: string[] = [], phases: string[] = [];
+  const f = await fixture((req, res) => {
+    headers.push(req.headers.authorization ?? "");
+    if (headers.length === 1) { res.writeHead(401); res.end("private diagnostic"); }
+    else res.end("{}");
+  });
+  try {
+    let prepares = 0;
+    const client = new RecipientTransport(f.origin, "unused-initial", { authorize: async request => {
+      phases.push(request.state);
+      if (request.state === "retry") { assert.equal(request.token, "token-1"); return { state: "authorized", token: "retried" }; }
+      assert.equal(request.state, "prepare"); prepares++; return { state: "authorized", token: `token-${prepares}` };
+    } });
+    await client.getJson("/v1/account"); await client.getJson("/v1/account");
+    assert.deepEqual(headers, ["Bearer token-1", "Bearer retried", "Bearer token-2"]);
+    assert.deepEqual(phases, ["prepare", "retry", "prepare"]);
+  } finally { await f.close(); }
+});
+
+test("a second 401 rejects only the current token; forbidden requests never refresh", async () => {
+  let status = 401, calls = 0; const phases: string[] = [];
+  const f = await fixture((_req, res) => { calls++; res.writeHead(status); res.end(); });
+  try {
+    const client = new RecipientTransport(f.origin, "initial", { authorize: async request => {
+      phases.push(request.state);
+      if (request.state === "reject") { assert.equal(request.token, "new-token"); return { state: "rejected" }; }
+      return { state: "authorized", token: request.state === "prepare" ? "old-token" : "new-token" };
+    } });
+    await category(client.getJson("/v1/account"), "auth_required");
+    assert.equal(calls, 2); assert.deepEqual(phases, ["prepare", "retry", "reject"]);
+    calls = 0; phases.length = 0; status = 403;
+    await category(client.getJson("/v1/account"), "forbidden");
+    assert.equal(calls, 1); assert.deepEqual(phases, ["prepare"]);
+  } finally { await f.close(); }
+});
+
+test("unchanged tokens are never replayed and authorization waits share the request deadline", async () => {
+  let calls = 0;
+  const f = await fixture((_req, res) => { calls++; res.writeHead(401); res.end(); });
+  try {
+    const same = new RecipientTransport(f.origin, "initial", { authorize: async () => ({ state: "authorized", token: "same" }) });
+    await category(same.getJson("/v1/account"), "auth_required"); assert.equal(calls, 1);
+    const stalled = new RecipientTransport(f.origin, "initial", { timeoutMs: 20, authorize: async () => new Promise(() => {}) });
+    await category(stalled.getJson("/v1/account"), "timeout"); assert.equal(calls, 1);
+  } finally { await f.close(); }
+});
+
 test("mount-aware routes, bearer-only headers, and real response bytes", async () => {
   const seen: Array<{ url?: string; auth?: string; cookie?: string; referer?: string }> = [];
   const f = await fixture((req, res) => {
