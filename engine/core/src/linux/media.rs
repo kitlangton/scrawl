@@ -62,6 +62,7 @@ impl PinnedVideoReader {
         let reader = VideoReader::open_location(
             &format!("/proc/self/fd/{}", file.as_raw_fd()),
             0,
+            Some(2),
         )?;
         if reader.duration_ms == 0 { return Err(IncompleteVideo.into()); }
         Ok(Self(reader))
@@ -113,10 +114,10 @@ struct VideoReader {
 
 impl VideoReader {
     fn open(movie: &Path, max_edge: u32) -> Result<Self> {
-        Self::open_location(&movie.display().to_string(), max_edge)
+        Self::open_location(&movie.display().to_string(), max_edge, None)
     }
 
-    fn open_location(location: &str, max_edge: u32) -> Result<Self> {
+    fn open_location(location: &str, max_edge: u32, decoder_threads: Option<i32>) -> Result<Self> {
         init_gstreamer()?;
         let caps = if max_edge > 0 {
             "video/x-raw,format=RGBA,pixel-aspect-ratio=1/1"
@@ -135,6 +136,21 @@ impl VideoReader {
             .context("No sink")?
             .downcast::<gst_app::AppSink>()
             .map_err(|_| anyhow!("Not an appsink"))?;
+        if let Some(threads) = decoder_threads {
+            // Autoplugged libav otherwise creates CPU-count decoder threads.
+            // Their stacks/allocator arenas can exhaust the supervised worker's
+            // address-space budget before even a small H.264 frame is returned.
+            // Install the bound before PAUSED triggers decoder construction.
+            pipeline.connect_deep_element_added(move |_, _, element| {
+                if let Some(property) = element.find_property("max-threads") {
+                    if property.value_type() == i32::static_type() {
+                        element.set_property("max-threads", threads);
+                    } else if property.value_type() == u32::static_type() {
+                        element.set_property("max-threads", threads as u32);
+                    }
+                }
+            });
+        }
         // Own the pipeline before startup so every failure tears it down.
         let mut reader = Self { pipeline, sink, duration_ms: 0 };
         reader.pipeline.set_state(gst::State::Paused)?;
@@ -345,6 +361,32 @@ mod tests {
     impl Drop for TempMovie {
         fn drop(&mut self) {
             let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    #[test]
+    fn pinned_h264_reader_bounds_autoplugged_decoder_threads() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/tiny.mp4");
+        let file = File::open(path).unwrap();
+        let reader = PinnedVideoReader::open(&file).unwrap();
+        for requested in [100, 0, 100] {
+            let frame = reader.frame(requested, 32, 4096).unwrap();
+            assert_eq!((frame.width, frame.height), (16, 16));
+            assert!(frame.rgba.chunks_exact(4).all(|pixel| pixel[2] > 240 && pixel[0] < 10 && pixel[1] < 10 && pixel[3] == 255));
+        }
+        let mut bounded_decoder = false;
+        for element in reader.0.pipeline.iterate_recurse().into_iter().flatten() {
+            if let Some(property) = element.find_property("max-threads") {
+                bounded_decoder = true;
+                if property.value_type() == i32::static_type() {
+                    assert_eq!(element.property::<i32>("max-threads"), 2);
+                } else if property.value_type() == u32::static_type() {
+                    assert_eq!(element.property::<u32>("max-threads"), 2);
+                }
+            }
+        }
+        if std::env::var_os("APPARENT_PINNED_EXPECT_LIBAV").is_some() {
+            assert!(bounded_decoder, "the closed libav fixture must exercise the thread bound");
         }
     }
 

@@ -5,6 +5,7 @@ import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rename, r
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
+import { Media2Client, launchMedia2Worker } from '../sdk/src/media2/index.ts';
 import { createMediaJobId, launchMediaWorker, MediaChildProcessTransport, MediaClient, MediaRpcError, type DecodeRequest, type MediaJobStatus } from '../sdk/src/media.ts';
 
 const binary = process.env.APPARENT_ENGINE_FRAMES_BIN;
@@ -269,4 +270,24 @@ test('forced supervisor death stops its pinned decoder and leaves only private u
     if (safeCleanup) await f.close();
     else console.error('Retained synthetic fixture because decoder cleanup was not established:', f.root);
   }
+});
+
+
+if (process.platform === 'linux') test('packaged media/2 negotiates separately and authenticates before unknown-job lookup', { skip: !binary }, async () => {
+  const root = await mkdtemp(join(await realpath(tmpdir()), 'apparent-media2-handshake-'));
+  await chmod(root, 0o700);
+  await mkdir(join(root, 'capture-v2'), { mode: 0o700 });
+  const transport = launchMedia2Worker(resolve(binary!), root);
+  const client = new Media2Client(transport);
+  try {
+    const hello = await client.handshake();
+    const supported = process.platform === 'linux';
+    assert.equal(hello.implementation, 'native');
+    assert.deepEqual(hello.capabilities, { retainedFrames: supported, contactSheet: supported, nativeJobAuthority: supported });
+    const reply = await transport.request({ channel: 'media', protocolVersion: 2, clientId: client.clientId, rpcId: 'b'.repeat(32), method: 'inspect', captureId: 'c'.repeat(32), ownerToken: 'd'.repeat(64), jobId: 'e'.repeat(32), requestSha256: 'f'.repeat(64) }, 5000);
+    assert.deepEqual(reply.error, { code: supported ? 'not_found' : 'unavailable' });
+    assert.equal(reply.result, undefined);
+    const namespace = join(root, 'materials-media-2');
+    assert.deepEqual(await readdir(namespace), [], 'unauthenticated lookup creates no job or output');
+  } finally { await client.close(); await rm(root, { recursive: true, force: true }); }
 });

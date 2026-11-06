@@ -209,7 +209,7 @@ test('an additive replacement method cannot bypass installed retirement or affec
   const artifact = await admittedArtifact();
   let resources: Awaited<ReturnType<typeof createInstalledNativeResources>> | undefined;
   let effects = 0;
-  assert.equal(Object.hasOwn(NativeResources.prototype, 'replaceFile'), false);
+  const originalReplacement = Object.getOwnPropertyDescriptor(NativeResources.prototype, 'replaceFile');
   // Model the actual additive SDK method without importing its unqualified
   // implementation. An inherited dispatch here would bypass installed #run.
   Object.defineProperty(NativeResources.prototype, 'replaceFile', { configurable: true, value() { effects++; return Promise.resolve({ state: 'replaced' }); } });
@@ -225,7 +225,8 @@ test('an additive replacement method cannot bypass installed retirement or affec
     await assert.rejects(replacement.replaceFile(closed, 'source', 'destination', {}), /provider_unavailable/);
     assert.equal(closed.fd, -1); assert.equal(effects, 0, 'No inherited native dispatch or automatic retry');
   } finally {
-    Reflect.deleteProperty(NativeResources.prototype, 'replaceFile');
+    if (originalReplacement) Object.defineProperty(NativeResources.prototype, 'replaceFile', originalReplacement);
+    else Reflect.deleteProperty(NativeResources.prototype, 'replaceFile');
     await resources?.close(); await artifact.source.close();
   }
 });

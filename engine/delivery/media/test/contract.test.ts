@@ -61,3 +61,20 @@ test('strict runtime inventory rejects symlinks and malformed paths', () => {
     assert.throws(() => validateArtifact(root))
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
+
+test('retained media advertises an explicit shared-capture-runtime launch without changing media1', () => {
+  const root = artifact()
+  try {
+    const path = resolve(root, 'manifest.json')
+    const manifest = JSON.parse(requireBytes(path, 'utf8'))
+    manifest.capabilities = ['media/1', 'media/2']
+    writeFileSync(path, JSON.stringify(manifest))
+    assert.throws(() => validateArtifact(root), /retained media launch identity/)
+    manifest.media2Launch = { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }
+    writeFileSync(path, JSON.stringify(manifest))
+    validateArtifact(root)
+    manifest.media2Launch.sharesCaptureRuntime = false
+    writeFileSync(path, JSON.stringify(manifest))
+    assert.throws(() => validateArtifact(root), /retained media launch identity/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
