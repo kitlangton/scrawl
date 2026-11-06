@@ -869,20 +869,13 @@ fn process_request(
                     if j.materials.is_none() {
                         remove_unsealed(root, &j)?;
                     }
-                    j.state = if j.cancel_requested {
-                        "cancelled"
+                    if j.cancel_requested {
+                        j.state = "cancelled".into();
+                        j.error = None;
                     } else {
-                        "failed"
+                        j.state = "failed".into();
+                        j.error = Some("unavailable".into());
                     }
-                    .into();
-                    j.error = Some(
-                        if j.cancel_requested {
-                            "cancelled"
-                        } else {
-                            "unavailable"
-                        }
-                        .into(),
-                    );
                     drop(j);
                     persist(existing).map_err(|_| "internal")?;
                 } else {
@@ -926,20 +919,13 @@ fn process_request(
                         if recovered.materials.is_none() {
                             remove_unsealed(root, &recovered)?;
                         }
-                        recovered.state = if recovered.cancel_requested {
-                            "cancelled"
+                        if recovered.cancel_requested {
+                            recovered.state = "cancelled".into();
+                            recovered.error = None;
                         } else {
-                            "failed"
+                            recovered.state = "failed".into();
+                            recovered.error = Some("unavailable".into());
                         }
-                        .into();
-                        recovered.error = Some(
-                            if recovered.cancel_requested {
-                                "cancelled"
-                            } else {
-                                "unavailable"
-                            }
-                            .into(),
-                        );
                         let shared = Arc::new(Shared {
                             journal: Mutex::new(recovered),
                             directory: root.to_owned(),
@@ -1092,20 +1078,13 @@ fn process_request(
                         if j.materials.is_none() {
                             remove_unsealed(root, &j)?;
                         }
-                        j.state = if j.cancel_requested {
-                            "cancelled"
+                        if j.cancel_requested {
+                            j.state = "cancelled".into();
+                            j.error = None;
                         } else {
-                            "failed"
+                            j.state = "failed".into();
+                            j.error = Some("unavailable".into());
                         }
-                        .into();
-                        j.error = Some(
-                            if j.cancel_requested {
-                                "cancelled"
-                            } else {
-                                "unavailable"
-                            }
-                            .into(),
-                        );
                         let shared = Arc::new(Shared {
                             journal: Mutex::new(j),
                             directory: root.to_owned(),
