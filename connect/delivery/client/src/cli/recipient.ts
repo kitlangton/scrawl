@@ -119,9 +119,10 @@ export async function publishVerified(
   destination: string,
   publish: RecipientCliDependencies["publish"],
 ): Promise<RecipientCliResult> {
+  const evidenceOnly = capture.evidenceOnly;
   const publication = await publish(capture, destination);
   if (publication.state !== "committed") return { ok: false, error: { category: "publication_uncertain", message: "publication outcome is uncertain; inspect the destination before taking further action" } };
-  if (capture.evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } };
+  if (evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } };
   return { ok: true, path: publication.path };
 }
 

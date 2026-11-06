@@ -188,6 +188,7 @@ The `./recipient-command` export prepares headless fetch/remote-inspect behavior
 and invokes the verified retrieval API through injected credential/publication
 boundaries. Explicit local sources remain local. Successful results require a
 committed publisher receipt; evidence snapshots require its evidence-only receipt.
+That evidence-only requirement is pinned before invoking the publisher.
 The command owns retrieved plaintext. Publisher callbacks borrow those buffers
 until their promise settles; the command then wipes them on success, uncertainty,
 failure or cancellation. Publishers must copy bytes needed beyond that lifetime.
