@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import { EventEmitter } from 'node:events';
 import { build } from 'esbuild';
 import { test } from 'node:test';
+import { fileURLToPath } from 'node:url';
 
 async function fixture() {
   const handlers = new Map<string, (...args: any[]) => Promise<any>>();
@@ -13,7 +14,7 @@ async function fixture() {
     removeHandler(channel: string) { handlers.delete(channel); },
   };
   (globalThis as any).__bridgeTestIpc = ipc;
-  const output = await build({ entryPoints: [new URL('../src/onboarding-progress-bridge.cts', import.meta.url).pathname],
+  const output = await build({ entryPoints: [fileURLToPath(new URL('../src/onboarding-progress-bridge.cts', import.meta.url))],
     bundle: true, platform: 'node', format: 'esm', write: false,
     plugins: [{ name: 'controlled-electron-transport', setup(builder) {
       builder.onResolve({ filter: /^electron$/ }, () => ({ path: 'electron', namespace: 'controlled' }));

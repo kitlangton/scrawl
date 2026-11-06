@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
 import { test } from 'node:test';
-import { chmod, mkdir, mkdtemp, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
@@ -30,7 +30,7 @@ test('packaged Electron routes the compiled Onboarding port through real main, p
   assert(helperStat.isFile() && (helperStat.mode & 0o111) && !(helperStat.mode & 0o022));
   assert.equal(digest(await readRegular(helperPath)), CONFIG_HOST_SHA256, 'Unexpected admitted config helper');
 
-  const directory = await mkdtemp(join(tmpdir(), 'onboarding-progress-electron-'));
+  const directory = await realpath(await mkdtemp(join(tmpdir(), 'onboarding-progress-electron-')));
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
   let succeeded = false;
   const sandboxes: Array<{ path: string; bytes: Buffer; mode: number }> = [];
