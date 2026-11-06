@@ -9,7 +9,7 @@ import { chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, sy
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
-import test from "node:test";
+import test, { after } from "node:test";
 import * as ed25519 from "@noble/ed25519";
 import { encodeArchive, encryptAge, generateAgeIdentity, signEnvelope, splitAgeStream, type Context } from "../../src/recipient/crypto.ts";
 import { runRecipientCommandFromState } from "../../src/cli/recipient-state.ts";
@@ -28,15 +28,21 @@ function absoluteEnv(name: string, value: string | undefined): string {
   return value;
 }
 const artifact = absoluteEnv("APPARENT_RESOURCE_ARTIFACT", artifactPath);
+const providerMode = process.env.APPARENT_RESOURCE_PROVIDER ?? "direct";
+assert.ok(providerMode === "direct" || providerMode === "installed", "resource provider mode must be explicit and supported");
 async function packedResourceSdk() {
   const consumer = process.env.APPARENT_RESOURCE_SDK_CONSUMER;
   absoluteEnv("APPARENT_RESOURCE_SDK_CONSUMER", consumer);
   const entry = `${consumer}/node_modules/@apparent/native-resources/dist/index.js`;
-  return await import(pathToFileURL(entry).href) as {
-  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => NamespaceResources & StateReplacementResources & {
-    checkAcl(handle: import("node:fs/promises").FileHandle): Promise<{ state: "accepted" | "refused" }>;
+  const installedEntry = `${consumer}/node_modules/@apparent/native-resources/dist/installed.js`;
+  const root = await import(pathToFileURL(entry).href);
+  const installed = providerMode === "installed" ? await import(pathToFileURL(installedEntry).href) : {};
+  type Ports = NamespaceResources & StateReplacementResources & {
     publish(parent: import("node:fs/promises").FileHandle, source: string, destination: string, options?: { signal?: AbortSignal }): Promise<{ state: "published" | "destination_exists" | "refused" | "publication_uncertain" }>;
   };
+  return { ...root, ...installed } as {
+  createInstalledNativeResources(options: { artifactDirectory: string; trustedManifestSha256: string; expectedSourceSha: string; target: string }): Promise<Ports & { close(): Promise<void>; readonly executable: string }>;
+  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => Ports;
   validateResourceArtifact(directory: string, expectedTarget: string): { sourceSha: string; target: string; executable: string; sha256: string; protocol: number };
 };
 }
@@ -51,7 +57,18 @@ assert.equal(manifest.executable, "apparent-resource-host");
 const executable = path.join(artifact, manifest.executable);
 const binarySha = createHash("sha256").update(await readFile(executable)).digest("hex");
 assert.equal(binarySha, manifest.sha256, "provider SHA must come from the admitted artifact bytes");
-const resources = new nativeModule.NativeResources({ executable, protocol: 1, target: manifest.target, sha256: binarySha });
+const trustedManifestSha256 = process.env.APPARENT_RESOURCE_MANIFEST_SHA256;
+if (providerMode === "installed") assert.match(trustedManifestSha256 ?? "", /^[a-f0-9]{64}$/, "installed mode requires an externally admitted manifest digest");
+const installedResources = providerMode === "installed" ? await nativeModule.createInstalledNativeResources({ artifactDirectory: artifact,
+  trustedManifestSha256: trustedManifestSha256!, expectedSourceSha: expectedSource!, target }) : undefined;
+const resources = providerMode === "installed" ? installedResources! : new nativeModule.NativeResources({ executable, protocol: 1, target: manifest.target, sha256: binarySha });
+assert.ok(resources, "installed mode must return a provider; direct fallback is forbidden");
+if (installedResources) after(async () => {
+  const stagedExecutable = installedResources.executable;
+  await installedResources.close();
+  await assert.rejects(lstat(stagedExecutable), { code: "ENOENT" });
+  assert.equal(createHash("sha256").update(await readFile(executable)).digest("hex"), binarySha, "retirement preserves the original admitted artifact");
+});
 assert.equal(typeof resources.checkAcl, "function", "native SDK must provide descriptor ACL verification");
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
@@ -416,5 +433,22 @@ test("native stale replacement refuses effect and removes only its private stage
     assert.deepEqual(await replacePrivateStateFile(root, "synthetic.test", Buffer.from("new"), expected, acquired.lease, resources), { state: "destination_changed" });
     assert.equal(await readFile(destination, "utf8"), "old");
     assert.deepEqual((await readdir(root)).sort(), ["queue.lock", "synthetic.test"]);
+  } finally { await acquired.lease.release(); }
+}));
+
+test("installed provider cannot retire during Connect calls or an owned queue lease", { skip: !installedResources }, async () => fixture(async root => {
+  const handle = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+  const pending = resources.checkAcl(handle);
+  await assert.rejects(installedResources!.close(), error => !!error && typeof error === "object" && "category" in error && error.category === "invalid_request");
+  assert.deepEqual(await pending, { state: "accepted" });
+  assert.equal(handle.fd, -1);
+  const lock = await open(path.join(root, "queue.lock"), constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600);
+  const acquired = await resources.lock(lock, { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired"); if (acquired.state !== "acquired") return;
+  try {
+    await assert.rejects(installedResources!.close(), error => !!error && typeof error === "object" && "category" in error && error.category === "invalid_request");
+    const input = Buffer.from("synthetic lifetime proof");
+    assert.deepEqual(await replacePrivateStateFile(root, "synthetic.test", input, null, acquired.lease, resources), { state: "committed" });
+    assert.deepEqual(await readFile(path.join(root, "synthetic.test")), input);
   } finally { await acquired.lease.release(); }
 }));
