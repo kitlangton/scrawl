@@ -205,28 +205,35 @@ test('uses a canonical private stage even when the system temp directory is alia
   }
 });
 
-test('an additive replacement method cannot bypass installed retirement or affect existing readers', { skip: !supportedHost }, async () => {
+test('replacement dispatch holds the installed lifetime and retirement refuses it without dispatch', { skip: !supportedHost, timeout: 2000 }, async () => {
   const artifact = await admittedArtifact();
   let resources: Awaited<ReturnType<typeof createInstalledNativeResources>> | undefined;
+  let operation: Promise<unknown> | undefined;
   let effects = 0;
-  const originalReplacement = Object.getOwnPropertyDescriptor(NativeResources.prototype, 'replaceFile');
-  // Model the actual additive SDK method without importing its unqualified
-  // implementation. An inherited dispatch here would bypass installed #run.
-  Object.defineProperty(NativeResources.prototype, 'replaceFile', { configurable: true, value() { effects++; return Promise.resolve({ state: 'replaced' }); } });
+  let entered!: () => void, release!: () => void;
+  const dispatched = new Promise<void>(resolve => { entered = resolve; });
+  const pending = new Promise<void>(resolve => { release = resolve; });
+  const originalReplacement = Object.getOwnPropertyDescriptor(NativeResources.prototype, 'replaceFile')!;
+  Object.defineProperty(NativeResources.prototype, 'replaceFile', { configurable: true, async value(parent: Awaited<ReturnType<typeof open>>) {
+    effects++; entered(); await pending; await parent.close(); return { state: 'replaced' };
+  } });
   try {
     resources = await createInstalledNativeResources(artifact.options);
     assert.deepEqual(await resources.checkAcl(await artifact.source.handle()), { state: 'accepted' });
-    const replacement = resources as typeof resources & { replaceFile(parent: Awaited<ReturnType<typeof artifact.source.handle>>, ...args: unknown[]): Promise<unknown> };
-    const live = await artifact.source.handle();
-    await assert.rejects(replacement.replaceFile(live, 'source', 'destination', {}), /provider_unavailable/);
-    assert.equal(live.fd, -1);
+    const live = await open(artifact.source.directory, constants.O_RDONLY | constants.O_DIRECTORY);
+    operation = resources.replaceFile(live, 'source', 'destination', { source: { device: '1', inode: '1' }, destination: null });
+    const started = await Promise.race([dispatched.then(() => true), operation.then(() => false, () => false)]);
+    assert.equal(started, true, 'The qualified SDK dispatch must be reachable');
+    await assert.rejects(resources.close(), { category: 'invalid_request' });
+    assert.equal((await lstat(resources.executable)).isFile(), true, 'Pending replacement retains its staged provider');
+    release(); assert.deepEqual(await operation, { state: 'replaced' }); assert.equal(live.fd, -1);
     await resources.close();
-    const closed = await artifact.source.handle();
-    await assert.rejects(replacement.replaceFile(closed, 'source', 'destination', {}), /provider_unavailable/);
-    assert.equal(closed.fd, -1); assert.equal(effects, 0, 'No inherited native dispatch or automatic retry');
+    const closed = await open(artifact.source.directory, constants.O_RDONLY | constants.O_DIRECTORY);
+    await assert.rejects(resources.replaceFile(closed, 'source', 'destination', { source: { device: '1', inode: '1' }, destination: null }), { category: 'provider_unavailable' });
+    assert.equal(closed.fd, -1); assert.equal(effects, 1, 'No dispatch after close or automatic retry');
   } finally {
-    if (originalReplacement) Object.defineProperty(NativeResources.prototype, 'replaceFile', originalReplacement);
-    else Reflect.deleteProperty(NativeResources.prototype, 'replaceFile');
+    release(); await operation?.catch(() => {});
+    Object.defineProperty(NativeResources.prototype, 'replaceFile', originalReplacement);
     await resources?.close(); await artifact.source.close();
   }
 });

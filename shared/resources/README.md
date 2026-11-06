@@ -135,12 +135,13 @@ finish their existing work and release leases themselves. It never cancels a
 lease, retries publication or writes Connect state. After retirement every method
 refuses before spawning, while still consuming the supplied descriptor.
 
-The separately owned additive `replaceFile` SDK method remains unavailable
-through this provider until its qualified implementation, lifetime wrapper and
-pending/closed tests are adopted. The installed provider shadows that method
-with local `provider_unavailable` refusal, consuming its transferred descriptor
-without dispatch, including after retirement. ACL, lock and publication remain
-supported when that SDK addition lands; Connect writer adoption is separate.
+`replaceFile` delegates the qualified public SDK operation under the same
+admission and pending-operation guard. Close refuses while replacement is in
+flight; calls after retirement consume the descriptor and refuse locally without
+dispatch. Results and uncertainty are preserved without retry. Use an admitted
+helper supporting replacement; this wrapper does not qualify arbitrary older
+artifacts or implement Connect's cooperative lock/writer policy. Connect writer
+adoption remains separate.
 
 This assembly contract is not an installed locator or adoption switch. A host
 must provide admitted bytes and protect the returned lifetime. Native producer

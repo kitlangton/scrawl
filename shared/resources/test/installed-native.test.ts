@@ -38,11 +38,39 @@ test('compiled installed provider preserves native flock/publication and its pro
     assert.deepEqual(await resources.publish(parent, 'staged', 'published'), { state: 'published' });
     assert.equal(parent.fd, -1);
     assert.equal(await readFile(join(root, 'published/value'), 'utf8'), 'synthetic-installed-resource');
+    const identity = async (name: string) => {
+      const info = await lstat(join(root, name), { bigint: true });
+      return { device: info.dev.toString(), inode: info.ino.toString() };
+    };
+    await writeFile(join(root, 'current.txt'), 'before', { mode: 0o600 });
+    await writeFile(join(root, 'next.txt'), 'after', { mode: 0o600 });
+    const original = await identity('current.txt');
+    const replacing = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    assert.deepEqual(await resources.replaceFile(replacing, 'next.txt', 'current.txt', {
+      source: await identity('next.txt'), destination: original,
+    }), { state: 'replaced' });
+    assert.equal(replacing.fd, -1);
+    assert.equal(await readFile(join(root, 'current.txt'), 'utf8'), 'after');
+    await assert.rejects(lstat(join(root, 'next.txt')), { code: 'ENOENT' });
+    await writeFile(join(root, 'next.txt'), 'stale-attempt', { mode: 0o600 });
+    const stale = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    assert.deepEqual(await resources.replaceFile(stale, 'next.txt', 'current.txt', {
+      source: await identity('next.txt'), destination: original,
+    }), { state: 'destination_changed' });
+    assert.equal(stale.fd, -1);
+    assert.equal(await readFile(join(root, 'current.txt'), 'utf8'), 'after');
+    assert.equal(await readFile(join(root, 'next.txt'), 'utf8'), 'stale-attempt');
     await resources.close();
     await assert.rejects(lstat(resources.executable), { code: 'ENOENT' });
     const after = await open(lockPath, constants.O_RDWR | constants.O_NOFOLLOW);
     await assert.rejects(resources.lock(after, { timeoutMs: 0 }), { category: 'provider_unavailable' });
     assert.equal(after.fd, -1);
+    const closedReplacement = await open(root, constants.O_RDONLY | constants.O_DIRECTORY | constants.O_NOFOLLOW);
+    await assert.rejects(resources.replaceFile(closedReplacement, 'next.txt', 'current.txt', {
+      source: await identity('next.txt'), destination: await identity('current.txt'),
+    }), { category: 'provider_unavailable' });
+    assert.equal(closedReplacement.fd, -1);
+    assert.equal(await readFile(join(root, 'current.txt'), 'utf8'), 'after');
   } finally {
     if (lease?.state === 'acquired') await lease.lease.release();
     await resources.close(); await rm(root, { recursive: true, force: true });
