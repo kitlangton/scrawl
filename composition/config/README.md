@@ -29,6 +29,27 @@ native durability or installed-app evidence. This package does not install a
 preload bridge, select an installed route, implement coaching windows or provide
 Record/Engine capabilities.
 
+Record's bounded legacy setting facade is `createRecordPenColorConfig({ executable,
+executableSha256, configPath })`. It returns `read()` and presence/value
+`compareAndSwap(expected, next)`, plus `close()`. Both the owner (`record`) and
+top-level key (`penColor`) are compiled into the facade and protocol; callers
+cannot choose another key. Missing differs from stored null. CAS compares the
+exact presence/value under the same native writer lock and returns fresh current
+value on conflict. Values are limited to 16 KiB of JSON. This is a privileged
+composition API; do not pass the unrestricted host client into a renderer. A
+transport loss or durability uncertainty returns `unknown`; close, recreate and
+read before deciding whether to write again.
+
+```ts
+const penColorConfig = await createRecordPenColorConfig({
+  executable: admittedConfigHost.path,
+  executableSha256: admittedConfigHost.sha256,
+  configPath: userConfigPath,
+});
+const current = await penColorConfig.read();
+const result = await penColorConfig.compareAndSwap(current, { present: true, value: '#336699' });
+```
+
 
 For first adoption, `backend.readForAdoption(ownerId)` atomically returns
 `{owner:{present,revision,value},legacy:{present,value}}`. The legacy key is
