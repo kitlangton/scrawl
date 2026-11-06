@@ -4,7 +4,7 @@ export const COMPONENTS = ['platform-config', 'platform-resources', 'app-shell']
 
 const config = ['composition/config/', 'shared/config-native/', 'shared/contracts/', '.cargo/']
 const resources = ['shared/resources/', '.cargo/']
-const shell = ['composition/app/', 'composition/native-host/', 'shared/contracts/', 'shared/ui/']
+const shell = ['composition/app/', 'composition/native-host/', 'composition/config/', 'shared/contracts/', 'shared/ui/']
 const allPrefixes = ['composition/delivery/', 'composition/architecture/', '.github/actions/delivery-contracts/', '.github/actions/delivery-component/', '.github/actions/runtime-budget/']
 
 function starts(path: string, prefixes: string[]) { return prefixes.some(prefix => path.startsWith(prefix)) }

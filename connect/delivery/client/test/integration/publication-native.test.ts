@@ -7,7 +7,7 @@ import { constants } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, link, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -22,6 +22,7 @@ import { readCredentialSnapshot, assertCredentialSnapshotCurrent, CredentialSnap
 import { readStoredCredentialHandle, CredentialReadError } from "../../src/credentials/private-read.ts";
 import { decodeRecipientRenewalReply, type RecipientRenewalOwner } from "../../src/state/renewal-owner.ts";
 import type { RetrievedRecipientCapture } from "../../src/recipient/retrieve.ts";
+import { readQueueSnapshot, QueueStoreError } from "../../src/queue/store.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
 const artifactPath = process.env.APPARENT_RESOURCE_ARTIFACT;
@@ -75,6 +76,31 @@ if (installedResources) after(async () => {
 assert.equal(typeof resources.checkAcl, "function", "native SDK must provide descriptor ACL verification");
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+test("native queue snapshot uses the stable lease and preserves private job data", async () => fixture(async root => {
+  const id = "a".repeat(32), context = { scope: "read" as const, approvedServer: "https://connect.example" };
+  const file = path.join(root, `${id}.job`);
+  const bytes = Buffer.from(JSON.stringify({ id, bundle: "/synthetic.apparent", server: context.approvedServer,
+    generation: "b".repeat(32), created: 10, attempts: 0, nextAttempt: 0, status: "pending", future: { retained: true } }));
+  await writeFile(file, bytes, { mode: 0o600 });
+  await link(file, path.join(root, "saved-record"));
+  const jobs = await readQueueSnapshot(root, context, resources);
+  assert.equal(jobs[0]!.id, id); assert.deepEqual(jobs[0]!.future, { retained: true });
+  assert.ok(Object.isFrozen(jobs[0]!.future)); assert.deepEqual(await readFile(file), bytes);
+  const lockPath = path.join(root, "queue.lock"), before = await lstat(lockPath);
+  const acquired = await resources.lock(await open(lockPath, constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired");
+  if (acquired.state === "acquired") {
+    try { await assert.rejects(readQueueSnapshot(root, context, resources, { lockTimeoutMs: 0 }),
+      e => e instanceof QueueStoreError && e.category === "lock_refused"); }
+    finally { await acquired.lease.release(); }
+  }
+  assert.equal((await lstat(lockPath)).ino, before.ino);
+  await readQueueSnapshot(root, context, resources);
+  await chmod(file, 0o644);
+  await assert.rejects(readQueueSnapshot(root, context, resources), e => e instanceof QueueStoreError && e.category === "unsafe_file");
+  assert.deepEqual(await readFile(file), bytes);
+}));
 function capture(evidenceOnly = false): RetrievedRecipientCapture {
   const entries = [
     ["summary.md", Buffer.from("synthetic recipient summary")],
