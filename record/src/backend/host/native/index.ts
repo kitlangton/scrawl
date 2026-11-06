@@ -62,6 +62,8 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
   let latest: NativeHostSnapshotInput | undefined;
   let latestFacts: RecordNativeFacts | undefined;
   let candidate: Candidate | undefined;
+  let awaitingSaveReadback: { sessionId: string; shortcut: NativeShortcutInput } | undefined;
+  const retiredEpochs = new Set<string>();
   let edit: { sessionId: string; value: string; error?: string } | undefined;
   let detached = false;
   let sequence = 0;
@@ -82,12 +84,20 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
   };
   const readFacts = async (): Promise<RecordNativeFacts> => {
     const read = ++sequence;
-    const value = await port.readSnapshot();
+    const value = structuredClone(await port.readSnapshot());
     if (!validSnapshot(value)) throw new Error('Native host snapshot unavailable');
     if (detached) throw new Error('Record native adapter detached');
+    if (retiredEpochs.has(value.processEpoch)) throw new Error('Native host returned a retired process observation');
     if (read === sequence) {
       if (!latest || value.processEpoch !== latest.processEpoch || value.revision >= latest.revision) {
-        if (latest && (value.processEpoch !== latest.processEpoch || value.revision !== latest.revision)) { candidate = undefined; edit = undefined; }
+        if (latest && value.processEpoch !== latest.processEpoch) retiredEpochs.add(latest.processEpoch);
+        if (latest && (value.processEpoch !== latest.processEpoch || value.revision !== latest.revision)) { candidate = undefined; edit = undefined; awaitingSaveReadback = undefined; }
+        const saved = awaitingSaveReadback;
+        const record = value.shortcuts.record;
+        const matches = (actual: NativeShortcutInput | null) => !!actual && actual.keyCode === saved?.shortcut.keyCode && actual.modifiers === saved.shortcut.modifiers && actual.label === saved.shortcut.label;
+        if (saved && edit?.sessionId === saved.sessionId && record.registration === 'registered' && matches(record.configured) && matches(record.effective)) {
+          edit = undefined; awaitingSaveReadback = undefined;
+        }
         latest = structuredClone(value);
         latestFacts = factsFor(latest);
       }
@@ -95,7 +105,9 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
     if (!latestFacts) throw new Error('Native host snapshot unavailable');
     return structuredClone(latestFacts);
   };
-  const dispatch = (command: NativeAction, observed?: { providerEpoch: string; revision: number }) => {
+  const dispatch = (input: NativeAction, observation?: { providerEpoch: string; revision: number }) => {
+    const command = structuredClone(input);
+    const observed = structuredClone(observation);
     const work = queue.then(async (): Promise<'accepted' | 'refused' | 'cancelled' | 'outcome-unknown'> => {
       if (detached || !latest || !latestFacts || !observed || observed.providerEpoch !== latestFacts.providerEpoch || observed.revision !== latestFacts.revision) return 'refused';
       const state = { processEpoch: observed.providerEpoch, revision: observed.revision };
@@ -114,12 +126,13 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
       }
       if (command.type === 'shortcut-submit') {
         if (!edit || edit.sessionId !== command.sessionId || !latest.shortcuts.record.canValidate) return 'refused';
+        awaitingSaveReadback = undefined; // A new explicit edit supersedes only the local pending display, never the admitted effect.
         const decoded = decodeShortcut(command.value);
         if (!decoded) { edit = { ...edit, value: command.value, error: 'Use an unambiguous modifier+key shortcut such as Ctrl+Shift+R' }; candidate = undefined; latestFacts = factsFor(latest); notify(); return 'refused'; }
         const result = await port.validateRecordShortcut(decoded.key, decoded.modifiers, state);
         if (detached || !latestFacts || latestFacts.providerEpoch !== observed.providerEpoch || latestFacts.revision !== observed.revision || edit?.sessionId !== command.sessionId) return 'refused';
         if (result.status === 'accepted' && result.shortcut) {
-          candidate = { sessionId: edit.sessionId, value: command.value, state: { providerEpoch: observed.providerEpoch, revision: observed.revision }, shortcut: result.shortcut };
+          candidate = { sessionId: edit.sessionId, value: command.value, state: { providerEpoch: observed.providerEpoch, revision: observed.revision }, shortcut: structuredClone(result.shortcut) };
           edit = { sessionId: edit.sessionId, value: command.value }; latestFacts = factsFor(latest); notify(); return 'accepted';
         }
         candidate = undefined; edit = { sessionId: edit.sessionId, value: command.value, error: result.status === 'refused' ? `Native validation refused (${result.reason})` : 'Native validation outcome unknown' };
@@ -128,11 +141,17 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
       if (command.type === 'shortcut-save') {
         if (!edit || edit.sessionId !== command.sessionId || !candidate || candidate.sessionId !== command.sessionId || !sameObservedState(candidate.state, observed) || !latest.shortcuts.record.canSave) return 'refused';
         const admitted = candidate; candidate = undefined;
-        return mutationStatus(await port.saveRecordShortcut(admitted.shortcut, state));
+        const result = await port.saveRecordShortcut(structuredClone(admitted.shortcut), state);
+        if (!detached && edit?.sessionId === admitted.sessionId) {
+          if (result.status === 'accepted') awaitingSaveReadback = { sessionId: admitted.sessionId, shortcut: admitted.shortcut };
+          edit = { ...edit, error: result.status === 'accepted' ? 'Awaiting native shortcut save readback' : result.status === 'refused' ? `Native save refused (${result.reason})` : 'Native save outcome unknown' };
+          latestFacts = factsFor(latest); notify();
+        }
+        return mutationStatus(result);
       }
       if (command.type === 'shortcut-cancel') {
         if (!edit || edit.sessionId !== command.sessionId) return 'refused';
-        edit = undefined; candidate = undefined; latestFacts = factsFor(latest); notify(); return 'cancelled';
+        edit = undefined; candidate = undefined; awaitingSaveReadback = undefined; latestFacts = factsFor(latest); notify(); return 'cancelled';
       }
       return 'refused';
     });
@@ -140,5 +159,5 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
     return work.catch(() => 'outcome-unknown' as const);
   };
   return { readFacts, dispatch, observe(listener) { if (detached) return () => undefined; listeners.add(listener); return () => listeners.delete(listener); },
-    dispose() { detached = true; sequence++; candidate = undefined; edit = undefined; listeners.clear(); } };
+    dispose() { detached = true; sequence++; candidate = undefined; edit = undefined; awaitingSaveReadback = undefined; listeners.clear(); } };
 }

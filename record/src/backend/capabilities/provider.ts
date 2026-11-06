@@ -381,9 +381,9 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     detach() {
       if (detached) return;
       detached = true; unsubscribeRuntime(); unsubscribeNative(); unsubscribeCaptureFacts(); listeners.clear();
-      options.native?.dispose?.();
-      // Runtime disposal only detaches subscriptions; native capture ownership stays with Engine.
-      options.runtime.dispose();
+      // Native adapter cleanup cannot strand the separately owned runtime subscription.
+      try { options.native?.dispose?.(); }
+      finally { options.runtime.dispose(); }
     },
   };
   return client;
