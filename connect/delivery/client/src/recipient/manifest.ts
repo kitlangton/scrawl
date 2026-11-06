@@ -26,10 +26,13 @@ export function sameContext(input: unknown, expected: Context): boolean {
 export function recipientManifest(input: unknown, expected: Context): Asset[] {
   if (!record(input) || !exact(input, ["version", "context", "files"]) || input.version !== 1) fail("invalid_encryption_archive");
   if (!sameContext(input.context, expected)) fail("encrypted_context_mismatch");
-  if (!Array.isArray(input.files) || input.files.length > 512) fail("invalid_manifest");
+  return recipientAssets(input.files, expected.group);
+}
+export function recipientAssets(input: unknown, group?: Context["group"]): Asset[] {
+  if (!Array.isArray(input) || input.length > 512) fail("invalid_manifest");
   const names = new Set<string>(), files: Asset[] = [];
   let total = 0;
-  for (const raw of input.files) {
+  for (const raw of input) {
     if (!record(raw) || !exact(raw, ["path", "size", "sha256"]) || !assetPath(raw.path)
       || !Number.isSafeInteger(raw.size) || (raw.size as number) < 0 || (raw.size as number) > 90_000_000
       || typeof raw.sha256 !== "string" || !/^[a-f0-9]{64}$/.test(raw.sha256) || names.has(raw.path)) fail("invalid_manifest");
@@ -37,10 +40,10 @@ export function recipientManifest(input: unknown, expected: Context): Asset[] {
     if (file.path === "apparent.json" && file.size > 2_000_000) fail("invalid_manifest");
     names.add(file.path); total += file.size;
     if (total > 500_000_000) fail("quota_exceeded");
-    if ((expected.group === "evidence" && MEDIA.has(file.path)) || (expected.group === "media" && !MEDIA.has(file.path))) fail("invalid_manifest");
+    if ((group === "evidence" && MEDIA.has(file.path)) || (group === "media" && !MEDIA.has(file.path))) fail("invalid_manifest");
     files.push(file);
   }
-  if (expected.group !== "media" && ["apparent.json", "summary.md", "contact-sheet.png"].some(name => !names.has(name))) fail("invalid_manifest");
+  if (group !== "media" && ["apparent.json", "summary.md", "contact-sheet.png"].some(name => !names.has(name))) fail("invalid_manifest");
   return files;
 }
 
