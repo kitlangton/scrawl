@@ -317,6 +317,7 @@ package export. It must not write the live namespace while Rust remains its
 writer. After dispatch, uncertain outcomes retain observed files without retry;
 proven no-effect results clean only the original stage inode under the original
 admitted directory. Lost fences retain staging rather than delete unproven data.
-Linux isolated consumer proof does not establish Mac or installed acceptance;
-the protected provider, coordinated sole-writer cutover and actual caller tests
+Isolated Linux and Mac consumer tests cover replacement and stale-inode refusal
+under the real queue lease. They do not establish installed acceptance; the
+protected provider, coordinated sole-writer cutover and actual caller tests
 remain required.
