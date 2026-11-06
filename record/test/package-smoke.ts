@@ -28,7 +28,7 @@ try {
   await run('npm', ['pack', '--ignore-scripts', '--pack-destination', scratch], { cwd: root });
   await Promise.all([initConsumer(headless), initConsumer(ui), initConsumer(bundle), initConsumer(publication)]);
 
-  await run('npm', ['install', '--no-audit', '--no-fund', tarball], { cwd: headless });
+  await run('npm', ['install', '--no-audit', '--no-fund', tarball, path.join(root, 'vendor/engine-sdk-0.3.1.tgz')], { cwd: headless });
   const headlessInstalled = path.join(headless, 'node_modules/@apparent/record');
   const manifest = JSON.parse(await readFile(path.join(headlessInstalled, 'package.json'), 'utf8'));
   assert.equal(manifest.scripts?.prepare, 'npm run build', 'source author lifecycle remains compatible');
@@ -39,11 +39,13 @@ try {
   await writeFile(declarations, `
     import { RecordWorkflow } from '@apparent/record';
     import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator } from '@apparent/record/host';
+    import { readCaptureMaterials, type CaptureMaterialsInput, type CaptureMaterialsRead } from '@apparent/record/host/materials';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
     import { createRecordFixture } from '@apparent/record/fixtures';
-    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, hasConfirmedArtifactOpen];
+    const read = (input: CaptureMaterialsInput): Promise<CaptureMaterialsRead> => readCaptureMaterials(input);
+    void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, read, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, hasConfirmedArtifactOpen];
   `);
   const tsc = path.join(root, 'node_modules/typescript/bin/tsc');
   await run(process.execPath, [tsc, '--noEmit', '--strict', '--skipLibCheck', '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', declarations], { cwd: headless });
@@ -52,14 +54,17 @@ try {
     import { createRequire } from 'node:module';
     import { RecordWorkflow } from '@apparent/record';
     import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator } from '@apparent/record/host';
+    import { readCaptureMaterials } from '@apparent/record/host/materials';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
-    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk']) assert.throws(() => require.resolve(name));
+    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui']) assert.throws(() => require.resolve(name));
+    assert.equal(typeof (await import('@apparent/engine-sdk/capture')).validateMaterialsDocument, 'function');
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
+    assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof decodeSelectedFrames, 'function');
     for (const exported of [SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory]) assert.equal(typeof exported, 'function');
     assert.equal(typeof createRecordCapabilityProvider, 'function');

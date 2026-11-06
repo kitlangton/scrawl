@@ -4,6 +4,23 @@
 
 `EngineSdkAdapter` composes an already constructed, packed `@apparent/engine-sdk` client. `createRecordHostRuntime` from `@apparent/record/host` composes it with `RecordWorkflow`, `SqliteCaptureMappingStore` and `PrivateBundleAllocator` using explicit private roots (Node 22.13+). The runtime reconciles persisted request IDs before admitting starts; active or ambiguous captures remain visible and block admission. The host subpath does not import React or Electron. It does not choose or launch an executable, select runtime locations, or establish capture readiness. The reusable pill is adopted through the existing legacy host; it does not install a replacement Electron main/preload route.
 
+`@apparent/record/host/materials` exports `readCaptureMaterials`. Inject the
+host-authenticated retained manifest, explicit expected material key/lease/bundle
+identity, and a separately trusted immutable root. It reads the detached payload
+and each declared collected fact (`context`, `interactions`, `candidates`,
+`transcript`, `acceptedStrokes`) with finite per-file and aggregate byte limits,
+checks sealed identity and SHA-256 before/after bounded `O_NOFOLLOW` reads, and
+delegates schema and fact validation to the packed SDK 0.3.1 public capture API.
+The returned `assemblyFacts` is directly accepted by canonical bundle assembly;
+unavailable collection states remain in the validated materials document.
+Video/audio stay sealed references. A successful read proves only that local
+bytes matched the supplied seals at read time. It is not native authentication,
+availability, media validation or Saved. Correctness across pathname races still
+depends on the producer's retained lease, immutable root and same-user/native
+exclusion; this is not a portable filesystem authority guarantee. The reader
+does not write, publish, release or cancel anything. Importing this subpath
+requires the host to install the optional `@apparent/engine-sdk` peer explicitly.
+
 `@apparent/record/processing` exports `decodeSelectedFrames` and
 `assembleProcessingOutput`; `@apparent/record/processing/media-consumer` exports
 the durable media/1 consumer. A host admits the
@@ -227,6 +244,7 @@ fallback route remains authoritative.
 | Next-shortcut admission and local-only admission | Explicitly unavailable | Current capture-v1 has neither reservation enforcement nor local-only enforcement. Record refuses local-only starts and refuses arm when the producer reports unavailable; it never infers enforcement from intent. A future producer must publish reservation consumption/cancellation/expiry and effective per-capture delivery readback. Engine committed parent-thread notification when usable native capabilities land. |
 | Transcript association | Implemented in the headless package | `associateTranscriptWithSelectedFrames` partitions supplied word/segment facts across existing selected frames using measured clause/anchor rules. Source-derived Rust parity tests cover Unicode whitespace, punctuation, gaps and boundary timing. This does not select images or supply missing native visual metrics. |
 | Semantic processing assembly and frame decode | Consumer implemented; installed adoption partial | PR #704 (main `7c2afd5`) added the formatter and decoder seam; this slice adds durable job ownership and real PNG decode proof against the retained Linux `media/1` artifact. It does not implement frame selection, native final publication, default output selection or installed handoff adoption. |
+| Capture/2 retained payload and fact bytes | Headless read-only consumer implemented; production producer availability unavailable | `@apparent/record/host/materials` reads an already host-authenticated retained manifest from an explicitly trusted immutable root, verifies bounded payload/fact contents with SDK 0.3.1 public validators and preserves unavailable observations. It feeds validated payload/fact bytes to existing assembly inputs. It does not authenticate native authority, decode video/audio, select frames, publish or claim Saved. A production capture/2 retained-material producer and its platform evidence are still unavailable; fixture and file-reader readiness do not establish native availability. |
 | Capture material to Record bundle assembly and authenticated publication | Assembly/publication composition implemented; native authority and installed adoption unavailable | `createCompletedCapturePublisher` validates an observed materials-ready status against original SDK-validated materials and explicit admission, then composes `assembleCanonicalBundle`, `prepareRecordPublication`, and durable recovery. Reconnect uses the same caller-persisted capture/owner binding without rerunning assembly/staging. The new capture/2 host slice supplies lifecycle materials references but does not read material bytes or invoke this publisher. Selected frames/images remain caller-attested. Native media2 lifecycle, selection, publication authority, final filesystem acceptance, material release, and installed adoption remain open. |
 | Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, native final bundle publication and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
 | Clipboard copy, link and artifact open | Local prompt policy implemented; native effects and receipts blocked | `formatLocalHandoff` preserves semantic context, warnings and the timed request, with access instructions first and no clipboard/publication effect. Copy/open actions may be dispatched through the native port, but dispatch is not success. Copy needs a clipboard receipt; link needs the existing link producer; artifact open needs the exact-artifact viewer acknowledgement or supported OS observation. No such production receipts are synthesized here. |
