@@ -29,6 +29,8 @@ The maximum is 74,772 bytes. Dimensions must match both PNG IHDR and the selecte
 receipt; regions are exactly min(width,128) by min(height,128). All cells are
 row-major native float32 in [0,1], exposed unchanged as JS numbers. PNG lengths
 and CRC retain standard big-endian encoding.
+The single `apOB` chunk follows the complete IDAT sequence and precedes IEND;
+the reader rejects an observation block before image data or interleaved IDAT.
 
 The 64×36 thumbnail samples cell centres using native f32 encoded-RGB
 `(0.2126R+0.7152G+0.0722B)/255`, ignoring alpha, without gamma linearization.

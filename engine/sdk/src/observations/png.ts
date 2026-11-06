@@ -39,6 +39,7 @@ export function readProfile(png: Buffer, width: number, height: number) {
     } else {
       if (dataStarted) dataEnded = true;
       if (type === "apOB") {
+        if (!dataStarted || imageBytes === 0) bad("observation profile must follow after image data");
         if (profile !== undefined) bad("duplicate observation profile");
         if (length > MAX_PROFILE_BYTES) bad("observation profile exceeds bounds");
         profile = body;

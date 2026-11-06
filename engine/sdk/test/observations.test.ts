@@ -79,6 +79,9 @@ test("observations reject duplicate profiles, extra payload, CRC damage and file
   const i = input(); i.pngBytes[50] ^= 1;
   assert.throws(() => readFrameVisualObservations(i), /SHA256/);
   assert.throws(() => readFrameVisualObservations({ ...input(), maxFileBytes: 1 }), /budget/);
+  const original = png([]);
+  const beforeImageData = Buffer.concat([original.subarray(0, 33), chunk("apOB", profile()), original.subarray(33)]);
+  assert.throws(() => readFrameVisualObservations(input(beforeImageData)), /after image data/);
 });
 
 test("PNG, profile and receipt dimensions must agree with exact bounded region shape", () => {
