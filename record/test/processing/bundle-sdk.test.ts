@@ -12,7 +12,7 @@ import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublic
 import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
 import { SqlitePublicationBindingStore } from "../../dist/backend/publication/store.js";
-import { encodeContactSheetLayout, prepareMedia2Request, selectDerivative2Artifact, validateDerivative2Document, type Derivative2DocumentInput } from "@apparent/engine-sdk/media2";
+import { Media2Client, type Media2RpcRequest, encodeContactSheetLayout, prepareMedia2Request, selectDerivative2Artifact, validateDerivative2Document, type Derivative2DocumentInput } from "@apparent/engine-sdk/media2";
 import { readRetainedDerivativeArtifacts } from "../../dist/backend/processing/retained-artifacts.js";
 import { createRecordCaptureCoordinator } from "../../dist/backend/host/capture2/coordinator.js";
 import { AbsentDestinationAllocator } from "../../dist/backend/host/absent-destination-allocator.js";
@@ -1035,7 +1035,7 @@ test("publication database atomically admits immutable processing policy beside 
     await assert.rejects(store.reserveProcessing({ ...record, plan: { ...record.plan, createdAtMs: 9999 } }), /storage is unavailable/u);
     await assert.rejects(store.reserveProcessing({ ...record, plan: { ...record.plan, ownerToken: "c".repeat(64) } }), /storage is unavailable/u);
     const snapshot = await store.getProcessing(captureId);
-    snapshot!.plan.request.requestedBundleMs[0] = 2000;
+    (snapshot!.plan as typeof record.plan).request.requestedBundleMs[0] = 2000;
     assert.deepEqual((await store.getProcessing(captureId))?.plan, record.plan, "reads are isolated copies");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -1109,7 +1109,7 @@ test("capture coordinator advances one retained request through synthetic media,
       async publish(request: Parameters<CaptureClient["publish"]>[0]) {
         publishes++;
         const prepared = preflightCapturePublication(request);
-        return { captureId, state: "publishing", publicationId: request.publicationId, planSha256: prepared.plan.planSha256 };
+        return { captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 };
       },
       async inspectPublication(request: Parameters<CaptureClient["inspectPublication"]>[0]) {
         return { captureId, state: "saved", publicationId: request.publicationId, planSha256: request.planSha256, materials: materialsManifest,
@@ -1118,22 +1118,33 @@ test("capture coordinator advances one retained request through synthetic media,
             manifestSha256: request.expected.manifestSha256, inventorySha256: "9".repeat(64) } };
       },
     } as unknown as CaptureClient;
-    let derives = 0, publishes = 0;
-    const mediaClient = {
-      async derive(request: Parameters<Media2Client["derive"]>[0]) {
+    let derives = 0, publishes = 0, mediaNegotiated = false;
+    const mediaClient = new Media2Client({
+      async request(rpc: Media2RpcRequest) {
+        if (rpc.method === "handshake") {
+          mediaNegotiated = true;
+          return { channel: "media", protocolVersion: 2, rpcId: rpc.rpcId, result: {
+            channel: "media", protocolVersion: 2, implementation: "native",
+            capabilities: { retainedFrames: true, contactSheet: true, nativeJobAuthority: true },
+          } };
+        }
+        assert.equal(mediaNegotiated, true, "fresh public Media2Client requires handshake before derive");
+        assert.equal(rpc.method, "derive", "synthetic single-dispatch case has no implicit cancel or repeat");
+        if (rpc.method !== "derive") throw new Error("unexpected synthetic media operation");
         const admitted = await new SqlitePublicationBindingStore(controlRoot).getProcessing(captureId);
         assert.ok(admitted, "original processing policy is durable before media dispatch");
         assert.deepEqual((admitted.plan as { requestVideoProof: boolean }).requestVideoProof, true);
         assert.equal(JSON.stringify(admitted).includes(ownerToken), false);
         derives++;
-        const document = derivative2For(input, [...request.request.requestedBundleMs], { outputDirectory: derivativeRoot, frameFiles: [frameSeal], sheetFile: sheetSeal, jobId: request.request.jobId });
-        return { jobId: request.request.jobId, requestSha256: prepareMedia2Request(request.request, request.materials).sha256, state: "complete", derivative: document };
+        const request = JSON.parse(rpc.requestJson);
+        const document = derivative2For(input, [...request.requestedBundleMs], { outputDirectory: derivativeRoot, frameFiles: [frameSeal], sheetFile: sheetSeal, jobId: request.jobId });
+        return { channel: "media", protocolVersion: 2, rpcId: rpc.rpcId, result: {
+          jobId: request.jobId, requestSha256: rpc.requestSha256, state: "complete",
+          derivative: { envelope: document.envelope, receiptJson: Buffer.from(document.bytes).toString("utf8") },
+        } };
       },
-      async inspect(request: Parameters<Media2Client["inspect"]>[0]) {
-        throw new Error(`unexpected inspect for synthetic single dispatch ${request.request.jobId}`);
-      },
-      async cancel() { throw new Error("coordinator must not cancel media implicitly"); },
-    } as unknown as Media2Client;
+      async close() { throw new Error("coordinator must not close caller-owned media client"); },
+    });
     const destinations = new AbsentDestinationAllocator(controlRoot, outputRoot);
     let selections = 0;
     const options = {

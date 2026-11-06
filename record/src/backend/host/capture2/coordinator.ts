@@ -164,6 +164,8 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     // Publication ownership is checked first. Saved handoff never rereads source materials.
     const binding = await store.get(mapping.captureId);
     if (binding) {
+      if (binding.bundleId !== mapping.bundleId || binding.bundlePath !== mapping.bundlePath)
+        throw new Error("Publication bundle identity conflicts with its capture mapping");
       if (binding.output && binding.output.requestId !== requestId) throw new Error("Saved output public request identity conflicts with its capture mapping");
       const saved = binding.state === "saved" && await output.resolveHandoff({ captureId: binding.output?.requestId ?? "", artifactId: binding.bundleId });
       if (saved) return;
@@ -220,7 +222,9 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     if (disposed || !planRecord) return;
     const plan = planRecord.plan as StoredPlan;
     let job: RecordMedia2Job;
-    try { job = await RecordMedia2Job.reopenRetained(options.mediaClient, jobPath, mapping.ownerToken); }
+    try { job = await RecordMedia2Job.reopenRetained(options.mediaClient, jobPath, mapping.ownerToken, {
+      request: plan.request, materials: planRecord.materials, leaseId: planRecord.leaseId, bundleId: planRecord.bundleId,
+    }); }
     catch (error) {
       let missing = false;
       try { await lstat(jobPath); }
@@ -233,6 +237,13 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     }
     if (disposed) return;
 
+    if (["ready", "submitted", "running", "cancelling", "unknown"].includes(job.state)) {
+      const hello = await options.mediaClient.handshake(operationTimeoutMs);
+      if (hello.implementation !== "native" || !hello.capabilities.retainedFrames || !hello.capabilities.nativeJobAuthority ||
+          (plan.request.contactSheet && !hello.capabilities.contactSheet))
+        throw new Error("Native retained-media capabilities are unavailable; no media operation was dispatched");
+      if (disposed) return;
+    }
     if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) {
       try { await job.inspect(mapping.ownerToken, operationTimeoutMs); } catch { /* same original job remains durable and unknown */ }
       if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) { pending.add(requestId); return; }

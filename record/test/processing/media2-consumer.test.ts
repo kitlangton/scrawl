@@ -411,3 +411,24 @@ test("offline validated derivative completion survives reopen, caller mutation a
     await reopened.cleanupJournal();
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test("retained media reopen refuses a different coordinator request or material tuple", async () => {
+  const root = await privateRoot();
+  try {
+    const original = input(root);
+    const client = {} as Media2Client;
+    const path = join(root, "original.sqlite");
+    await RecordMedia2Job.create(client, path, original);
+    const expected = { request: original.request, materials: original.materials.manifest.key,
+      leaseId: original.materials.manifest.leaseId, bundleId: original.materials.payload.bundleId };
+    assert.equal((await RecordMedia2Job.reopenRetained(client, path, token, expected)).jobId, original.request.jobId);
+    for (const changed of [
+      { ...expected, request: { ...expected.request, jobId: "5".repeat(32) } },
+      { ...expected, request: { ...expected.request, requestedBundleMs: [1000, 1000, 1900] } },
+      { ...expected, materials: { ...expected.materials, revision: "6".repeat(64) } },
+      { ...expected, leaseId: "7".repeat(32) },
+      { ...expected, bundleId: "foreign" },
+    ]) await assert.rejects(RecordMedia2Job.reopenRetained(client, path, token, changed), /original coordinator binding/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
