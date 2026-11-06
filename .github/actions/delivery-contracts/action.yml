@@ -20,6 +20,14 @@ runs:
         npm --prefix composition/architecture run typecheck
         npm --prefix composition/architecture test
         npm --prefix composition/architecture run check -- --owner shared --owner composition
+    - name: Verify compiled headless host packages
+      shell: bash
+      run: |
+        npm --prefix shared/contracts ci --include=dev --ignore-scripts --prefer-offline --no-fund
+        npm --prefix composition/native-host ci --include=dev --ignore-scripts --prefer-offline --no-fund
+        npm --prefix composition/native-host run typecheck
+        npm --prefix composition/native-host test
+        npm --prefix composition/native-host run test:packed
     - name: Validate the independent workflows
       uses: docker://rhysd/actionlint:1.7.12
       with:
