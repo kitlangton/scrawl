@@ -201,6 +201,16 @@ jobs retain their original journals and are never redispatched by inspection.
 Issue observations are reconstructed during startup; Saved facts still have only
 the publication store as authority. Await `dispose()` before deleting owned private
 control data; it drains coordinator work without cancelling or closing SDK clients.
+Hosts first close their own UI/provider command admission and drain commands to injected native ports.
+They may then call the coordinator’s `shutdown()`: it closes coordinator
+admission, drains already admitted calls, and returns native/durable ownership
+items separately from local drain completion. Pending or unknown items are not
+idle proof; this coordinator does not produce next-shortcut admission facts.
+The report covers `scope: "record-coordinator"`; it cannot clear other users of a shared SDK/runtime.
+Await `shutdown()` and then `dispose()` before closing caller-owned SDK clients, and
+require any other SDK owners to clear their own work. Background capture observation
+is drained even when the final mapping read fails. A reserved publication discovered
+after shutdown admission closes remains undispatched for recovery on the next owner.
 
 Binary inputs are fingerprinted by digest and length. Supplied derivative receipts
 are forwarded to the existing stager and SDK validation without asserting provenance.

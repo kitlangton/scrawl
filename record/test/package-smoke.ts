@@ -107,7 +107,7 @@ try {
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
     import {createCapture2RecordRuntime, type Capture2RecordRuntimeOptions} from '@apparent/record/host/capture2-runtime';
-    import {createRecordCaptureCoordinator, type RecordCaptureCoordinator, type RecordCaptureProcessingSelection} from '@apparent/record/host/capture2-coordinator';
+    import {createRecordCaptureCoordinator, type RecordCaptureCoordinator, type RecordCaptureCoordinatorShutdownReport, type RecordCaptureProcessingSelection} from '@apparent/record/host/capture2-coordinator';
     declare const capture2RuntimeOptions: Capture2RecordRuntimeOptions;
     void createCapture2RecordRuntime(capture2RuntimeOptions);
     declare const coordinator: RecordCaptureCoordinator;
@@ -115,7 +115,8 @@ try {
     const processingIssues = coordinator.processingIssues();
     const detachProcessingIssues: () => void = coordinator.observeProcessingIssues(() => undefined);
     const coordinatorDisposal: Promise<void> = coordinator.dispose();
-    void [processingIssues, detachProcessingIssues, coordinatorDisposal];
+    const shutdownReport: Promise<RecordCaptureCoordinatorShutdownReport> = coordinator.shutdown();
+    void [processingIssues, detachProcessingIssues, coordinatorDisposal, shutdownReport];
     const handoffResolver: RecordCaptureCoordinator['resolveHandoff'] = coordinator.resolveHandoff;
     declare const processingSelection: RecordCaptureProcessingSelection;
     const createMedia2Job = (client: Media2Client, input: Media2JobInput) => RecordMedia2Job.create(client, '/tmp/record-media2-job.json', input);

@@ -25,7 +25,7 @@ const publicState = (receipt: Capture2Receipt, readiness: RecordState["readiness
 };
 
 /** Bridges the published capture/2 host into Record's existing provider runtime seam. */
-export async function createCapture2RecordRuntime(options: Capture2RecordRuntimeOptions): Promise<RecordHostRuntimePort & RecordCapture2StartPort> {
+export async function createCapture2RecordRuntime(options: Capture2RecordRuntimeOptions): Promise<RecordHostRuntimePort & RecordCapture2StartPort & { drainObservation(): Promise<void> }> {
   const interval = options.pollIntervalMs ?? 750;
   if (!Number.isSafeInteger(interval) || interval < 100 || interval > 10_000) throw new Error("Capture2 observer interval must be between 100 and 10000ms");
   let disposed = false;
@@ -35,6 +35,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
   let reconciliation: OwnershipReport["reconciliation"] = "pending";
   let timer: ReturnType<typeof setTimeout> | undefined;
   let polling = false;
+  let pollFlight: Promise<void> | undefined;
   let startInFlight = false;
   let operationRevision = 0;
   const listeners = new Set<(value: RecordState) => void>();
@@ -76,16 +77,21 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
   };
   // A host may synchronously deliver its snapshot during subscribe().
   const unsubscribe = options.host.subscribe(onEvent);
-  const poll = async () => {
-    if (disposed || polling) return;
+  const poll = (): Promise<void> => {
+    if (disposed || polling) return pollFlight ?? Promise.resolve();
     polling = true;
-    try {
-      const candidates = [...known.values()].filter(receipt => active.has(receipt.phase));
-      for (const item of candidates) {
-        if (disposed) return;
-        try { accept(await options.host.inspect(item.requestId)); } catch { /* unknown ownership remains active */ }
-      }
-    } finally { polling = false; schedulePoll(); }
+    const work = (async () => {
+      try {
+        const candidates = [...known.values()].filter(receipt => active.has(receipt.phase));
+        for (const item of candidates) {
+          if (disposed) return;
+          try { accept(await options.host.inspect(item.requestId)); } catch { /* unknown ownership remains active */ }
+        }
+      } finally { polling = false; schedulePoll(); }
+    })();
+    pollFlight = work;
+    void work.then(() => { if (pollFlight === work) pollFlight = undefined; }, () => { if (pollFlight === work) pollFlight = undefined; });
+    return work;
   };
   const readinessResult = await options.host.readiness();
   if (!disposed) { readiness = readinessResult.ready ? { ready: true } : { ready: false, reason: readinessResult.reason ?? "Native Record capture/2 unavailable" }; publish({ ...state, readiness }); }
@@ -190,6 +196,8 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
     captures() { return [...known.values()].map(receipt => publicState(receipt, readiness)); },
     completionEligibleCaptureIds() { return [...known.values()].filter(receipt => receipt.phase === "materials-ready" || receipt.phase === "processing").map(receipt => receipt.requestId); },
     canStartCapture() { return !disposed && startup.state === "ready" && ![...known.values()].some(receipt => active.has(receipt.phase)); },
+    /** After dispose stops new observations, await the already admitted background poll. */
+    async drainObservation() { await Promise.allSettled(pollFlight ? [pollFlight] : []); },
     dispose() {
       if (!disposed) { disposed = true; if (timer) clearTimeout(timer); timer = undefined; unsubscribe(); listeners.clear(); reconciliation = reconciliation === "pending" ? "interrupted" : reconciliation; }
       return { requestIds: startup.state === "blocked" ? startup.unresolved.map(item => item.requestId) : [], storageUnavailable: false, reconciliation };
