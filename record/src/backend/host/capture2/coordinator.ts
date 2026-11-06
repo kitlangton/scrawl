@@ -136,10 +136,18 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   const output = createRecordPublicationOutput(options.captureClient, options.privateControlRoot, options.preflight);
   const store = new SqlitePublicationBindingStore(options.privateControlRoot);
   const flights = new Map<string, Promise<void>>();
+  const projections = new Set<Promise<unknown>>();
   const pending = new Set<string>();
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   let disposal: Promise<void> | undefined;
+  const project = <T>(read: () => Promise<T>): Promise<T> => {
+    if (disposed) return Promise.reject(new Error("Record capture coordinator is disposed"));
+    const operation = read();
+    projections.add(operation);
+    void operation.then(() => projections.delete(operation), () => projections.delete(operation));
+    return operation;
+  };
   const issues = new Map<string, RecordCaptureProcessingIssue>();
   const listeners = new Set<() => void>();
   const notify = () => {
@@ -162,7 +170,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   let factsFingerprint: string | undefined;
   const captureFacts: RecordCaptureFactsPort = {
     observe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    async readFacts() {
+    readFacts() { return project(async () => {
       const facts = await output.captureFacts.readFacts();
       const captures = new Map(facts.captures.map(fact => [fact.captureId, fact]));
       for (const issue of issues.values()) if (issue.requestId && captures.get(issue.requestId)?.phase !== "saved") {
@@ -175,7 +183,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       if (factsFingerprint !== undefined && factsFingerprint !== fingerprint) factsRevision++;
       factsFingerprint = fingerprint;
       return structuredClone({ ...snapshot, revision: factsRevision });
-    },
+    }); },
   };
 
 
@@ -385,7 +393,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     captureFacts,
     processingIssues: () => structuredClone([...issues.values()]),
     observeProcessingIssues(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
-    resolveHandoff: output.resolveHandoff,
+    resolveHandoff: identity => project(() => output.resolveHandoff(structuredClone(identity))),
     createProvider(providerOptions) { return createRecordCapabilityProvider({ ...providerOptions, runtime, capture2Start: runtime, captureFacts }); },
     async reconcile() { await reconcile(); },
     dispose() {
@@ -399,7 +407,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       listeners.clear();
       runtime.dispose();
       host.dispose();
-      disposal = Promise.allSettled([startupRecovery, ...flights.values()]).then(() => undefined);
+      disposal = Promise.allSettled([startupRecovery, ...flights.values(), ...projections]).then(() => undefined);
       return disposal;
     },
   };
