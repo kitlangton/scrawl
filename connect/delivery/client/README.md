@@ -177,6 +177,17 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+The `./local-status` export composes `readLocalStatus` from the existing private
+credential and queue readers under one queue lease. The caller supplies admitted
+fresh settings, approved server context, time and the resource provider lifetime.
+The result matches local `status(false)` fields and auth classifications, including
+renewable grants with expired access tokens, and excludes credential tokens and
+unknown queue fields. Invalid stored grants appear signed out; unsafe descriptor,
+ACL, directory or queue reads refuse the whole status. It makes no account request,
+renewal or product JSON write. It can create the existing stable empty lock file.
+`projectLocalStatus` also accepts already admitted secret-free facts. Neither API
+routes the installed CLI; Rust remains its sole live writer and command owner.
+
 The `./queue` export decodes legacy private queue records and proposes guarded
 transitions. Callers must supply fresh facts under the authoritative writer lock,
 including the captured cancellation epoch before applying upload results. These
