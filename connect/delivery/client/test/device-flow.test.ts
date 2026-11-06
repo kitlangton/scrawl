@@ -57,6 +57,44 @@ test('pending response then approved response commits once', async () => {
   assert.equal(polls, 2); assert.deepEqual(f.commits, ['https://accounts.example']);
 });
 
+test('explicit read scope commits an approved read grant with only the safe approval exposed', async () => {
+  const f = fixture(approved({ scope: 'read' })); let approval: unknown;
+  assert.equal(await authorizeDevice(f.transport, new AbortController().signal, value => { approval = value; },
+    { expectedScope: 'read', now: () => 0, sleep: async () => {} }), null);
+  assert.deepEqual(f.commits, ['https://accounts.example']);
+  assert.deepEqual(approval, { verificationUri: start().verificationUri, userCode: 'ABCD-1234' });
+  assert.equal(JSON.stringify(approval).includes('access-secret'), false);
+});
+
+for (const [expectedScope, replyScope] of [['read', 'upload'], ['upload', 'read']] as const) {
+  test(`scope mismatch (${expectedScope} expected, ${replyScope} received) never commits`, async () => {
+    const f = fixture(approved({ scope: replyScope }));
+    assert.equal(await authorizeDevice(f.transport, new AbortController().signal, () => {},
+      { expectedScope, now: () => 0, sleep: async () => {} }), 'unavailable');
+    assert.deepEqual(f.commits, []);
+  });
+}
+
+for (const expectedScope of [null, 'invalid'] as unknown[]) {
+  test(`invalid requested scope ${String(expectedScope)} fails before transport start`, async () => {
+    const f = fixture(); let starts = 0;
+    f.transport.start = async () => { starts++; return start(); };
+    assert.equal(await authorizeDevice(f.transport, new AbortController().signal, () => {},
+      { expectedScope } as never), 'unavailable');
+    assert.equal(starts, 0); assert.deepEqual(f.commits, []);
+  });
+}
+
+test('requested scope is pinned before start and cannot be changed by caller mutation', async () => {
+  const f = fixture(approved({ scope: 'read' }));
+  const options: { expectedScope?: 'read' | 'upload'; now: () => number; sleep: (ms: number, signal: AbortSignal) => Promise<void> } = {
+    expectedScope: 'read', now: () => 0, sleep: async () => {},
+  };
+  f.transport.start = async () => { options.expectedScope = 'upload'; return start(); };
+  assert.equal(await authorizeDevice(f.transport, new AbortController().signal, () => {}, options), null);
+  assert.deepEqual(f.commits, ['https://accounts.example']);
+});
+
 test('abort while waiting stops before poll and commit', async () => {
   const f = fixture(); const controller = new AbortController();
   const waiting = authorizeDevice(f.transport, controller.signal, () => {}, {
