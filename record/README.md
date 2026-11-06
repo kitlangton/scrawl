@@ -117,6 +117,15 @@ contents. Record stores control metadata privately and never creates or
 replaces the final bundle path. After an ambiguous reply, `reconcile` restores
 its expected receipt from that original binding and calls `inspectPublication`;
 changed bindings fail closed and a repeated command does not allocate new IDs.
+New reserved publications retain the exact preflighted dispatch metadata without
+`ownerToken`. Reconciliation can claim a still-undispatched reservation once through
+the existing dispatch CAS; an ambiguous dispatched publication remains inspect-only.
+Record limits each recovery descriptor to 2 MiB of serialized JSON and all retained
+recovery descriptors in one control store to 16 MiB, including terminal rows.
+These are Record operational limits, smaller than SDK document maxima. Admission
+checks the aggregate under the SQLite write lock; capacity exhaustion refuses a
+new reservation before dispatch and never evicts history or changes the bundle.
+This bounds recovery metadata, not the entire SQLite database or filesystem.
 The API does not assemble canonical bundles, release retained materials, or
 claim native capture/publication availability. SDK0.4's testing peer remains a
 test double and cannot produce native Saved.
