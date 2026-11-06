@@ -1,6 +1,9 @@
 # Website and Connect continuous delivery
 
 Each value stream has an independent native GitHub paths-filtered workflow.
+Engine SDK, native core, media and capture components share `stream-engine.yml`
+with separate component/target matrix jobs and artifacts. Linux/macOS targets
+remain defined by each component registration.
 Owner entrypoints in `.github/workflows/stream-<owner>.yml` own their PR and main
 jobs, permissions, fixed owner/target matrix and runtime audit. Small composite
 actions under `.github/actions/delivery-contracts` and `delivery-component` share
@@ -25,7 +28,7 @@ Use `python3 enablement/verification.py --base <base> --run` for explicit affect
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
 `.github/workflows/stream-*.yml` are the independent main producer workflows for
-registered components, including Public's Bun-built web artifact and native Engine
+registered components (Engine components share one workflow), including Public's Bun-built web artifact and native Engine
 providers. Each paths filter includes its owner source, shared consumed inputs,
 registration/build contracts and its own workflow. The registry records each
 owner's supported targets and artifact stage; missing registrations remain

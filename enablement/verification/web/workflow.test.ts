@@ -1,12 +1,13 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import test from 'node:test'
+import { workflowPathFor } from '../../../composition/delivery/core.ts'
 
 const root = new URL('../../../.github/workflows/', import.meta.url)
 const contracts = readFileSync(new URL('../actions/delivery-contracts/action.yml', root), 'utf8')
 const component = readFileSync(new URL('../actions/delivery-component/action.yml', root), 'utf8')
 const workerCaller = readFileSync(new URL('web-delivery.yml', root), 'utf8')
-const entry = (name: string) => readFileSync(new URL(`stream-${name}.yml`, root), 'utf8')
+const entry = (name: string) => readFileSync(new URL(workflowPathFor(name).split('/').at(-1)!, root), 'utf8')
 const paths = (source: string) => source.split(/\n\s+paths:\n/)[1]?.split(/\n\s{2,}[a-z_]+:/)[0]?.match(/^\s+- '([^']+)'/gm)?.map(value => value.trim().slice(3, -1)) ?? []
 const eventPaths = (source: string, event: string) => {
   const section = source.split(`\n  ${event}:\n`)[1]?.split(/\n  [a-z_]+:\n|\npermissions:/)[0] ?? ''
@@ -38,7 +39,7 @@ test('owner entrypoints select only their stream and shared delivery inputs', ()
   for (const name of owners) {
     const source = entry(name)
     const sourcePaths = paths(source)
-    assert(sourcePaths.includes(`.github/workflows/stream-${name}.yml`))
+    assert(sourcePaths.includes(workflowPathFor(name)))
     assert(sourcePaths.includes('composition/delivery/**'))
     assert(sourcePaths.includes('composition/architecture/**'))
     for (const actionPath of sharedActions) assert(sourcePaths.includes(actionPath))
@@ -46,7 +47,9 @@ test('owner entrypoints select only their stream and shared delivery inputs', ()
     const registration = name === 'platform-resources'
       ? { id: name, kind: 'directory', stage: 'library', package: 'shared/resources/delivery', targets: ['linux-x64', 'macos-x64'], inputs: ['shared/resources/', '.cargo/'] }
       : JSON.parse(readFileSync(new URL(`../../../${registrations[name]}`, import.meta.url), 'utf8'))
-    const matrix = JSON.parse(source.match(/^\s+matrix: (.+)$/m)![1]).include
+    const matrices = [...source.matchAll(/^\s+matrix: (.+)$/gm)].map(match => JSON.parse(match[1]).include)
+    assert.deepEqual(matrices[0], matrices[1], `${name} PR and main matrices agree`)
+    const matrix = matrices[0].filter((row: any) => row.id === name)
     assert.deepEqual(matrix.map((row: any) => row.id), matrix.map(() => name))
     assert.deepEqual([...matrix.map((row: any) => row.target)].sort(), [...registration.targets].sort())
     assert(matrix.every((row: any) => row.runner === (row.target === 'macos-x64' ? 'macos-26-intel' : 'ubuntu-24.04')))
@@ -124,7 +127,7 @@ test('Connect producer and client retain separate invocation and path ownership'
   assert(paths(entry('connect-client')).includes('connect/delivery.json'))
   assert(!paths(entry('connect-client')).includes('connect/web/**'))
   const streamWorkflows = readdirSync(root).filter(name => name.endsWith('.yml') && name.startsWith('stream-'))
-  assert.deepEqual(streamWorkflows.sort(), owners.map(name => `stream-${name}.yml`).sort())
+  assert.deepEqual(streamWorkflows.sort(), [...new Set(owners.map(name => workflowPathFor(name).split('/').at(-1)!))].sort())
 })
 
 test('PR and main events share path filters, fixed target matrices and least privilege', () => {
@@ -168,11 +171,19 @@ test('non-stream workflows remain manual or reusable', () => {
   }
 })
 
+test('Engine has one workflow containing exactly its registered component targets', () => {
+  const source = entry('engine')
+  const matrix = JSON.parse(source.match(/^\s+matrix: (.+)$/m)![1]).include
+  assert.deepEqual(matrix.map((row: any) => [row.id, row.target]).sort(), [
+    ['engine', 'linux-x64'], ['engine-native', 'linux-x64'], ['engine-native', 'macos-x64'],
+    ['engine-media-native', 'linux-x64'], ['engine-media-native', 'macos-x64'], ['engine-capture-native', 'linux-x64'],
+  ].sort())
+})
 test('media native targets use the same producer with platform-specific fresh setup', () => {
   const workflow = entry('engine-media-native');
   const matrices = [...workflow.matchAll(/^\s+matrix: (.+)$/gm)].map(match => JSON.parse(match[1]).include);
   assert.equal(matrices.length, 2);
-  for (const rows of matrices) assert.deepEqual(rows.map((row: any) => [row.target, row.runner]), [['linux-x64', 'ubuntu-24.04'], ['macos-x64', 'macos-26-intel']]);
+  for (const rows of matrices) assert.deepEqual(rows.filter((row: any) => row.id === 'engine-media-native').map((row: any) => [row.target, row.runner]), [['linux-x64', 'ubuntu-24.04'], ['macos-x64', 'macos-26-intel']]);
   const linux = component.split('    - name: Install Engine media runtime and fixture dependencies')[1].split('    - name:')[0];
   assert.match(linux, /inputs.target == 'linux-x64'/);
   const mac = component.split('    - name: Qualify native Intel Mac media toolchain')[1].split('    - name:')[0];

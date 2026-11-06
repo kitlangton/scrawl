@@ -7,6 +7,7 @@ import { resolve } from 'node:path'
 import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
+import { assertBuildWorkflowIdentity } from './cli.ts'
 import { assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
@@ -302,5 +303,24 @@ test('capture/2 has its own Linux native route and mandatory admission inputs', 
   assert.equal(row[0].architecture_owner, 'engine')
   assert.equal(row[0].package, 'engine/delivery/capture')
   assert.equal(row[0].language, 'native')
-  assert.equal(workflowPathFor(capture.id), '.github/workflows/stream-engine-capture-native.yml')
+  assert.equal(workflowPathFor(capture.id), '.github/workflows/stream-engine.yml')
+})
+
+test('Engine components require the consolidated canonical PR workflow identity', () => {
+  for (const id of ['engine', 'engine-native', 'engine-media-native', 'engine-capture-native']) {
+    assert.equal(workflowPathFor(id), '.github/workflows/stream-engine.yml')
+    const env = {
+      GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/123/merge',
+      GITHUB_REPOSITORY: 'tryapparent/apparent',
+      GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/pull/123/merge',
+      APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-engine.yml',
+    }
+    assert.doesNotThrow(() => assertBuildWorkflowIdentity(env, id))
+    assert.throws(() => assertBuildWorkflowIdentity({ ...env,
+      GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-agent.yml@refs/pull/123/merge',
+    }, id), /canonical owner workflow/)
+    assert.throws(() => assertBuildWorkflowIdentity({ ...env,
+      APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-engine-native.yml',
+    }, id), /canonical owner workflow/)
+  }
 })
