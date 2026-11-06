@@ -9,6 +9,7 @@
     "./recipient-publication": "./dist/recipient/publication.js",
     "./recipient-command/state": "./dist/cli/recipient-state.js",
     "./recipient-host": "./dist/cli/recipient-host.js",
+    "./local-status": "./dist/cli/status-state.js",
     "./recipient-command/renewal": "./dist/state/renewal-owner.js",
     "./recipient-command": "./dist/cli/recipient.js",
     "./credentials": "./dist/credentials/index.js",

@@ -23,6 +23,7 @@ import { readStoredCredentialHandle, CredentialReadError } from "../../src/crede
 import { decodeRecipientRenewalReply, type RecipientRenewalOwner } from "../../src/state/renewal-owner.ts";
 import type { RetrievedRecipientCapture } from "../../src/recipient/retrieve.ts";
 import { readQueueSnapshot, QueueStoreError } from "../../src/queue/store.ts";
+import { readLocalStatus } from "../../src/cli/status-state.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
 const artifactPath = process.env.APPARENT_RESOURCE_ARTIFACT;
@@ -97,6 +98,14 @@ test("native queue snapshot uses the stable lease and preserves private job data
   }
   assert.equal((await lstat(lockPath)).ino, before.ino);
   await readQueueSnapshot(root, context, resources);
+  const credential = Buffer.from(JSON.stringify({ server: context.approvedServer, scope: "read", token: "synthetic-status-token", generation: "b".repeat(32) }));
+  await writeFile(path.join(root, "read.credential"), credential, { mode: 0o600 });
+  const status = await readLocalStatus(root, { server: context.approvedServer, serverValid: true, hostedSync: true,
+    cloudEnabled: true, uploadConsent: true, encryption: false, nowSeconds: 100 }, resources);
+  assert.equal(status.readSignedIn, true); assert.equal(status.uploadSignedIn, false);
+  assert.equal(status.queue[0]!.id, id); assert.equal(status.enabled, true);
+  assert.ok(!JSON.stringify(status).includes("synthetic-status-token"));
+  assert.deepEqual(await readFile(path.join(root, "read.credential")), credential);
   await chmod(file, 0o644);
   await assert.rejects(readQueueSnapshot(root, context, resources), e => e instanceof QueueStoreError && e.category === "unsafe_file");
   assert.deepEqual(await readFile(file), bytes);
