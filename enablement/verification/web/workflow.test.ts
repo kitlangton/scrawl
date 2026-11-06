@@ -1,6 +1,8 @@
 import assert from 'node:assert/strict'
 import { readFileSync, readdirSync } from 'node:fs'
 import test from 'node:test'
+import { platformPlan } from '../../../composition/delivery/platform/plan.ts'
+import { fileURLToPath } from 'node:url'
 import { workflowPathFor } from '../../../composition/delivery/core.ts'
 
 const root = new URL('../../../.github/workflows/', import.meta.url)
@@ -22,6 +24,11 @@ const registrations: Record<string, string> = {
   agent: 'agent/delivery.json', public: 'public/delivery.json',
 }
 const owners = Object.keys(registrations)
+const platformIds = ['platform-config', 'platform-resources', 'app-shell']
+const platformRows = platformPlan(fileURLToPath(new URL('../../../', import.meta.url)), platformIds).matrix.include
+const matricesFor = (source: string) => source.includes('name: platform delivery')
+  ? [platformRows, platformRows]
+  : [...source.matchAll(/^\s+matrix: (.+)$/gm)].map(match => JSON.parse(match[1]).include)
 const sharedActions = [
   '.github/actions/delivery-contracts/**', '.github/actions/delivery-component/**',
 ]
@@ -47,7 +54,7 @@ test('owner entrypoints select only their stream and shared delivery inputs', ()
     const registration = name === 'platform-resources'
       ? { id: name, kind: 'directory', stage: 'library', package: 'shared/resources/delivery', targets: ['linux-x64', 'macos-x64'], inputs: ['shared/resources/', '.cargo/'] }
       : JSON.parse(readFileSync(new URL(`../../../${registrations[name]}`, import.meta.url), 'utf8'))
-    const matrices = [...source.matchAll(/^\s+matrix: (.+)$/gm)].map(match => JSON.parse(match[1]).include)
+    const matrices = matricesFor(source)
     assert.deepEqual(matrices[0], matrices[1], `${name} PR and main matrices agree`)
     const matrix = matrices[0].filter((row: any) => row.id === name)
     assert.deepEqual(matrix.map((row: any) => row.id), matrix.map(() => name))
@@ -67,15 +74,14 @@ test('platform resources workflow retains literal receipt names, full Cargo clos
   assert.match(workflow, /name: deliver \/ Delivery contracts/)
   assert.match(workflow, /name: deliver \/ Workflow runtime budget/)
   assert.match(workflow, /name: deliver \/ stream \(\$\{\{ matrix\.id \}\}, \$\{\{ matrix\.target \}\}\)/)
-  assert.match(workflow, /"id":"platform-resources","target":"linux-x64"/)
-  assert.match(workflow, /"id":"platform-resources","target":"macos-x64"/)
+  assert.deepEqual(platformRows.filter(row => row.id === 'platform-resources').map(row => row.target), ['linux-x64', 'macos-x64'])
   assert.doesNotMatch(workflow, /macos-arm64/)
-  assert.match(workflow, /APPARENT_DELIVERY_WORKFLOW_PATH: '\.github\/workflows\/stream-platform-resources\.yml'/)
+  assert.match(workflow, /APPARENT_DELIVERY_WORKFLOW_PATH: '\.github\/workflows\/stream-platform\.yml'/)
   assert.match(workflow, /id: \$\{\{ matrix\.id \}\}[\s\S]*?target: \$\{\{ matrix\.target \}\}[\s\S]*?publish: 'false'/)
 })
 
 test('shared composite actions hold steps while owner workflows own jobs and receipt identities', () => {
-  assert.match(contracts, /node --experimental-strip-types --test composition\/delivery\/\*\.test\.ts enablement\/verification\/web\/workflow\.test\.ts/)
+  assert.match(contracts, /node --experimental-strip-types --test composition\/delivery\/\*\.test\.ts composition\/delivery\/platform\/\*\.test\.ts enablement\/verification\/web\/workflow\.test\.ts/)
   assert.match(contracts, /composition\/architecture run check -- --owner shared --owner composition/)
   assert.match(contracts, /actionlint:1\.7\.12/)
   assert.match(component, /cli\.ts build/)
@@ -218,6 +224,28 @@ test('App Shell PR retention follows packaged Electron verification and main can
   assert.match(section(entry('app-shell'), 'stream'), /pull-requests: read/)
 })
 
+test('Platform shares one selector and gates successful audit on selected execution', () => {
+  const source = entry('platform-config')
+  for (const id of platformIds) assert.equal(workflowPathFor(id), '.github/workflows/stream-platform.yml')
+  assert.match(section(source, 'contracts'), /fetch-depth: 0/)
+  assert.match(section(source, 'contracts'), /matrix: \$\{\{ steps.selection.outputs.matrix \}\}/)
+  assert.match(section(source, 'contracts'), /has_ready: \$\{\{ steps.selection.outputs.has_ready \}\}/)
+  assert.match(section(source, 'contracts'), /id: selection\n\s+run: node --experimental-strip-types composition\/delivery\/platform\/plan\.ts/)
+  assert.match(section(source, 'contracts'), /composition\/delivery\/platform\/plan\.ts/)
+  assert.doesNotMatch(source.split('jobs:')[0], /concurrency:/)
+  for (const job of ['stream', 'verify-pr']) {
+    assert.match(section(source, job), /group: platform-\$\{\{ matrix.id \}\}-\$\{\{ matrix.target \}\}/)
+    assert.match(section(source, job), /needs.contracts.outputs.has_ready == 'true'/)
+    assert.match(section(source, job), /matrix: \$\{\{ fromJSON\(needs.contracts.outputs.matrix\) \}\}/)
+  }
+  const audit = section(source, 'runtime-budget')
+  assert.match(audit, /test "\$CONTRACTS" = success/)
+  assert.match(audit, /test "\$PR" = success/)
+  assert.match(audit, /test "\$PRODUCER" = success/)
+  assert(audit.indexOf('name: Require successful selected components') < audit.indexOf('uses: ./.github/actions/runtime-budget'))
+  assert.deepEqual(platformPlan(fileURLToPath(new URL('../../../', import.meta.url)), []).matrix.include, [])
+  assert.throws(() => platformPlan(fileURLToPath(new URL('../../../', import.meta.url)), ['missing']), /unavailable/)
+})
 
 test('supported native candidates qualify Rust before admission, while Config main can authenticate PRs', () => {
   const firstRust = component.indexOf('uses: dtolnay/rust-toolchain@stable')

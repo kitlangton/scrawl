@@ -4,7 +4,7 @@ import { admitPrCandidate } from './pr-candidate.ts'
 const landed = 'a'.repeat(40), head = 'b'.repeat(40), base = 'c'.repeat(40), tested = 'd'.repeat(40), tree = 'e'.repeat(40), digest = 'f'.repeat(64)
 function fixture(ownerId = 'engine', target = 'linux-x64') {
   const repo = 'tryapparent/apparent'
-  const workflow = ownerId === 'app-shell' ? 'stream-app-shell.yml' : ownerId === 'platform-config' ? 'stream-platform-config.yml' : 'stream-engine.yml'
+  const workflow = ['app-shell', 'platform-config'].includes(ownerId) ? 'stream-platform.yml' : 'stream-engine.yml'
   const data: Record<string, any> = {
     [`repos/${repo}/commits/${landed}/pulls?per_page=100`]: [{ number: 9, merged_at: '2026-11-06', merge_commit_sha: landed, head: { sha: head, repo: { full_name: repo } } }],
     [`repos/${repo}/actions/workflows/${workflow}/runs?event=pull_request&head_sha=${head}&per_page=100`]: { workflow_runs: [{ id: 10, run_attempt: 2, event: 'pull_request', path: `.github/workflows/${workflow}`, conclusion: 'success', head_sha: head, head_repository: { full_name: repo }, pull_requests: [{ number: 9, head: { sha: head }, base: { sha: base } }] }] },

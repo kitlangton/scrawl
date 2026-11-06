@@ -438,12 +438,12 @@ test('App Shell promotion retains the exact packaged archive and original build 
   const app: Owner = { ...owner, id: 'app-shell', kind: 'app-shell', package: 'composition/app', inputs: ['composition/app/'], targets: ['linux-x64', 'macos-x64'], stage: 'development-app' }
   const input = resolve(temp, 'app-package-candidate'); mkdirSync(resolve(input, 'bundle'), { recursive: true })
   writeFileSync(resolve(input, 'bundle/app'), 'synthetic packaged runtime bytes')
-  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/pull/9/merge', GITHUB_RUN_ID: '887', GITHUB_RUN_ATTEMPT: '1' }
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/pull/9/merge', GITHUB_RUN_ID: '887', GITHUB_RUN_ATTEMPT: '1' }
   for (const target of app.targets) {
     const sealed = resolve(temp, 'app-sealed-' + target), promoted = resolve(temp, 'app-promoted-' + target)
     const receipt = sealPayload(repo, app, target, input, sealed, 'a'.repeat(64), prEnv, true)
     const zip = resolve(temp, 'app-' + target + '.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: sealed })
-    const next = reusePayload(repo, app, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '887', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/heads/main', GITHUB_RUN_ID: '888' })
+    const next = reusePayload(repo, app, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '887', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/heads/main', GITHUB_RUN_ID: '888' })
     assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '887')
     assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
   }
@@ -507,7 +507,7 @@ test('Config candidate sealing retains each staged helper manifest under its own
   const input = resolve(temp, 'config-helper-payload'); mkdirSync(input)
   writeFileSync(resolve(input, 'manifest.json'), JSON.stringify({ sourceSha: 'b'.repeat(40), protocol: 1 }))
   writeFileSync(resolve(input, 'apparent-config-host'), 'synthetic helper')
-  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform-config.yml@refs/pull/9/merge', GITHUB_RUN_ID: '997', GITHUB_RUN_ATTEMPT: '1' }
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/pull/9/merge', GITHUB_RUN_ID: '997', GITHUB_RUN_ATTEMPT: '1' }
   for (const target of config.targets) {
     const sealed = resolve(temp, 'config-helper-sealed-' + target)
     const receipt = sealPayload(repo, config, target, input, sealed, 'c'.repeat(64), prEnv, true)

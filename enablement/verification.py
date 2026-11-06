@@ -257,7 +257,7 @@ APP_SHELL_ROOT = "composition/app/"
 APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
 APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/",
                     ".github/actions/delivery-contracts/", ".github/actions/delivery-component/")
-APP_SHELL_WORKFLOW = ".github/workflows/stream-app-shell.yml"
+APP_SHELL_WORKFLOW = ".github/workflows/stream-platform.yml"
 
 RECORD_PACKAGE_ROOT = "record/"
 RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
@@ -699,7 +699,8 @@ def run_agent_tests():
 
 def run_delivery_tests():
     """Run delivery's dependency-free Node tests without installing packages."""
-    tests = sorted((ROOT / APP_SHELL_DELIVERY_ROOT).glob("*.test.ts"))
+    package = ROOT / APP_SHELL_DELIVERY_ROOT
+    tests = sorted([*package.glob("*.test.ts"), *package.glob("platform/*.test.ts")])
     if not tests:
         raise RuntimeError("Delivery checks need composition/delivery/*.test.ts; the hook never installs dependencies")
     subprocess.run(["node", "--experimental-strip-types", "--test",

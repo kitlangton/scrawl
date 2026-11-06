@@ -1,9 +1,13 @@
 # Website and Connect continuous delivery
 
-Each value stream has an independent native GitHub paths-filtered workflow.
+Value streams use native GitHub paths-filtered workflows; Platform groups config, resources and App Shell behind component selection.
 Engine SDK, native core, media and capture components share `stream-engine.yml`
 with separate component/target matrix jobs and artifacts. Linux/macOS targets
 remain defined by each component registration.
+Platform's selector preserves separate config/resources/App Shell jobs and artifacts;
+missing history selects all. Its shared audit requires selected jobs to succeed.
+The canonical workflow path changes, so prior producer receipts rebuild once.
+See [delivery core](../../composition/delivery/README.md) for selection and reuse rules.
 Owner entrypoints in `.github/workflows/stream-<owner>.yml` own their PR and main
 jobs, permissions, fixed owner/target matrix and runtime audit. Small composite
 actions under `.github/actions/delivery-contracts` and `delivery-component` share
