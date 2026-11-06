@@ -1,8 +1,27 @@
 # Native host client
 
+This package ships compiled ESM and declaration files for Node.js 22.18 or newer.
+Its runtime has no React, Electron, TypeScript, Rust, or source-tree dependency.
+Install a matching `@apparent/app-contracts` package beside it; the contracts
+package's `./native` export contains only headless native DTOs and constants.
+The source package is a development dependency solely for this owner's build.
+
+`npm run build` emits `dist/`; `npm pack` builds before packaging. The package
+exports `@apparent/native-host`, `@apparent/native-host/pen`, and
+`@apparent/native-host/clipboard`. To install local artifacts together:
+
+```sh
+npm install ./apparent-app-contracts-0.1.0.tgz ./apparent-native-host-0.1.0.tgz
+```
+
+The installed package contains no TypeScript source. `npm run test:packed`
+builds and packs both packages, installs them into a fresh consumer, checks plain
+Node imports and strict consumer declarations, and exercises the compiled client
+against a synthetic native-host socket.
+
 `createNativeHostPort()` is privileged composition code for the fixed
 `$HOME/.config/apparent/agent-control/capture.sock` endpoint. It returns only
-the consumer-neutral `NativeHostPort` contract from `@apparent/app-contracts/host`;
+the consumer-neutral `NativeHostPort` contract from `@apparent/app-contracts/native`;
 pass this object to a Record-owned adapter in trusted composition, never expose
 the socket or this client to a renderer. Example:
 

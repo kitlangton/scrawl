@@ -3,7 +3,9 @@ import { lstat } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { join, normalize } from 'node:path';
-import { MAX_SERIALIZED_FRAME_BYTES, MAX_UTF8_TEXT_BYTES, type NativeClipboardPort, type NativeClipboardWriteResult, type NativeHostPort, type NativeHostSnapshot, type NativeHostRefusal, type NativeMutationResult, type NativePenPort, type NativePenResult, type NativePenSnapshot, type LegacyConfigValue } from '@apparent/app-contracts/host';
+import { MAX_SERIALIZED_FRAME_BYTES, MAX_UTF8_TEXT_BYTES, type NativeClipboardPort, type NativeClipboardWriteResult, type NativeHostPort, type NativeHostSnapshot, type NativeHostRefusal, type NativeMutationResult, type NativePenPort, type NativePenResult, type NativePenSnapshot } from '@apparent/app-contracts/native';
+
+type LegacyConfigValue = Parameters<NativePenPort['applyStrokeColor']>[1];
 
 const MAX_FRAME = 4096;
 const TIMEOUT_MS = 3000;
