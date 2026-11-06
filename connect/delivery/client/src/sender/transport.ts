@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { assetPath } from "../recipient/manifest.ts";
+import { recipientAssets } from "../recipient/manifest.ts";
 import { decodeStrictJson } from "../recipient/json.ts";
 import {
   normalizeRecipientServer, readBoundedTransportBody, RecipientTransportError,
@@ -17,46 +17,58 @@ export type PlainUploadOptions = {
   /** Reauthorize each request for this exact server and upload scope. */
   authorize(server: string, scope: "upload", signal: AbortSignal): Promise<PlainUploadAuthorization>;
   /** Caller freshness/cancellation guard, checked at every request boundary. */
-  active?(): boolean;
+  active(): boolean;
   signal?: AbortSignal;
 };
 
-const FILE_LIMIT = 90_000_000;
-const TOTAL_LIMIT = 500_000_000;
 const MANIFEST_LIMIT = 128 * 1024;
 const JSON_LIMIT = 2_000_000;
 const TOKEN_LIMIT = 8192;
 const ID = /^[a-f0-9]{32}$/;
-const HASH = /^[a-f0-9]{64}$/;
+const SAFE_FAILURES = new Set(["invalid_request", "invalid_response", "invalid_server", "stale_snapshot",
+  "auth_required", "unauthorized", "forbidden", "redirect_refused", "cancelled", "timeout", "response_too_large", "request_failed"]);
 const fail = (category: ConstructorParameters<typeof RecipientTransportError>[0]): never => {
   throw new RecipientTransportError(category);
 };
 
 function validateFiles(input: readonly PreparedPlainAsset[]): PreparedPlainAsset[] {
-  if (!Array.isArray(input) || input.length === 0 || input.length > 512) fail("invalid_request");
-  const names = new Set<string>();
-  let total = 0;
-  const files = input.map(file => {
-    if (!file || typeof file !== "object" || !assetPath(file.path) || names.has(file.path)
-      || !Number.isSafeInteger(file.size) || file.size < 0 || file.size > FILE_LIMIT
-      || typeof file.sha256 !== "string" || !HASH.test(file.sha256)) fail("invalid_request");
-    names.add(file.path); total += file.size;
-    if (total > TOTAL_LIMIT || file.path === "apparent.json" && file.size > JSON_LIMIT) fail("invalid_request");
-    return { path: file.path, size: file.size, sha256: file.sha256 };
-  });
-  for (const required of ["apparent.json", "summary.md", "contact-sheet.png"]) if (!names.has(required)) fail("invalid_request");
+  let files: PreparedPlainAsset[];
+  try { files = recipientAssets(input); } catch { return fail("invalid_request"); }
   if (new TextEncoder().encode(JSON.stringify({ files })).byteLength > MANIFEST_LIMIT) fail("invalid_request");
   return files;
 }
 
 function checkActive(options: PlainUploadOptions, signal: AbortSignal): void {
   if (signal.aborted) fail(signal.reason === "deadline" ? "timeout" : "cancelled");
-  try { if (options.active && !options.active()) fail("stale_snapshot"); }
+  try { if (!options.active()) fail("stale_snapshot"); }
   catch (error) { if (error instanceof RecipientTransportError) throw error; fail("stale_snapshot"); }
+  if (signal.aborted) fail(signal.reason === "deadline" ? "timeout" : "cancelled");
 }
 
 function token(value: unknown): asserts value is string {
   if (typeof value !== "string" || value.length === 0 || value.length > TOKEN_LIMIT || !/^[\x21-\x7e]+$/.test(value)) fail("auth_required");
+}
+
+async function readPreparedAsset(options: PlainUploadOptions, path: string): Promise<Uint8Array> {
+  const controller = new AbortController();
+  const abortCaller = () => controller.abort("caller");
+  if (options.signal?.aborted) fail("cancelled");
+  options.signal?.addEventListener("abort", abortCaller, { once: true });
+  const timeout = setTimeout(() => controller.abort("deadline"), 60_000);
+  let onAbort: (() => void) | undefined;
+  try {
+    checkActive(options, controller.signal);
+    const aborted = new Promise<never>((_resolve, reject) => {
+      onAbort = () => reject(new RecipientTransportError(controller.signal.reason === "deadline" ? "timeout" : "cancelled"));
+      controller.signal.addEventListener("abort", onAbort, { once: true });
+    });
+    return await Promise.race([options.readAsset(path, controller.signal), aborted]);
+  } finally {
+    clearTimeout(timeout);
+    options.signal?.removeEventListener("abort", abortCaller);
+    if (onAbort) controller.signal.removeEventListener("abort", onAbort);
+    controller.abort();
+  }
 }
 
 async function request(options: PlainUploadOptions, server: string, route: string, method: "POST" | "PUT" | "GET",
@@ -120,19 +132,7 @@ function json(bytes: Uint8Array): Record<string, unknown> {
 }
 
 function responseFiles(value: unknown): PreparedPlainAsset[] {
-  if (!Array.isArray(value) || value.length > 512) fail("invalid_response");
-  const files: PreparedPlainAsset[] = [];
-  const names = new Set<string>();
-  for (const raw of value as unknown[]) {
-    if (!raw || typeof raw !== "object" || Array.isArray(raw)) fail("invalid_response");
-    const row = raw as Record<string, unknown>;
-    if (Object.keys(row).sort().join(",") !== "path,sha256,size" || !assetPath(row.path) || names.has(row.path as string)
-      || !Number.isSafeInteger(row.size) || (row.size as number) < 0 || (row.size as number) > FILE_LIMIT
-      || typeof row.sha256 !== "string" || !HASH.test(row.sha256)) fail("invalid_response");
-    names.add(row.path as string);
-    files.push({ path: row.path as string, size: row.size as number, sha256: row.sha256 as string });
-  }
-  return files;
+  try { return recipientAssets(value); } catch { return fail("invalid_response"); }
 }
 
 function sameManifest(left: readonly PreparedPlainAsset[], right: readonly PreparedPlainAsset[]): boolean {
@@ -145,10 +145,21 @@ function sameManifest(left: readonly PreparedPlainAsset[], right: readonly Prepa
 }
 
 /** Upload an already stable, consented plaintext snapshot. This never encrypts or falls back from encryption. */
-export async function uploadPreparedPlainCapture(options: PlainUploadOptions): Promise<void> {
+export async function uploadPreparedPlainCapture(input: PlainUploadOptions): Promise<void> {
+  try {
+    const options = { server: input.server, captureId: input.captureId, files: input.files,
+      readAsset: input.readAsset, authorize: input.authorize, active: input.active, signal: input.signal };
+    await upload(options);
+  } catch (cause) {
+    if (cause instanceof RecipientTransportError && SAFE_FAILURES.has(cause.category)) fail(cause.category);
+    fail("request_failed");
+  }
+}
+
+async function upload(options: PlainUploadOptions): Promise<void> {
   const server = normalizeRecipientServer(options.server);
   if (typeof options.captureId !== "string" || !ID.test(options.captureId)) fail("invalid_request");
-  if (typeof options.readAsset !== "function" || typeof options.authorize !== "function") fail("invalid_request");
+  if (typeof options.readAsset !== "function" || typeof options.authorize !== "function" || typeof options.active !== "function") fail("invalid_request");
   const files = validateFiles(options.files);
   const base = `/v1/captures/${options.captureId}`;
   const reservation = json(await request(options, server, base, "POST", new TextEncoder().encode(JSON.stringify({ files })), true));
@@ -156,8 +167,8 @@ export async function uploadPreparedPlainCapture(options: PlainUploadOptions): P
   if (reservation.status === "pending") {
     for (const file of files) {
       checkActive(options, options.signal ?? new AbortController().signal);
-      const source = await options.readAsset(file.path, options.signal ?? new AbortController().signal);
-      if (!(source instanceof Uint8Array)) fail("stale_snapshot");
+      const source = await readPreparedAsset(options, file.path);
+      if (!(source instanceof Uint8Array) || source.byteLength !== file.size) fail("stale_snapshot");
       const owned = new Uint8Array(source);
       try {
         const sha = createHash("sha256").update(owned).digest("hex");

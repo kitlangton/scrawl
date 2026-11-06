@@ -23,6 +23,7 @@ function getBody(req: import("node:http").IncomingMessage): Promise<Buffer> {
   return new Promise((resolve, reject) => { const parts: Buffer[] = []; req.on("data", chunk => parts.push(Buffer.from(chunk))); req.on("end", () => resolve(Buffer.concat(parts))); req.on("error", reject); });
 }
 const options = (server: string, files = manifest) => ({ server, captureId: id, files,
+  active: () => true,
   readAsset: async (path: string) => new Uint8Array(data.get(path)!),
   authorize: async (approvedServer: string, scope: "upload") => ({ approvedServer, scope, token: "synthetic-token" }) });
 const capture = (promise: Promise<unknown>, category: string) => assert.rejects(promise, (error: unknown) =>
@@ -40,7 +41,9 @@ test("pending plaintext reservation uploads exact mounted paths and verifies uno
     else { assert.equal(req.method, "PUT"); const path = req.url!.split("/files/")[1]!; assert.deepEqual(body, Buffer.from(data.get(path)!)); res.end("{}"); }
   });
   try {
-    await uploadPreparedPlainCapture(options(`${f.origin}/connect`));
+    const borrowed = new Map([...data].map(([name, bytes]) => [name, new Uint8Array(bytes)]));
+    await uploadPreparedPlainCapture({ ...options(`${f.origin}/connect`), readAsset: async name => borrowed.get(name)! });
+    for (const [name, bytes] of borrowed) assert.deepEqual(bytes, data.get(name), "caller-owned bytes remain intact");
     assert.deepEqual(requests.map(r => r.url), [
       `/connect/v1/captures/${id}`, ...manifest.map(file => `/connect/v1/captures/${id}/files/${file.path}`),
       `/connect/v1/captures/${id}/complete`, `/connect/v1/captures/${id}`,
@@ -128,4 +131,42 @@ test("checks caller freshness at every request and before final readback", async
     await capture(uploadPreparedPlainCapture({ ...options(f.origin), active: () => ++activeChecks < 5 }), "stale_snapshot");
     assert(calls < 2 + manifest.length + 2, "stale callback stops before a later mutation/readback request");
   } finally { await f.close(); }
+});
+
+test("snapshot-reader failures are redacted and cancellation settles even if the reader ignores its signal", async () => {
+  const f = await fixture(async (req, res) => { await getBody(req); res.end(JSON.stringify({ id, status: "pending" })); });
+  try {
+    await capture(uploadPreparedPlainCapture({ ...options(f.origin), readAsset: async () => { throw Error("private-token /private/capture"); } }), "request_failed");
+    const modified = new RecipientTransportError("invalid_response"); modified.message = "private-token /private/capture";
+    await capture(uploadPreparedPlainCapture({ ...options(f.origin), readAsset: async () => { throw modified; } }), "invalid_response");
+    const controller = new AbortController();
+    let started!: () => void;
+    const reading = new Promise<void>(resolve => { started = resolve; });
+    const upload = uploadPreparedPlainCapture({ ...options(f.origin), signal: controller.signal,
+      readAsset: async () => { started(); return new Promise<Uint8Array>(() => {}); } });
+    await reading; controller.abort();
+    await capture(upload, "cancelled");
+  } finally { await f.close(); }
+});
+
+test("captures callbacks, identifiers and cancellation signal before the first await", async () => {
+  const f = await fixture(async (req, res) => { await getBody(req); res.end(JSON.stringify(req.method === "POST"
+    ? { id, status: "ready" } : { id, status: "ready", files: manifest })); });
+  try {
+    const input = { ...options(f.origin), signal: new AbortController().signal };
+    const original = input.authorize;
+    input.authorize = async (...args) => {
+      input.captureId = "f".repeat(32); input.authorize = async () => { throw Error("mutated-secret"); };
+      return original(...args);
+    };
+    await uploadPreparedPlainCapture(input);
+  } finally { await f.close(); }
+});
+
+test("cancellation inside the freshness guard does not start an unbounded authorization callback", { timeout: 1000 }, async () => {
+  const controller = new AbortController(); let calls = 0;
+  await capture(uploadPreparedPlainCapture({ ...options("http://127.0.0.1:1"), signal: controller.signal,
+    active: () => { controller.abort(); return true; },
+    authorize: async () => { calls++; return new Promise<never>(() => {}); } }), "cancelled");
+  assert.equal(calls, 0);
 });
