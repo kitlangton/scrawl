@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { chmodSync, readFileSync, mkdirSync, mkdtempSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import test from 'node:test'
@@ -30,5 +31,22 @@ test('Mac manifest binds helper inventory, native architecture and system closur
     assert.throws(() => validateMacArtifact(root), /Mach-O/)
     rmSync(resolve(root, MAC_FILES[2])); symlinkSync('/bin/sh', resolve(root, MAC_FILES[2]))
     assert.throws(() => validateMacArtifact(root), /symlink/)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
+
+test('Mac entry forwards both published channels and rejects unsupported versions', () => {
+  const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-mac-launch-'))
+  try {
+    mkdirSync(resolve(root, 'libexec')); mkdirSync(resolve(root, 'private runtime'), { mode: 0o700 })
+    const entry = resolve(root, 'apparent-engine-frames')
+    writeFileSync(entry, readFileSync(new URL('../src/launch-macos.sh', import.meta.url)), { mode: 0o755 })
+    writeFileSync(resolve(root, MAC_FILES[1]), '#!/bin/sh\nset -eu\n[ -z "${DYLD_LIBRARY_PATH+x}" ] || exit 7\nprintf "%s\\n" "$@"\n', { mode: 0o755 })
+    chmodSync(entry, 0o755)
+    for (const version of ['1', '2']) {
+      const args = ['--media-runtime-directory', resolve(root, 'private runtime'), '--media-channel', 'media', '--media-protocol-version', version]
+      const actual = execFileSync(entry, args, { encoding: 'utf8', env: { ...process.env, DYLD_LIBRARY_PATH: '/untrusted/ambient' } })
+      assert.deepEqual(actual.trimEnd().split('\n'), args)
+    }
+    assert.throws(() => execFileSync(entry, ['--media-runtime-directory', resolve(root, 'private runtime'), '--media-channel', 'media', '--media-protocol-version', '3'], { stdio: 'pipe' }), { status: 2 })
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
