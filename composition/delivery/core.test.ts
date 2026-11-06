@@ -1,4 +1,5 @@
 import './runtime/pr-candidate.test.ts'
+import './consumer/handoff.test.ts'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'

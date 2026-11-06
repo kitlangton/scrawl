@@ -1,5 +1,4 @@
 import { admitPrCandidate } from './runtime/pr-candidate.ts'
-import { matchesInvocation } from './consumer/handoff.ts'
 import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
@@ -93,7 +92,7 @@ async function main(args: string[]) {
     output({ supported: supportsPrCandidate(args[1], args[2]) }); return
   }
   if ((args.length === 4 || args.length === 5) && args[0] === 'consume') {
-    const { handoff } = await import('./consumer/handoff.ts')
+    const { handoff, matchesInvocation } = await import('./consumer/handoff.ts')
     const owner = ownerFor(args[1]); const target = targetArg(args[2]); const sourceSha = args[3]
     if (!/^[0-9a-f]{40}$/.test(sourceSha)) throw new Error('Producer commit must be a full 40-character SHA')
     const repo = 'tryapparent/apparent'
