@@ -39,7 +39,7 @@
 .onboarding-puddle path { fill:var(--pond-colour); transition:fill .16s ease-out; }
 .onboarding-puddle-ring { fill:none; stroke:var(--apparent-paper); stroke-width:3; opacity:0; transform-origin:150px 49px; }
 .onboarding-pond-frog { position:absolute; left:5%; top:24px; width:29%; height:80px; object-fit:contain; transform-origin:center bottom; }
-.onboarding-pond[data-hop=true] .onboarding-pond-frog { animation:onboarding-pen-hop .9s linear forwards; }
+.onboarding-pond[data-landing=true] .onboarding-pond-frog { animation:onboarding-pen-hop .9s linear forwards; }
 .onboarding-pond[data-landing=true] .onboarding-puddle-ring { animation:onboarding-pen-splash .3s .6s ease-out both; }
 .onboarding-shell footer.onboarding-pen-footer { display:grid; grid-template-columns:1fr auto 1fr; min-height:80px; padding:16px; }
 .onboarding-pen-footer button:first-child { justify-self:start; }
