@@ -11,7 +11,7 @@
 .onboarding-coach-content { max-height:calc(100vh - 136px); overflow:auto; overflow-wrap:anywhere; }
 .onboarding-coach-frog { position:absolute; top:-43px; left:-5px; width:80px; height:55px; object-fit:contain; pointer-events:none; animation:onboarding-coach-arrive .42s cubic-bezier(.2,.7,.3,1); }
 .onboarding-coach-label { font-size:1rem; font-weight:500; margin:0; }
-.onboarding-shell section.onboarding-practice h1 { font-size:1.125rem; line-height:1.5; margin:13px 0 8px; }
+.onboarding-shell section.onboarding-practice h1 { font-size:1.125rem; font-weight:700; line-height:1.5; margin:13px 0 8px; }
 .onboarding-shell section.onboarding-practice p { font-size:1.125rem; line-height:1.5; margin:0 0 16px; }
 .onboarding-coach-actions { display:flex; align-items:center; justify-content:space-between; gap:8px; }
 .onboarding-coach-note { flex:1; color:var(--apparent-muted-foreground); font-size:.875rem; line-height:1.35; }
