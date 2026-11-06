@@ -107,6 +107,44 @@ export interface LegacyAdoptionBackend extends TransactionalConfigBackend {
   adoptLegacy(ownerId: string, expectedLegacy: LegacyConfigValue, value: JsonValue): Promise<ConfigAdoptionResult>;
 }
 
+/** Public, consumer-neutral view of OS facts owned by the running Desktop GUI. */
+export type NativePermissionStatus = 'granted' | 'denied' | 'not-determined' | 'unavailable';
+export type NativePermissionAction = 'request-permission' | 'open-system-settings';
+export interface NativePermissionFact {
+  id: string;
+  status: NativePermissionStatus;
+  usableNow: boolean;
+  relaunchNeeded: boolean;
+  actions: NativePermissionAction[];
+}
+export type NativeShortcutRegistration = 'registered' | 'unregistered' | 'externally-managed' | 'unknown' | 'unavailable';
+export interface NativeShortcutFact {
+  configured: { keyCode: number; modifiers: number; label: string } | null;
+  effective: { keyCode: number; modifiers: number; label: string } | null;
+  registration: NativeShortcutRegistration;
+  canValidate: boolean;
+  canSave: boolean;
+}
+export interface NativeHostSnapshot {
+  api: 1;
+  processEpoch: string;
+  revision: number;
+  scope: 'running-desktop-process';
+  freshness: 'cached-gui-observation';
+  permissions: NativePermissionFact[];
+  shortcuts: { record: NativeShortcutFact; paste: NativeShortcutFact };
+}
+export type NativeHostRefusal = 'stale' | 'busy' | 'unavailable' | 'invalid' | 'reserved' | 'registration-refused';
+export type NativeMutationResult = { status: 'accepted' } | { status: 'refused'; reason: NativeHostRefusal } | { status: 'outcome-unknown' };
+/** Fixed operation set. Transport and GUI owner are supplied by privileged composition. */
+export interface NativeHostPort {
+  readSnapshot(): Promise<NativeHostSnapshot>;
+  requestPermission(permissionId: string, expected: { processEpoch: string; revision: number }): Promise<NativeMutationResult>;
+  openSystemSettings(permissionId: string, expected: { processEpoch: string; revision: number }): Promise<NativeMutationResult>;
+  validateRecordShortcut(key: string, modifiers: number, expected: { processEpoch: string; revision: number }): Promise<NativeMutationResult & { shortcut?: { keyCode: number; modifiers: number; label: string } }>;
+  saveRecordShortcut(shortcut: { keyCode: number; modifiers: number; label: string }, expected: { processEpoch: string; revision: number }): Promise<NativeMutationResult>;
+}
+
 /** Record's narrow compatibility access to its compiled `penColor` config key. */
 export interface RecordPenColorConfig {
   read(): Promise<LegacyConfigValue>;

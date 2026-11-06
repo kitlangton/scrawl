@@ -32,10 +32,17 @@ pub fn permissions() -> BTreeMap<Permission, Status> {
 }
 
 /// Explains (in the browser) how to let Apparent read the input devices: the README's section.
-pub fn open_settings(permission: Permission) {
-    if permission == Permission::Accessibility {
-        let _ = super::shell::open(std::path::Path::new(
+pub fn settings_available(permission: Permission) -> bool {
+    permission == Permission::Accessibility
+        && ["xdg-open", "gio"].into_iter().any(|program| crate::shared::handoff::on_path(program).is_some())
+}
+
+pub fn open_settings(permission: Permission) -> bool {
+    if settings_available(permission) {
+        super::shell::open(std::path::Path::new(
             "https://github.com/tryapparent/apparent/blob/main/capture/desktop/docs/linux/linux.md#clicks-and-ink-on-wayland",
-        ));
+        )).is_ok()
+    } else {
+        false
     }
 }
