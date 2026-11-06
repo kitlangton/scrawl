@@ -1,6 +1,6 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { planRenewal } from '../../src/credentials/renewal-plan.ts';
+import { planRenewal, RenewalPlanError } from '../../src/credentials/renewal-plan.ts';
 import { decodeRenewalJournal } from '../../src/credentials/renewal-journal.ts';
 import { decodeStoredCredential, type StoredCredential } from '../../src/credentials/wire.ts';
 
@@ -77,5 +77,19 @@ test('plan snapshots caller-owned credentials, journal data and response bytes',
     assert.equal(result.request.refreshToken, 'refresh');
     assert.equal(result.journal.issued, 100);
     assert.ok(Object.isFrozen(result) && Object.isFrozen(result.journal) && Object.isFrozen(result.journal.base) && Object.isFrozen(result.request));
+  }
+});
+
+test('caller-owned Buffer response bytes survive recovery and early refusal', () => {
+  const borrowed = Buffer.from(encode(reply)), original = Buffer.from(borrowed);
+  assert.equal(planRenewal(input({ force: true, journal: journal(), responseBytes: borrowed })).kind, 'recover_completed');
+  assert.deepEqual(borrowed, original);
+  assert.equal(planRenewal(input({ cancelled: true, responseBytes: borrowed })).kind, 'cancelled');
+  assert.deepEqual(borrowed, original);
+});
+
+test('invalid issue clocks fail with an allowlisted category before a journal can be proposed', () => {
+  for (const now of [-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1]) {
+    assert.throws(() => planRenewal(input({ force: true, now })), error => error instanceof RenewalPlanError && error.category === 'invalid_plan' && error.message === 'invalid_plan');
   }
 });

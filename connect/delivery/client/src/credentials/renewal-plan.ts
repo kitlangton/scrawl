@@ -27,10 +27,21 @@ const journalSnapshot = (journal: RenewalJournal): RenewalJournal => Object.free
 
 /** Pure proposal matching the legacy renew() decision order after its scope lock is held. */
 export function planRenewal(input: RenewalPlanInput): RenewalPlan {
+  if (!Number.isSafeInteger(input.now) || input.now < 0) throw new RenewalPlanError();
+  const responseBytes = input.responseBytes === null ? null : new Uint8Array(input.responseBytes);
+  try { return decideRenewal(input, responseBytes); }
+  finally { responseBytes?.fill(0); }
+}
+
+export class RenewalPlanError extends Error {
+  readonly category = 'invalid_plan';
+  constructor() { super('invalid_plan'); this.name = 'RenewalPlanError'; }
+}
+
+function decideRenewal(input: RenewalPlanInput, responseBytes: Uint8Array | null): RenewalPlan {
   const expected = snapshot(input.expected);
   const current = snapshot(input.current);
   const journal = input.journal === null ? null : journalSnapshot(input.journal);
-  const responseBytes = input.responseBytes === null ? null : input.responseBytes.slice();
 
   if (input.cancelled) return Object.freeze({ kind: 'cancelled', reason: 'cancelled' });
   if (input.revocationPending) return Object.freeze({ kind: 'cancelled', reason: 'revocation_pending' });
