@@ -130,7 +130,7 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   for(const frame of frameFacts)if(frame.markId&&!canonicalMarks.some(mark=>mark.id===frame.markId))fail(`selected frame references missing canonical mark ${frame.markId}`);
   const target=input.admission.target;
   const document: Record<string,unknown>={version:1,id:input.admission.bundleId,createdAtMs:input.admission.createdAtMs,durationMs:m.payload.clock.durationMs,target,transcript,
-    strokes,marks:canonicalMarks,events,...(m.payload.collection.interactions==="unavailable"?{interactionTelemetry:"video_only"}:{}),
+    strokes,marks:canonicalMarks,events,...(m.payload.collection.interactions==="unavailable"?{interactionTelemetry:"videoOnly"}:{}),
     keyframes:frameFacts.map(f=>({index:f.index,t:f.timeMs,reason:f.canonicalReason,file:f.file,event:f.event??"",...(f.text?{said:f.text}:{}),...(f.markId?{markId:f.markId}:{})})),contactSheet:artifactPath(sheet.relativePath),video:m.payload.video.file,...(m.payload.clock.videoOffsetMs?{videoOffsetMs:m.payload.clock.videoOffsetMs}:{}),
     ...(m.payload.audio?{audio:m.payload.audio.file}:{}),...(input.admission.source?{source:input.admission.source}:{}),...(input.admission.device?{device:input.admission.device}:{}),...(input.admission.note?{note:input.admission.note}:{}),
     ...(input.admission.imageQualityWarning?{imageQualityWarning:input.admission.imageQualityWarning}:{}),

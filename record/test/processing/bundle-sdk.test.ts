@@ -106,6 +106,32 @@ test("assembles an SDK-validated materials envelope and sealed facts with defaul
   assert.deepEqual(result.validatedFacts.transcript?.identity, identity);
 });
 
+test("public assembler emits canonical videoOnly when interaction collection is unavailable", async () => {
+  const input = await fixture();
+  const payload = JSON.parse(new TextDecoder().decode(input.payloadBytes));
+  const interactionPath = payload.facts.interactions.file;
+  payload.collection.interactions = "unavailable";
+  delete payload.facts.interactions;
+  payload.files = payload.files.filter((file: { relativePath: string }) => file.relativePath !== interactionPath);
+  delete input.facts.interactions;
+  input.payloadBytes = bytes(payload);
+  input.manifest.key.revision = sha(input.payloadBytes);
+  input.manifest.payloadFile.sha256 = sha(input.payloadBytes);
+  input.manifest.payloadFile.identity.size = input.payloadBytes.byteLength;
+  for (const artifact of input.artifacts) artifact.materials = { ...input.manifest.key };
+
+  const result = assembleCanonicalBundle(input);
+  const document = JSON.parse(new TextDecoder().decode(result.apparentJson));
+  assert.equal(document.interactionTelemetry, "videoOnly");
+  assert.deepEqual(document.events, []);
+  assert.equal(result.inventory.collection.interactions, "unavailable");
+  assert.equal(result.validatedFacts.interactions, undefined);
+  assert.equal(result.inventory.entries.find(entry => entry.role === "frame")?.provenance, "caller-attested");
+
+  const collected = assembleCanonicalBundle(await fixture());
+  assert.equal(Object.hasOwn(JSON.parse(new TextDecoder().decode(collected.apparentJson)), "interactionTelemetry"), false);
+});
+
 test("public SDK validator seals RGB facts and canonical assembly preserves absent, black and observed colors", async () => {
   const input = await fixture();
   const payload = JSON.parse(new TextDecoder().decode(input.payloadBytes));
