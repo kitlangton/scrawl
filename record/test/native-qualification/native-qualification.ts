@@ -1,4 +1,7 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
 const exited = new WeakSet<ChildProcess>();
 
 export function trackChild(child: ChildProcess): ChildProcess {
@@ -26,6 +29,29 @@ export async function runBounded(command: string, args: string[], timeoutMs: num
   try { await Promise.race([result, timeout]); }
   finally { clearTimeout(timer); }
   return { stdout, stderr };
+}
+
+/** Parse the exact generated module before a qualification supervisor is launched. */
+export async function checkGeneratedNodeScript(source: string): Promise<void> {
+  const directory = await mkdtemp(path.join(tmpdir(), 'record-native-script-check-'));
+  try {
+    await chmod(directory, 0o700);
+    const script = path.join(directory, 'qualification.mjs');
+    await writeFile(script, source, { mode: 0o600, flag: 'wx' });
+    await runBounded(process.execPath, ['--check', script], 5000);
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+/** Attempt every owner-local cleanup action while retaining every failure. */
+export async function runCleanupSteps(steps: Array<{ label: string; run: () => unknown | Promise<unknown> }>): Promise<Error[]> {
+  const errors: Error[] = [];
+  for (const step of steps) {
+    try { await step.run(); }
+    catch (cause) { errors.push(new Error(`${step.label}: ${cause instanceof Error ? cause.message : String(cause)}`, { cause })); }
+  }
+  return errors;
 }
 
 export async function waitForExit(child: ChildProcess, graceMs = 1500): Promise<void> {
@@ -86,7 +112,7 @@ export async function runQualification(command: string, args: string[], options:
       child.stdout.setEncoding('utf8').on('data', value => { stdout += value; if (stdout.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
       child.stderr.setEncoding('utf8').on('data', value => { stderr += value; if (stderr.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
       child.once('error', reject);
-      child.once('close', code => failure ? reject(failure) : code === 0 ? resolve() : reject(new Error('native qualification failed: ' + stderr)));
+      child.once('close', code => failure ? reject(new Error(`${failure.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`)) : code === 0 ? resolve() : reject(new Error(`native qualification failed (${code}):\nstdout:\n${stdout}\nstderr:\n${stderr}`)));
     });
     return { stdout, stderr };
   } finally {
