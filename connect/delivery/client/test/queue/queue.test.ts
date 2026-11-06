@@ -44,9 +44,28 @@ test("cancel, expiry, recovery and stale upload completion preserve race fences"
   assert.equal(expire(snap(job(), { now: 1200, retentionSeconds: 100 })).kind, "transition");
   assert.equal(recover(snap(), "old-epoch").kind, "unchanged");
   assert.equal(recover(snap(job({ status: "failed" })), "epoch-1").kind, "unchanged");
-  const captured = { id: "a".repeat(32), bundle: "/synthetic/capture.apparent", server: "https://api.example.test", generation: "b".repeat(32), created: 100, encrypted: true, publicCopy: false, status: "pending" as const };
+  const captured = { id: "a".repeat(32), bundle: "/synthetic/capture.apparent", server: "https://api.example.test", generation: "b".repeat(32), created: 100, encrypted: true, publicCopy: false, status: "pending" as const, cancellationEpoch: "epoch-1" };
   assert.equal(completeUpload(snap(job({ status: "cancelled" })), captured, { ok: true }).kind, "unchanged");
   assert.equal(completeUpload(snap(job(), { generation: "d".repeat(32) }), captured, { ok: true }).kind, "unchanged");
   const failed = completeUpload(snap(job()), captured, { ok: false, error: "file_too_large", sizeFailure: { path: "x", size: 10, limit: 9 } });
   assert.equal(failed.kind, "transition"); if (failed.kind === "transition") assert.deepEqual([failed.job.status, failed.job.error, failed.job.sizeFailure?.size], ["failed", "file_too_large", 10]);
+});
+
+
+test("preserves serde option defaults and the donor's two-megabyte record bound", () => {
+  const decoded = job({ error: undefined, sizeFailure: null, extension: "x".repeat(140_000) });
+  assert.equal(decoded.error, null); assert.equal(decoded.sizeFailure, undefined);
+  assert.deepEqual(decodeJob(encodeJob(decoded)), decoded);
+  assert.throws(() => decodeJob(new Uint8Array(2_000_001)));
+  assert.throws(() => job({ attempts: 0x1_0000_0000 }));
+});
+test("clock rollback retains jobs and pending-recipient waits do not consume attempts or increase backoff", () => {
+  assert.equal(retry(snap(job(), { now: 90 })).kind, "transition");
+  const j = job({ attempts: 7 }); const captured = { ...j, cancellationEpoch: "epoch-1" };
+  const waiting = completeUpload(snap(j), captured, { ok: false, error: "encryption_pending_recipient" });
+  assert.equal(waiting.kind, "transition");
+  if (waiting.kind === "transition") assert.deepEqual([waiting.job.status, waiting.job.attempts, waiting.job.nextAttempt], ["pending", 7, 120 + 5 * 2 ** 7]);
+  assert.equal(completeUpload(snap(j, { cancellationEpoch: "new-epoch" }), captured, { ok: true }).kind, "unchanged");
+  assert.equal(completeUpload(snap(job({ status: "ready" })), { ...captured, status: "ready" }, { ok: true }).kind, "unchanged");
+  assert.throws(() => completeUpload(snap(j), captured, { ok: false, error: "private remote details" }), { message: "invalid_queue_result" });
 });

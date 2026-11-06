@@ -20,7 +20,7 @@ function current(s: FreshQueueSnapshot): boolean {
   return s.enabled && j.server === s.server && j.generation === s.generation &&
     (j.publicCopy ? s.sharingEnabled && !j.encrypted && j.shared : j.encrypted === s.encryptionEnabled);
 }
-function retained(s: FreshQueueSnapshot): boolean { return s.now >= s.job.created && s.now - s.job.created <= s.retentionSeconds; }
+function retained(s: FreshQueueSnapshot): boolean { return Math.max(0, s.now - s.job.created) <= s.retentionSeconds; }
 
 /** Mirrors explicit `retry`: only active pending/failed records within retention reset. */
 export function retry(snapshot: FreshQueueSnapshot): Decision {
@@ -33,8 +33,8 @@ export function retry(snapshot: FreshQueueSnapshot): Decision {
 }
 
 /** Disable/logout cancellation wins over any later worker completion. */
-export function cancel(job: Job, enabled: boolean, readyIsTerminal = true): Decision {
-  if (readyIsTerminal && job.status === "ready") return unchanged("already_ready");
+export function cancel(job: Job, enabled: boolean): Decision {
+  if (job.status === "ready") return unchanged("already_ready");
   if (enabled) return unchanged("still_enabled");
   if (job.status === "cancelled") return unchanged("already_cancelled");
   const next = copy(job); next.status = "cancelled";
@@ -60,15 +60,16 @@ export function recover(snapshot: FreshQueueSnapshot, observedCancellationEpoch:
 }
 
 /** Fence late network results against fresh status, generation and cancellation. */
-export function completeUpload(snapshot: FreshQueueSnapshot, captured: Pick<Job, "id" | "bundle" | "server" | "generation" | "created" | "encrypted" | "publicCopy" | "status">, result: { ok: true } | { ok: false; error: string; sizeFailure?: Job["sizeFailure"] }): Decision {
+export function completeUpload(snapshot: FreshQueueSnapshot, captured: Pick<Job, "id" | "bundle" | "server" | "generation" | "created" | "encrypted" | "publicCopy" | "status"> & { cancellationEpoch: string }, result: { ok: true } | { ok: false; error: string; sizeFailure?: Job["sizeFailure"] }): Decision {
   const j = snapshot.job;
-  if (!current(snapshot) || j.id !== captured.id || j.bundle !== captured.bundle || j.server !== captured.server || j.generation !== captured.generation || j.created !== captured.created || j.encrypted !== captured.encrypted || j.publicCopy !== captured.publicCopy || j.status !== captured.status || j.status === "cancelled" || j.status === "awaiting_share") return unchanged("stale_completion");
+  if (snapshot.cancellationEpoch !== captured.cancellationEpoch || !current(snapshot) || j.id !== captured.id || j.bundle !== captured.bundle || j.server !== captured.server || j.generation !== captured.generation || j.created !== captured.created || j.encrypted !== captured.encrypted || j.publicCopy !== captured.publicCopy || j.status !== captured.status || j.status !== "pending") return unchanged("stale_completion");
   const next = copy(j); next.attempts++;
   if (result.ok) { next.status = "ready"; next.error = null; delete next.sizeFailure; return transition(next, "upload_ready"); }
+  if (!["auth_required", "file_too_large", "encryption_action_required", "encryption_pending_recipient", "quota_exceeded", "unsupported_asset", "upload_failed"].includes(result.error)) throw new Error("invalid_queue_result");
   next.error = result.error; if (result.error === "file_too_large") next.sizeFailure = result.sizeFailure; else delete next.sizeFailure;
-  if (["auth_required", "file_too_large", "encryption_action_required"].includes(result.error) || next.attempts >= 8) next.status = "failed";
-  next.nextAttempt = snapshot.now + Math.min(5 * 2 ** Math.min(next.attempts, 10), 3600);
   if (result.error === "encryption_pending_recipient") next.attempts--;
+  else if (["auth_required", "file_too_large", "encryption_action_required"].includes(result.error) || next.attempts >= 8) next.status = "failed";
+  next.nextAttempt = snapshot.now + Math.min(5 * 2 ** Math.min(next.attempts, 10), 3600);
   return transition(next, "upload_failed");
 }
 
