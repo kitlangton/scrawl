@@ -46,7 +46,7 @@ test('catalog reports absent owners pending and blocks present owners without re
   mkdirSync(resolve(path, 'composition/app'), { recursive: true })
   const missing = catalog(path)
   assert.deepEqual(missing.blocked, ['app-shell: source exists without delivery registration'])
-  assert.deepEqual(missing.pending, ['record', 'connect-client', 'connect-browser', 'engine', 'engine-native', 'engine-capture-native', 'engine-media-native', 'platform-config', 'onboarding', 'agent', 'public'])
+  assert.deepEqual(missing.pending, ['record', 'connect-client', 'connect-browser', 'engine', 'engine-native', 'engine-capture-native', 'engine-media-native', 'platform-config', 'platform-resources', 'onboarding', 'agent', 'public'])
   mkdirSync(resolve(path, 'record')); mkdirSync(resolve(path, 'shared/ui'), { recursive: true })
   writeFileSync(resolve(path, 'record/delivery.json'), JSON.stringify({ ...owner, inputs: ['shared/ui/'] }))
   assert.match(catalog(path).blocked.join(';'), /Package source must be covered/)
@@ -62,6 +62,25 @@ test('platform config native lane declares its complete source closure and compo
   assert.equal(native.length, 2)
   assert(native.every(row => row.language === 'native' && row.kind === 'directory' && row.architecture_owner === 'composition'))
   assert.deepEqual(native.map(row => row.target), ['linux-x64', 'macos-x64'])
+})
+
+test('platform resources fixture has only public Linux and Mac targets and fingerprints inherited Cargo config', () => {
+  const path = resolve(temp, 'platform-resources-plan')
+  for (const dir of ['shared/resources/src', 'shared/resources/delivery', 'shared/resources/native', '.cargo']) mkdirSync(resolve(path, dir), { recursive: true })
+  const registration = { schema: 1, id: 'platform-resources', kind: 'directory', package: 'shared/resources/delivery', inputs: ['shared/resources/', '.cargo/'], verify: ['verify'], build: 'build', targets: ['linux-x64', 'macos-x64'], stage: 'library', language: 'native', artifactPath: 'dist' }
+  writeFileSync(resolve(path, 'shared/resources/delivery/delivery.json'), JSON.stringify(registration))
+  writeFileSync(resolve(path, 'shared/resources/delivery/index.ts'), 'fixture\n')
+  writeFileSync(resolve(path, '.cargo/config.toml'), '[build]\njobs = 3\n')
+  const plan = makePlan(path)
+  const native = plan.matrix.include.filter(row => row.id === 'platform-resources')
+  assert.deepEqual(plan.blocked, [])
+  assert.deepEqual(native.map(row => row.target), ['linux-x64', 'macos-x64'])
+  assert(native.every(row => row.kind === 'directory' && row.language === 'native' && row.stage === 'library' && row.architecture_owner === 'shared'))
+  assert.deepEqual(catalog(path).owners.find(item => item.id === 'platform-resources')?.inputs, ['shared/resources/', '.cargo/'])
+  writeFileSync(resolve(path, 'shared/resources/delivery/delivery.json'), JSON.stringify({ ...registration, inputs: ['shared/resources/'] }))
+  assert.match(catalog(path).blocked.join(';'), /must fingerprint shared\/resources\/ and \.cargo\//)
+  writeFileSync(resolve(path, 'shared/resources/delivery/delivery.json'), JSON.stringify({ ...registration, targets: ['linux-x64', 'macos-x64', 'macos-arm64'] }))
+  assert.match(catalog(path).blocked.join(';'), /Unsupported target/)
 })
 
 test('native Engine and SDK are independent lanes with the same architectural owner', () => {
