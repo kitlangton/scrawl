@@ -987,9 +987,14 @@ test("publication output exposes only durably matched Saved facts and handoff af
     await assertAbsent(join(root, "changed-staging"));
 
     const reopened = createRecordPublicationOutput(sdk, join(root, "control"), preflightCapturePublication);
+    let notifications = 0;
+    reopened.captureFacts.observe!(() => { throw new Error("observer isolation"); });
+    const detach = reopened.captureFacts.observe!(() => { notifications++; });
     const saved = await reopened.reconcile({ captureId: identity.captureId, ownerToken, publicationId, materials: input.manifest.key,
       leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath });
     assert.equal(saved.state, "saved");
+    assert.equal(notifications, 1, "durable output updates wake the existing provider without another capture event");
+    detach();
     const facts = await reopened.captureFacts.readFacts();
     assert.deepEqual(facts.captures, [{ captureId: requestId, artifactId: "sdk-bundle", delivery: "unknown", phase: "saved",
       outcomes: [{ kind: "save", ok: true, at: (await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId))!.savedObservedAt }] }]);

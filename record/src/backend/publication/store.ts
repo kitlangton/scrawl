@@ -1,4 +1,5 @@
 import { DatabaseSync } from "node:sqlite";
+import { isDeepStrictEqual } from "node:util";
 import { isAbsolute, join, resolve } from "node:path";
 import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "../host/private-path.js";
 import { initializePrivateSqlite } from "../host/sqlite-initialization.js";
@@ -126,6 +127,11 @@ export class SqlitePublicationBindingStore {
         receipt.bundleId !== current.bundleId || receipt.bundlePath !== current.bundlePath || receipt.manifestSha256 !== current.manifestSha256 || receipt.artifactVersion !== 1 ||
         receipt.artifactProvenance !== "native" || !hash.test(receipt.inventorySha256) || JSON.stringify(receipt.materials) !== JSON.stringify(current.materials) ||
         Object.keys(receipt).sort().join(",") !== ["artifactProvenance", "artifactVersion", "bundleId", "bundlePath", "captureId", "inventorySha256", "manifestSha256", "materials", "planSha256", "publicationId"].sort().join(","))) throw hostError();
+      if (state === "saved" && current.savedReceipt) {
+        if (!isDeepStrictEqual(current.savedReceipt, receipt)) throw hostError();
+        db.exec("COMMIT");
+        return true;
+      }
       const next = state === "saved" ? { ...current, state, savedReceipt: structuredClone(receipt!), savedObservedAt: new Date().toISOString() } : { ...current, state };
       db.prepare("UPDATE publication_binding SET binding_json = ? WHERE capture_id = ?").run(JSON.stringify(next), binding.captureId);
       db.exec("COMMIT");

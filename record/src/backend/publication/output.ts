@@ -26,6 +26,12 @@ export function createRecordPublicationOutput(client: CaptureClient, privateCont
   const providerEpoch = randomUUID();
   let revision = 0;
   let fingerprint = "";
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    for (const listener of [...listeners]) if (listeners.has(listener)) {
+      try { listener(); } catch { listeners.delete(listener); }
+    }
+  };
 
   const readSaved = async () => (await bindings.list()).filter(binding => binding.state === "saved" && binding.output && binding.savedReceipt &&
     binding.savedReceipt.artifactProvenance === "native" && binding.savedReceipt.artifactVersion === 1 &&
@@ -37,10 +43,15 @@ export function createRecordPublicationOutput(client: CaptureClient, privateCont
   return {
     async publish(input) {
       const { requestId, requestVideoProof, ...capture } = structuredClone(input);
-      return publisher.publishCompletedCapture({ ...capture, outputRequest: { requestId, requestVideoProof } });
+      try { return await publisher.publishCompletedCapture({ ...capture, outputRequest: { requestId, requestVideoProof } }); }
+      finally { notify(); }
     },
-    reconcile: input => publisher.reconcile(structuredClone(input)),
+    async reconcile(input) {
+      try { return await publisher.reconcile(structuredClone(input)); }
+      finally { notify(); }
+    },
     captureFacts: {
+      observe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
       async readFacts(): Promise<RecordCaptureFacts> {
         const saved = await readSaved();
         const captures: CaptureFact[] = saved.map(binding => ({ captureId: binding.output!.requestId, artifactId: binding.bundleId, delivery: "unknown", phase: "saved",

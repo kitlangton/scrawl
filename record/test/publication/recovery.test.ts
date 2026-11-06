@@ -321,3 +321,25 @@ test("legacy saved bindings remain readable but have no guessed public output", 
     assert.equal(await output.resolveHandoff({ captureId, artifactId: binding.bundleId }), null);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+
+test("Saved inspection preserves the first exact receipt and observation time", async () => {
+  const root = await temp();
+  try {
+    const store = new SqlitePublicationBindingStore(join(root, "private"));
+    const input = makeInput(join(root, "final.apparent"));
+    const binding = { captureId, publicationId, planSha256: input.planFile.planSha256, materials: materials.manifest.key,
+      leaseId: materials.manifest.leaseId, bundleId: "take.apparent", bundlePath: join(root, "final.apparent"),
+      manifestSha256: "1".repeat(64), state: "reserved" as const };
+    const receipt = { captureId, publicationId, planSha256: binding.planSha256, materials: binding.materials,
+      bundleId: binding.bundleId, bundlePath: binding.bundlePath, manifestSha256: binding.manifestSha256,
+      artifactVersion: 1 as const, artifactProvenance: "native" as const, inventorySha256: "9".repeat(64) };
+    await store.reserve(binding);
+    assert.equal(await store.observe(binding, "saved", receipt), true);
+    const first = await store.get(captureId);
+    assert.equal(await store.observe(binding, "saved", structuredClone(receipt)), true);
+    assert.deepEqual(await store.get(captureId), first);
+    await assert.rejects(store.observe(binding, "saved", { ...receipt, inventorySha256: "8".repeat(64) }), /storage is unavailable/);
+    assert.deepEqual(await store.get(captureId), first);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
