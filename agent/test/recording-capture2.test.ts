@@ -422,3 +422,24 @@ test('signal received while durable identity persistence is pending prevents sta
     assert.equal(fixture.calls.at(-1)?.method, 'close');
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test('default capture collection cannot overlap Agent control storage before allocation or start', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-capture2-overlap-'));
+  const previous = process.env.APPARENT_CAPTURES_DIR;
+  try {
+    const controlRoot = join(root, 'control');
+    for (const captures of [controlRoot, join(controlRoot, 'captures'), root]) {
+      process.env.APPARENT_CAPTURES_DIR = captures;
+      let calls = 0;
+      await assert.rejects(recordWithCapture2(defaultArgs(), {
+        controlRoot, executable: '/opt/apparent-engine', runtime: join(root, 'runtime'),
+        factory: async () => { calls++; throw new Error('must not compose'); },
+      }), /separate from the Agent control root/);
+      assert.equal(calls, 0);
+      await assert.rejects(access(controlRoot), { code: 'ENOENT' });
+    }
+  } finally {
+    if (previous === undefined) delete process.env.APPARENT_CAPTURES_DIR; else process.env.APPARENT_CAPTURES_DIR = previous;
+    await rm(root, { recursive: true, force: true });
+  }
+});
