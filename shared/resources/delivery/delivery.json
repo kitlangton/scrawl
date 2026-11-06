@@ -4,7 +4,8 @@
   "kind": "directory",
   "package": "shared/resources/delivery",
   "inputs": [
-    "shared/resources/"
+    "shared/resources/",
+    ".cargo/"
   ],
   "verify": [
     "verify"
