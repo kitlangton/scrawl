@@ -78,8 +78,10 @@ routing.
 already composed for the same private capture/2 runtime, and supplies the
 original owner token on each operation and reopen. The caller owns client
 lifecycle. Record preflights the caller's request, contact-sheet layout and
-materials, then durably stores the original request hash and materials before
-dispatch. Duplicate requested times and caller-selected output policy remain
+materials, then durably stores the original request hash and materials in a private SQLite
+journal before dispatch. The existing host storage primitives provide an atomic
+compare-and-swap transition, so stale handles and separate processes cannot both
+claim the same ready job. No SDK request or filesystem await holds a transaction. Duplicate requested times and caller-selected output policy remain
 intact.
 
 An ambiguous derive remains unresolved across restart and can only be reconciled
@@ -89,3 +91,10 @@ after SDK derivative validation and original request/layout binding checks; it
 is a processing result, not a Saved or publication result. Synthetic offline
 tests cover the client seam and consistency contract only. SDK validation does
 not prove derivative origin, and no native media/2 worker is currently available.
+
+Terminal results are immutable: later inspections cannot replace a failure code
+or validated derivative, even when the reported state name is unchanged.
+`cleanupJournal()` clears the stored request/material/derivative payload while
+retaining a private SQLite tombstone. Use a new journal path for a new job;
+stale handles cannot reuse the cleared namespace. Cleanup never releases native
+materials or cancels work. Media/1 keeps its existing journal implementation.

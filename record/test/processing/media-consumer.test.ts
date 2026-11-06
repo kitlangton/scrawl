@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { pathToFileURL } from "node:url";
 import { test } from "node:test";
 import { decodeSelectedFrames, assembleProcessingOutput, type DecodeSelection } from "../../src/backend/processing/index.ts";
-import { RecordMediaJob, processCompletedBundle, type ManagedMediaClient, type RecordProcessingFunctions } from "../../dist/backend/processing/media-consumer.js";
+import { RecordMediaJob, processCompletedBundle, type ManagedMediaClient, type RecordProcessingFunctions } from "../../src/backend/processing/media-consumer.ts";
 const processing: RecordProcessingFunctions = { decodeSelectedFrames, assembleProcessingOutput };
 type NativeTestMediaClient = ManagedMediaClient & {
   handshake(): Promise<{ implementation: "native" | "test-double"; capabilities: { decodeFrames: boolean } }>;

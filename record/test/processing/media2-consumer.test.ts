@@ -1,5 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
+import { DatabaseSync } from "node:sqlite";
+import { spawn } from "node:child_process";
 import { chmod, lstat, mkdtemp, readFile, realpath, rm, stat } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -60,6 +62,14 @@ function input(root: string): Media2JobInput {
   };
 }
 
+function readJournal(path: string) {
+  const db = new DatabaseSync(path, { readOnly: true });
+  try {
+    const raw = db.prepare("SELECT record_json FROM media2_job WHERE id = 1").get()?.record_json;
+    return typeof raw === "string" ? JSON.parse(raw) : null;
+  } finally { db.close(); }
+}
+
 async function privateRoot(): Promise<string> {
   const path = await realpath(await mkdtemp(join(tmpdir(), "record-media2-job-")));
   await chmod(path, 0o700);
@@ -94,28 +104,28 @@ test("media2 job journals immutable duplicate slots before dispatch and reconcil
     } as unknown as Media2Client; // Offline seam only; no handshake or native receipt is asserted.
 
     const job = await RecordMedia2Job.create(seam, journal, original);
-    const before = JSON.parse(await readFile(journal, "utf8"));
+    const before = readJournal(journal);
     assert.equal((await stat(journal)).mode & 0o777, 0o600);
     assert.equal(before.state, "ready");
     assert.equal(before.dispatchAttempted, false);
     assert.deepEqual(before.request.requestedBundleMs, [1000, 1000, 1800]);
     assert.deepEqual(before.request.contactSheet, originalRequest.contactSheet);
     assert.deepEqual(before.materials, originalMaterials);
-    assert.equal((await readFile(journal, "utf8")).includes(token), false);
+    assert.equal((await readFile(journal)).includes(Buffer.from(token)), false);
 
     original.request.requestedBundleMs[0] = 2000;
     original.materials.payload.video.width = 1;
     await assert.rejects(RecordMedia2Job.reopen(seam, journal, original), /does not match its original request and materials/);
     await assert.rejects(job.derive("invalid-token"), { name: "Media2PreflightError" });
     assert.equal(job.state, "ready", "preflight rejection has no dispatch or persisted state transition");
-    assert.equal(JSON.parse(await readFile(journal, "utf8")).dispatchAttempted, false);
+    assert.equal(readJournal(journal).dispatchAttempted, false);
 
     await assert.rejects(job.derive(token), Media2TransportError);
     assert.equal(job.state, "unknown");
     assert.equal(calls.filter(call => call.method === "derive").length, 1);
     assert.deepEqual(calls[0]!.input.request, originalRequest);
     assert.equal(calls[0]!.input.ownerToken, token);
-    const submitted = JSON.parse(await readFile(journal, "utf8"));
+    const submitted = readJournal(journal);
     assert.equal(submitted.dispatchAttempted, true);
     assert.equal(submitted.state, "unknown");
     assert.equal(submitted.requestSha256, job.requestSha256);
@@ -143,7 +153,7 @@ test("media2 job journals immutable duplicate slots before dispatch and reconcil
     assert.equal(reopened.state, "cancelled");
     assert.equal(calls.filter(call => call.method === "cancel").length, 1, "cancel occurs only after explicit call");
     await reopened.cleanupJournal();
-    await assert.rejects(lstat(journal), { code: "ENOENT" });
+    assert.equal(readJournal(journal), null);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -168,7 +178,7 @@ test("packed Media2Client unavailable capability remains undispatched and Record
     const job = await RecordMedia2Job.create(client, journal, input(root));
     await assert.rejects(job.derive(token), (error: unknown) => error instanceof Media2RpcError && error.code === "unavailable" && error.dispatched === false);
     assert.equal(job.state, "unavailable");
-    assert.equal(JSON.parse(await readFile(journal, "utf8")).dispatchAttempted, false);
+    assert.equal(readJournal(journal).dispatchAttempted, false);
     assert.deepEqual(requests.map(request => request.method), ["handshake"], "unavailable derive sends no job RPC");
     assert.equal(closeCalls, 0, "the Record job does not close its injected SDK client");
     await job.cleanupJournal();
@@ -220,8 +230,106 @@ test("invalid operation timeouts fail preflight before dispatch state or client 
     await assert.rejects(job.derive(token, 0), { name: "Media2PreflightError" });
     assert.equal(job.state, "ready");
     assert.equal(calls, 0);
-    assert.equal(JSON.parse(await readFile(journal, "utf8")).dispatchAttempted, false);
+    assert.equal(readJournal(journal).dispatchAttempted, false);
     await job.cleanupJournal();
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("same-state terminal conflicts cannot replace the durable failure", async () => {
+  const root = await privateRoot();
+  try {
+    const original = input(root), prepared = preflightMedia2Dispatch(original);
+    const status = { jobId: original.request.jobId, requestSha256: prepared.prepared.sha256, state: "failed", error: { code: "unavailable" } };
+    const client = { async derive() { return status; }, async inspect() { return { ...status, error: { code: "conflict" } }; } } as unknown as Media2Client;
+    const journal = join(root, "immutable-failure.json");
+    const job = await RecordMedia2Job.create(client, journal, original);
+    await job.derive(token);
+    await assert.rejects(job.inspect(token), /conflicts with the durable terminal result/);
+    const reopened = await RecordMedia2Job.reopen(client, journal, original);
+    await assert.rejects(reopened.inspect(token), /conflicts with the durable terminal result/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("concurrent reopened handles admit only one durable derive dispatch", async () => {
+  const root = await privateRoot();
+  try {
+    const original = input(root), prepared = preflightMedia2Dispatch(original);
+    let dispatched = 0;
+    const client = { async derive() { dispatched++; return { jobId: original.request.jobId, requestSha256: prepared.prepared.sha256, state: "running" }; } } as unknown as Media2Client;
+    const journal = join(root, "single-dispatch.json");
+    const first = await RecordMedia2Job.create(client, journal, original);
+    const second = await RecordMedia2Job.reopen(client, journal, original);
+    const results = await Promise.allSettled([first.derive(token), second.derive(token)]);
+    assert.equal(dispatched, 1);
+    assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+    await assert.rejects(second.derive(token), /inspection|in progress/);
+    await assert.rejects(second.cleanupJournal(), /unresolved/);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("separate processes reopening the same ready journal cannot both dispatch", { timeout: 15000 }, async () => {
+  const root = await privateRoot();
+  const children: ReturnType<typeof spawn>[] = [];
+  try {
+    const journal = join(root, "processes.sqlite");
+    await RecordMedia2Job.create({} as Media2Client, journal, input(root));
+    const source = `
+      import { DatabaseSync } from 'node:sqlite';
+      const { RecordMedia2Job } = await import(process.argv[2]);
+      const db = new DatabaseSync(process.argv[1], {readOnly:true});
+      const record = JSON.parse(db.prepare('SELECT record_json FROM media2_job WHERE id = 1').get().record_json); db.close();
+      const client = {async derive() { console.log('dispatch'); return {jobId:record.request.jobId,requestSha256:record.requestSha256,state:'running'}; }};
+      const job = await RecordMedia2Job.reopen(client, process.argv[1], {ownerToken:'${token}',request:record.request,materials:record.materials});
+      console.log('ready');
+      await new Promise(resolve => process.stdin.once('data', resolve));
+      try { await job.derive('${token}'); console.log('accepted'); }
+      catch { console.log('refused'); }
+    `;
+    const runs = [0, 1].map(() => {
+      const child = spawn(process.execPath, ["--input-type=module", "-e", source, journal,
+        new URL("../../dist/backend/processing/media2-consumer.js", import.meta.url).href], { stdio: ["pipe", "pipe", "pipe"] });
+      children.push(child);
+      let output = "", error = "";
+      child.stderr!.on("data", chunk => { error += String(chunk); });
+      const ready = new Promise<void>((resolve, reject) => {
+        child.stdout!.on("data", chunk => { output += String(chunk); if (output.includes("ready\n")) resolve(); });
+        child.once("error", reject);
+        child.once("exit", () => { if (!output.includes("ready\n")) reject(new Error(`media2 child failed before barrier: ${error}`)); });
+      });
+      const done = new Promise<void>((resolve, reject) => {
+        child.once("error", reject);
+        child.once("exit", code => code === 0 ? resolve() : reject(new Error(`media2 child exit ${code}: ${error}`)));
+      });
+      void done.catch(() => {}); // Cleanup still awaits owned children when a barrier fails.
+      return { child, ready, done, output: () => output };
+    });
+    await Promise.all(runs.map(run => run.ready));
+    for (const run of runs) run.child.stdin!.end("start\n");
+    await Promise.all(runs.map(run => run.done));
+    const lines = runs.flatMap(run => run.output().trim().split("\n"));
+    assert.equal(lines.filter(line => line === "dispatch").length, 1);
+    assert.equal(lines.filter(line => line === "accepted").length, 1);
+    assert.equal(lines.filter(line => line === "refused").length, 1);
+  } finally {
+    await Promise.all(children.filter(child => child.exitCode === null && child.signalCode === null).map(child =>
+      new Promise<void>(resolve => { child.once("exit", () => resolve()); child.kill("SIGKILL"); })));
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test("cleanup clears payload but preserves a tombstone against stale journal reuse", async () => {
+  const root = await privateRoot();
+  try {
+    const journal = join(root, "cleaned.sqlite"), original = input(root);
+    const client = {} as Media2Client;
+    const first = await RecordMedia2Job.create(client, journal, original);
+    const stale = await RecordMedia2Job.reopen(client, journal, original);
+    await first.cleanupJournal();
+    assert.equal(readJournal(journal), null);
+    await assert.rejects(stale.derive(token));
+    await assert.rejects(RecordMedia2Job.reopen(client, journal, original));
+    await assert.rejects(RecordMedia2Job.create(client, journal, original));
+    assert.equal((await stat(journal)).mode & 0o777, 0o600);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
@@ -258,6 +366,14 @@ test("offline validated derivative completion survives reopen, caller mutation a
       async inspect() {
         if (++inspection === 1) throw new Media2TransportError();
         if (inspection === 2) return { ...complete, jobId: "0".repeat(32) };
+        if (inspection === 4) {
+          const changedPayload = { ...payload, receiptId: "9".repeat(32) };
+          const changedBytes = new TextEncoder().encode(JSON.stringify(changedPayload));
+          const changedEnvelope = { ...(derivative.envelope as object), receiptId: changedPayload.receiptId,
+            payload: changedPayload, receiptFile: { relativePath: "receipt.json", identity: {
+              device: "1", inode: "receipt", size: changedBytes.length, modifiedNs: "3" }, sha256: hash(changedBytes) } };
+          return { ...complete, derivative: { ...derivative, bytes: changedBytes, envelope: changedEnvelope } };
+        }
         return { state: "running", jobId: complete.jobId, requestSha256: complete.requestSha256 };
       },
     } as unknown as Media2Client;
@@ -271,6 +387,7 @@ test("offline validated derivative completion survives reopen, caller mutation a
     assert.notEqual(job.derivative!.bytes[0], 0, "callers cannot mutate the persisted completion");
     await assert.rejects(job.inspect(token), /outcome is unknown/);
     await assert.rejects(job.inspect(token), /mismatched original job binding/);
+    await assert.rejects(job.inspect(token), /conflicts with the durable terminal result/);
     await assert.rejects(job.inspect(token), /conflicts with the durable terminal result/);
     assert.equal(job.state, "complete");
     const reopened = await RecordMedia2Job.reopen(client, journal, original);

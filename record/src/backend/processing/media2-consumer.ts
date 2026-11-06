@@ -14,9 +14,8 @@ import type {
   Media2JobStatus,
 } from "@apparent/engine-sdk/media2";
 import type { MaterialsDocument } from "@apparent/engine-sdk/capture";
-import { assertPrivateJournalPath, readPrivateJournal, removePrivateJournal, writePrivateJournal } from "./private-journal.js";
+import { Media2Store } from "./media2-store.js";
 
-const JOURNAL_LABEL = "retained media2 journal";
 type Client = Media2Client;
 export type RecordMedia2JobState = "ready" | "submitted" | "running" | "cancelling" | "unknown" | "unavailable" | "complete" | "failed" | "cancelled";
 type StoredDerivative = {
@@ -91,15 +90,17 @@ export class RecordMedia2Job {
   private readonly client: Client;
   private record: Media2JobRecord;
   private busy = false;
+  private readonly store: Media2Store;
 
   private constructor(client: Client, journalPath: string, record: Media2JobRecord) {
+    this.store = new Media2Store(journalPath);
     this.client = client;
     this.journalPath = journalPath;
     this.record = record;
   }
 
   static async create(client: Client, journalPath: string, value: Media2JobInput): Promise<RecordMedia2Job> {
-    assertPrivateJournalPath(journalPath, JOURNAL_LABEL);
+    const store = new Media2Store(journalPath);
     const snapshot = structuredClone(value);
     const { input, prepared } = preflightMedia2Dispatch(snapshot);
     const record: Media2JobRecord = {
@@ -107,13 +108,13 @@ export class RecordMedia2Job {
       request: structuredClone(input.request), requestSha256: prepared.sha256, materials: structuredClone(input.materials),
     };
     validateRecord(record);
-    await writePrivateJournal(journalPath, record, JOURNAL_LABEL, true);
+    await store.create(record);
     return new RecordMedia2Job(client, journalPath, record);
   }
 
   static async reopen(client: Client, journalPath: string, value: Media2JobInput): Promise<RecordMedia2Job> {
-    assertPrivateJournalPath(journalPath, JOURNAL_LABEL);
-    const record = await readPrivateJournal(journalPath, JOURNAL_LABEL) as Media2JobRecord;
+    const store = new Media2Store(journalPath);
+    const record = await store.read() as Media2JobRecord;
     validateRecord(record);
     const snapshot = structuredClone(value);
     const { input, prepared } = preflightMedia2Dispatch(snapshot);
@@ -136,8 +137,31 @@ export class RecordMedia2Job {
   private async exclusive<T>(operation: () => Promise<T>): Promise<T> {
     if (this.busy) throw new Error("retained media2 job operation already in progress");
     this.busy = true;
-    try { return await operation(); }
+    try { await this.refresh(); return await operation(); }
     finally { this.busy = false; }
+  }
+
+  private async refresh(): Promise<void> {
+    const current = await this.store.read() as Media2JobRecord;
+    validateRecord(current);
+    if (current.requestSha256 !== this.record.requestSha256 || !isDeepStrictEqual(current.request, this.record.request) ||
+        !isDeepStrictEqual(current.materials, this.record.materials)) throw new Error("retained media2 journal original binding changed");
+    this.record = current;
+  }
+
+  private async persist(next: Media2JobRecord): Promise<void> {
+    validateRecord(next);
+    if (!await this.store.compareExchange(this.record, next)) {
+      await this.refresh();
+      throw new Error("retained media2 journal changed; inspection is required");
+    }
+    this.record = next;
+  }
+
+  private async markUnknown(): Promise<void> {
+    await this.refresh();
+    if (!["complete", "failed", "cancelled"].includes(this.record.state))
+      await this.persist({ ...this.record, state: "unknown" });
   }
 
   private operationInput(ownerToken: string, timeoutMs: number): Media2JobInput {
@@ -153,16 +177,14 @@ export class RecordMedia2Job {
       if (this.record.dispatchAttempted || !["ready", "unavailable"].includes(this.record.state))
         throw new Error("retained media2 job requires inspection before another derive");
       const input = this.operationInput(ownerToken, timeoutMs);
-      this.record = { ...this.record, state: "submitted", dispatchAttempted: true, error: undefined };
-      await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+      await this.persist({ ...this.record, state: "submitted", dispatchAttempted: true, error: undefined });
       let status: Media2JobStatus;
       try { status = await this.client.derive(input, timeoutMs); }
       catch (error) {
         if (isUndispatched(error)) {
           const unavailable = error instanceof Media2RpcError && error.code === "unavailable";
-          this.record = { ...this.record, state: unavailable ? "unavailable" : "ready", dispatchAttempted: false };
-        } else this.record = { ...this.record, state: "unknown" };
-        await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+          await this.persist({ ...this.record, state: unavailable ? "unavailable" : "ready", dispatchAttempted: false });
+        } else await this.markUnknown();
         throw error;
       }
       return this.acceptStatus(status);
@@ -178,8 +200,7 @@ export class RecordMedia2Job {
       catch {
         // A failed observation cannot erase a previously validated terminal result.
         if (!["complete", "failed", "cancelled"].includes(this.record.state)) {
-          this.record = { ...this.record, state: "unknown" };
-          await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+          await this.markUnknown();
         }
         throw new Error("retained media2 inspect outcome is unknown");
       }
@@ -194,14 +215,12 @@ export class RecordMedia2Job {
         throw new Error("retained media2 job is not cancellable");
       const input = this.operationInput(ownerToken, timeoutMs);
       const previous = this.record;
-      this.record = { ...this.record, state: "cancelling", cancelAttempted: true };
-      await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+      await this.persist({ ...this.record, state: "cancelling", cancelAttempted: true });
       let status: Media2JobStatus;
       try { status = await this.client.cancel(input, timeoutMs); }
       catch (error) {
-        if (isUndispatched(error)) this.record = { ...previous };
-        else this.record = { ...this.record, state: "unknown" };
-        await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+        if (isUndispatched(error)) await this.persist(previous);
+        else await this.markUnknown();
         throw error;
       }
       return this.acceptStatus(status);
@@ -209,10 +228,10 @@ export class RecordMedia2Job {
   }
 
   private async acceptStatus(status: Media2JobStatus): Promise<Media2JobStatus> {
+    await this.refresh();
     if (status.jobId !== this.jobId || status.requestSha256 !== this.record.requestSha256) {
       if (!["complete", "failed", "cancelled"].includes(this.record.state)) {
-        this.record = { ...this.record, state: "unknown" };
-        await writePrivateJournal(this.journalPath, this.record, JOURNAL_LABEL);
+        await this.markUnknown();
       }
       throw new Error("media2 client returned a mismatched original job binding");
     }
@@ -229,8 +248,10 @@ export class RecordMedia2Job {
       next = { ...this.record, state: status.state, dispatchAttempted: true, error: undefined };
     }
     validateRecord(next);
-    await writePrivateJournal(this.journalPath, next, JOURNAL_LABEL);
-    this.record = next;
+    if (["complete", "failed", "cancelled"].includes(this.record.state) &&
+        (!isDeepStrictEqual(next.derivative, this.record.derivative) || !isDeepStrictEqual(next.error, this.record.error)))
+      throw new Error("media2 observation conflicts with the durable terminal result");
+    await this.persist(next);
     return structuredClone(status);
   }
 
@@ -238,7 +259,7 @@ export class RecordMedia2Job {
     return this.exclusive(async () => {
       const safe = !this.record.dispatchAttempted || ["complete", "failed", "cancelled"].includes(this.record.state);
       if (!safe) throw new Error("cannot clean an unresolved retained media2 job");
-      await removePrivateJournal(this.journalPath, JOURNAL_LABEL);
+      if (!await this.store.compareExchange(this.record, null)) throw new Error("retained media2 journal changed during cleanup");
     });
   }
 }
