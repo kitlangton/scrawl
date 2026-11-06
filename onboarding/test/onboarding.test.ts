@@ -207,6 +207,21 @@ test("mounted pen choice commits only on Use this pen and reduced motion advance
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
+test("setup Later stays in scrollable content and defers through its owner control", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "pen" }; await f.controller.load(); let closed = 0;
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() { closed++; } })); await Promise.resolve(); });
+  const later = [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Try later")!;
+  const section = dom.window.document.querySelector("main.onboarding-shell section")!;
+  assert.ok(section.contains(later), "Later belongs to the pane that scrolls above the fixed setup footer");
+  assert.ok(section.parentElement?.querySelector("footer"), "the setup navigation remains outside the scroll pane");
+  await act(async () => { later.click(); await Promise.resolve(); });
+  assert.equal(f.controller.state.progress.status, "deferred"); assert.equal(closed, 1);
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
 test("mounted Close keeps setup visible when deferral save is unknown", async () => {
   const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
