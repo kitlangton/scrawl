@@ -4,6 +4,7 @@ import os
 import json
 from pathlib import Path
 import shutil
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -23,6 +24,37 @@ def run(*args, cwd, env=None, input=None):
 
 
 class PrePushGuardTests(unittest.TestCase):
+    def prepare_npm_install(self, package, source):
+        """Copy a real npm manifest/lock and model npm's prepared install metadata."""
+        source = Path(source)
+        package.mkdir(parents=True, exist_ok=True)
+        for name in ("package.json", "package-lock.json"):
+            if (source / name).resolve() != (package / name).resolve():
+                shutil.copy2(source / name, package / name)
+        manifest = json.loads((package / "package.json").read_text())
+        lock = json.loads((package / "package-lock.json").read_text())
+        installed = {"packages": {}}
+        dependencies = manifest.get("dependencies", {}) | manifest.get("devDependencies", {})
+        for name in dependencies:
+            key = "node_modules/" + name
+            entry = dict(lock["packages"][key])
+            installed["packages"][key] = entry
+            dependency = package / key
+            dependency.mkdir(parents=True, exist_ok=True)
+            if entry.get("link"):
+                target = lock["packages"][entry["resolved"]]
+                version = target["version"]
+            else:
+                version = entry["version"]
+            (dependency / "package.json").write_text(json.dumps({"version": version}))
+            resolved = entry.get("resolved", "")
+            if resolved.startswith("file:"):
+                artifact = package / resolved[5:]
+                if not artifact.exists():
+                    artifact.mkdir(parents=True, exist_ok=True)
+                    (artifact / "package.json").write_text(json.dumps({"version": version}))
+        (package / "node_modules/.package-lock.json").write_text(json.dumps(installed))
+
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix=".pf-", dir=Path.home())
         self.addCleanup(self.tmp.cleanup)
@@ -40,6 +72,12 @@ class PrePushGuardTests(unittest.TestCase):
         for name in ("test_fixture_push.py", "test_verification.py", "test_release_gate.py",
                      "test_temp_preflight.py", "test_owner_lanes.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
+        for name in ("enablement/verification/dependencies/preflight.test.ts",
+                     "capture/desktop/ui/frontend/scripts/check-dependency-freshness.test.ts",
+                     "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts"):
+            target = self.repo / name
+            target.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(HOOK.parents[1] / name, target)
         client = self.repo / "connect/delivery/client"
         for name in ("package.json", "package-lock.json", "tsconfig.json"):
             destination = client / name
@@ -50,19 +88,17 @@ class PrePushGuardTests(unittest.TestCase):
         (client / "src/index.ts").write_text("export const value = 1;\n")
         (client / "test").mkdir()
         (client / "test/index.test.ts").write_text("// package test input\n")
+        self.prepare_npm_install(client, HOOK.parents[1] / "connect/delivery/client")
         app_shell = self.repo / "composition/app"
         source_app_shell = SELECTOR.parents[1] / "composition/app"
         for name in ("package.json", "package-lock.json", "tsconfig.json", ".gitignore"):
             destination = app_shell / name
             destination.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(source_app_shell / name, destination)
-        app_dependencies = json.loads((app_shell / "package.json").read_text())
-        app_node_modules = app_shell / "node_modules"
-        for name in (*app_dependencies.get("dependencies", {}),
-                     *app_dependencies.get("devDependencies", {})):
-            dependency = app_node_modules / name / "package.json"
-            dependency.parent.mkdir(parents=True, exist_ok=True)
-            dependency.write_text("fixture\n")
+        self.prepare_npm_install(app_shell, source_app_shell)
+        architecture = self.repo / "composition/architecture"
+        architecture.mkdir(parents=True, exist_ok=True)
+        self.prepare_npm_install(architecture, SELECTOR.parents[1] / "composition/architecture")
         # Unknown history includes Record's independent renderer. Provision
         # dependency markers as for the shell; npm itself remains mocked.
         for package, names in (
@@ -80,6 +116,8 @@ class PrePushGuardTests(unittest.TestCase):
                 dependency = root / "node_modules" / name
                 dependency.parent.mkdir(parents=True, exist_ok=True)
                 dependency.write_text("fixture\n")
+        for relative in ("record", "capture/desktop/ui/frontend"):
+            self.prepare_npm_install(self.repo / relative, SELECTOR.parents[1] / relative)
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
         # The independent top-level owner is selected on unknown history too.
         # Copy its tracked input closure, not its generated/dependency trees.
@@ -88,13 +126,7 @@ class PrePushGuardTests(unittest.TestCase):
             target.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(HOOK.parents[1] / name, target)
         package = self.repo / "onboarding"
-        manifest = json.loads((package / "package.json").read_text())
-        lock = json.loads((package / "package-lock.json").read_text())
-        for name in {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}:
-            target = package / "node_modules" / name / "package.json"
-            target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text(json.dumps({'version': lock['packages']['node_modules/' + name]['version']}))
-        (package / 'node_modules/.package-lock.json').write_text(json.dumps(lock))
+        self.prepare_npm_install(package, package)
         # Preserve the dependency-free delivery check closure for conservative
         # unknown-history selection; it never invokes this hook suite.
         delivery = self.repo / "composition/delivery"
@@ -123,7 +155,7 @@ class PrePushGuardTests(unittest.TestCase):
         # real cross-owner regression in test_verification.py.
         architecture = self.repo / "composition/architecture"
         (architecture / "src").mkdir(parents=True)
-        (architecture / "node_modules/typescript").mkdir(parents=True)
+        (architecture / "node_modules/typescript").mkdir(parents=True, exist_ok=True)
         (architecture / ".gitignore").write_text("node_modules/\n")
         (architecture / "src/cli.ts").write_text("// Hook fixture package boundary; actual scanner is tested separately.\n")
         run("git", "add", ".", cwd=self.repo)
@@ -134,7 +166,8 @@ class PrePushGuardTests(unittest.TestCase):
                      "age-encryption/package.json", "@noble/ed25519/package.json"):
             dependency = self.client / "node_modules" / name
             dependency.parent.mkdir(parents=True, exist_ok=True)
-            dependency.write_text("fixture\n")
+            if not dependency.name == "package.json" or not dependency.exists():
+                dependency.write_text("fixture\n")
         self.bin = Path(self.tmp.name) / "bin"
         self.bin.mkdir()
         self.log = Path(self.tmp.name) / "commands"
@@ -142,6 +175,9 @@ class PrePushGuardTests(unittest.TestCase):
         taskpolicy = self.bin / "taskpolicy"
         taskpolicy.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$COMMAND_LOG\"\nexit \"${MOCK_STATUS:-0}\"\n")
         taskpolicy.chmod(0o755)
+        node = self.bin / "node"
+        node.write_text("#!/bin/sh\ncase \"$*\" in *check-dependency-freshness.ts*|*composition/app/scripts/check-installed.ts*) exit 0;; esac\nexec " + shlex.quote(shutil.which("node")) + " \"$@\"\n")
+        node.chmod(0o755)
         npm = self.bin / "npm"
         npm.write_text('#!/bin/sh\nprintf "%s:%s\\n" "$PWD" "$*" >> "$NPM_COMMAND_LOG"\nexit "${NPM_STATUS:-0}"\n')
         npm.chmod(0o755)
@@ -209,7 +245,8 @@ class PrePushGuardTests(unittest.TestCase):
             for name in ("typescript/bin/tsc", "vite/bin/vite.js", "@apparent/ui/package.json"):
                 target = frontend / "node_modules" / name
                 target.parent.mkdir(parents=True, exist_ok=True)
-                target.write_text("fixture\n")
+                if not name.endswith("package.json") or not target.exists():
+                    target.write_text("fixture\n")
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "entry baseline", cwd=self.repo)
         run("git", "update-ref", "refs/remotes/origin/main", "HEAD", cwd=self.repo)
@@ -253,7 +290,7 @@ class PrePushGuardTests(unittest.TestCase):
         for name in (*manifest.get("dependencies", {}), *manifest.get("devDependencies", {})):
             dependency = site / "node_modules" / name / "package.json"
             dependency.parent.mkdir(parents=True, exist_ok=True)
-            dependency.write_text("fixture\n")
+            dependency.write_text(json.dumps({"version": "fixture"}))
         (site / ".gitignore").write_text("node_modules/\n")
         target = site / path
         target.parent.mkdir(parents=True, exist_ok=True)
@@ -335,7 +372,8 @@ class PrePushGuardTests(unittest.TestCase):
                 "shared/ui/src/button.tsx"):
             target = self.repo / path
             target.parent.mkdir(parents=True, exist_ok=True)
-            target.write_text("// changed transitive input\n")
+            target.write_text(target.read_text() + "\n" if path.endswith("package.json")
+                              else "// changed transitive input\n")
         run("git", "add", "-A", cwd=self.repo)
         run("git", "commit", "-qm", "transitive inputs", cwd=self.repo)
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
@@ -362,7 +400,7 @@ class PrePushGuardTests(unittest.TestCase):
         self.onboarding_delta(dependencies=False)
         result = self.push(remote="refs/heads/feature")
         self.assertNotEqual(result.returncode, 0)
-        self.assertIn("run npm ci in capture/desktop/ui/frontend", result.stderr)
+        self.assertIn("run npm ci --no-audit --no-fund in capture/desktop/ui/frontend", result.stderr)
         self.assertFalse(self.log.exists())
 
     def test_onboarding_deleted_or_renamed_entry_requires_contract_update(self):
@@ -407,7 +445,7 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push(remote="refs/heads/feature")
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("package-lock.json", result.stderr)
-        self.assertIn("restore them or update the pre-push contract", result.stderr)
+        self.assertIn("run npm ci --no-audit --no-fund in connect/delivery/client", result.stderr)
         self.assertFalse(self.npm_log.exists())
 
     def test_connect_client_missing_dependencies_never_install(self):
@@ -522,6 +560,7 @@ class PrePushGuardTests(unittest.TestCase):
         browser = self.repo / "connect/web"
         browser.mkdir(parents=True)
         (browser / "package.json").write_text('{}\n')
+        (browser / "bun.lock").write_text('{}\n')
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "independent browser", cwd=self.repo)
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
@@ -533,6 +572,7 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
             f"node {self.repo}/shared/ui/scripts/check-theme.ts",
+            "node --experimental-strip-types --test enablement/verification/dependencies/preflight.test.ts capture/desktop/ui/frontend/scripts/check-dependency-freshness.test.ts",
             "bun install --frozen-lockfile", "bun run build",
             "node --test test/artifact.test.mjs test/closure.test.mjs test/routes.test.mjs",
             "node scripts/test-browser.mjs",

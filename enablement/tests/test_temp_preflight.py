@@ -90,12 +90,15 @@ class TempPreflightTests(unittest.TestCase):
                 verification, 'run_app_shell_check') as app_check, patch.object(
                 verification, 'run_record_typescript_check') as record_check, patch.object(
                 verification, 'run_onboarding_package_check') as onboarding_check, patch.object(
-                verification, 'run_architecture_check') as architecture_check:
+                verification, 'run_architecture_check') as architecture_check, patch.object(
+                verification, 'preflight_dependencies'):
             verification.run_pr_checks()
         architecture_check.assert_called_once_with([])  # Unknown history requests all owners.
         public_build.assert_called_once_with()  # Unknown history includes Public feedback.
         client_tests.assert_called_once_with()  # Keep owner checks selected without live dependency setup.
         commands = [call.args[0] for call in run.call_args_list]
+        dependency_contracts = commands.pop(0)
+        self.assertIn('enablement/verification/dependencies/preflight.test.ts', dependency_contracts)
         self.assertEqual(commands[2][:3], ['node', '--experimental-strip-types', '--test'])
         self.assertIn('composition/delivery/core.test.ts', commands[2][3:])
         self.assertIn('composition/delivery/public.test.ts', commands[2][3:])

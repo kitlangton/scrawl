@@ -11,6 +11,7 @@ import hashlib
 import json
 import os
 import re
+import shutil
 import stat
 import signal
 import sys
@@ -172,6 +173,24 @@ ONBOARDING_PACKAGE_BUILD_INPUTS = {
 
 def onboarding_package_selected(paths):
     return not paths or any(path.startswith(ONBOARDING_PACKAGE_ROOT) for path in paths)
+
+
+FRONTEND_ROOT = "capture/desktop/ui/frontend/"
+
+
+def onboarding_renderer_selected(paths):
+    onboarding_inputs = (
+        FRONTEND_ROOT + "src/onboarding/", FRONTEND_ROOT + "src/shared/",
+        FRONTEND_ROOT + "src/components/", FRONTEND_ROOT + "src/styles/",
+    )
+    onboarding_exact = {FRONTEND_ROOT + path for path in (
+        "onboarding.html", "package.json", "package-lock.json", "vite.config.ts",
+        "scripts/tsconfig.onboarding.json", "tsconfig.json", "src/style.css",
+        "src/main.tsx", "src/base.css", "src/onboarding/main.tsx",
+    )}
+    return any(path.startswith(onboarding_inputs) or path in onboarding_exact
+               or path.startswith("shared/ui/")
+               or path == "shared/assets/fonts/HostGrotesk-Variable.ttf" for path in paths)
 
 
 RECORD_UI_INPUTS = {
@@ -458,9 +477,11 @@ def check_temp_environment():
 
 
 def run_pr_checks(selection=None):
+    paths = selection["paths"] if selection else []
+    preflight_dependencies(selection or select(paths), include_architecture=True)
+    run_dependency_contracts()
     subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    paths = selection["paths"] if selection else []
     run_architecture_check(paths)
     if (selection or {}).get("agent", agent_tests_selected(paths)):
         run_agent_tests()
@@ -484,26 +505,9 @@ def run_pr_checks(selection=None):
                     "test_temp_preflight.py", "test_owner_lanes.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                         "-p", pattern], cwd=ROOT, check=True)
-    frontend_root = "capture/desktop/ui/frontend/"
-    onboarding_inputs = (
-        frontend_root + "src/onboarding/",
-        frontend_root + "src/shared/",
-        frontend_root + "src/components/",
-        frontend_root + "src/styles/",
-    )
-    onboarding_exact = {
-        frontend_root + path for path in (
-            "onboarding.html", "package.json", "package-lock.json", "vite.config.ts",
-            "scripts/tsconfig.onboarding.json", "tsconfig.json", "src/style.css",
-            "src/main.tsx", "src/base.css",
-        )
-    }
-    if any(path == frontend_root + "src/onboarding/main.tsx"
-           or path.startswith(onboarding_inputs) or path in onboarding_exact
-           or path.startswith("shared/ui/")
-           or path == "shared/assets/fonts/HostGrotesk-Variable.ttf" for path in paths):
-        frontend = ROOT / "capture/desktop/ui/frontend"
-        if not (ROOT / (frontend_root + "src/onboarding/main.tsx")).is_file():
+    if onboarding_renderer_selected(paths):
+        frontend = ROOT / FRONTEND_ROOT
+        if not (frontend / "src/onboarding/main.tsx").is_file():
             raise RuntimeError("Onboarding entry was deleted or renamed; update its focused check contract before pushing")
         if not all((frontend / item).is_file() for item in (
                 "node_modules/typescript/bin/tsc", "node_modules/vite/bin/vite.js",
@@ -552,22 +556,7 @@ def run_onboarding_package_check():
     if missing_dependencies:
         raise RuntimeError("Onboarding package checks need installed locked dependencies: run npm ci in onboarding; the hook never installs dependencies. Missing: " + ", ".join(sorted(missing_dependencies)))
     try:
-        installed = json.loads((package / "node_modules/.package-lock.json").read_text())["packages"]
-        for name in dependencies:
-            key = "node_modules/" + name
-            expected, actual = lock["packages"][key], installed[key]
-            if expected.get("resolved", "").startswith("file:"):
-                artifact = (package / expected["resolved"][5:]).resolve()
-                if not artifact.is_relative_to((package / "vendor").resolve()) or not artifact.is_file():
-                    raise ValueError("local dependency is not a contained vendor artifact")
-                integrity = "sha512-" + base64.b64encode(hashlib.sha512(artifact.read_bytes()).digest()).decode("ascii")
-                if integrity != expected.get("integrity"):
-                    raise ValueError("local dependency integrity mismatch")
-            if any(expected.get(field) != actual.get(field) for field in ("version", "resolved", "integrity")):
-                raise ValueError("stale installed dependency: " + name)
-            version = json.loads((package / key / "package.json").read_text())["version"]
-            if version != expected["version"]:
-                raise ValueError("stale installed package: " + name)
+        check_npm_install(package, manifest, lock, dependencies)
     except (OSError, KeyError, TypeError, ValueError) as error:
         raise RuntimeError("Onboarding installed lock/dependencies are stale or missing; run npm ci in onboarding before pushing (the hook never installs)") from error
     subprocess.run(["npm", "run", "typecheck"], cwd=package, check=True)
@@ -696,6 +685,11 @@ def run_record_typescript_check():
 
 def run_public_site_build():
     package = ROOT / "public/site"
+    check_public_site_prerequisites(package)
+    subprocess.run(["npm", "run", "build"], cwd=package, check=True)
+
+
+def check_public_site_prerequisites(package):
     controls = ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html")
     missing_controls = [name for name in controls if not (package / name).is_file()]
     if missing_controls:
@@ -720,10 +714,17 @@ def run_public_site_build():
             "The pre-push hook never installs dependencies. Missing: "
             + ", ".join(sorted(missing_dependencies))
         )
-    subprocess.run(["npm", "run", "build"], cwd=package, check=True)
+
+
+def run_dependency_contracts():
+    subprocess.run(["node", "--experimental-strip-types", "--test",
+                    "enablement/verification/dependencies/preflight.test.ts",
+                    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.test.ts"],
+                   cwd=ROOT, check=True)
 
 
 def run_contract_checks():
+    run_dependency_contracts()
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_*push*.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
@@ -926,6 +927,7 @@ def overlapping_contracts():
 
 def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=False,
                overlap_root_build=False):
+    preflight_dependencies(selection, include_browser=True)
     if selection["root"] or selection["engine"]:
         check_temp_environment()
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
@@ -935,6 +937,101 @@ def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=
     else:
         run_contract_checks()
         run_selected_checks(selection, offline, cargo_timings, overlap_root_build)
+
+
+def preflight_dependencies(selection, include_architecture=False, include_browser=False):
+    """Fail before contracts/builds when selected owners lack locked installs."""
+    paths = selection.get("paths", [])
+    packages = []
+    if include_architecture and architecture_owners(paths) != []:
+        packages.append(("composition/architecture", "typescript"))
+    if selection.get("agent"):
+        packages.append(("agent", "@apparent/engine-sdk"))
+    if selection.get("app_shell"):
+        packages.append(("composition/app", "@apparent/app-contracts"))
+    if selection.get("record"):
+        packages.extend((("record", "typescript"),
+                         ("capture/desktop/ui/frontend", "@apparent/record")))
+    if include_architecture and onboarding_renderer_selected(paths):
+        packages.append((FRONTEND_ROOT.rstrip("/"), "typescript"))
+    if selection.get("onboarding_package"):
+        packages.append(("onboarding", "typescript"))
+    if selection.get("platform_resources"):
+        packages.append(("shared/resources", "typescript"))
+    if include_architecture and connect_client_typescript_selected(paths):
+        packages.append(("connect/delivery/client", "typescript"))
+    if include_architecture and selection.get("public_site", public_site_build_selected(paths)):
+        packages.append(("public/site", None))
+    for relative, sentinel in packages:
+        package = ROOT / relative
+        if relative == "public/site":
+            check_public_site_prerequisites(package)
+            continue
+        manifest_path, lock_path = package / "package.json", package / "package-lock.json"
+        try:
+            manifest = json.loads(manifest_path.read_text())
+            lock = json.loads(lock_path.read_text())
+            dependencies = manifest.get("dependencies", {}) | manifest.get("devDependencies", {})
+            if (manifest.get("dependencies", {}) != lock["packages"][""].get("dependencies", {})
+                    or manifest.get("devDependencies", {}) != lock["packages"][""].get("devDependencies", {})):
+                raise ValueError("manifest and lock differ")
+            if sentinel and sentinel not in dependencies:
+                raise ValueError("expected direct dependency absent from manifest")
+            check_npm_install(package, manifest, lock, dependencies)
+        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
+            remedy = ("bun install --frozen-lockfile in public/site" if relative == "public/site"
+                      else f"npm ci --no-audit --no-fund in {relative}")
+            raise RuntimeError(f"Selected verification package {relative} has a missing or stale locked install ({error}); run {remedy}; the hook never installs dependencies") from error
+    if selection.get("app_shell"):
+        # Reuse the package's source-of-truth copied-file freshness check before
+        # its contract/build suite runs; this command only reads files.
+        subprocess.run(["node", "--experimental-strip-types", "composition/app/scripts/check-installed.ts"],
+                       cwd=ROOT, check=True)
+    if selection.get("record") or (include_architecture and onboarding_renderer_selected(paths)):
+        subprocess.run(["node", "--experimental-strip-types", "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts"],
+                       cwd=ROOT, check=True)
+    if include_browser and selection.get("browser"):
+        check_browser_prerequisites()
+
+
+def check_browser_prerequisites():
+    """Check read-only inputs for the existing browser lane; its selected runner installs frozen deps."""
+    package = ROOT / "connect/web"
+    missing = [name for name in ("package.json", "bun.lock") if not (package / name).is_file()]
+    if missing:
+        raise RuntimeError("Browser verification inputs are missing: " + ", ".join(missing))
+    if not shutil.which("bun"):
+        raise RuntimeError("Browser verification needs Bun on PATH; its selected lane runs bun install --frozen-lockfile")
+
+
+def check_npm_install(package, manifest, lock, dependencies):
+    """Validate npm's installed lock and package contents without mutating them."""
+    missing = [name for name in dependencies
+               if not (package / "node_modules" / name / "package.json").is_file()]
+    if missing:
+        raise ValueError("installed packages are missing: " + ", ".join(sorted(missing)))
+    installed = json.loads((package / "node_modules/.package-lock.json").read_text())["packages"]
+    for name in dependencies:
+        key = "node_modules/" + name
+        expected, actual = lock["packages"][key], installed[key]
+        if expected.get("resolved", "").startswith("file:"):
+            artifact = (package / expected["resolved"][5:]).resolve()
+            if package == ROOT / ONBOARDING_PACKAGE_ROOT and (
+                    not artifact.is_relative_to((package / "vendor").resolve()) or not artifact.is_file()):
+                raise ValueError("local dependency is not a contained vendor artifact")
+            if artifact.is_file():
+                integrity = "sha512-" + base64.b64encode(hashlib.sha512(artifact.read_bytes()).digest()).decode("ascii")
+                if integrity != expected.get("integrity"):
+                    raise ValueError("local dependency artifact integrity mismatch: " + name)
+            elif not (artifact / "package.json").is_file():
+                raise ValueError("local dependency artifact missing: " + name)
+        if any(expected.get(field) != actual.get(field) for field in ("version", "resolved", "integrity", "link")):
+            raise ValueError("installed package differs from lock: " + name)
+        installed_version = json.loads((package / key / "package.json").read_text()).get("version")
+        version = (lock["packages"][expected["resolved"]]["version"]
+                   if expected.get("link") else expected["version"])
+        if installed_version != version:
+            raise ValueError("installed package version differs from lock: " + name)
 
 
 def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
