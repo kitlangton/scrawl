@@ -261,6 +261,32 @@ async function readPenPreference(config?: RecordPenConfigPort): Promise<PenPrefe
   } catch { return { ...unknownPen(), error: "authoritative pen config/readback unavailable" }; }
 }
 
+/** Validate durable receipt identity against facts already retained by this provider.
+ * Older unseen events remain valid; arrival order never supplies a sequence. */
+function consistentCausalHistory(previous: CaptureFact | undefined, next: CaptureFact): boolean {
+  if (!previous) return true;
+  const notes = new Map<string, { noteId: string; barrier: ScreenStrokeCursor }>();
+  const strokes = new Map<string, { surface: "screen" | "whiteboard"; cursor?: ScreenStrokeCursor }>();
+  for (const outcome of previous.outcomes) {
+    if (outcome.kind === "note-save" && outcome.ok) notes.set(outcome.receiptId, { noteId: outcome.noteId, barrier: outcome.screenStrokeBarrier });
+    if (outcome.kind === "accepted-stroke" && outcome.ok) strokes.set(outcome.strokeId, { surface: outcome.surface,
+      ...(outcome.surface === "screen" && outcome.cursor ? { cursor: outcome.cursor } : {}) });
+  }
+  for (const outcome of next.outcomes) {
+    if (outcome.kind === "note-save" && outcome.ok) {
+      const old = notes.get(outcome.receiptId);
+      if (old && (old.noteId !== outcome.noteId || old.barrier.historyId !== outcome.screenStrokeBarrier.historyId ||
+          old.barrier.sequence !== outcome.screenStrokeBarrier.sequence)) return false;
+    }
+    if (outcome.kind === "accepted-stroke" && outcome.ok) {
+      const old = strokes.get(outcome.strokeId);
+      if (old && (old.surface !== outcome.surface || (outcome.surface === "screen" && outcome.cursor && old.cursor &&
+          (old.cursor.historyId !== outcome.cursor.historyId || old.cursor.sequence !== outcome.cursor.sequence)))) return false;
+    }
+  }
+  return true;
+}
+
 function mergeCapture(previous: CaptureFact | undefined, next: CaptureFact): CaptureFact {
   if (!previous) return clone(next);
   const outcomes = [...previous.outcomes];
@@ -300,9 +326,11 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   let outputFacts = unavailableCaptureFacts();
   // Record edit drafts are consumer-owned UI state layered over immutable native facts.
   const acceptNativeSnapshot = revisionedPortSnapshots<RecordNativeFacts>(value => ({ ...value, shortcut: { ...value.shortcut, draft: null } }));
-  const acceptOutputSnapshot = revisionedPortSnapshots<RecordCaptureFacts>();
+  const acceptOutputRevision = revisionedPortSnapshots<RecordCaptureFacts>();
   let pen = unknownPen();
   const captures = new Map<string, CaptureFact>();
+  const acceptOutputSnapshot = (next: RecordCaptureFacts) => next.captures.every(capture => consistentCausalHistory(captures.get(capture.captureId), capture))
+    ? acceptOutputRevision(next) : undefined;
   const runtimeObservedAt = new Map<string, string>();
   const listeners = new Set<(snapshot: CapabilitySnapshot) => void>();
   const usedRequests = new Set<string>();

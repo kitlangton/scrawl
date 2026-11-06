@@ -534,3 +534,36 @@ test("stopped processing failures and unknowns are visible without overriding ac
     } finally { client.detach(); }
   }
 });
+
+test("causal receipt identities cannot be rebound across snapshots or reconnect", async () => {
+  const note = { kind: "note-save" as const, at: "2026-01-01T00:00:03Z", ok: true as const, noteId: "saved-note", receiptId: "save-receipt",
+    screenStrokeBarrier: { historyId: "durable-history", sequence: 10 } };
+  const stroke = { kind: "accepted-stroke" as const, at: "2026-01-01T00:00:02Z", ok: true as const, surface: "screen" as const,
+    strokeId: "pre-note-stroke", cursor: { historyId: "durable-history", sequence: 9 } };
+  let facts: RecordCaptureFacts = { ...outputFacts(), captures: [{ captureId: "causal-capture", phase: "recording", delivery: "unknown", outcomes: [note, stroke] }] };
+  const client = createRecordCapabilityProvider({ runtime: runtimeFixture().runtime, providerEpoch: "causal-history-provider", captureFacts: { readFacts: async () => structuredClone(facts) } });
+  try {
+    await new Promise(resolve => setImmediate(resolve));
+    for (const outcomes of [
+      [{ ...note, screenStrokeBarrier: { ...note.screenStrokeBarrier, sequence: 8 } }, stroke],
+      [note, { ...stroke, cursor: { ...stroke.cursor, sequence: 11 } }],
+      [{ ...note, noteId: "different-note" }, stroke],
+    ]) {
+      facts = { ...facts, revision: facts.revision + 1, captures: [{ ...facts.captures[0]!, outcomes }] };
+      const current = client.current();
+      await client.execute({ type: "refresh", requestId: `contradiction-${facts.revision}`, expected: { providerEpoch: current.providerEpoch, revision: current.revision } });
+      const retained = client.current().captures[0]!.outcomes;
+      assert.deepEqual(retained, [note, stroke], "a revised receipt cannot turn the earlier stroke into a post-note effect");
+    }
+    facts = { ...facts, providerEpoch: "output-reconnected", revision: 1, captures: [{ ...facts.captures[0]!, outcomes: [note, { ...stroke, cursor: { ...stroke.cursor, sequence: 11 } }] }] };
+    const reconnect = client.current();
+    await client.execute({ type: "refresh", requestId: "contradictory-reconnect", expected: { providerEpoch: reconnect.providerEpoch, revision: reconnect.revision } });
+    assert.deepEqual(client.current().captures[0]!.outcomes, [note, stroke], "reconnect cannot rebind durable IDs");
+    // An older, previously unseen event can arrive late; its own cursor remains below the barrier.
+    const older = { ...stroke, strokeId: "late-pre-note-stroke", cursor: { ...stroke.cursor, sequence: 5 } };
+    facts = { ...facts, revision: 2, captures: [{ ...facts.captures[0]!, outcomes: [note, stroke, older] }] };
+    const current = client.current();
+    await client.execute({ type: "refresh", requestId: "late-original-event", expected: { providerEpoch: current.providerEpoch, revision: current.revision } });
+    assert.deepEqual(client.current().captures[0]!.outcomes, [note, stroke, older], "arrival order does not replace durable causal order");
+  } finally { client.detach(); }
+});

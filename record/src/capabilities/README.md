@@ -76,6 +76,12 @@ Screen accepted-stroke outcomes may carry the durable cursor
 capture, has the same history incarnation and a sequence strictly greater than
 the note's barrier. Event timestamps and receipt arrival order do not establish
 this relation. Missing cursors remain unavailable for causal comparisons.
+Receipt IDs bind one immutable note identity/barrier, and stroke IDs bind one
+surface and observed cursor within a capture. The provider rejects conflicting
+revisions of known identities, including across producer reconnects, using its
+existing fact history. Previously unseen older events can still arrive late.
+The producer must retain those identities and causal order durably across a
+provider restart; the Record projection does not manufacture a counter.
 
 These are public additive contracts, not claims that the producers exist.
 Production currently has no physical shortcut-trial producer, durable nonempty
