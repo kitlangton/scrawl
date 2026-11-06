@@ -233,7 +233,10 @@ test("mounted shortcut recorder submits modifier and physical key names, then re
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Choose recording shortcut")!.click(); await Promise.resolve(); });
   const recorder = dom.window.document.querySelector<HTMLElement>("[aria-label='Shortcut recorder']")!;
+  await act(async () => { recorder.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "F1", code: "F1", bubbles: true, cancelable: true })); });
+  assert.match(dom.window.document.querySelector('[role="alert"]')?.textContent ?? "", /Use a letter or number/);
   await act(async () => { recorder.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "r", code: "KeyR", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })); });
+  assert.equal(dom.window.document.querySelector('[role="alert"]'), null);
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Check shortcut")!.click(); await Promise.resolve(); });
   assert.equal(submitted, "Ctrl+Shift+R");
   assert.equal(f.controller.state.snapshot?.shortcut.effective, initialEffective); assert.equal(f.controller.state.progress.stage, "shortcut");

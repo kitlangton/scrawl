@@ -32,13 +32,14 @@ export function OnboardingContribution({ controller, Button, close, onManualPast
   const [color, setColor] = useState<PenColor>(snapshot?.pen.effective ?? "coral");
   const [shortcutValue, setShortcutValue] = useState("");
   const [validatedShortcut, setValidatedShortcut] = useState("");
+  const [shortcutError, setShortcutError] = useState("");
   const shortcutRecorder = useRef<HTMLDivElement>(null);
   const [animation, setAnimation] = useState(false);
   const mounted = useRef(true), penArmed = useRef(false);
   useEffect(() => { mounted.current = true; let alive = true; const off = controller.subscribe(s => alive && setState(s)); if (loadOnMount) void controller.load().then(s => alive && setState(s)); return () => { alive = false; mounted.current = false; off(); }; }, [controller, loadOnMount]);
   const p = state.progress, page = pages[p.stage];
   useEffect(() => { if (snapshot?.pen.effective && !snapshot.pen.supported.includes(color)) setColor(snapshot.pen.effective); }, [snapshot?.pen.effective, snapshot?.pen.supported, color]);
-  useEffect(() => { if (snapshot?.shortcut.draft) { shortcutRecorder.current?.focus(); setShortcutValue(""); setValidatedShortcut(""); } }, [snapshot?.shortcut.draft?.sessionId]);
+  useEffect(() => { if (snapshot?.shortcut.draft) { shortcutRecorder.current?.focus(); setShortcutValue(""); setValidatedShortcut(""); setShortcutError(""); } }, [snapshot?.shortcut.draft?.sessionId]);
   useEffect(() => {
     if (p.stage !== "pen" || p.status === "deferred" || penArmed.current || !controller.penSelectionConfirmed(color)) return;
     penArmed.current = true;
@@ -73,10 +74,10 @@ export function OnboardingContribution({ controller, Button, close, onManualPast
         if (event.key === "Escape") { event.preventDefault(); setShortcutValue(""); setValidatedShortcut(""); void controller.cancelShortcut(snapshot.shortcut.draft!.sessionId); return; }
         event.preventDefault();
         const key = /^(Key[A-Z]|Digit[0-9])$/.test(event.code) ? event.code.replace(/^(Key|Digit)/, "") : "";
-        if (!key || !(event.ctrlKey || event.altKey || event.metaKey || event.shiftKey)) { setShortcutValue(""); setValidatedShortcut(""); return; }
+        if (!key || !(event.ctrlKey || event.altKey || event.metaKey || event.shiftKey)) { setShortcutValue(""); setValidatedShortcut(""); setShortcutError("Use a letter or number with Ctrl, Alt, Meta or Shift."); return; }
         const modifiers = [event.ctrlKey && "Ctrl", event.altKey && "Alt", event.metaKey && "Meta", event.shiftKey && "Shift"].filter(Boolean);
-        setShortcutValue(`${modifiers.join("+")}+${key}`); setValidatedShortcut("");
-      }}><p>Press Ctrl, Alt, Meta or Shift with a letter or number.</p><kbd>{shortcutValue || snapshot.shortcut.draft.value || "Waiting for keys"}</kbd></div><Button variant="outline" disabled={!shortcutValue || state.command === "unknown"} onClick={() => void checkShortcut(snapshot.shortcut.draft!.sessionId)}>Check shortcut</Button><Button variant="ghost" onClick={() => { setShortcutValue(""); setValidatedShortcut(""); void controller.cancelShortcut(snapshot.shortcut.draft!.sessionId); }}>Cancel</Button><Button disabled={!validatedShortcut || validatedShortcut !== shortcutValue || validatedShortcut !== snapshot.shortcut.draft.value || !!snapshot.shortcut.draft.error} onClick={() => void controller.saveShortcut(snapshot.shortcut.draft!.sessionId)}>Save shortcut</Button>{snapshot.shortcut.draft.error && <p role="alert">{snapshot.shortcut.draft.error}</p>}</>}</>}
+        setShortcutValue(`${modifiers.join("+")}+${key}`); setValidatedShortcut(""); setShortcutError("");
+      }}><p>Press Ctrl, Alt, Meta or Shift with a letter or number.</p>{shortcutError && <p role="alert">{shortcutError}</p>}<kbd>{shortcutValue || snapshot.shortcut.draft.value || "Waiting for keys"}</kbd></div><Button variant="outline" disabled={!shortcutValue || state.command === "unknown"} onClick={() => void checkShortcut(snapshot.shortcut.draft!.sessionId)}>Check shortcut</Button><Button variant="ghost" onClick={() => { setShortcutValue(""); setValidatedShortcut(""); void controller.cancelShortcut(snapshot.shortcut.draft!.sessionId); }}>Cancel</Button><Button disabled={!validatedShortcut || validatedShortcut !== shortcutValue || validatedShortcut !== snapshot.shortcut.draft.value || !!snapshot.shortcut.draft.error} onClick={() => void controller.saveShortcut(snapshot.shortcut.draft!.sessionId)}>Save shortcut</Button>{snapshot.shortcut.draft.error && <p role="alert">{snapshot.shortcut.draft.error}</p>}</>}</>}
       {p.stage === "permissions" && <><p className="onboarding-fact">{snapshot?.connection !== "connected" ? "Record is disconnected; readiness is unknown." : "Permission status and usable recording readiness are reported by the operating system."}</p>{snapshot?.readiness.requirements.map(r => <div className="onboarding-requirement" key={r.id}><strong>{permissionName(r.id)}</strong><span>{permissionStatus(r)}</span>{r.allowedRepairActions.includes("open-system-settings" as RepairAction) && <Button variant="outline" onClick={() => void controller.repair("open-system-settings", r.id)}>Open Settings</Button>}{r.allowedRepairActions.includes("request-permission" as RepairAction) && <Button variant="outline" onClick={() => void controller.repair("request-permission", r.id)}>Request access</Button>}{r.allowedRepairActions.includes("request-safe-relaunch" as RepairAction) && <Button variant="outline" onClick={() => void controller.safeRelaunch()}>Reopen Apparent</Button>}</div>)}<Button variant="outline" onClick={() => void controller.dispatch("refresh")}>Check access</Button></>}
       {p.stage === "copied" && <Button onClick={() => void controller.dispatch(page.action ?? "continue")}>{page.label}</Button>}
       {p.stage === "paste" && <><Button onClick={() => void controller.dispatch("manual-paste-confirm")}>I pasted it</Button><Button variant="outline" onClick={onManualPasteInstructions}>Show paste instructions</Button></>}
@@ -88,8 +89,9 @@ export function OnboardingContribution({ controller, Button, close, onManualPast
       {state.publication === "unknown" && <Button variant="outline" onClick={() => void controller.dispatch("retry")}>Reload progress</Button>}
       {state.command === "unknown" && <Button variant="outline" onClick={() => void controller.dispatch("refresh")}>Check status</Button>}
       {state.error && <p role="alert">{state.error}</p>}
+      {isPractice && <Button className="onboarding-later" variant="ghost" onClick={() => void closeSetup()}>Try later</Button>}
     </section>{showFooter && <footer><Button variant="ghost" onClick={() => void controller.dispatch("back")} disabled={state.saving || state.publication === "unknown" || p.stage === "welcome" || p.stage === "complete" || ["copied", "paste", "locate"].includes(p.stage)}>Back</Button><span>{p.status === "deferred" ? "Paused" : p.stage === "complete" ? "Complete" : "Your first capture"}</span><Button onClick={() => p.stage === "complete" ? void closeSetup() : void next()} disabled={state.saving || state.publication === "unknown" || (p.stage === "pen" && animation)}>{p.stage === "complete" ? "Finish setup" : p.stage === "pen" ? "Use this pen" : p.stage === "permissions" ? "Choose recording shortcut" : p.stage === "shortcut" ? "Try a capture" : page.label ?? "Continue"}</Button></footer>}
-    {p.stage !== "complete" && <Button className="onboarding-later" variant="ghost" onClick={() => void closeSetup()}>Try later</Button>}
+    {!isPractice && p.stage !== "complete" && <Button className="onboarding-later" variant="ghost" onClick={() => void closeSetup()}>Try later</Button>}
   </main>;
 }
 

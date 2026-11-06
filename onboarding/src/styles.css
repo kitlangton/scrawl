@@ -5,6 +5,7 @@
 .onboarding-shell section { min-height:0; overflow:auto; padding:24px 32px; flex:1; }
 .onboarding-shell section.onboarding-practice { position:relative; display:flex; flex:0 1 auto; flex-direction:column; justify-content:center; max-width:680px; width:calc(100% - 48px); margin:62px auto 24px; padding:30px; border:1px solid var(--apparent-border); border-radius:24px 24px 24px 6px; background:var(--apparent-surface); box-shadow:0 12px 30px var(--apparent-shadow); overflow:visible; }
 .onboarding-coach-frog { position:absolute; top:-42px; left:18px; width:82px; height:58px; object-fit:contain; pointer-events:none; animation:onboarding-coach-arrive .42s cubic-bezier(.2,.7,.3,1); }
+.onboarding-shell section.onboarding-practice h1 { font-size:1.125rem; line-height:1.5; margin:16px 0 8px; }
 .onboarding-shell[data-practice=true] { overflow:auto; border-color:transparent; background:transparent; }
 .onboarding-shell[data-practice=true] .onboarding-practice { overflow-wrap:anywhere; }
 .onboarding-practice .onboarding-brand img { width:112px; height:82px; }
