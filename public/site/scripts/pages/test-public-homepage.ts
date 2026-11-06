@@ -239,6 +239,21 @@ test("source homepage preserves accepted responsive layout and interactions", as
             assert.equal(await splash.count(), 0)
           }
           if (width === 390) {
+            // React unmount cancels an in-flight jump; reopening starts a fresh sequence.
+            await page.emulateMedia({ reducedMotion: "no-preference" })
+            await lounge.dblclick({ delay: 80 })
+            await page.waitForFunction(() => document.querySelector(".frog-splash-dialog")?.getAttribute("data-stage") === "jump")
+            await page.keyboard.press("Escape")
+            assert.equal(await splash.count(), 0)
+            assert.equal(await lounge.evaluate(element => (element as HTMLElement).style.visibility), "")
+            assert.equal(await lounge.evaluate(element => element === document.activeElement), true)
+            await lounge.dblclick({ delay: 80 })
+            await page.evaluate(() => window.dispatchEvent(new Event("pagehide")))
+            await page.waitForFunction(() => !document.querySelector(".frog-splash-dialog"))
+            assert.equal(await page.evaluate(() => document.documentElement.style.overflow), "")
+            await page.waitForTimeout(1300)
+            assert.equal(await splash.count(), 0)
+
             await page.emulateMedia({ reducedMotion: "no-preference" })
             await lounge.dblclick({ delay: 80 })
             await page.waitForFunction(() => document.querySelector(".frog-splash-dialog")?.getAttribute("data-stage") === "ripple")
