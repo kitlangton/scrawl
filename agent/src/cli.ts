@@ -4,7 +4,7 @@ import { retainRequest, loadRequest } from './ownership.js';
 import { markEntries, markLine } from './inspection.js';
 import { isAbsolute, resolve } from 'node:path';
 import { resolveBundle, readManifest, readBundle, readRegular, checkImageReference, hasMicrophoneSamples, configuredAgentContext } from './bundle.js';
-import { recordWithEngine } from './recording.js';
+import { DEFAULT_RECORD_DURATION_SECONDS, recordWithEngine } from './recording.js';
 import { controlCapture2, discoverCapture2Sources, recordWithCapture2 } from './recording/capture2.js';
 import { semanticSummary } from './summary.js';
 import { issueCommand, issueHelp, IssueCliError } from './issue.js';
@@ -13,7 +13,7 @@ import { runZoom } from './zoom/zoom.js';
 import { generateDemo } from './demo/generate.js';
 
 const VERSION = '0.1.0';
-function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection, synthetic demo generation, and Engine foreground recording/frame selection.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent demo [--out FRESH.apparent] [--json]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n       apparent-agent skill\n       apparent-agent record --duration <seconds> --out <absolute.apparent-path>\n       apparent-agent record --protocol capture2 --duration <seconds> --out <absolute.apparent-path> --source <discovered-id>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent capture --protocol capture2 <inspect|stop|cancel> <request-id>\n       apparent-agent capture --protocol capture2 sources [--json]\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nDemo creates illustrative synthetic local data only; it does not record a screen or audio.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nCapture/2 requires explicit --protocol capture2 and APPARENT_ENGINE_CAPTURE_EXECUTABLE; it never falls back to V1. capture --protocol capture2 sources [--json] is read-only public SDK discovery.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
+function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection, synthetic demo generation, and Engine foreground recording/frame selection.\n\nUsage: apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent demo [--out FRESH.apparent] [--json]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n       apparent-agent skill\n       apparent-agent record [--duration <seconds>] --out <absolute.apparent-path>\n       apparent-agent record --protocol capture2 [--duration <seconds>] [--out <absolute.apparent-path>] --source <discovered-id>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent capture --protocol capture2 <inspect|stop|cancel> <request-id>\n       apparent-agent capture --protocol capture2 sources [--json]\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nRecord duration defaults to 5 seconds; capture timing begins after native readiness.\nDemo creates illustrative synthetic local data only; it does not record a screen or audio.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nCapture/2 requires explicit --protocol capture2 and APPARENT_ENGINE_CAPTURE_EXECUTABLE; it never falls back to V1. capture --protocol capture2 sources [--json] is read-only public SDK discovery.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
 async function main(args: string[]) {
   if(args[0]==='demo'&&args.length===2&&['--help','-h'].includes(args[1])) { process.stdout.write('Usage: apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\nGenerate a local illustrative synthetic bundle; no capture, Engine, Desktop, provider, or network is used. --clipboard currently fails before writing until a native clipboard route is published.\n'); return 0; }
   if (args[0] === 'zoom' && args.length === 2 && ['--help','-h'].includes(args[1])) {
@@ -227,14 +227,15 @@ async function frames(args: string[]) {
   }
 }
 async function record(args: string[]) {
-  let duration: number | undefined; let out: string | undefined;
+  let duration: number | undefined; let durationSeen = false; let out: string | undefined;
   for (let i = 0; i < args.length; i++) {
-    if (args[i] === '--duration' && duration === undefined) duration = Number(args[++i]);
+    if (args[i] === '--duration' && !durationSeen) { durationSeen = true; duration = Number(args[++i]); }
     else if (args[i] === '--out' && out === undefined) out = args[++i];
     else throw new Error(`Unknown option: ${args[i]}`);
   }
-  if (!Number.isFinite(duration) || duration! <= 0 || duration! > 3600 || !out || !resolve(out).endsWith('.apparent'))
-    throw new Error('record requires --duration (greater than 0 and at most 3600 seconds) and an absolute --out path ending in .apparent');
+  const durationSeconds = duration ?? DEFAULT_RECORD_DURATION_SECONDS;
+  if (!Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 3600 || !out || !resolve(out).endsWith('.apparent'))
+    throw new Error('record requires --out (absolute path ending in .apparent); --duration must be greater than 0 and at most 3600 seconds when supplied');
   if (!isAbsolute(out!)) throw new Error('--out must be absolute');
   const executable = process.env.APPARENT_ENGINE_EXECUTABLE; const runtime = process.env.APPARENT_ENGINE_RUNTIME;
   if (!executable || !runtime || !isAbsolute(executable) || !isAbsolute(runtime))
@@ -249,7 +250,7 @@ async function record(args: string[]) {
   process.on('SIGTERM', onSignal);
   let recoveryPath: string | undefined;
   try {
-    process.stdout.write(`${await recordWithEngine(client, resolve(out!), duration!, () => signalRequested, async request => { recoveryPath = await retainRequest(resolve(runtime), request); })}\n`);
+    process.stdout.write(`${await recordWithEngine(client, resolve(out!), durationSeconds, () => signalRequested, async request => { recoveryPath = await retainRequest(resolve(runtime), request); })}\n`);
     return 0;
   } catch (error) {
     if (recoveryPath) process.stderr.write(`Private operation recovery record: ${recoveryPath}\n`);

@@ -5,11 +5,12 @@ import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { CaptureClient, launchCaptureEngine, type CaptureTransport } from '@apparent/engine-sdk/capture';
+import { DEFAULT_RECORD_DURATION_SECONDS } from '../recording.js';
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 
 export type Capture2Clock = { now(): number; sleep(ms: number): Promise<void> };
 const systemClock: Capture2Clock = { now: () => performance.now(), sleep: ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms)) };
-export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; executable: string }) => Promise<{ host: Capture2Host; close(): Promise<string> }>;
+export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; executable: string }) => Promise<{ host: Capture2Host; allocateDestination(requestId: string, exactPath?: string): Promise<string>; close(): Promise<string> }>;
 
 async function ensurePrivateStoreRoot(controlRoot: string): Promise<string> {
   if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || controlRoot === parse(controlRoot).root) throw new Error('Agent capture/2 control root is invalid');
@@ -65,8 +66,11 @@ async function defaultHostFactory(paths: Parameters<Capture2HostFactory>[0]) {
   ]);
   const client = new CaptureClient(launchCaptureEngine(paths.executable, paths.runtime, 40_000));
   try {
-    const host = createCapture2Host({ client, mappings: new SqliteCaptureMappingStore(storeRoot), destinations: new AbsentDestinationAllocator(storeRoot, paths.destinationRoot) });
-    return { host, close: () => client.close() };
+    const destinations = new AbsentDestinationAllocator(storeRoot, paths.destinationRoot);
+    const host = createCapture2Host({ client, mappings: new SqliteCaptureMappingStore(storeRoot), destinations });
+    return { host, allocateDestination: async (requestId: string, exactPath?: string) => exactPath
+      ? (await destinations.reserveExact(requestId, exactPath)).bundlePath
+      : (await destinations.allocate(requestId)).bundlePath, close: () => client.close() };
   } catch (error) { await client.close(); throw error; }
 }
 
@@ -132,22 +136,26 @@ export function parseCapture2ControlArgs(args: string[]): { method: 'inspect' | 
 }
 
 /** Capture/2 stays explicit; its admitted production provider is Linux X11 only. */
-export function parseCapture2RecordArgs(args: string[]): { durationSeconds: number; out: string; sourceId: string } {
-  let duration: number | undefined, out: string | undefined, sourceId: string | undefined, protocol = false;
+export function parseCapture2RecordArgs(args: string[]): { durationSeconds: number; out?: string; sourceId: string } {
+  let duration: number | undefined, durationSeen = false, out: string | undefined, sourceId: string | undefined, protocol = false;
   for (let i = 0; i < args.length; i++) {
     const arg = args[i];
     if (arg === '--protocol' && !protocol && args[i + 1] === 'capture2') { protocol = true; i++; continue; }
-    if (arg === '--duration' && duration === undefined) duration = Number(args[++i]);
-    else if (arg === '--out' && out === undefined) out = args[++i];
+    if (arg === '--duration' && !durationSeen) { durationSeen = true; duration = Number(args[++i]); }
+    else if (arg === '--out' && out === undefined) {
+      out = args[++i];
+      if (!out || out.startsWith('--')) throw new Error('--out requires a normalized absolute .apparent destination');
+    }
     else if (arg === '--source' && sourceId === undefined) sourceId = args[++i];
     else throw new Error(`Unknown, duplicate, or invalid capture/2 record option: ${arg}`);
   }
-  if (!protocol || !Number.isFinite(duration) || duration! <= 0 || duration! > 3600 || !out || !sourceId)
-    throw new Error('record --protocol capture2 requires --duration (greater than 0 and at most 3600 seconds), --out, and an exact discovered --source ID');
-  if (!isAbsolute(out!) || resolve(out!) !== out || !out!.endsWith('.apparent') || out!.endsWith('/.apparent'))
+  const durationSeconds = duration ?? DEFAULT_RECORD_DURATION_SECONDS;
+  if (!protocol || !Number.isFinite(durationSeconds) || durationSeconds <= 0 || durationSeconds > 3600 || !sourceId)
+    throw new Error('record --protocol capture2 requires an exact discovered --source ID and a --duration greater than 0 and at most 3600 seconds when supplied');
+  if (out !== undefined && (!isAbsolute(out) || resolve(out) !== out || !out.endsWith('.apparent') || out.endsWith('/.apparent')))
     throw new Error('--out must be a normalized absolute .apparent destination');
   if (!sourceId || sourceId.startsWith('-') || sourceId.length > 4096) throw new Error('--source requires an exact discovered source ID');
-  return { durationSeconds: duration!, out: out!, sourceId: sourceId! };
+  return { durationSeconds, ...(out === undefined ? {} : { out }), sourceId: sourceId! };
 }
 
 export async function recordWithCapture2(
@@ -158,11 +166,13 @@ export async function recordWithCapture2(
   const executable = config.executable ?? process.env.APPARENT_ENGINE_CAPTURE_EXECUTABLE;
   const runtime = config.runtime ?? process.env.APPARENT_ENGINE_RUNTIME;
   const controlRoot = config.controlRoot ?? process.env.APPARENT_AGENT_CONTROL_ROOT ?? resolve(homedir(), '.local/share/apparent/agent');
-  const destinationRoot = resolve(parsed.out, '..');
+  const destinationRoot = parsed.out ? resolve(parsed.out, '..') : await import('../bundle.js').then(({ resolveCaptures }) => resolveCaptures());
   if (!executable || !runtime || !isAbsolute(executable) || resolve(executable) !== executable || !isAbsolute(runtime) || resolve(runtime) !== runtime)
     throw new Error('Capture/2 requires APPARENT_ENGINE_CAPTURE_EXECUTABLE and APPARENT_ENGINE_RUNTIME as normalized absolute paths; no protocol fallback is attempted');
-  if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || controlRoot === parsed.out || parsed.out.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${parsed.out}/`))
+  if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || (parsed.out && (controlRoot === parsed.out || parsed.out.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${parsed.out}/`))))
     throw new Error('Agent capture/2 control root must be normalized, absolute, and separate from the output destination');
+  if (!parsed.out && (destinationRoot === controlRoot || destinationRoot.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${destinationRoot}/`)))
+    throw new Error('Configured capture storage must be separate from the Agent control root');
   await mkdir(controlRoot, { recursive: true, mode: 0o700 });
   const rootInfo = await lstat(controlRoot);
   if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || rootInfo.uid !== process.getuid?.() || (rootInfo.mode & 0o077) !== 0 || await realpath(controlRoot).catch(() => '') !== controlRoot)
@@ -184,10 +194,11 @@ export async function recordWithCapture2(
     if (discovery.state !== 'available' || matches.length !== 1) throw new Error(matches.length ? 'Discovered source ID is ambiguous' : 'Source ID was not present in current capture/2 discovery');
     if (interrupted()) throw new Error('Interrupted before capture start; no request was submitted');
     requestId = randomUUID();
-    await (config.persistIdentity ?? retainPublicIdentity)(controlRoot, requestId, parsed.out);
+    const destinationPath = await composed.allocateDestination(requestId, parsed.out);
+    await (config.persistIdentity ?? retainPublicIdentity)(controlRoot, requestId, destinationPath);
     if (interrupted()) throw new Error(`Interrupted after retaining capture/2 request ${requestId}; no start was dispatched`);
     process.stderr.write(`Capture/2 request ID: ${requestId}\n`);
-    let receipt = await composed.host.start({ requestId, source: matches[0], options: { audio: 'none', localOnly: true }, invocation: { invocationId: randomBytes(16).toString('hex'), observedAtMs: Date.now(), kind: 'explicit' }, destinationPath: parsed.out });
+    let receipt = await composed.host.start({ requestId, source: matches[0], options: { audio: 'none', localOnly: true }, invocation: { invocationId: randomBytes(16).toString('hex'), observedAtMs: Date.now(), kind: 'explicit' }, ...(parsed.out ? { destinationPath } : {}) });
     const startupBy = clock.now() + 30_000;
     while (receipt.phase === 'starting' && clock.now() < startupBy && !interrupted()) {
       await clock.sleep(200); receipt = await composed.host.inspect(requestId);

@@ -34,6 +34,16 @@ through this binding. It does not install the producer into Preview or an existi
 Provider detach disposes only this adapter's draft and observers; it does not close
 the injected host port or cancel an already admitted mutation.
 
+For explicit local handoff composition, `createRecordLocalClipboardPort` accepts the
+published `NativeClipboardPort`, the same host's `NativeHostPort`, an exact
+capture/artifact resolver, and the producer's `MAX_UTF8_TEXT_BYTES`. The resolver must
+provide authenticated Saved and processing facts; the adapter checks their identity and
+bundle-path consistency, formats the existing full handoff text, then performs one
+fresh-state clipboard write. The native receipt must confirm the exact UTF-8 SHA-256 and
+byte length before Record returns `applied`. It never closes the injected ports, retries,
+truncates, or infers Saved/publication itself. This adapter is exported for explicit
+composition and is not wired into the capability provider or installed route.
+
 `AbsentDestinationAllocator` is an explicit capture/2 host primitive. Construct
 it with distinct absolute private control and destination roots, then call
 `allocate(recordRequestId)`. The returned `AbsentDestinationBinding` contains a
@@ -44,8 +54,12 @@ Request IDs must be nonempty, well-formed UTF-8 strings of at most 4096 bytes,
 without NUL. The control root identifies the persistent reservation registry;
 retain it across restarts rather than replacing it with a new registry.
 
-Allocation creates the two private roots as needed and writes only control
-metadata. The final bundle path must be absent for a first reservation and is
+The control root is private and is created as needed. An existing destination
+root may use ordinary owner-owned permissions such as `0755`; it must not be
+group/world writable or resolve through an alias, and allocation never changes
+its mode. A missing destination root is created with the existing private
+`0700` mode. Allocation writes only private control metadata. The final bundle
+path must be absent for a first reservation and is
 never created or opened by this allocator. The absence check does not reserve
 a filesystem entry; Engine must still enforce absent-only publication. Filesystem
 checks happen outside the short SQLite write transaction, whose final read

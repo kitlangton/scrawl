@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
 import { assertBuildWorkflowIdentity } from './cli.ts'
-import { assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
+import { supportsPrCandidate, appShellBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -344,4 +344,88 @@ test('PR SDK candidates use separate names and canonical PR identity, then reiss
   assert.throws(() => sealPayload(repo, sdk, 'linux-x64', input, resolve(temp, 'not-pr'), receipt.inputDigest, { ...prEnv, GITHUB_EVENT_NAME: 'workflow_dispatch' }, true), /canonical/)
   assert.throws(() => sealPayload(repo, owner, 'linux-x64', input, resolve(temp, 'not-sdk'), receipt.inputDigest, prEnv, true), /canonical/)
   assert.throws(() => sealPayload(repo, sdk, 'linux-x64', input, resolve(temp, 'not-main'), receipt.inputDigest, prEnv), /canonical/)
+})
+
+
+test('native identity covers actual compilers, SDK and byte-affecting environment; unknown identity fails closed', () => {
+  const probe = (command: string, args: string[]) => command + ' ' + args.join(' ') + ' version 1'
+  const baseline = nativeBuildIdentity({}, 'linux', probe)
+  assert.notDeepEqual(nativeBuildIdentity({}, 'linux', (c, a) => probe(c, a) + ' changed'), baseline)
+  for (const name of ['RUSTFLAGS', 'CFLAGS', 'CXXFLAGS', 'CPPFLAGS', 'LDFLAGS', 'RUSTDOCFLAGS', 'CARGO_TARGET_X86_64_UNKNOWN_LINUX_GNU_LINKER', 'CARGO_PROFILE_RELEASE_OPT_LEVEL', 'CC_x86_64_unknown_linux_gnu', 'CFLAGS_x86_64_unknown_linux_gnu']) {
+    assert.notDeepEqual(nativeBuildIdentity({ [name]: 'changed' }, 'linux', probe), baseline, name)
+  }
+  assert.notDeepEqual(nativeBuildIdentity({}, 'darwin', probe), baseline)
+  assert.throws(() => nativeBuildIdentity({}, 'linux', () => ''), /identity/)
+  assert.throws(() => nativeBuildIdentity({}, 'linux', () => { throw Error('missing compiler') }), /missing compiler/)
+  assert.throws(() => nativeBuildIdentity({ RUSTC_WRAPPER: 'unknown-wrapper' }, 'linux', probe), /wrappers/)
+})
+
+test('native promotion preserves archived build SHA across a different admitted main SHA', () => {
+  const root = resolve(temp, 'native-provenance-repo'); newRepo(root)
+  const native = { ...owner, id: 'engine-native', kind: 'directory' as const, language: 'native' as const, package: 'engine/delivery/native', inputs: ['engine/'], targets: ['linux-x64', 'macos-x64'] as const }
+  const nativeOwner: Owner = { ...native, targets: [...native.targets] }
+  const input = resolve(temp, 'native-provenance-payload'); mkdirSync(input)
+  const buildSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+  writeFileSync(resolve(input, 'manifest.json'), JSON.stringify({ sourceSha: buildSha }))
+  writeFileSync(resolve(input, 'apparent-engine'), 'synthetic native payload')
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/pull/9/merge', GITHUB_RUN_ID: '777', GITHUB_RUN_ATTEMPT: '1' }
+  const sealed = resolve(temp, 'native-provenance-sealed')
+  const original = sealPayload(root, nativeOwner, 'macos-x64', input, sealed, 'd'.repeat(64), prEnv, true)
+  assert.equal(original.buildSourceSha, buildSha)
+  const zip = resolve(temp, 'native-provenance.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: sealed })
+  git(root, 'commit', '--allow-empty', '-qm', 'landed candidate')
+  const mainSha = execFileSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8' }).trim()
+  const mainEnv = { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/heads/main', GITHUB_RUN_ID: '778' }
+  const promoted = resolve(temp, 'native-provenance-promoted')
+  const receipt = reusePayload(root, nativeOwner, 'macos-x64', zip, promoted, original.inputDigest, buildSha, '98', '777', '1', mainEnv)
+  assert.equal(receipt.sourceSha, mainSha); assert.equal(receipt.buildSourceSha, buildSha)
+  assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
+  const manifest = execFileSync('tar', ['-xOzf', resolve(promoted, 'component.tar.gz'), 'native-provenance-payload/manifest.json'], { encoding: 'utf8' })
+  assert.equal(JSON.parse(manifest).sourceSha, buildSha)
+})
+
+test('native fingerprints invalidate when the actual compiler output or flags change', () => {
+  const root = resolve(temp, 'native-fingerprint'); newRepo(root)
+  const bin = resolve(temp, 'native-toolchain-bin'); mkdirSync(bin)
+  for (const tool of ['rustc', 'cargo', 'cc']) { const path = resolve(bin, tool); writeFileSync(path, '#!/bin/sh\nprintf "toolchain version one\\n"\n'); chmodSync(path, 0o755) }
+  const nativeOwner: Owner = { ...owner, id: 'engine-native', package: 'engine/delivery/native', inputs: ['engine/'], language: 'native' }
+  const saved = { PATH: process.env.PATH, RUSTFLAGS: process.env.RUSTFLAGS, CC: process.env.CC, RUSTC: process.env.RUSTC }
+  try {
+    process.env.PATH = `${bin}:${process.env.PATH}`; delete process.env.CC; delete process.env.RUSTC
+    const initial = inputDigest(root, nativeOwner)
+    writeFileSync(resolve(bin, 'rustc'), '#!/bin/sh\nprintf "toolchain version two\\n"\n')
+    assert.notEqual(inputDigest(root, nativeOwner), initial)
+    const changedCompiler = inputDigest(root, nativeOwner)
+    process.env.RUSTFLAGS = '-C opt-level=2'
+    assert.notEqual(inputDigest(root, nativeOwner), changedCompiler)
+    writeFileSync(resolve(bin, 'rustc'), '#!/bin/sh\nexit 1\n')
+    assert.throws(() => inputDigest(root, nativeOwner))
+  } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
+})
+
+
+test('App Shell reuse fingerprints packaging overrides without unrelated workflow settings', () => {
+  const baseline = appShellBuildEnvironment({})
+  for (const name of ['ELECTRON_OVERRIDE_DIST_PATH', 'ELECTRON_MIRROR', 'ELECTRON_RUN_AS_NODE', 'npm_config_arch', 'NPM_CONFIG_PLATFORM', 'NODE_OPTIONS', 'NODE_ENV']) {
+    assert.notDeepEqual(appShellBuildEnvironment({ [name]: 'changed' }), baseline, name)
+  }
+  assert.deepEqual(appShellBuildEnvironment({ GITHUB_RUN_ID: 'different', PUBLIC_POSTHOG_TOKEN: 'synthetic' }), baseline)
+  assert.equal(supportsPrCandidate('app-shell', 'linux-x64'), true)
+  assert.equal(supportsPrCandidate('app-shell', 'macos-x64'), true)
+  assert.equal(supportsPrCandidate('app-shell', 'web'), false)
+})
+
+test('App Shell promotion retains the exact packaged archive and original build provenance', () => {
+  const app: Owner = { ...owner, id: 'app-shell', kind: 'app-shell', package: 'composition/app', inputs: ['composition/app/'], targets: ['linux-x64', 'macos-x64'], stage: 'development-app' }
+  const input = resolve(temp, 'app-package-candidate'); mkdirSync(resolve(input, 'bundle'), { recursive: true })
+  writeFileSync(resolve(input, 'bundle/app'), 'synthetic packaged runtime bytes')
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/pull/9/merge', GITHUB_RUN_ID: '887', GITHUB_RUN_ATTEMPT: '1' }
+  for (const target of app.targets) {
+    const sealed = resolve(temp, 'app-sealed-' + target), promoted = resolve(temp, 'app-promoted-' + target)
+    const receipt = sealPayload(repo, app, target, input, sealed, 'a'.repeat(64), prEnv, true)
+    const zip = resolve(temp, 'app-' + target + '.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: sealed })
+    const next = reusePayload(repo, app, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '887', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/heads/main', GITHUB_RUN_ID: '888' })
+    assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '887')
+    assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
+  }
 })

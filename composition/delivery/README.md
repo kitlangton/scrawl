@@ -60,8 +60,8 @@ On reuse the workflow downloads the admitted artifact by its numeric ID. `reuse 
 
 ## PR verification reuse
 
-The Engine SDK Linux lane retains a seven-day PR candidate after its fresh checks
-and build. Main jobs first try existing verified-main reuse, then a same-repository
+The Engine SDK Linux lane, native Engine Linux/Intel Mac lanes and App Shell
+Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
 synthetic merge commit's base/head parents and requires its complete Git tree to
@@ -70,14 +70,36 @@ archive hash/size/run-attempt checks still apply. Forks, missing metadata, chang
 trees, expired artifacts and failed retrieval/validation fall back to fresh work.
 The run API's head SHA identifies the PR head, not its tested synthetic merge.
 
-Candidates use separate `pr-engine-linux-x64-MERGE_SHA-DIGEST` artifact names;
+Candidates use separate `pr-ID-TARGET-MERGE_SHA-DIGEST` artifact names;
 retention is not publication authority. Main reissues an exact-main receipt with
 original-run provenance, then attests/uploads through the existing path. Main job
 summaries distinguish reuse from fresh verification. No workflows, skipped jobs or
-cancellation rules are added. Native and other owner lanes retain their existing
+cancellation rules are added. Other owner lanes retain their existing
 behavior; production configuration and platform/native acceptance remain required.
-This SDK exception supersedes the general statement that PR jobs do not archive
+These Engine exceptions supersede the general statement that PR jobs do not archive
 artifacts. Changed-tree or per-component PR matching is deliberately not enabled.
+
+Native Engine admission installs Rust before fingerprinting on PRs and main,
+including reuse hits. Its digest additionally covers actual rustc/Cargo/C compiler
+versions, macOS SDK/Clang where applicable, and compiler/linker environment
+overrides. Empty/missing identities and unknown Rust compiler wrappers fail closed.
+The archived native manifest retains its original build source SHA. The outer
+receipt records the admitted main SHA in `sourceSha` and the unchanged payload
+build SHA in `buildSourceSha`, plus original-run provenance; promotion never
+rewrites native bytes or their embedded manifest. Prior fingerprints lacking this
+identity rebuild once. Native runtime, GUI routes and deployment authority do not
+change; existing native producer checks run fresh on both supported PR targets.
+
+App Shell candidates are archived only after the exact packaged Electron app
+passes the existing platform tests. Promotion retains the complete package and
+its archive hash; it does not repackage or change installed routing, bridge
+contracts, Electron versions or package layout. Its fingerprint additionally
+covers Electron/npm overrides and Node options/environment; locked Electron and
+packager inputs remain in the source closure. The original package source is
+retained in `buildSourceSha`. The shared TypeScript allowlist selects retention,
+sealing and admission consistently for enabled owner/target pairs. Both existing
+platform PR lanes keep their fresh checks; main authenticates only its own owner
+workflow and target. No new Desktop GUI/native behavior is introduced.
 
 ## Public web artifacts
 

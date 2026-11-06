@@ -80,3 +80,12 @@ test("accepts the exact byte boundary without reading past its bounded buffer", 
   await writeFile(file, json + " ".repeat(32768 - Buffer.byteLength(json)));
   assert.equal((await readStoredCredentialHandle(await ownedHandle(file), context, admitted)).token, record().token);
 }));
+
+
+test("invalid caller context consumes the descriptor before returning a redacted error", () => fixture(async file => {
+  const handle = await ownedHandle(file);
+  try {
+    await assert.rejects(readStoredCredentialHandle(handle, { ...context, scope: "invalid" as never }, admitted), category("invalid_credential"));
+    await assert.rejects(handle.stat());
+  } finally { await handle.close().catch(() => {}); }
+}));

@@ -336,7 +336,7 @@ test('test-double handshake and uncertain worker shutdown never publish success 
 }));
 
 test('stable patch releases in reviewed SDK lines install and record the actual SDK version', async () => withTemp(async (directory) => {
-  for (const legacy of [false, true]) for (const version of ['0.2.1', '0.3.0', '0.3.1', '0.3.2', '0.3.17']) {
+  for (const legacy of [false, true]) for (const version of ['0.2.1', '0.3.0', '0.3.1', '0.3.2', '0.3.17', '0.4.0', '0.4.1', '0.4.27']) {
     const { input, prefix } = await fixtureInputs(directory, `sdk-${version}-${legacy}`);
     const dependencies = fixtureDependencies({
       installNpm(snapshot, root, home) {
@@ -373,7 +373,7 @@ test('unrecognized SDK declarations and mismatched published versions fail witho
 }));
 
 test('unreviewed SDK versions still fail without a success receipt', async () => withTemp(async (directory) => {
-  for (const version of ['0.4.0', '0.1.9', '1.0.0', '0.3.0-next', '0.3.1+unreviewed', '0.3.01', '0.3.9007199254740992']) {
+  for (const version of ['0.5.0', '0.1.9', '1.0.0', '0.4.0-next', '0.4.1+unreviewed', '0.3.01', '0.3.9007199254740992']) {
     const { input, prefix } = await fixtureInputs(directory, `sdk-${version}`);
     const dependencies = fixtureDependencies({
       installNpm(snapshot, root, home) {

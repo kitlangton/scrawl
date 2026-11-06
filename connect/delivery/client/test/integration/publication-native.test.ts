@@ -10,8 +10,10 @@ import { pathToFileURL } from "node:url";
 import test from "node:test";
 import * as ed25519 from "@noble/ed25519";
 import { encodeArchive, encryptAge, generateAgeIdentity, signEnvelope, splitAgeStream, type Context } from "../../src/recipient/crypto.ts";
+import { runRecipientCommandFromState } from "../../src/cli/recipient-state.ts";
 import { parseRecipientCommand, runRecipientCommand } from "../../src/cli/recipient.ts";
 import { publishRecipientCapture, RecipientPublicationError } from "../../src/recipient/publication.ts";
+import { readCredentialSnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources } from "../../src/state/namespace.ts";
 import { readStoredCredentialHandle, CredentialReadError } from "../../src/credentials/private-read.ts";
 import type { RetrievedRecipientCapture } from "../../src/recipient/retrieve.ts";
 
@@ -28,7 +30,7 @@ async function packedResourceSdk() {
   absoluteEnv("APPARENT_RESOURCE_SDK_CONSUMER", consumer);
   const entry = `${consumer}/node_modules/@apparent/native-resources/dist/index.js`;
   return await import(pathToFileURL(entry).href) as {
-  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => {
+  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => NamespaceResources & {
     checkAcl(handle: import("node:fs/promises").FileHandle): Promise<{ state: "accepted" | "refused" }>;
     publish(parent: import("node:fs/promises").FileHandle, source: string, destination: string, options?: { signal?: AbortSignal }): Promise<{ state: "published" | "destination_exists" | "refused" | "publication_uncertain" }>;
   };
@@ -192,6 +194,18 @@ test("recipient CLI retrieves a synthetic encrypted capture and publishes throug
     assert.deepEqual(result, { ok: true, path: destination });
     assert.equal(await readFile(path.join(destination, "summary.md"), "utf8"), "synthetic CLI handoff\n");
     mode((await lstat(destination)).mode, 0o700, "CLI bundle");
+    const state = path.join(root, "state"); await mkdir(state, { mode: 0o700 });
+    const identityId = "f".repeat(32), expiresAt = Math.floor(Date.now() / 1000) + 3600;
+    await writeFile(path.join(state, "read.credential"), JSON.stringify({ server: origin, scope: "read", token, generation: "a".repeat(32), refreshToken: "synthetic-refresh",
+      expiresAt, refreshExpiresAt: expiresAt + 3600, grantId: "reader", encryption_identity: identityId }), { mode: 0o600 });
+    await writeFile(path.join(state, `${identityId}.identity`), JSON.stringify({ version: 1, age: reader.identity, signing: Buffer.from(signingSeed).toString("hex") }), { mode: 0o600 });
+    const stateDestination = path.join(root, "state-cli.apparent");
+    const stateResult = await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", stateDestination]), {
+      directory: state, approvedServer: origin, resources, inspectLocal: async source => source,
+    });
+    assert.deepEqual(stateResult, { ok: true, path: stateDestination });
+    assert.equal(await readFile(path.join(stateDestination, "summary.md"), "utf8"), "synthetic CLI handoff\n");
+
   } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
 }));
 
@@ -230,4 +244,46 @@ test("native credential reader rejects Darwin file ACL grants before returning s
     await assert.rejects(readStoredCredentialHandle(handle, { scope: "read", approvedServer: server }, resources), error => error instanceof CredentialReadError && error.category === "unsafe_file");
     await assert.rejects(handle.stat());
   } finally { execFileSync("/bin/chmod", ["-N", file]); }
+}));
+
+
+test("native state snapshots use the published lock lease and preserve the stable lock inode", async () => fixture(async root => {
+  const state = path.join(root, "state"); await mkdir(state, { mode: 0o700 });
+  const server = "https://app.tryapparent.com/connect";
+  await writeFile(path.join(state, "read.credential"), JSON.stringify({ server, scope: "read", token: "synthetic-private-token", generation: "c".repeat(32) }), { mode: 0o600 });
+  const snapshot = await readCredentialSnapshot(state, { scope: "read", approvedServer: server }, resources);
+  const inode = (await lstat(path.join(state, "queue.lock"))).ino;
+  await assertCredentialSnapshotCurrent(state, snapshot, resources);
+  assert.equal((await lstat(path.join(state, "queue.lock"))).ino, inode);
+  assert.deepEqual((await readdir(state)).sort(), ["queue.lock", "read.credential"]);
+}));
+
+
+test("native snapshot reads obey real flock contention and fresh cancellation/revocation fences", async () => fixture(async root => {
+  const state = path.join(root, "state"); await mkdir(state, { mode: 0o700 });
+  const server = "https://app.tryapparent.com/connect", context = { scope: "read" as const, approvedServer: server };
+  await writeFile(path.join(state, "read.credential"), JSON.stringify({ server, scope: "read", token: "synthetic-private-token", generation: "d".repeat(32) }), { mode: 0o600 });
+  const snapshot = await readCredentialSnapshot(state, context, resources);
+  const held = await resources.lock(await open(path.join(state, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+  assert.equal(held.state, "acquired"); if (held.state !== "acquired") throw new Error("missing_lease");
+  try { await assert.rejects(readCredentialSnapshot(state, context, resources, { lockTimeoutMs: 15 }), error => error instanceof CredentialSnapshotError && error.category === "lock_refused"); }
+  finally { await held.lease.release(); }
+  await writeFile(path.join(state, "cancellation"), JSON.stringify("new epoch"), { mode: 0o600 });
+  await assert.rejects(assertCredentialSnapshotCurrent(state, snapshot, resources), error => error instanceof CredentialSnapshotError && error.category === "stale_snapshot");
+  await writeFile(path.join(state, "revocation-synthetic.intent"), "false", { mode: 0o600 });
+  await assert.rejects(readCredentialSnapshot(state, context, resources), error => error instanceof CredentialSnapshotError && error.category === "revocation_pending");
+}));
+
+
+test("native snapshots refuse Darwin cancellation-record ACL grants", { skip: process.platform !== "darwin" }, async () => fixture(async root => {
+  const { execFileSync } = await import("node:child_process");
+  const state = path.join(root, "state"), server = "https://app.tryapparent.com/connect";
+  await mkdir(state, { mode: 0o700 });
+  await writeFile(path.join(state, "read.credential"), JSON.stringify({ server, scope: "read", token: "synthetic-private-token", generation: "e".repeat(32) }), { mode: 0o600 });
+  const cancellation = path.join(state, "cancellation");
+  await writeFile(cancellation, JSON.stringify("epoch"), { mode: 0o600 });
+  try {
+    execFileSync("/bin/chmod", ["+a", "everyone allow read", cancellation]);
+    await assert.rejects(readCredentialSnapshot(state, { scope: "read", approvedServer: server }, resources), error => error instanceof CredentialSnapshotError && error.category === "unsafe_file");
+  } finally { execFileSync("/bin/chmod", ["-N", cancellation]); }
 }));

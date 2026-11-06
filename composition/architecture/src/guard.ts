@@ -9,6 +9,7 @@ const product = ['engine', 'record', 'agent', 'onboarding'] as const;
 const packageRoots: Record<string, string> = {
   '@apparent/engine-sdk': 'engine/sdk', '@apparent/record': 'record',
   '@apparent/agent': 'agent', '@apparent/onboarding': 'onboarding',
+  '@apparent/native-host': 'composition/native-host',
   '@apparent/connect-client': 'connect/delivery/client',
   '@apparent/connect-static-hosting': 'connect/tooling/hosting',
   '@apparent/app-contracts': 'shared/contracts', '@apparent/ui': 'shared/ui',
@@ -17,6 +18,7 @@ const packageOwners: Record<string, Owner> = {
   '@apparent/engine-sdk': 'engine', '@apparent/record': 'record', '@apparent/agent': 'agent',
   '@apparent/onboarding': 'onboarding', '@apparent/app-contracts': 'shared', '@apparent/ui': 'shared',
   '@apparent/connect-client': 'connect', '@apparent/connect-static-hosting': 'connect',
+  '@apparent/native-host': 'composition',
 };
 const publicEdges: Record<Owner, Owner[]> = {
   engine: ['shared'], record: ['engine', 'shared'], agent: ['engine', 'record', 'shared'], onboarding: ['record', 'shared'],
@@ -39,6 +41,15 @@ function ownerOf(root: string, file: string): Owner {
   return 'other';
 }
 function allowed(from: Owner, to: Owner): boolean { return from === to || publicEdges[from].includes(to); }
+
+// This package exception does not authorize composition source paths or aliases.
+function allowedPackage(root: string, source: string, from: Owner, to: Owner, name: string, subpath = '.'): boolean {
+  const nativeHostRelative = path.relative(canonical(path.resolve(root, 'composition/native-host')), canonical(source));
+  const inNativeHost = nativeHostRelative !== '..' && !nativeHostRelative.startsWith(`..${path.sep}`) && !path.isAbsolute(nativeHostRelative);
+  if (inNativeHost && to === 'agent') return false;
+  return allowed(from, to) || (from === 'agent' && to === 'composition' && name === '@apparent/native-host'
+    && (subpath === '.' || subpath === './clipboard'));
+}
 
 function manifestExports(root: string, pkg: string, packageNames: Map<string,{owner:Owner;dir:string}>): Set<string> {
   const dir = packageNames.get(pkg)?.dir ?? path.resolve(root, packageRoots[pkg] ?? '');
@@ -206,7 +217,7 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
         errors.push(`${path.relative(root,mf)}: repository dependency ${npmAlias} must use its canonical public name, not npm alias ${dep}`);
       }
       const declared = packageOwners[dep] ?? packageNames.get(dep)?.owner;
-      if (declared && !allowed(manifestOwner, declared)) errors.push(`${path.relative(root, mf)}: dependency ${dep} violates ${manifestOwner} -> ${declared}`);
+      if (declared && !allowedPackage(root, mf, manifestOwner, declared, dep)) errors.push(`${path.relative(root, mf)}: dependency ${dep} violates ${manifestOwner} -> ${declared}`);
       if (/\.tgz(?:$|[?#])|\.tar\.gz(?:$|[?#])/.test(version) && !declared) errors.push(`${path.relative(root,mf)}: tarball dependency ${dep} is not a declared public package`);
       if (!version.startsWith('file:') && !version.startsWith('workspace:')) continue;
       let targetPath: string | undefined;
@@ -222,6 +233,9 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
       if (relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
         errors.push(`${path.relative(root,mf)}: local dependency ${dep} resolves outside the repository`); continue;
       }
+      if (dep === '@apparent/native-host' && realTarget !== canonical(path.resolve(root, packageRoots[dep]))) {
+        errors.push(`${path.relative(root,mf)}: local dependency ${dep} must target its canonical public package root`); continue;
+      }
       const targetManifest=path.join(realTarget,'package.json');
       if (!existsSync(targetManifest)) {
         const targetOwner=ownerOf(root,realTarget);
@@ -233,7 +247,7 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
         const actualOwner=ownerOf(root,realTarget);
         if (actualName !== dep) errors.push(`${path.relative(root,mf)}: local dependency ${dep} targets package ${actualName ?? '(unnamed)'}`);
         if (packageOwners[dep] && actualOwner !== packageOwners[dep]) errors.push(`${path.relative(root,mf)}: local dependency ${dep} targets ${actualOwner}, expected ${packageOwners[dep]}`);
-        if (!allowed(manifestOwner,actualOwner)) errors.push(`${path.relative(root,mf)}: local dependency ${dep} violates ${manifestOwner} -> ${actualOwner}`);
+        if (!allowedPackage(root, mf, manifestOwner, actualOwner, dep)) errors.push(`${path.relative(root,mf)}: local dependency ${dep} violates ${manifestOwner} -> ${actualOwner}`);
       } catch { errors.push(`${path.relative(root,mf)}: cannot read target package manifest for ${dep}`); }
     }
   }
@@ -265,7 +279,7 @@ export function checkArchitecture(rootInput: string, owners?: readonly Owner[]):
       const pkg = packageRef(spec, packageNames);
       if (pkg) {
         const target = packageOwners[pkg.name] ?? packageNames.get(pkg.name)!.owner;
-        if (!allowed(from, target)) errors.push(`${path.relative(root,file)}:${line}: forbidden package dependency ${from} -> ${target} (${spec})`);
+        if (!allowedPackage(root, file, from, target, pkg.name, pkg.subpath)) errors.push(`${path.relative(root,file)}:${line}: forbidden package dependency ${from} -> ${target} (${spec})`);
         if (!manifestExports(root, pkg.name, packageNames).has(pkg.subpath)) errors.push(`${path.relative(root,file)}:${line}: private or undeclared package subpath ${spec}`);
         return;
       }

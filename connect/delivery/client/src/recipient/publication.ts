@@ -5,6 +5,7 @@ import path from "node:path";
 import type { RetrievedRecipientCapture } from "./retrieve.ts";
 import type { Asset } from "./crypto.ts";
 import { recipientAssets, validateRecipientReferences } from "./manifest.ts";
+import { admitTrustedDirectory, DirectoryAdmissionFailure, directoryIdentity } from "../state/directory.ts";
 
 /** The deliberately small privileged boundary. Both methods consume their handles. */
 export type RecipientPublicationResources = {
@@ -28,7 +29,7 @@ const badUnicode = (s: string) => s.includes("\0") || /[\uD800-\uDBFF](?![\uDC00
 const safeAssetPath = (name: string) => !badUnicode(name) && !name.startsWith("/") && !name.includes("\\")
   && name.split("/").every((part) => part !== "" && part !== "." && part !== "..");
 const flags = C.O_RDONLY | (C.O_NOFOLLOW ?? 0) | (C.O_DIRECTORY ?? 0);
-function dirStat(s: { dev: bigint; ino: bigint; mode: bigint; uid: bigint }) { return `${s.dev}:${s.ino}:${s.mode}:${s.uid}`; }
+const dirStat = directoryIdentity;
 async function openedDir(name: string): Promise<FileHandle> { return open(name, flags); }
 async function cleanupStage(parent: FileHandle, stagePath: string, parentIdentity: string, stageIdentity: string, created: Map<string, string>, createdDirs: Map<string, string>): Promise<boolean> {
   try {
@@ -100,46 +101,10 @@ export async function publishRecipientCapture(
   const created = new Map<string, string>(); const createdDirs = new Map<string, string>(); let phase: "preparing" | "dispatched" | "published" | "uncertain" = "preparing";
   let parentIdentity = "", stageIdentity = "";
   try {
-    // Walk lexical components without following links, check ACL and compare descriptor identity.
-    const components = parentPath.split(path.sep).filter(Boolean);
-    let prefix = path.parse(parentPath).root;
-    let checkedParent: string | undefined;
-    const rootHandle = await openedDir(prefix);
-    let rootStat;
-    try { rootStat = await rootHandle.stat({ bigint: true }); } catch (e) { await rootHandle.close().catch(() => {}); throw e; }
-    checkedParent = dirStat(rootStat);
-    const rootAcl = await resources.checkAcl(rootHandle);
-    const rootSticky = (rootStat.mode & 0o1000n) !== 0n;
-    let rootNamed;
-    try { rootNamed = await lstat(prefix, { bigint: true }); } catch (e) { await rootHandle.close().catch(() => {}); throw e; }
-    if (rootAcl.state !== "accepted" || !rootStat.isDirectory() || rootStat.uid !== 0n || rootStat.dev !== rootNamed.dev || rootStat.ino !== rootNamed.ino || (rootStat.mode & 0o022n) !== 0n && !rootSticky) fail("unsafe_directory");
-    let privateAncestor = false;
-    for (const component of components) {
-      cancelled(signal);
-      prefix = path.join(prefix, component);
-      const handle = await openedDir(prefix);
-      let before, named;
-      try { before = await handle.stat({ bigint: true }); named = await lstat(prefix, { bigint: true }); }
-      catch (e) { await handle.close().catch(() => {}); throw e; }
-      const sticky = (before.mode & 0o1000n) !== 0n;
-      const leaf = prefix === parentPath;
-      if (!before.isDirectory() || before.uid !== 0n && before.uid !== BigInt(process.getuid!())
-        || before.dev !== named.dev || before.ino !== named.ino || !named.isDirectory()
-        || (before.mode & 0o022n) !== 0n && !(sticky || (privateAncestor && !leaf))) {
-        await handle.close(); fail("unsafe_directory");
-      }
-      const acl = await resources.checkAcl(handle);
-      if (acl.state !== "accepted") fail("unsafe_directory");
-      // The public result is checked after the call; handle has been consumed there.
-      const afterPath = await lstat(prefix, { bigint: true });
-      if (!afterPath.isDirectory() || afterPath.dev !== before.dev || afterPath.ino !== before.ino
-        || afterPath.mode !== before.mode || afterPath.uid !== before.uid) fail("unsafe_directory");
-      if (leaf) checkedParent = dirStat(afterPath);
-      privateAncestor ||= (before.mode & 0o077n) === 0n;
-    }
-    parent = await openedDir(parentPath);
+    const admitted = await admitTrustedDirectory(parentPath, resources, "publication-parent", signal);
+    parent = admitted.handle;
     const parentBefore = await parent.stat({ bigint: true }); parentIdentity = dirStat(parentBefore);
-    if (checkedParent !== parentIdentity) fail("unsafe_directory");
+    if (admitted.identity !== parentIdentity) fail("unsafe_directory");
     let target: boolean;
     try { await lstat(requested); target = true; } catch (e) { if ((e as NodeJS.ErrnoException).code !== "ENOENT") fail("unsafe_directory"); target = false; }
     if (target) fail("destination_exists");
@@ -225,6 +190,7 @@ export async function publishRecipientCapture(
     if (phase === "preparing" && parent && stage && stagePath) await cleanupStage(parent, stagePath, parentIdentity, stageIdentity, created, createdDirs);
     if (phase !== "preparing") return { state: "publication-uncertain" };
     if (error instanceof RecipientPublicationError) throw error;
+    if (error instanceof DirectoryAdmissionFailure) return fail(error.category === "cancelled" ? "cancelled" : "unsafe_directory");
     return fail("publication_refused");
   } finally { await parent?.close().catch(() => {}); for (const file of copies) file.bytes.fill(0); }
 }
