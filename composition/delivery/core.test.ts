@@ -598,7 +598,7 @@ test('PR input equivalence survives unrelated main advances but rejects changed 
 
 test('App Shell fingerprints its external verification inputs', () => {
   const root = resolve(temp, 'app-shell-external-inputs'); newRepo(root)
-  const app = catalog(repo).owners.find(item => item.id === 'app-shell')!
+  const app: Owner = { ...JSON.parse(readFileSync(resolve(repo, 'composition/app/delivery.json'), 'utf8')), language: 'typescript' }
   for (const name of ['enablement/native/owned-processes.ts', '.github/workflows/verification-platform.yml']) {
     assert(app.files?.includes(name))
     const before = sourceDigest(root, app)
