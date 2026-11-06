@@ -420,3 +420,21 @@ test('PR and fresh main media builds share the bounded runtime dependency instal
   assert.match(setup, /run: node --experimental-strip-types composition\/delivery\/media-dependencies\.ts/)
   assert.doesNotMatch(setup, /apt-get|APPARENT_GST_PLUGIN_SOURCE/)
 })
+
+test('settled completion metadata still rejects the actual over-budget workload', async () => {
+  let reads = 0;
+  let now = 0;
+  const name = 'deliver / stream (record, linux-x64)';
+  const request = async () => {
+    reads++;
+    const entry = reads === 1
+      ? { ...job(0, 901, name), status: 'in_progress', conclusion: null, completed_at: null }
+      : job(0, 901, name);
+    return new Response(JSON.stringify({ total_count: 2, jobs: [entry, pendingAudit] }));
+  };
+  const jobs = await loadTerminalJobs('https://api.github.com', 'owner/repo', '42', '1', 'synthetic-token', request as typeof fetch,
+    { clock: () => now, delay: async ms => { now += ms; } });
+  assert.equal(reads, 2);
+  assert.equal(executionSeconds(jobs), 901);
+  assert.throws(() => enforceBudget(jobs), /901.0s \/ 900s/);
+});
