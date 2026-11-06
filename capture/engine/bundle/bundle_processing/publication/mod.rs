@@ -3,7 +3,6 @@
 pub(crate) mod benchmark;
 mod cleanup;
 mod fs;
-mod movie;
 mod validate;
 
 use crate::capture::engine::bundle::diagnostics::{Diagnose, Step};

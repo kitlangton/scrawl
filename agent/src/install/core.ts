@@ -31,8 +31,7 @@ function validatePackageMetadata(agent: unknown, sdk: unknown) {
   if (!agent || typeof agent !== 'object' || Array.isArray(agent)) fail('installed Agent package metadata is invalid');
   const agentPackage = agent as Record<string, any>;
   if (agentPackage.name !== '@apparent/agent' || agentPackage.version !== AGENT_VERSION ||
-      agentPackage.bin?.['apparent-agent'] !== './dist/cli.js' ||
-      agentPackage.dependencies?.['@apparent/engine-sdk'] !== 'file:../engine/sdk') fail('installed Agent package metadata mismatch');
+      agentPackage.bin?.['apparent-agent'] !== './dist/cli.js') fail('installed Agent package metadata mismatch');
   if (!sdk || typeof sdk !== 'object' || Array.isArray(sdk)) fail('installed Engine SDK package metadata is invalid');
   const sdkPackage = sdk as Record<string, any>;
   const mediaExport = sdkPackage.exports?.['./media'];
@@ -40,6 +39,11 @@ function validatePackageMetadata(agent: unknown, sdk: unknown) {
       !mediaExport || mediaExport.import !== './dist/src/media.js' || mediaExport.types !== './dist/src/media.d.ts') {
     fail('installed SDK media export/version mismatch');
   }
+  // Older admitted Agent archives bundled the SDK from the workspace. New ones
+  // bundle a published tarball; its declared version must match the installed SDK.
+  const sdkSource = agentPackage.dependencies?.['@apparent/engine-sdk'];
+  if (sdkSource !== 'file:../engine/sdk' && sdkSource !== `file:vendor/apparent-engine-sdk-${sdkPackage.version}.tgz`)
+    fail('installed Agent package metadata mismatch');
   return { agentPackage, sdkPackage, mediaImport: mediaExport.import.slice(2) };
 }
 

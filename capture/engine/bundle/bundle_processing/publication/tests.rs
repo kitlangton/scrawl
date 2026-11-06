@@ -111,11 +111,11 @@ fn publication_checks_real_image_audio_movie_and_exact_manifest_inputs() {
     for (movie_name, movie_bytes) in [
         (
             "recording.mp4",
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mp4")).as_slice(),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/engine/core/tests/fixtures/tiny.mp4")).as_slice(),
         ),
         (
             "recording.mov",
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mov")).as_slice(),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/engine/core/tests/fixtures/tiny.mov")).as_slice(),
         ),
     ] {
         let fixture = Fixture::new();
@@ -158,11 +158,11 @@ fn publication_rejects_movie_with_valid_boxes_but_truncated_sample_payload() {
     for (movie_name, movie_bytes) in [
         (
             "recording.mp4",
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mp4")).as_slice(),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/engine/core/tests/fixtures/tiny.mp4")).as_slice(),
         ),
         (
             "recording.mov",
-            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mov")).as_slice(),
+            include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/engine/core/tests/fixtures/tiny.mov")).as_slice(),
         ),
     ] {
         let fixture = Fixture::new();

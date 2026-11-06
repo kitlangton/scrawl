@@ -1,11 +1,34 @@
 import {test} from 'node:test';
 import {strict as assert} from 'node:assert';
 import {mkdtemp,rm,mkdir,writeFile,readFile,access} from 'node:fs/promises';
+import {cpSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {PNG} from 'pngjs';
+
+// The isolated run executes this suite too; only its own source-copy driver is omitted.
+if (process.env.APPARENT_AGENT_ISOLATED_TEST !== '1') test('Agent installs, builds and tests from an isolated owner source copy',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'agent-source-isolation-'));
+  try {
+    const npm=process.env.npm_execpath!; assert(npm);
+    const source=fileURLToPath(new URL('..',import.meta.url));
+    const isolated=join(root,'agent');
+    cpSync(source,isolated,{recursive:true,filter:path=>!path.split('/').some(part=>part==='node_modules'||part==='dist')});
+    const env={...process.env,HOME:root,APPARENT_AGENT_ISOLATED_TEST:'1'};
+    const run=(args:string[])=>{
+      const result=spawnSync(process.execPath,args,{cwd:isolated,encoding:'utf8',timeout:120000,env});
+      assert.equal(result.status,0,result.stderr);return result.stdout;
+    };
+    run([npm,'ci','--no-audit','--no-fund']);
+    run([npm,'run','build']);
+    run([npm,'run','typecheck']);
+    run([npm,'test']);
+    const packed=JSON.parse(run([npm,'pack','--json','--pack-destination',root]));
+    assert.equal(packed[0].name,'@apparent/agent');
+  }finally{await rm(root,{recursive:true,force:true});}
+});
 
 test('packed CLI installs offline outside checkout and prints its standalone skill without config, storage, or Engine',async()=>{
   const root=await mkdtemp(join(tmpdir(),'agent-package-'));
@@ -33,10 +56,15 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
       "import * as processing from '@apparent/record/processing';",
       "import * as mediaConsumer from '@apparent/record/processing/media-consumer';",
       "import * as media from '@apparent/engine-sdk/media';",
+      "import * as sdk from '@apparent/engine-sdk';",
+      "import * as sdkTesting from '@apparent/engine-sdk/testing';",
+      "import * as mediaTesting from '@apparent/engine-sdk/media/testing';",
+      "import * as captureSdk from '@apparent/engine-sdk/capture';",
+      "import * as captureTesting from '@apparent/engine-sdk/capture/testing';",
       "import type { Capture2Phase } from '@apparent/record/host/capture2';",
       '// @ts-expect-error Capture2Host has no Agent-visible Saved phase.',
       'const savedPhase: Capture2Phase = "saved";',
-      'void [record, host, capture2, publication, processing, mediaConsumer, media];',
+      'void [record, host, capture2, publication, processing, mediaConsumer, media, sdk, sdkTesting, mediaTesting, captureSdk, captureTesting];',
     ].join('\n'));
     try {
       const tsc=resolve(source,'node_modules/typescript/bin/tsc');

@@ -1,7 +1,4 @@
-use super::{
-    fs::{self, Directory},
-    movie,
-};
+use super::fs::{self, Directory};
 use crate::capture::engine::bundle::diagnostics::{Diagnose, Step};
 use crate::shared::model::ApparentBundle;
 use anyhow::{Context, Result, ensure};
@@ -142,7 +139,7 @@ impl Inventory {
         }
         if let Some(video) = &expected.video {
             self.file(video)
-                .and_then(movie::validate)
+                .and_then(apparent_capture_engine::publication::validate_movie)
                 .context("invalid movie artifact")
                 .diagnostic(Step::MovieValidate)?;
         }
@@ -158,7 +155,7 @@ impl Inventory {
                         .diagnostic(Step::WavValidate)?
                 }
                 Some("mp4" | "mov") if expected.video.as_deref() != Some(name) => {
-                    movie::validate(&artifact.file)
+                    apparent_capture_engine::publication::validate_movie(&artifact.file)
                         .with_context(|| format!("invalid retained movie: {name}"))
                         .diagnostic(Step::MovieValidate)?
                 }

@@ -13,13 +13,13 @@
     "README.md"
   ],
   "scripts": {
-    "build": "tsc -p ../engine/sdk/tsconfig.json --typeRoots ./node_modules/@types && tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --experimental-strip-types --test test/*.test.ts",
     "prepack": "npm run build",
-    "typecheck": "tsc -p ../engine/sdk/tsconfig.json --typeRoots ./node_modules/@types && tsc -p tsconfig.json --noEmit"
+    "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@apparent/engine-sdk": "file:../engine/sdk",
+    "@apparent/engine-sdk": "file:vendor/apparent-engine-sdk-0.3.2.tgz",
     "@apparent/record": "file:vendor/record-0.1.0-492ecb2.tgz",
     "@types/node": "22.19.0",
     "pngjs": "^7.0.0"
