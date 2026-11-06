@@ -25,6 +25,15 @@ class Store implements ProgressStore {
   }
 }
 const TestButton = ({ children, variant: _variant, size: _size, ...props }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }) => createElement("button", props, children);
+function mockPenHop(dom: JSDOM, decode: () => Promise<void> = async () => {}) {
+  let start!: () => void, finish!: () => void;
+  const started = new Promise<void>(resolve => { start = resolve; });
+  const finished = new Promise<void>(resolve => { finish = resolve; });
+  Object.defineProperty(dom.window.HTMLImageElement.prototype, "decode", { configurable: true, value: decode });
+  Object.defineProperty(dom.window.HTMLImageElement.prototype, "getAnimations", { configurable: true, value(this: HTMLImageElement) { if (!this.classList.contains("onboarding-pond-frog")) return []; start(); return [{ animationName: "onboarding-pen-hop", finished }]; } });
+  Object.defineProperty(dom.window, "matchMedia", { configurable: true, value: () => ({ matches: false }) });
+  return { started, finish };
+}
 class FactoryTimer implements RepairTimer {
   entries = new Map<number, { callback: () => void; delay: number }>(); next = 0;
   set(callback: () => void, delay: number) { const id = ++this.next; this.entries.set(id, { callback, delay }); return id; }
@@ -87,7 +96,7 @@ test("renders the actual React contribution with accessible controls and packed 
   assert.match(welcome, /Welcome\./); assert.match(welcome, /Sign-in is not available yet/); assert.match(welcome, /alt="apparent"/); assert.match(welcome, /assets\/apparent-app-icon\.svg/);
   await f.controller.dispatch("continue");
   const html = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
-  assert.match(html, /Pick your pen\./); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.equal((html.match(/<span aria-hidden="true" style="--pencil:/g) ?? []).length, 4); assert.match(html, /Choose a color for your pen/); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen/); assert.match(html, /Frog guide/); assert.match(html, /Try later/); f.controller.dispose();
+  assert.match(html, /Pick your pen\./); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.equal((html.match(/<span aria-hidden="true" style="--pencil:/g) ?? []).length, 4); assert.match(html, /Choose a color for your pen/); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen|Frog guide|A quick setup/); assert.match(html, /Try later/); f.controller.dispose();
 });
 
 test("mounted permission rows use readable names and provider-factual states", async () => {
@@ -237,7 +246,7 @@ test("mounted shortcut recorder submits modifier and physical key names, then re
   assert.match(dom.window.document.querySelector('[role="alert"]')?.textContent ?? "", /Use a letter or number/);
   await act(async () => { recorder.dispatchEvent(new dom.window.KeyboardEvent("keydown", { key: "r", code: "KeyR", ctrlKey: true, shiftKey: true, bubbles: true, cancelable: true })); });
   assert.equal(dom.window.document.querySelector('[role="alert"]'), null);
-  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === "Check shortcut")!.click(); await Promise.resolve(); });
+  await act(async () => { await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.equal(submitted, "Ctrl+Shift+R");
   assert.equal(f.controller.state.snapshot?.shortcut.effective, initialEffective); assert.equal(f.controller.state.progress.stage, "shortcut");
   assert.equal([...dom.window.document.querySelectorAll<HTMLButtonElement>("button")].find(button => button.textContent === "Save shortcut")?.disabled, false);
@@ -252,17 +261,47 @@ test("mounted shortcut recorder submits modifier and physical key names, then re
 test("late pen animation completion after deferral cannot resume setup", async () => {
   const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
-  Object.defineProperty(dom.window, "matchMedia", { configurable: true, value: () => ({ matches: false }) });
+  const hop = mockPenHop(dom);
   f.client.execute = async command => { const current = f.driver.current(); if (command.type !== "select-pen") return { status: "accepted", requestId: command.requestId, snapshot: current }; const updated = { ...current, revision: current.revision + 1, pen: { ...current.pen, effective: command.value } }; f.driver.publish(updated); return { status: "applied", requestId: command.requestId, snapshot: updated }; };
   await f.controller.load(); await f.controller.dispatch("continue"); const root = createRoot(dom.window.document.getElementById("root")!);
   await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
   await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.click(); });
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Use this pen")!.click(); await Promise.resolve(); });
+  await hop.started;
   await act(async () => { [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Try later")!.click(); await Promise.resolve(); });
-  const frogNode = dom.window.document.querySelector(".onboarding-pond-frog")!; const animationEnd = new dom.window.Event("animationend", { bubbles: true }); Object.defineProperty(animationEnd, "animationName", { value: "onboarding-pen-hop" });
-  await act(async () => { frogNode.dispatchEvent(animationEnd); await Promise.resolve(); });
+  await act(async () => { hop.finish(); await new Promise(resolve => setTimeout(resolve, 200)); });
   assert.equal(f.controller.state.progress.status, "deferred"); assert.equal(f.controller.state.progress.stage, "pen");
   await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("pen animation decode failure is recoverable and confirmed hop completes after landing", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  let decodes = 0; const hop = mockPenHop(dom, async () => { if (++decodes === 1) throw new Error("font/image decode failed"); });
+  f.client.execute = async command => { const current = f.driver.current(); if (command.type !== "select-pen") return { status: "accepted", requestId: command.requestId, snapshot: current }; const updated = { ...current, revision: current.revision + 1, pen: { ...current.pen, effective: command.value } }; f.driver.publish(updated); return { status: "applied", requestId: command.requestId, snapshot: updated }; };
+  await f.controller.load(); await f.controller.dispatch("continue"); const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
+  await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.click(); });
+  const usePen = () => [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Use this pen")!.click();
+  await act(async () => { usePen(); await new Promise(resolve => setTimeout(resolve, 0)); });
+  assert.match(dom.window.document.querySelector('[role="alert"]')?.textContent ?? "", /could not finish its jump/);
+  await act(async () => { usePen(); await Promise.resolve(); }); await hop.started;
+  await act(async () => { hop.finish(); await new Promise(resolve => setTimeout(resolve, 200)); });
+  assert.equal(decodes, 2); assert.equal(f.controller.state.progress.stage, "permissions");
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
+});
+
+test("unmount invalidates an unfinished pen hop", async () => {
+  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  const hop = mockPenHop(dom);
+  f.client.execute = async command => { const current = f.driver.current(); if (command.type !== "select-pen") return { status: "accepted", requestId: command.requestId, snapshot: current }; const updated = { ...current, revision: current.revision + 1, pen: { ...current.pen, effective: command.value } }; f.driver.publish(updated); return { status: "applied", requestId: command.requestId, snapshot: updated }; };
+  await f.controller.load(); await f.controller.dispatch("continue"); const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
+  await act(async () => { dom.window.document.querySelector<HTMLButtonElement>('[aria-label="purple pen"]')!.click(); });
+  await act(async () => { [...dom.window.document.querySelectorAll("button")].find(button => button.textContent === "Use this pen")!.click(); await Promise.resolve(); });
+  await hop.started; await act(async () => { root.unmount(); }); hop.finish(); await new Promise(resolve => setTimeout(resolve, 200));
+  assert.equal(f.controller.state.progress.stage, "pen"); f.controller.dispose(); dom.window.close();
 });
 
 test("practice renderer is a compact coach in the owner screen without setup navigation chrome", async () => {
@@ -366,7 +405,7 @@ test("capture updates during a progress write are reconciled after it completes"
 test("complete mounted branded lesson follows one local-only admitted capture to confirmed open", async () => {
   const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
-  Object.defineProperty(dom.window, "matchMedia", { configurable: true, value: () => ({ matches: false }) });
+  Object.defineProperty(dom.window, "matchMedia", { configurable: true, value: () => ({ matches: true }) });
   let commandId = 0;
   f.client.execute = async command => {
     let current = f.driver.current();
@@ -391,12 +430,9 @@ test("complete mounted branded lesson follows one local-only admitted capture to
   const click = async (label: string) => act(async () => { const button = [...dom.window.document.querySelectorAll("button")].find(b => b.textContent === label || b.getAttribute("aria-label") === label); assert.ok(button, `missing button ${label}`); button.click(); await new Promise(resolve => setTimeout(resolve, 0)); });
   const title = (expected: string) => assert.equal(dom.window.document.querySelector("h1")?.textContent, expected);
   const publishSnapshot = async (update: (snapshot: ReturnType<typeof f.driver.current>) => ReturnType<typeof f.driver.current>) => act(async () => { const current = f.driver.current(); assert.equal(f.driver.publish({ ...update(current), revision: current.revision + 1 }), true); await new Promise(resolve => setTimeout(resolve, 0)); });
-  await click("Get started"); assert.equal(f.controller.state.progress.stage, "pen");
+  await click("Choose a pen"); assert.equal(f.controller.state.progress.stage, "pen");
   await click("purple pen"); assert.equal(f.driver.current().pen.effective, "coral", "selecting a visible pen color does not write it yet");
-  await click("Use this pen"); assert.equal(f.controller.state.progress.stage, "pen", "confirmed choice waits for the donor hop to finish");
-  const frogNode = dom.window.document.querySelector(".onboarding-pond-frog")!;
-  const animationEnd = new dom.window.Event("animationend", { bubbles: true }); Object.defineProperty(animationEnd, "animationName", { value: "onboarding-pen-hop" });
-  await act(async () => { frogNode.dispatchEvent(animationEnd); await new Promise(resolve => setTimeout(resolve, 0)); });
+  await click("Use this pen"); assert.equal(f.controller.state.progress.stage, "permissions", "reduced motion advances after confirmed provider readback");
   assert.equal(f.controller.state.progress.stage, "permissions");
   await click("Choose recording shortcut"); assert.equal(f.controller.state.progress.stage, "shortcut");
   await click("Try a capture"); assert.equal(f.controller.state.progress.stage, "practice-start");
@@ -602,7 +638,7 @@ test('host activation waits for a pending owner write before reading progress ag
   await hosted.activation.activate({ reason: 'firstLaunch' });
   const root = createRoot(dom.window.document.getElementById('root')!);
   await act(async () => root.render(createElement(hosted.module.Screen)));
-  await act(async () => { [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Get started')!.click(); });
+  await act(async () => { [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Choose a pen')!.click(); });
   const activation = hosted.activation.activate({ reason: 'resume' }); await Promise.resolve();
   assert.equal(reads, 1);
   await act(async () => { finish(); await activation; });
