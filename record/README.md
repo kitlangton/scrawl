@@ -53,11 +53,19 @@ collection states, plus the validated original materials/fact documents. It
 does not write or publish files, make a Saved claim, copy native materials,
 create a final destination, or perform clipboard/network/cleanup effects.
 
-The headless source install pins SDK 0.4.1 from the committed
-`vendor/engine-sdk-0.4.1.tgz` for development and declares `^0.4.1` as an
+The headless source install pins SDK 0.4.2 from the committed
+`vendor/engine-sdk-0.4.2.tgz` for development and declares `^0.4.2` as an
 optional peer. A host importing the bundle subpath must install that peer. The
 verified tarball SHA-256 is
-`f0c4b9777033bcde0463e0442074e5af714cddaed1c45452802012e66d21c156`.
+`62b1b2e103a585dbf10b848c9538ddcf888b3643b85d7eb89db8c1a61647066c`.
+
+The SDK `/observations` subpath exposes `readFrameVisualObservations` and its
+public input/result/source types. Reader callers supply the original validated
+materials, completed derivative/2 document, 1-based request index, exact sealed
+PNG bytes, and explicit byte budget. The typed result is either unavailable
+(profile absent or unsupported) or measured against the decoded derivative
+RGBA8 plane. These offline consistency measurements do not authenticate native
+issuance or establish selection, candidate collection, Saved, or publication.
 
 Assembly requires at least one selected frame, one contact sheet, and exact
 sealed media references. Hosts may supply video/audio as `materialReferences`
@@ -93,12 +101,14 @@ assembly returns an exact unsupported error. This API is fixture-ready only;
 it does not decode raw materials, choose frames/marks, produce contact sheets,
 or establish native provenance/full-profile acceptance.
 
-`@apparent/record/processing/media2-consumer` exports `RecordMedia2Job` over the published SDK 0.4.1 client. It durably binds the original retained-material request, layout and hash before dispatch; ambiguous jobs inspect the same identity, and cancellation remains explicit. A packed Linux Xvfb qualification now exercises that job against the admitted native Media/2 worker using retained Capture/2 materials, then reads its sealed frames/contact sheet into canonical assembly and a prepared staging plan. Selection times/layout are explicit caller input; validated derivatives remain processing inputs, never Saved. The producer has no publication capability, and this proof does not authenticate a published bundle or establish copy.
+`@apparent/record/processing/media2-consumer` exports `RecordMedia2Job` over the published SDK 0.4.2 client. It durably binds the original retained-material request, layout and hash before dispatch; ambiguous jobs inspect the same identity, and cancellation remains explicit.
+
+The retained packed Linux Xvfb qualification used SDK 0.4.1 and the admitted `0570f775` native Media/2 worker with retained Capture/2 materials, then read its sealed frames/contact sheet into canonical assembly and a prepared staging plan. SDK 0.4.2's capture, media/1 and media/2 core client modules are byte-identical, so that interface evidence is reused; this dependency upgrade did not run a new native Record observation/selection qualification. Selection times/layout in that proof were explicit caller input; validated derivatives were processing inputs, never Saved. That earlier producer had no publication capability. The later authenticated publication continuation is tracked below; the staged-plan proof alone does not authenticate a published bundle or establish copy.
 
 The publication subpath has an optional SDK peer: hosts using it supply the
 published SDK. Other Record consumers do not need to install that peer. Source
-checks use the pinned `record/vendor/engine-sdk-0.4.1.tgz` package (SHA256
-`f0c4b9777033bcde0463e0442074e5af714cddaed1c45452802012e66d21c156`),
+checks use the pinned `record/vendor/engine-sdk-0.4.2.tgz` package (SHA256
+`62b1b2e103a585dbf10b848c9538ddcf888b3643b85d7eb89db8c1a61647066c`),
 without importing or building an adjacent Engine checkout. Publication remains
 separate from the package root.
 
