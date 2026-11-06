@@ -308,3 +308,15 @@ installed locator or release. Without this explicit port, the previous read-only
 recovery/reload behavior remains. Installed provider/launch assembly and caller
 adoption are still pending. Remove this temporary legacy bridge when the
 coordinated TypeScript writer and all its consumers pass the migration gates.
+
+The internal `state/replacement` prerequisite stages a bounded private byte copy,
+uses the admitted `replaceFile` operation under a caller-held queue lease, and
+requires inode-pinned private readback before reporting commitment. It performs
+no JSON policy or credential/journal ordering and has no production caller or
+package export. It must not write the live namespace while Rust remains its
+writer. After dispatch, uncertain outcomes retain observed files without retry;
+proven no-effect results clean only the original stage inode under the original
+admitted directory. Lost fences retain staging rather than delete unproven data.
+Linux isolated consumer proof does not establish Mac or installed acceptance;
+the protected provider, coordinated sole-writer cutover and actual caller tests
+remain required.
