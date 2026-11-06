@@ -34,19 +34,25 @@ impl Drop for Running {
     fn drop(&mut self) { let _ = self.0.kill(); let _ = self.0.wait(); }
 }
 
-struct FootprintGuard {
+pub(crate) struct FootprintGuard {
     stop: std::sync::Arc<std::sync::atomic::AtomicBool>,
     thread: Option<std::thread::JoinHandle<()>>,
 }
 impl FootprintGuard {
     fn start(helper_pid: u32, budget: u64) -> Self {
+        Self::monitor(Some(helper_pid), budget)
+    }
+    pub(crate) fn worker(budget: u64) -> Self {
+        Self::monitor(None, budget)
+    }
+    fn monitor(helper_pid: Option<u32>, budget: u64) -> Self {
         use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
         let stop = Arc::new(AtomicBool::new(false));
         let done = stop.clone();
         let thread = std::thread::spawn(move || {
             while !done.load(Ordering::Acquire) {
                 let own = footprint(unsafe { libc::getpid() });
-                let helper = footprint(helper_pid as libc::pid_t);
+                let helper = helper_pid.map(|pid| footprint(pid as libc::pid_t)).unwrap_or(Ok(0));
                 if matches!(helper, Err(Some(libc::ESRCH))) { break }
                 let valid = match (own, helper) {
                     (Ok(a), Ok(b)) => a.checked_add(b).is_some_and(|n| n <= budget),

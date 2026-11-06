@@ -1,11 +1,12 @@
 import assert from 'node:assert/strict';
 import { execFileSync, spawn } from 'node:child_process';
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { test } from 'node:test';
-import { Media2Client, launchMedia2Worker } from '../sdk/src/media2/index.ts';
+import { Media2Client, launchMedia2Worker, validateDerivative2Document, type Media2JobInput } from '../sdk/src/media2/index.ts';
+import { validateMaterialsDocument } from '../sdk/src/capture-documents/index.ts';
 import { createMediaJobId, launchMediaWorker, MediaChildProcessTransport, MediaClient, MediaRpcError, type DecodeRequest, type MediaJobStatus } from '../sdk/src/media.ts';
 
 const binary = process.env.APPARENT_ENGINE_FRAMES_BIN;
@@ -273,7 +274,7 @@ test('forced supervisor death stops its pinned decoder and leaves only private u
 });
 
 
-if (process.platform === 'linux') test('packaged media/2 negotiates separately and authenticates before unknown-job lookup', { skip: !binary }, async () => {
+if (process.platform === 'linux' || process.platform === 'darwin') test('packaged media/2 negotiates separately and authenticates before unknown-job lookup', { skip: !binary }, async () => {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'apparent-media2-handshake-'));
   await chmod(root, 0o700);
   await mkdir(join(root, 'capture-v2'), { mode: 0o700 });
@@ -281,7 +282,7 @@ if (process.platform === 'linux') test('packaged media/2 negotiates separately a
   const client = new Media2Client(transport);
   try {
     const hello = await client.handshake();
-    const supported = process.platform === 'linux';
+    const supported = process.platform === 'linux' || process.platform === 'darwin';
     assert.equal(hello.implementation, 'native');
     assert.deepEqual(hello.capabilities, { retainedFrames: supported, contactSheet: supported, nativeJobAuthority: supported });
     const reply = await transport.request({ channel: 'media', protocolVersion: 2, clientId: client.clientId, rpcId: 'b'.repeat(32), method: 'inspect', captureId: 'c'.repeat(32), ownerToken: 'd'.repeat(64), jobId: 'e'.repeat(32), requestSha256: 'f'.repeat(64) }, 5000);
@@ -290,4 +291,107 @@ if (process.platform === 'linux') test('packaged media/2 negotiates separately a
     const namespace = join(root, 'materials-media-2');
     assert.deepEqual(await readdir(namespace), [], 'unauthenticated lookup creates no job or output');
   } finally { await client.close(); await rm(root, { recursive: true, force: true }); }
+});
+
+// Synthetic retained authority only: this exercises native decode/registry and
+// public transport, without claiming that macOS capture produced the materials.
+test('packaged retained media/2 decodes H264 with native seals and cold recovery', { skip: !binary }, async () => {
+  const f = await fixture();
+  const id = () => randomBytes(16).toString('hex');
+  const captureId = id(), materialsId = id(), leaseId = id();
+  const ownerToken = randomBytes(32).toString('hex');
+  const captureRoot = join(f.runtime, 'capture-v2');
+  const materialRoot = join(captureRoot, 'materials', captureId);
+  await mkdir(materialRoot, { recursive: true, mode: 0o700 });
+  await chmod(captureRoot, 0o700); await chmod(join(captureRoot, 'materials'), 0o700);
+  const seal = async (relativePath: string) => {
+    const file = join(materialRoot, relativePath);
+    const bytes = await readFile(file), info = await stat(file, { bigint: true });
+    return { relativePath, identity: { device: String(info.dev), inode: String(info.ino), size: Number(info.size), modifiedNs: String(info.mtimeNs) }, sha256: createHash('sha256').update(bytes).digest('hex') };
+  };
+  await copyFile(resolve(process.env.APPARENT_RETAINED_MEDIA_FIXTURE ?? 'engine/core/tests/fixtures/tiny.mp4'), join(materialRoot, 'recording.mp4'));
+  await chmod(join(materialRoot, 'recording.mp4'), 0o600);
+  const video = await seal('recording.mp4');
+  const payload = {
+    schema: 'apparent.capture-materials-payload/1', identity: { captureId, materialsId }, bundleId: 'retained-fixture', root: materialRoot, leaseId,
+    clock: { epoch: 'capture-admission-monotonic', units: 'integer-milliseconds', durationMs: 1000, videoOffsetMs: 250 },
+    confirmedSource: { id: 'display:fixture', generation: id(), confirmedAtMs: 1, kind: 'display', displayId: 1, rectangle: { x: 0, y: 0, width: 16, height: 16, scale: 1 }, confirmation: { kind: 'explicit-display', id: id() } },
+    invocation: { kind: 'explicit', invocationId: id(), observedAtMs: 0 }, files: [video], video: { file: 'recording.mp4', width: 16, height: 16, durationMs: 200 }, facts: {},
+    collection: { context: 'unavailable', interactions: 'unavailable', candidates: 'unavailable', transcript: 'unavailable', acceptedStrokes: 'unavailable' }, warnings: [], safety: { nativeRemoteDelivery: 'forbidden', safeForProcessing: true },
+  };
+  const payloadBytes = Buffer.from(JSON.stringify(payload));
+  await writeFile(join(materialRoot, 'materials.json'), payloadBytes, { mode: 0o600, flag: 'wx' });
+  const payloadFile = await seal('materials.json');
+  const manifest = { schema: 'apparent.capture-materials/1', key: { captureId, materialsId, revision: payloadFile.sha256 }, root: materialRoot, leaseId, payloadFile };
+  const materials = validateMaterialsDocument(manifest, payloadBytes);
+  const rootInfo = await stat(materialRoot, { bigint: true });
+  assert.ok(Number.isSafeInteger(Number(rootInfo.ino)) && Number.isSafeInteger(Number(rootInfo.dev)));
+  await writeFile(join(captureRoot, `${captureId}.json`), JSON.stringify({
+    capture_id: captureId, owner_token: ownerToken, state: 'materials-ready', root: materialRoot, materials: manifest, materials_id: materialsId, lease_id: leaseId,
+    root_device: Number(rootInfo.dev), root_inode: Number(rootInfo.ino), release_phase: null, release_movie: video.identity, release_payload: payloadFile.identity, payload_digest: payloadFile.sha256,
+  }), { mode: 0o600, flag: 'wx' });
+  const input: Media2JobInput = { ownerToken, materials, request: {
+    schema: 'apparent.retained-frame-request/1', materials: manifest.key, leaseId, jobId: id(), outputDirectory: join(f.root, 'retained-output'), requestedBundleMs: [0, 250, 1000, 0],
+    limits: { maxFrames: 4, maxEdge: 16, maxTotalPixels: 4096, deadlineMs: 20_000 },
+    contactSheet: { schema: 'apparent.contact-sheet-layout/1', width: 64, height: 16, backgroundRgb: [11, 22, 33], fit: 'stretch', sampling: 'legacy-bilinear', clipping: 'reject', tiles: [1, 2, 3, 4].map((requestIndex, index) => ({ requestIndex, x: index * 16, y: 0, width: 16, height: 16 })) },
+  } };
+  let media = new Media2Client(launchMedia2Worker(resolve(binary!), f.runtime));
+  try {
+    const hello = await media.handshake();
+    assert.deepEqual(hello.capabilities, { retainedFrames: true, contactSheet: true, nativeJobAuthority: true });
+    let status = await media.derive(input);
+    const deadline = Date.now() + 25_000;
+    while (status.state === 'running' && Date.now() < deadline) { await pause(20); status = await media.inspect(input); }
+    assert.equal(status.state, 'complete', `retained fixture result: ${JSON.stringify(status)}`);
+    if (status.state !== 'complete') assert.fail('native derivative is absent');
+    const envelope = validateDerivative2Document(status.derivative, materials);
+    assert.deepEqual(envelope.payload.frames.map(frame => frame.requestedBundleMs), [0, 250, 1000, 0]);
+    assert.deepEqual(envelope.payload.frames.map(frame => frame.effectiveVideoMs), [0, 0, 750, 0]);
+    assert.equal(envelope.payload.frames[0].clampedToStart, true);
+    assert.equal(envelope.payload.frames[2].clampedToEnd, true);
+    assert.ok(envelope.payload.frames[2].actualVideoMs! < 750);
+    assert.ok(envelope.payload.contactSheet);
+    for (const image of [...envelope.payload.frames, envelope.payload.contactSheet!]) {
+      const bytes = await readFile(join(input.request.outputDirectory, image.file.relativePath));
+      assert.equal(bytes.subarray(0, 8).toString('hex'), '89504e470d0a1a0a');
+      assert.equal(bytes.readUInt32BE(16), image.width); assert.equal(bytes.readUInt32BE(20), image.height);
+      assert.equal(createHash('sha256').update(bytes).digest('hex'), image.file.sha256);
+      const info = await stat(join(input.request.outputDirectory, image.file.relativePath), { bigint: true });
+      assert.deepEqual({ device: String(info.dev), inode: String(info.ino), size: Number(info.size), modifiedNs: String(info.mtimeNs) }, image.file.identity);
+    }
+    await media.close();
+    media = new Media2Client(launchMedia2Worker(resolve(binary!), f.runtime));
+    await media.handshake();
+    assert.deepEqual(await media.inspect(input), status, 'cold inspection keeps the original native receipt');
+    assert.deepEqual(await media.cancel(input), status, 'completed output wins late cancellation');
+    await assert.rejects(media.inspect({ ...input, ownerToken: '0'.repeat(64) }), /permission_denied/);
+    // Large explicit sheet work keeps an admitted job active while controls
+    // race it; this is synthetic caller policy, not a default Record layout.
+    const busyInput = (jobId: string, outputDirectory: string): Media2JobInput => ({ ...input, request: {
+      ...input.request, jobId, outputDirectory, requestedBundleMs: Array.from({ length: 48 }, () => 0),
+      limits: { ...input.request.limits, maxFrames: 48, maxTotalPixels: 20_000_000 },
+      contactSheet: { ...input.request.contactSheet!, width: 4096, height: 4096 },
+    } });
+    const cancelledInput = busyInput(id(), join(f.root, 'retained-cancelled'));
+    assert.equal((await media.derive(cancelledInput)).state, 'running');
+    assert.equal((await media.cancel(cancelledInput)).state, 'cancelled');
+    assert.equal((await media.inspect(cancelledInput)).state, 'cancelled');
+    const lostInput = busyInput(id(), join(f.root, 'retained-owner-lost'));
+    assert.equal((await media.derive(lostInput)).state, 'running');
+    const owned = (media as unknown as { transport: { child: import('node:child_process').ChildProcess } }).transport.child;
+    const exited = new Promise<void>(done => owned.once('exit', () => done()));
+    assert.equal(owned.kill('SIGKILL'), true, 'only this test-owned service is killed');
+    await exited;
+    await media.close();
+    media = new Media2Client(launchMedia2Worker(resolve(binary!), f.runtime));
+    await media.handshake();
+    let lost = await media.inspect(lostInput);
+    const lostDeadline = Date.now() + 3000;
+    while (lost.state === 'running' && Date.now() < lostDeadline) { await pause(10); lost = await media.inspect(lostInput); }
+    assert.equal(lost.state, 'failed');
+    if (lost.state !== 'failed') assert.fail('lost job was not reconciled');
+    assert.equal(lost.error.code, 'owner_lost');
+    assert.equal((await stat(materialRoot)).isDirectory(), true, 'cancel/process loss retains original materials');
+
+  } finally { await media.close(); await f.close(); }
 });

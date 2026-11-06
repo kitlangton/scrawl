@@ -4,11 +4,15 @@
 //! This module repeats that check before admission, runs pin/hash/decode in the
 //! re-exec child, and reconciles durable status only after the child is reaped.
 
-#[cfg(all(target_os = "linux", feature = "media"))]
-mod linux {
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
+mod native {
+    #[cfg(target_os = "linux")]
+    use crate::materials_media::execute_retained_linux as execute_retained;
+    #[cfg(target_os = "macos")]
+    use crate::materials_media::execute_retained_macos as execute_retained;
     use crate::materials_media::{
         CancelObservation, Checkpoint, JobOutcome, JobReference, JobRegistry, MaterialsKey,
-        NativeRequest, execute_retained_linux,
+        NativeRequest,
     };
     use apparent_capture_engine::{Runtime, SecureStore};
     use serde::{Deserialize, Serialize};
@@ -232,6 +236,11 @@ mod linux {
     }
 
     pub fn child() -> std::result::Result<(), &'static str> {
+        // Reuse the Mac worker's existing physical-footprint enforcement through
+        // pinning, PNG/sheet assembly and durable receipt publication as well as
+        // AVFoundation decoding. This guard exits only the owned re-exec child.
+        #[cfg(target_os = "macos")]
+        let _footprint = crate::macos::FootprintGuard::worker(1536 * 1024 * 1024);
         let mut lifetime = unsafe { File::from_raw_fd(5) };
         std::thread::spawn(move || {
             let mut byte = [0u8; 1];
@@ -271,7 +280,7 @@ mod linux {
             SecureStore::open(Path::new(&request.output_directory))
                 .map_err(|_| "invalid_output")?,
         ));
-        let result = execute_retained_linux(
+        let result = execute_retained(
             &registry,
             &runtime,
             &capture_directory,
@@ -587,18 +596,18 @@ mod linux {
     }
 }
 
-#[cfg(all(target_os = "linux", feature = "media"))]
-pub use linux::PublicActive as Active;
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
+pub use native::PublicActive as Active;
 
-#[cfg(all(target_os = "linux", feature = "media"))]
+#[cfg(all(any(target_os = "linux", target_os = "macos"), feature = "media"))]
 pub fn child() -> std::result::Result<(), &'static str> {
-    linux::child()
+    native::child()
 }
 
-#[cfg(not(all(target_os = "linux", feature = "media")))]
+#[cfg(not(all(any(target_os = "linux", target_os = "macos"), feature = "media")))]
 pub struct Active;
 
-#[cfg(not(all(target_os = "linux", feature = "media")))]
+#[cfg(not(all(any(target_os = "linux", target_os = "macos"), feature = "media")))]
 impl Active {
     pub fn start(
         _runtime_path: &std::path::Path,
@@ -625,7 +634,7 @@ impl Active {
     }
 }
 
-#[cfg(not(all(target_os = "linux", feature = "media")))]
+#[cfg(not(all(any(target_os = "linux", target_os = "macos"), feature = "media")))]
 pub fn child() -> std::result::Result<(), &'static str> {
     Err("native_unavailable")
 }

@@ -429,7 +429,7 @@ fn derive_retained_macos(
         source,
         &effective_times,
         binding.limits.max_edge,
-        64_000_000,
+        binding.limits.max_total_pixels,
         |decoded| match preparation.push(
             DecodedFrame {
                 actual_video_ms: decoded.actual_ms,
