@@ -1,8 +1,7 @@
-import { constants } from "node:fs";
-import { randomUUID } from "node:crypto";
-import { link, lstat, mkdir, open, realpath, rename, rm, stat, unlink } from "node:fs/promises";
-import { dirname, isAbsolute, resolve } from "node:path";
+import { mkdir, realpath, stat } from "node:fs/promises";
+import { isAbsolute, resolve } from "node:path";
 import type { DecodeSelection, ProcessingInput, ProcessingOutput, PublishedMediaClient, SelectedFrame } from "./index.js";
+import { assertPrivateJournalPath, readPrivateJournal, removePrivateJournal, writePrivateJournal } from "./private-journal.js";
 
 export type MediaJobRequest = Parameters<PublishedMediaClient["decode"]>[0];
 export type MediaJobStatus =
@@ -51,18 +50,6 @@ function validateRecord(value: unknown): asserts value is ProcessingJobRecord {
 function assertPrivatePath(path: string) {
   if (!isAbsolute(path) || resolve(path) !== path || path.includes("\0")) throw new TypeError("job record path must be absolute and normalized");
 }
-async function writeDurable(path: string, value: ProcessingJobRecord, create = false) {
-  const parent = dirname(path); const dir = await stat(parent);
-  if (!dir.isDirectory() || (dir.mode & 0o077) !== 0 || dir.uid !== process.getuid?.() || await realpath(parent) !== parent) throw new Error("processing journal directory must be private and owned");
-  if (!create) { const existing = await lstat(path); if (!existing.isFile() || existing.isSymbolicLink() || existing.nlink !== 1 || existing.uid !== process.getuid?.() || (existing.mode & 0o077) !== 0) throw new Error("processing journal must be a private owned file"); }
-  const tmp = `${path}.tmp-${randomUUID()}`;
-  const handle = await open(tmp, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY | (constants.O_NOFOLLOW ?? 0), 0o600);
-  try { await handle.writeFile(`${JSON.stringify(value)}\n`); await handle.sync(); } finally { await handle.close(); }
-  try { if (create) await link(tmp, path); else await rename(tmp, path); }
-  finally { await unlink(tmp).catch(() => {}); }
-  const dh = await open(parent, constants.O_RDONLY | (constants.O_DIRECTORY ?? 0) | (constants.O_NOFOLLOW ?? 0));
-  try { await dh.sync(); } finally { await dh.close(); }
-}
 
 /** Durable owner for one media/1 job. Host injects the admitted client and processing functions. */
 export class RecordMediaJob {
@@ -76,7 +63,7 @@ export class RecordMediaJob {
   }
   static async create(client: ManagedMediaClient, processing: RecordProcessingFunctions, journalPath: string, selection: DecodeSelection): Promise<RecordMediaJob> {
     selection = structuredClone(selection);
-    assertPrivatePath(journalPath);
+    assertPrivateJournalPath(journalPath, "processing journal");
     if (!selection.frames.length) throw new Error("cannot create an empty media job");
     if (!/^[0-9a-f]{32}$/u.test(selection.jobId) || !isAbsolute(selection.outputDirectory) || resolve(selection.outputDirectory) !== selection.outputDirectory || selection.frames.length > selection.limits.maxFrames) throw new TypeError("invalid media job identity, output path, or frame count");
     const output = await stat(selection.outputDirectory);
@@ -89,15 +76,12 @@ export class RecordMediaJob {
     const request: MediaJobRequest = { jobId: selection.jobId, source: selection.source, requestedBundleMs: selection.frames.map(frame => frame.timeMs), outputDirectory: selection.outputDirectory, limits: selection.limits };
     const record: ProcessingJobRecord = { schema: 1, state: "submitted", dispatchAttempted: false, request, selection: selection.frames.map(frame => ({ ...frame })) };
     validateRecord(record);
-    await writeDurable(journalPath, record, true);
+    await writePrivateJournal(journalPath, record, "processing journal", true);
     return new RecordMediaJob(client, journalPath, record, processing);
   }
   static async reopen(client: ManagedMediaClient, processing: RecordProcessingFunctions, journalPath: string): Promise<RecordMediaJob> {
-    assertPrivatePath(journalPath); const info = await lstat(journalPath);
-    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0 || await realpath(journalPath) !== journalPath) throw new Error("processing journal must be a private owned file");
-    const journal = await open(journalPath, constants.O_RDONLY | (constants.O_NOFOLLOW ?? 0));
-    let contents: string; try { contents = await journal.readFile("utf8"); } finally { await journal.close(); }
-    const record: unknown = JSON.parse(contents);
+    assertPrivateJournalPath(journalPath, "processing journal");
+    const record = await readPrivateJournal(journalPath, "processing journal");
     validateRecord(record);
     return new RecordMediaJob(client, journalPath, record, processing);
   }
@@ -118,10 +102,10 @@ export class RecordMediaJob {
   private async decodeOwned(selection: DecodeSelection): Promise<SelectedFrame[]> {
     if (selection.jobId !== this.jobId || JSON.stringify(selection.source) !== JSON.stringify(this.record.request.source) || JSON.stringify(selection.limits) !== JSON.stringify(this.record.request.limits) || selection.outputDirectory !== this.outputDirectory || JSON.stringify(selection.frames) !== JSON.stringify(this.record.selection)) throw new Error("selection does not match the durable processing job");
     if (this.record.state !== "submitted" || this.record.dispatchAttempted) throw new Error("processing job requires reconciliation before another decode dispatch");
-    this.record = { ...this.record, dispatchAttempted: true }; await writeDurable(this.journalPath, this.record);
+    this.record = { ...this.record, dispatchAttempted: true }; await writePrivateJournal(this.journalPath, this.record, "processing journal");
     const frames = await this.processing.decodeSelectedFrames(this.client, structuredClone({ ...selection, source: this.record.request.source, limits: this.record.request.limits, frames: this.record.selection }));
     const complete: ProcessingJobRecord = { ...this.record, state: "complete", frames: structuredClone(frames) };
-    validateRecord(complete); await writeDurable(this.journalPath, complete); this.record = complete; return structuredClone(frames);
+    validateRecord(complete); await writePrivateJournal(this.journalPath, complete, "processing journal"); this.record = complete; return structuredClone(frames);
   }
   async inspect(timeoutMs = 5000): Promise<MediaJobStatus> {
     return this.exclusive(() => this.inspectOwned(timeoutMs));
@@ -135,10 +119,10 @@ export class RecordMediaJob {
         frames: selected, jobId: this.jobId, source: this.record.request.source, outputDirectory: this.outputDirectory, limits: this.record.request.limits,
       });
       const complete: ProcessingJobRecord = { ...this.record, dispatchAttempted: true, state: "complete", frames: mapped.map((frame, i) => ({ ...frame, index: selected[i].index, text: selected[i].text })) };
-      validateRecord(complete); await writeDurable(this.journalPath, complete); this.record = complete;
+      validateRecord(complete); await writePrivateJournal(this.journalPath, complete, "processing journal"); this.record = complete;
     } else if (status.state === "failed" || status.state === "cancelled") {
       const terminal: ProcessingJobRecord = { ...this.record, state: status.state, terminal: status.state };
-      validateRecord(terminal); await writeDurable(this.journalPath, terminal); this.record = terminal;
+      validateRecord(terminal); await writePrivateJournal(this.journalPath, terminal, "processing journal"); this.record = terminal;
     }
     return status;
   }
@@ -148,9 +132,7 @@ export class RecordMediaJob {
   }
   private async cleanupOwned(): Promise<void> {
     if (this.record.state === "submitted") throw new Error("cannot clean an unresolved media job");
-    const info = await lstat(this.journalPath);
-    if (!info.isFile() || info.isSymbolicLink() || info.nlink !== 1 || info.uid !== process.getuid?.() || (info.mode & 0o077) !== 0) throw new Error("processing journal must be a private owned file");
-    await rm(this.journalPath, { force: false });
+    await removePrivateJournal(this.journalPath, "processing journal");
   }
 }
 

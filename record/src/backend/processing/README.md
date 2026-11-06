@@ -19,10 +19,13 @@ or selected by this formatter.
 
 The golden tests use sanitized Rust summary fixtures and synthetic UI-like PNGs
 under `test/fixtures/take.apparent`; these images verify references and layout,
-not capture or decoder behavior. The native consumer test separately exercises
-real PNG decode against the retained Linux `media/1` artifact from Engine source
-`463f0053908a9c6030d3c5665aacd10089884aa` using an isolated synthetic H.264
-bundle.
+not capture or decoder behavior. Native consumer tests separately exercise PNG
+decode against retained Linux and macOS `media/1` artifacts using isolated
+synthetic H.264 bundles. The macOS r2 run passed 1/1 against the admitted
+`ae0789` closure on macOS 26.6.2 Apple Silicon through x64 Rosetta: two 320×180
+PNGs matched SDK inspection, and the durable job reopened and cleaned up its
+journal. This does not establish Intel CPU, macOS 15, native ARM, capture,
+media/2, publication, clipboard, or installed-route behavior.
 
 The optional `"local-clipboard"` presentation retains semantic context, notes and
 warnings while omitting destination/target metadata, archive image instructions
@@ -64,7 +67,25 @@ const { frames, output } = await processCompletedBundle(job, processing, selecti
   { durationMs, bundlePath, transcript, videoPath });
 ```
 
-The consumer test checks native handshake, durable job ownership, PNG
-signatures/dimensions/hashes, and semantic text. It makes no capture-v1,
-installed-route, macOS media, or current-main artifact-admission claim. The
-artifact remains Linux x86_64 only.
+The retained Linux artifact is x86_64 only. The macOS result above used a
+separately admitted x64 closure; neither run changes capture or installed
+routing.
+
+## Durable media/2 consumer
+
+`RecordMedia2Job` is exported from
+`@apparent/record/processing/media2-consumer`. The host injects the `Media2Client`
+already composed for the same private capture/2 runtime, and supplies the
+original owner token on each operation and reopen. The caller owns client
+lifecycle. Record preflights the caller's request, contact-sheet layout and
+materials, then durably stores the original request hash and materials before
+dispatch. Duplicate requested times and caller-selected output policy remain
+intact.
+
+An ambiguous derive remains unresolved across restart and can only be reconciled
+by inspecting the same input; Record never retries derive or cancels implicitly.
+Cancellation is an explicit caller action. A complete result is accepted only
+after SDK derivative validation and original request/layout binding checks; it
+is a processing result, not a Saved or publication result. Synthetic offline
+tests cover the client seam and consistency contract only. SDK validation does
+not prove derivative origin, and no native media/2 worker is currently available.
