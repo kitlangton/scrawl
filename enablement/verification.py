@@ -148,7 +148,7 @@ MACHINERY_WORKFLOW_INPUTS = {
 }
 MACHINERY_OWNER_WORKFLOW_INPUTS = {".github/workflows/verification-platform.yml"}
 MACHINERY_SHARED_INPUTS = {
-    ".githooks/pre-push", "enablement/verification.py",
+    "enablement/verification.py",
 }
 MACHINERY_KNOWN_ENABLEMENT_INPUTS = MACHINERY_TEST_FILES | set().union(
     *MACHINERY_TEST_INPUTS.values()) | {"enablement/refactor.md"}
@@ -161,6 +161,7 @@ def machinery_tests_selected(paths, history_known=True):
     paths = set(paths)
     # The shared selector supplies execution paths and contracts for every
     # machinery suite, so changing it selects the complete affected matrix.
+    # Individual hooks select only their own integration suite below.
     if paths & MACHINERY_SHARED_INPUTS:
         return list(MACHINERY_TEST_INPUTS)
     if any(path.startswith("enablement/") and path not in MACHINERY_KNOWN_ENABLEMENT_INPUTS

@@ -1183,7 +1183,7 @@ class SelectionTests(unittest.TestCase):
             "README.md": [],
             "enablement/docs/continuous-delivery.md": [],
             "record/src/index.ts": [],
-            ".githooks/pre-push": list(verification.MACHINERY_TEST_INPUTS),
+            ".githooks/pre-push": ["test_pre_push_guard.py"],
             "enablement/verification.py": list(verification.MACHINERY_TEST_INPUTS),
             "enablement/verification/dependencies/preflight.test.ts": ["test_verification.py"],
             "enablement/tests/test_pre_push_guard.py": ["test_pre_push_guard.py"],
