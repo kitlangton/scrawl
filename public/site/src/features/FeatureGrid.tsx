@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react"
 import "./feature-grid.css"
+import demoTheme from "./demo-theme.css?raw"
+import { MobileExample } from "./MobileExample"
 
 const FEATURES = [
   { title: "Sketch what you mean", path: "how-it-works", description: "Sketch an idea on the whiteboard, finish recording, and show the change to your agent." },
@@ -15,6 +17,22 @@ function FeatureAnimation({ path, title, paused }: { path: string; title: string
   const [visible, setVisible] = useState(false)
   const [loaded, setLoaded] = useState(false)
   const [near, setNear] = useState(false)
+  const prepareTheme = () => {
+    const doc = frame.current?.contentDocument
+    if (!doc?.head || !host.current) return
+    let style = doc.getElementById("apparent-feature-theme")
+    if (!style) {
+      style = doc.createElement("style")
+      style.id = "apparent-feature-theme"
+      style.textContent = demoTheme
+      // Example documents contain body styles; keep the theme after those rules.
+      doc.body.append(style)
+    }
+    const theme = getComputedStyle(host.current)
+    for (const role of ["background", "foreground", "primary", "primary-foreground", "border", "brand"])
+      doc.documentElement.style.setProperty(`--demo-${role}`, theme.getPropertyValue(`--color-${role}`))
+    doc.documentElement.style.setProperty("--demo-surface", theme.getPropertyValue("--color-muted"))
+  }
   useEffect(() => {
     const element = host.current!
     const resize = new ResizeObserver(([entry]) => setWidth(entry.contentRect.width))
@@ -28,12 +46,22 @@ function FeatureAnimation({ path, title, paused }: { path: string; title: string
     return () => { resize.disconnect(); preload.disconnect(); visibility.disconnect() }
   }, [])
   useEffect(() => {
-    frame.current?.contentWindow?.postMessage({ apparentFeature: paused || !visible ? "pause" : "play" }, location.origin)
+    const phone = matchMedia("(max-width: 700px)")
+    const update = () => frame.current?.contentWindow?.postMessage({ apparentFeature: paused || !visible || phone.matches ? "pause" : "play" }, location.origin)
+    update()
+    phone.addEventListener("change", update)
+    return () => phone.removeEventListener("change", update)
   }, [paused, visible, loaded])
+  useEffect(() => {
+    const preference = matchMedia("(prefers-color-scheme: dark)")
+    preference.addEventListener("change", prepareTheme)
+    return () => preference.removeEventListener("change", prepareTheme)
+  }, [])
   return <div className="feature-grid-viewport" ref={host}>
-    {near && <iframe ref={frame} title={`${title} — illustrative animation`} src={`/feature-demos/${path}/index.html`}
-      loading="lazy" onLoad={() => setLoaded(true)} tabIndex={-1}
-      style={{ transform: `scale(${width / 800})` }} />}
+    <MobileExample path={path} />
+    {near && <iframe ref={frame} aria-hidden="true" title={`${title} — illustrative animation`} src={`/feature-demos/${path}/index.html`}
+      onLoad={() => { prepareTheme(); setLoaded(true) }} tabIndex={-1}
+      style={{ transform: `scale(${width / 800})`, opacity: loaded ? 1 : 0 }} />}
   </div>
 }
 
