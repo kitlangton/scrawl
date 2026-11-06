@@ -346,6 +346,26 @@ test("practice renderer is a compact coach in the owner screen without setup nav
   assert.match(html, /data-practice="true"/); assert.match(html, /class="onboarding-practice"/); assert.match(html, /class="onboarding-coach-frog"/); assert.doesNotMatch(html, /aria-label="Close setup"/); assert.match(html, /Try later/); f.controller.dispose();
 });
 
+test("armed practice says the effective shortcut once and keeps local-only and unarmed states clear", async () => {
+  const armed = fixture(), admissionId = "practice-render-admission";
+  armed.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start", admissionId };
+  const before = armed.driver.current();
+  armed.driver.publish({ ...before, revision: before.revision + 1, shortcut: { ...before.shortcut, effective: "⌥⇧S", label: "⌥⇧S", registration: "registered" }, nextShortcutAdmission: { state: "armed", admissionId, delivery: "local-only", expiresAt: new Date(Date.now() + 60_000).toISOString() } });
+  await armed.controller.load();
+  const ready = renderToStaticMarkup(createElement(OnboardingContribution, { controller: armed.controller, Button: TestButton, close() {} }));
+  assert.match(ready, /Press ⌥⇧S to start recording\./); assert.equal((ready.match(/⌥⇧S/g) ?? []).length, 1);
+  assert.match(ready, /Local-only practice/); assert.doesNotMatch(ready, /Ready when you are|onboarding-waiting|Try again/); assert.match(ready, /Try later/);
+  armed.controller.dispose();
+
+  const preparing = fixture(); preparing.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start", admissionId: "pending-admission" }; await preparing.controller.load();
+  const preparingHtml = renderToStaticMarkup(createElement(OnboardingContribution, { controller: preparing.controller, Button: TestButton, close() {} }));
+  assert.match(preparingHtml, /Preparing your local practice/); assert.doesNotMatch(preparingHtml, /Press .* to start recording/); preparing.controller.dispose();
+
+  const ended = fixture(); ended.progress.value = { ...initialProgress(), status: "in-progress", stage: "practice-start" }; await ended.controller.load();
+  const endedHtml = renderToStaticMarkup(createElement(OnboardingContribution, { controller: ended.controller, Button: TestButton, close() {} }));
+  assert.match(endedHtml, /The previous practice ended/); assert.match(endedHtml, /Try again/); ended.controller.dispose();
+});
+
 test("failed copy offers a scoped copy retry for the saved practice capture", async () => {
   const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "preparing", attemptId: "copy-retry" }; await f.controller.load();
   publish(f.driver, [capture("copy-retry", "saved", [outcome("save"), { kind: "copy", at: "2026-11-05T00:00:00.000Z", ok: false }], "artifact-copy")]);
