@@ -1,19 +1,18 @@
 /** Conservative owner/target promotion. GitHub metadata authenticates source identity;
  * candidate ZIP receipts still undergo the normal byte/digest/attempt validation. */
-import type { AdmissionResult } from '../core.ts'
+import { supportsPrCandidate, workflowPathFor, type AdmissionResult } from '../core.ts'
 
 const repository = 'tryapparent/apparent'
-const workflow = '.github/workflows/stream-engine.yml'
 type Api = <T>(endpoint: string) => T
 export function admitPrCandidate(api: Api, currentSha: string, currentTree: string, digest: string, ownerId = 'engine', target = 'linux-x64'): AdmissionResult | undefined {
-  // Only the ordered first expansion is enabled. Keep workflow identity fixed.
-  if (!(['engine', 'engine-native'].includes(ownerId)) || !(['linux-x64', 'macos-x64'].includes(target)) || (ownerId === 'engine' && target !== 'linux-x64')) return
+  if (!supportsPrCandidate(ownerId, target)) return
+  const workflow = workflowPathFor(ownerId)
   const pulls = api<Array<{ number: number; merged_at: string | null; merge_commit_sha: string; head: { sha: string; repo: { full_name: string } | null } }>>(`repos/${repository}/commits/${currentSha}/pulls?per_page=100`)
   const landed = api<{ sha: string; parents: Array<{ sha: string }> }>(`repos/${repository}/git/commits/${currentSha}`)
   if (landed.sha !== currentSha || !landed.parents.length) return
   for (const pull of pulls) {
     if (!pull.merged_at || pull.merge_commit_sha !== currentSha || pull.head.repo?.full_name !== repository || !Number.isSafeInteger(pull.number)) continue
-    const { workflow_runs: runs } = api<{ workflow_runs: Array<{ id: number; run_attempt: number; event: string; path: string; conclusion: string; head_sha: string; head_repository: { full_name: string }; pull_requests: Array<{ number: number; head: { sha: string }; base: { sha: string } }> }> }>(`repos/${repository}/actions/workflows/stream-engine.yml/runs?event=pull_request&head_sha=${pull.head.sha}&per_page=100`)
+    const { workflow_runs: runs } = api<{ workflow_runs: Array<{ id: number; run_attempt: number; event: string; path: string; conclusion: string; head_sha: string; head_repository: { full_name: string }; pull_requests: Array<{ number: number; head: { sha: string }; base: { sha: string } }> }> }>(`repos/${repository}/actions/workflows/${workflow.split('/').at(-1)}/runs?event=pull_request&head_sha=${pull.head.sha}&per_page=100`)
     for (const run of runs) {
       if (run.event !== 'pull_request' || run.path !== workflow || run.conclusion !== 'success' || run.head_sha !== pull.head.sha || run.head_repository?.full_name !== repository || !Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0) continue
       const { jobs, total_count: jobCount } = api<{ total_count: number; jobs: Array<{ name: string; status: string; conclusion: string }> }>(`repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`)

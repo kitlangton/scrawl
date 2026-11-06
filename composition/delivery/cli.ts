@@ -3,7 +3,7 @@ import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPathFor } from './core.ts'
+import { supportsPrCandidate, assessPrior, buildOwner, catalog, inputDigest, makePlan, reusePayload, sealPayload, type Owner, type Target, workflowPathFor } from './core.ts'
 
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
 function output(values: Record<string, string | boolean | number | null>) {
@@ -70,7 +70,7 @@ async function main(args: string[]) {
       result = assessPrior(root, owner, target, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), repo, runs,
         run => ghPages<{ name: string; status: string; conclusion: string | null }>(repo, `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`),
         run => ghPages<{ id: number; name: string; expired: boolean }>(repo, `repos/${repo}/actions/runs/${run.id}/artifacts`))
-      if (!result.reuse && ['engine', 'engine-native'].includes(owner.id) && (target === 'linux-x64' || target === 'macos-x64')) {
+      if (!result.reuse && supportsPrCandidate(owner.id, target)) {
         result = admitPrCandidate(endpoint => gh(repo, endpoint), execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(), result.input_digest, owner.id, target) ?? result
       }
     } catch { result = { reuse: false, reason: 'GitHub identity or artifact history could not be established; rebuilding', input_digest: inputDigest(root, owner, target), prior_artifact_id: null, prior_source_sha: null, prior_run_id: null, prior_run_attempt: null } }
@@ -84,6 +84,9 @@ async function main(args: string[]) {
     assertBuildWorkflowIdentity(env, owner.id)
     buildOwner(root, owner, target, args[3])
     return
+  }
+  if (args.length === 3 && args[0] === 'candidate-support') {
+    output({ supported: supportsPrCandidate(args[1], args[2]) }); return
   }
   if (args.length === 5 && args[0] === 'candidate') {
     const owner = ownerFor(args[1]); const target = targetArg(args[2])
