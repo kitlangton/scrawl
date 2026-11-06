@@ -20,6 +20,13 @@ export interface SelectedFrame {
   markId?: string;
 }
 
+/** Preformatted semantic context supplied for the corresponding selected frame. */
+export interface SemanticFrameText {
+  frameIndex: number;
+  head: string;
+  lines: string[];
+}
+
 export interface RecordTarget {
   app?: string;
   /** Manifest context only; never rendered in summary or clipboard handoff. */
@@ -75,6 +82,8 @@ export interface ProcessingInput {
   contextChanges?: ContextChange[];
   transcript: { text: string; segments: TranscriptSegment[] };
   frames: SelectedFrame[];
+  /** Caller-supplied rich semantic chunks; these are not authenticated bundle facts. */
+  semanticFrameText?: { mode: "rich-context"; frames: SemanticFrameText[] };
   marks?: RecordMark[];
   events?: RecordInteraction[];
   /** Compatibility input retained for callers of the first processing slice. */
@@ -245,6 +254,23 @@ function validate(input: ProcessingInput): void {
     previous = frame.index;
     previousTime = frame.timeMs;
   }
+  if (input.semanticFrameText !== undefined) {
+    const rich = input.semanticFrameText;
+    if (!rich || typeof rich !== "object" || rich.mode !== "rich-context" || !Array.isArray(rich.frames))
+      throw new TypeError("semanticFrameText must use rich-context mode with an ordered frame list");
+    if (rich.frames.length !== input.frames.length)
+      throw new TypeError("semanticFrameText must cover every selected frame exactly once");
+    for (let i = 0; i < rich.frames.length; i++) {
+      const text = rich.frames[i];
+      if (!text || typeof text !== "object" || text.frameIndex !== input.frames[i].index
+        || typeof text.head !== "string" || !Array.isArray(text.lines))
+        throw new TypeError("semanticFrameText must match selected frame identity and contain only text");
+      for (let line = 0; line < text.lines.length; line++) {
+        if (typeof text.lines[line] !== "string")
+          throw new TypeError("semanticFrameText must match selected frame identity and contain only text");
+      }
+    }
+  }
   for (const segment of input.transcript.segments) {
     if (!Number.isSafeInteger(segment.startMs) || segment.startMs < 0 || segment.startMs > input.durationMs)
       throw new RangeError("transcript time must be within the recording duration");
@@ -281,6 +307,7 @@ export function assembleProcessingOutput(
 ): ProcessingOutput {
   validate(input);
   const clipboard = format === "local-clipboard";
+  const richContext = input.frames.length > 0 && input.semanticFrameText !== undefined;
   const lines = [clipboard
     ? `[apparent ${clock(input.durationMs)} · ${input.bundlePath}]`
     : `[apparent ${clock(input.durationMs)} · ${targetLabel(input)} · ${input.bundlePath}]`];
@@ -310,8 +337,22 @@ export function assembleProcessingOutput(
   }
   if (!clipboard && input.autocrop) lines.push(`Cropped to: ${input.autocrop.label} (full frames in ${input.autocrop.fullFramesDirectory}/)`);
 
-  const timeline = legacyTimeline(input);
-  if (input.frames.length) {
+  const timeline = richContext ? [] : legacyTimeline(input);
+  if (richContext) {
+    let shownScreen = input.screenAtStart;
+    for (let i = 0; i < input.frames.length; i++) {
+      const frame = input.frames[i];
+      const screenMarker = frame.screenName && frame.screenName !== shownScreen ? ` ⟨${contextValue(frame.screenName)}⟩` : "";
+      shownScreen = frame.screenName ?? shownScreen;
+      const flag = frame.markId && input.marks?.some((mark) => mark.id === frame.markId && mark.shape === "flag");
+      const flagMarker = flag ? " ⚑" : "";
+      const semantic = input.semanticFrameText!.frames[i];
+      const head = semantic.head ? ` ${semantic.head}` : "";
+      lines.push(`- #${frame.index} (${clock(frame.timeMs)})${screenMarker}${flagMarker}${head}`);
+      for (const line of semantic.lines) lines.push(`  ${line}`);
+      if (!clipboard) lines.push(`  ${frame.absolutePath}`);
+    }
+  } else if (input.frames.length) {
     const firstFrameTime = input.frames[0].timeMs;
     for (const item of timeline.filter((entry) => entry.timeMs < firstFrameTime))
       lines.push(`  · ${clock(item.timeMs)} ${item.text}`);

@@ -44,6 +44,42 @@ test("formats the legacy local handoff order and quotes paths safely", () => {
   assert.ok(!text.includes("PRIVATE WINDOW TITLE") && !text.includes("PRIVATE TOKEN") && !text.includes("abc123") && !text.includes("xyz789"));
 });
 
+test("local handoff uses rich processing chunks without re-adding the legacy timeline", () => {
+  const bundlePath = "/synthetic/rich-handoff.apparent";
+  const { text } = formatLocalHandoff({
+    savedBundle: { status: "saved", bundlePath },
+    requestVideoProof: false,
+    processing: {
+      durationMs: 5_000,
+      bundlePath,
+      target: { app: "Editor", windowTitle: "PRIVATE WINDOW TITLE" },
+      screenAtStart: "Screen One",
+      transcript: { text: "Legacy whole-transcript rendering must be suppressed.", segments: [
+        { startMs: 500, text: "Legacy whole-transcript rendering must be suppressed." },
+      ] },
+      frames: [{ index: 1, timeMs: 500, absolutePath: `${bundlePath}/frames/1.png` }],
+      events: [{ kind: "note", timeMs: 1_000, pin: 1, text: "legacy note duplicate" }],
+      notes: [{ timeMs: 1_000, text: "legacy note duplicate", pin: 1 }],
+      contextChanges: [{ timeMs: 2_000, key: "legacy context duplicate", value: "hidden" }],
+      warnings: [{ kind: "imageQuality", message: "Keep this warning." }],
+      autocrop: { label: "Editor", fullFramesDirectory: `${bundlePath}/frames-full` },
+      semanticFrameText: { mode: "rich-context", frames: [{
+        frameIndex: 1,
+        head: "“Open the menu,”",
+        lines: ["✎① 0:00 pin 1", "· 0:01 Typed note · pin 1 · frames/1.png:\n    Keep this\n    for review", "· 0:02 tab → Preview"],
+      }] },
+    },
+  });
+  assert.match(text, /Inspect contact-sheet\.png and relevant frames/);
+  assert.match(text, /Screen: Screen One/);
+  assert.match(text, /Image quality: Keep this warning\./);
+  assert.match(text, /Uncropped images are in \/synthetic\/rich-handoff\.apparent\/frames-full\//);
+  assert.match(text, /- #1 \(0:00\) “Open the menu,”\n  ✎① 0:00 pin 1/);
+  assert.match(text, /Typed note · pin 1 · frames\/1\.png:\n    Keep this\n    for review/);
+  assert.match(text, /· 0:02 tab → Preview/);
+  assert.doesNotMatch(text, /Legacy whole-transcript|legacy note duplicate|legacy context duplicate|PRIVATE WINDOW TITLE/);
+});
+
 test("preserves the supplied video-proof opt-out exactly", () => {
   assert.ok(formatLocalHandoff({ ...base, requestVideoProof: false }).text.includes("Once per agent session"));
   assert.ok(!formatLocalHandoff({ ...base, requestVideoProof: false }).text.includes("make-it-apparent"));
