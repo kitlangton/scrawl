@@ -221,6 +221,10 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     }
     await client.stop({ captureId: second.captureId, ownerToken: second.ownerToken });
     const areaReady = await until(client, { captureId: second.captureId, ownerToken: second.ownerToken }, ["materials-ready"]);
+    const areaDocument = validateMaterialsDocument(areaReady.materials!, readFileSync(join(areaReady.materials!.root, areaReady.materials!.payloadFile.relativePath)));
+    assert.equal(areaDocument.payload.confirmedSource.rectangle.width, 683, "confirmed source keeps the actual physical area");
+    assert.equal(areaDocument.payload.video.width, 682, "manifest reports the actual even encoded width");
+    assert.equal(areaDocument.payload.video.height, 384);
     const areaMovie = join(areaReady.materials!.root, "recording.mp4");
     const areaInfo = JSON.parse(execFileSync(ffprobeCommand, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=width,height,codec_name", "-of", "json", areaMovie], { encoding: "utf8" }));
     assert.deepEqual(areaInfo.streams[0], { codec_name: "h264", width: 682, height: 384 }, "the odd-width physical area is resampled to valid even encoded dimensions");
