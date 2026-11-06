@@ -1,0 +1,14 @@
+{
+  "schema": 1,
+  "fixtureImports": [
+    {
+      "file": "test/integration/publication-native.test.ts",
+      "function": "packedResourceSdk",
+      "env": "APPARENT_RESOURCE_SDK_CONSUMER",
+      "package": "@apparent/native-resources",
+      "exports": [
+        "."
+      ]
+    }
+  ]
+}

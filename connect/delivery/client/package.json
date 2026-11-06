@@ -6,6 +6,7 @@
   "files": ["dist"],
   "exports": {
     ".": "./dist/index.js",
+    "./recipient-publication": "./dist/recipient/publication.js",
     "./recipient-command": "./dist/cli/recipient.js",
     "./credentials": "./dist/credentials/wire.js",
     "./queue": "./dist/queue/index.js",
