@@ -193,6 +193,117 @@ fn pen_color_protocol_rejects_bad_presence_and_oversized_values() {
 }
 
 #[test]
+fn guarded_pen_color_effect_skips_stale_snapshots_and_keeps_absent_distinct_from_null() {
+    use apparent_config_native::{PenColorEffectResult, compare_and_swap_pen_color_in, with_pen_color_current_in};
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"secret":"preserve","streamState":{"agent":{"revision":4,"value":"opaque"}}}"#).unwrap();
+    let absent = apparent_config_native::LegacyValue { present: false, value: Value::Null };
+    let null = apparent_config_native::LegacyValue { present: true, value: Value::Null };
+    let called = AtomicBool::new(false);
+
+    // A newer top-level CAS completes first; a stale apply must not run.
+    assert_eq!(compare_and_swap_pen_color_in(&path, absent.clone(), null.clone()).unwrap(),
+        apparent_config_native::LegacyCasResult::Saved);
+    let stale = with_pen_color_current_in(&path, absent, || {
+        called.store(true, Ordering::SeqCst);
+        Ok("must not apply")
+    }).unwrap();
+    assert_eq!(stale, PenColorEffectResult::Conflict(null.clone()));
+    assert!(!called.load(Ordering::SeqCst));
+
+    let applied = with_pen_color_current_in(&path, null.clone(), || Ok("synthetic effect".to_owned())).unwrap();
+    assert_eq!(applied, PenColorEffectResult::Applied("synthetic effect".to_owned()));
+    let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["penColor"], Value::Null);
+    assert_eq!(saved["secret"], "preserve");
+    assert_eq!(saved["streamState"]["agent"], json!({"revision":4,"value":"opaque"}));
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn guarded_pen_color_effect_holds_lock_until_interprocess_writer_can_commit() {
+    use apparent_config_native::{PenColorEffectResult, with_pen_color_current_in};
+    use std::sync::mpsc;
+    use std::time::Duration;
+
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"penColor":"blue","keep":true}"#).unwrap();
+    let expected = apparent_config_native::LegacyValue { present: true, value: json!("blue") };
+    let guard_path = path.clone();
+    let (entered_tx, entered_rx) = mpsc::channel();
+    let (release_tx, release_rx) = mpsc::channel();
+    let effect = std::thread::spawn(move || with_pen_color_current_in(&guard_path, expected, || {
+        entered_tx.send(()).unwrap();
+        release_rx.recv_timeout(Duration::from_secs(3)).unwrap();
+        Ok("native callback completed")
+    }));
+    entered_rx.recv_timeout(Duration::from_secs(2)).unwrap();
+
+    use std::os::fd::AsRawFd;
+    let probe_path = dir.join("config.json.lock");
+    let probe = fs::OpenOptions::new().read(true).write(true).open(probe_path).unwrap();
+    let probe_result = unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) };
+    assert_eq!(probe_result, -1, "effect callback must retain the shared config lock");
+    assert_eq!(std::io::Error::last_os_error().kind(), std::io::ErrorKind::WouldBlock);
+
+    let writer_path = path.clone();
+    let (writer_started_tx, writer_started_rx) = mpsc::channel();
+    let (writer_done_tx, writer_done_rx) = mpsc::channel();
+    let writer = std::thread::spawn(move || {
+        writer_started_tx.send(()).unwrap();
+        let result = host(&writer_path, "record", &req("later", "compareAndSwapPenColor",
+            ",\"expectedLegacy\":{\"present\":true,\"value\":\"blue\"},\"next\":{\"present\":true,\"value\":\"green\"}")).1;
+        writer_done_tx.send(response(&result)).unwrap();
+    });
+    writer_started_rx.recv_timeout(Duration::from_secs(1)).unwrap();
+    assert!(writer_done_rx.recv_timeout(Duration::from_millis(150)).is_err(),
+        "interprocess config writer must remain blocked during the effect callback");
+
+    release_tx.send(()).unwrap();
+    assert_eq!(effect.join().unwrap().unwrap(), PenColorEffectResult::Applied("native callback completed"));
+    assert_eq!(writer_done_rx.recv_timeout(Duration::from_secs(2)).unwrap()["status"], "saved");
+    writer.join().unwrap();
+    let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["penColor"], "green");
+    assert_eq!(saved["keep"], true);
+    assert_eq!(unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_EX | libc::LOCK_NB) }, 0,
+        "writer lock must be released when the effect callback finishes");
+    assert_eq!(unsafe { libc::flock(probe.as_raw_fd(), libc::LOCK_UN) }, 0);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn guarded_pen_color_effect_failure_and_invalid_paths_never_claim_applied() {
+    use apparent_config_native::{PenColorEffectResult, with_pen_color_current_in};
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::os::unix::fs::symlink;
+
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"penColor":"blue","secret":"unchanged"}"#).unwrap();
+    let expected = apparent_config_native::LegacyValue { present: true, value: json!("blue") };
+    let before = fs::read(&path).unwrap();
+    let failed = with_pen_color_current_in(&path, expected.clone(), || -> anyhow::Result<()> {
+        anyhow::bail!("synthetic native effect failure")
+    });
+    assert!(failed.is_err());
+    assert!(!matches!(failed, Ok(PenColorEffectResult::Applied(_))));
+    assert_eq!(fs::read(&path).unwrap(), before);
+
+    let invalid = dir.join("link.json");
+    symlink(&path, &invalid).unwrap();
+    let called = AtomicBool::new(false);
+    assert!(with_pen_color_current_in(&invalid, expected, || {
+        called.store(true, Ordering::SeqCst);
+        Ok(())
+    }).is_err());
+    assert!(!called.load(Ordering::SeqCst));
+    assert_eq!(fs::read(&path).unwrap(), before);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn malformed_and_unsafe_lock_inputs_are_rejected_without_rewriting_config() {
     let dir = temp(); let path = dir.join("config.json");
     let malformed = b"{broken"; fs::write(&path, malformed).unwrap();
