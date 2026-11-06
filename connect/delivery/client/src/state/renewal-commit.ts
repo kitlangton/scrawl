@@ -33,7 +33,10 @@ async function readEvidence<T extends object>(directory: StateDirectory, name: s
 /** Internal coordinated-writer preparation; no production caller or package export.
  * Caller must own the sole state writer before using this against live state.
  * Acquire scope then queue, recover only completed exact-base evidence, publish
- * the credential durably, then remove only the evidence inodes actually consumed.
+ * the credential durably, then check evidence stamps before cleaning their paths.
+ * Cleanup requires the legacy cooperative scope/queue protocol in the admitted
+ * private namespace. Path check + unlink is not atomic against a same-UID process
+ * bypassing those locks; that threat is outside the directory admission boundary.
  * No HTTP, expiry extension, config changes, retry or competing writer activation.
  */
 export async function commitCompletedRenewal(directoryPath: string,
@@ -103,6 +106,8 @@ export async function commitCompletedRenewal(directoryPath: string,
           fence(); if (!await samePathFd(directory)) reject("unavailable");
           const named = await privateStat(file);
           if (!named.isFile() || named.isSymbolicLink() || stamp(named) !== expectedStamp) reject("unavailable");
+          // Supported mutators are excluded by our scope/queue leases. This is
+          // an observed stamp check, not an atomic inode-conditional unlink.
           await unlink(file);
         }
         await directory.handle.sync(); fence();

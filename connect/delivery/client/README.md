@@ -355,7 +355,13 @@ legacy renewal response in isolated writer preparation. It shares the existing
 namespace admission, private readers and lock checks; takes scope then queue;
 rechecks the full stored credential, cancellation, intent and evidence identities;
 and uses private native replacement plus verified readback. Only then may it
-unlink the consumed journal/response inodes and sync their parent. It preserves
+check the consumed evidence stamps, unlink their paths and sync the parent.
+Cleanup relies on relevant writers honoring the legacy scope/queue protocol in
+the admitted private namespace. The stamp check and unlink are separate calls;
+a same-UID process bypassing those locks can replace a name between them. This
+follows the existing directory admission and legacy `clear_renewal` trust boundary,
+and does not promise atomic inode-conditional deletion against such a process.
+It preserves
 the original issue time and leaves other scopes and config untouched. Possible
 effects, failed acknowledgements, cancellation or cleanup/lease failures report
 uncertainty without retry or restoration. It has no production caller or package
