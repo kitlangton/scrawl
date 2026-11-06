@@ -3,6 +3,7 @@ import { cp, mkdir, mkdtemp, rename, rm, rmdir, writeFile } from 'node:fs/promis
 import { dirname, join, resolve } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { digest, exactFiles, readRegular, readShell, readStream } from './artifacts.ts';
+import { verifyNativeModes, type NativeFileModes } from './native-modes.ts';
 
 /** No compiler or owner source access: only consume already-built, validated artifacts. */
 export async function assemble(shell: string, streams: string[], destination: string) {
@@ -27,6 +28,7 @@ export async function assemble(shell: string, streams: string[], destination: st
     for (const [name, hash] of Object.entries(shellManifest.files)) {
       assert.equal(digest(await readRegular(join(stage, name))), hash, 'Shell changed during assembly');
     }
+    if (shellManifest.nativeFiles) await verifyNativeModes(stage, shellManifest.nativeFiles);
     await rm(join(stage, 'manifest.json'));
     await writeFile(join(stage, 'registry.js'), 'export const streams = ' + JSON.stringify(manifests) + ';\n');
     const files: Record<string, string> = {};
@@ -34,7 +36,8 @@ export async function assemble(shell: string, streams: string[], destination: st
       ['manifest.json', 'index.js', ...Object.keys(manifest.assets ?? {})].map(file => `streams/${manifest.id}/${file}`))];
     for (const file of inventory) files[file] = digest(await readRegular(join(stage, file)));
     await writeFile(join(stage, 'assembly.json'), JSON.stringify({ schemaVersion: 1,
-      shell: digest(JSON.stringify(shellManifest)), streams: manifests, files }, null, 2) + '\n');
+      shell: digest(JSON.stringify(shellManifest)), streams: manifests, files,
+      ...(shellManifest.nativeFiles ? { nativeFiles: shellManifest.nativeFiles } : {}) }, null, 2) + '\n');
     await verifyAssembly(stage);
     // Reserve a fresh destination exclusively, then replace our own empty reservation.
     // Existing applications/assemblies are never overwritten.
@@ -46,13 +49,17 @@ export async function assemble(shell: string, streams: string[], destination: st
 }
 export async function verifyAssembly(directory: string) {
   const receipt = JSON.parse((await readRegular(join(directory, 'assembly.json'))).toString()) as {
-    schemaVersion: number; files: Record<string, string>;
+    schemaVersion: number; files: Record<string, string>; nativeFiles?: NativeFileModes;
   };
   assert.equal(receipt.schemaVersion, 1);
   for (const name of Object.keys(receipt.files)) {
     assert(!name.includes('..') && !name.startsWith('/') && !name.includes('\\'), 'Invalid assembly path');
   }
   await exactFiles(directory, [...Object.keys(receipt.files), 'assembly.json']);
+  if (Object.hasOwn(receipt, 'nativeFiles')) {
+    await verifyNativeModes(directory, receipt.nativeFiles!);
+    assert.deepEqual(Object.keys(receipt.nativeFiles!).sort(), Object.keys(receipt.files).filter(name => name.startsWith('native-record/')).sort(), 'Incomplete native mode inventory');
+  } else assert(!Object.keys(receipt.files).some(name => name.startsWith('native-record/')), 'Missing native mode inventory');
   for (const [name, hash] of Object.entries(receipt.files)) {
     assert.equal(digest(await readRegular(join(directory, name))), hash, 'Assembly checksum mismatch');
   }

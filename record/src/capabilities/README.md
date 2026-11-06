@@ -52,6 +52,59 @@ unavailable/unknown; never invent a consumed event. No production shortcut
 reservation producer exists yet. The fixture defaults to `unavailable` and refuses
 arm/cancel until its driver publishes a supported state.
 
+## Shortcut-trial and causal note/stroke evidence
+
+`shortcutTrial` is separate from `nextShortcutAdmission`: it represents a
+request-scoped physical shortcut test and never starts capture. Its binding
+includes the producer epoch/revision, opaque registration identity and exact
+effective shortcut. `idle` is valid only at that exact source revision;
+reservations retain an opaque identity through `reserved`, `pressing`,
+`observed`, `expired`, `cancelled` or `unknown`. `observed` requires a physical
+press/release pair. A `begin-shortcut-trial` result of `accepted` is dispatch
+only and cannot produce that observation. Binding or epoch changes invalidate
+the prior reservation; stale reservation identity is retained as `unknown`.
+When the native port omits this producer, the provider publishes `unavailable`
+and refuses trial commands. The existing arm-next-shortcut command is not a
+physical trial and must not be substituted.
+
+A successful `note-save` outcome means a trusted producer has durably saved a
+nonempty note. It exposes only opaque note and receipt IDs plus a
+`screenStrokeBarrier` cursor; note content and paths are not part of the
+capability. Draft, empty, failed and cancelled outcomes are non-success facts.
+Screen accepted-stroke outcomes may carry the durable cursor
+`{ historyId, sequence }`. A stroke is causally after a note only when it belongs to the same
+capture, has the same history incarnation and a sequence strictly greater than
+the note's barrier. Event timestamps and receipt arrival order do not establish
+this relation. Missing cursors remain unavailable for causal comparisons.
+Receipt IDs bind one immutable note identity/barrier, and stroke IDs bind one
+surface and observed cursor within a capture. The provider rejects conflicting
+revisions of known identities, including across producer reconnects, using its
+existing fact history. Previously unseen older events can still arrive late.
+The producer must retain those identities and causal order durably across a
+provider restart; the Record projection does not manufacture a counter.
+
+These are public additive contracts, not claims that the producers exist.
+Production currently has no physical shortcut-trial producer, durable nonempty
+note receipt/barrier producer, or screen-stroke history cursor producer. Their
+owners must supply authoritative scoped facts before these capabilities become
+available. Platform must publish guarded non-recording trial reservation and
+physical press/release readback for the exact effective registration incarnation;
+its current permission/shortcut port does not provide that operation. Engine must
+publish a durable capture-scoped screen-stroke history and an authoritative
+cursor barrier. Record retains note orchestration and receipt translation: the
+existing authoritative note persistence remains
+`capture/engine/runtime/recording/notes.rs::Store::save/commit`. Its empty-save
+`Ok` and Desktop's `saved_count` are not new durable-note receipts. A producer
+must bind an actual nonempty committed save to an opaque receipt and subsequent
+native cursor barrier; this schema creates no competing note writer or native
+protocol. Native Linux/Mac effect and published artifact evidence remain required
+for those producers. Fixtures
+are synthetic controlled facts only; they establish no native effect or durable
+save. The fixtures cover physical pair/no event, unrelated request, stale
+epoch/binding, expiry/cancellation/unknown/reconnect and note draft/empty/
+failure/cancellation, pre/post-barrier strokes, unrelated history/capture and
+late receipts/finalization.
+
 `@apparent/record/fixtures` exports `createRecordFixture`, `fixtureScenarios` and
 test-only driver types. Instantiate separately for each consumer test:
 
@@ -80,9 +133,10 @@ stale frames return false.
 Use `disconnect`/`reconnect` for connection/epoch changes. Retired epochs return
 false. Each accepted publication reaches observers; listener failures are isolated.
 Script transport uncertainty/refusal/cancellation with `setNextResult`.
-The seven named scenarios cover permission relaunch, external shortcut refusal,
-pen failure, unrelated capture, saved history after reconnect, ambiguous control
-and unsubscribe during recording. They make no native/local-only proof claim.
+The named scenarios include permission relaunch, external shortcut refusal,
+pen failure, unrelated capture, saved history after reconnect, ambiguous control,
+unsubscribe during recording and the synthetic onboarding evidence cases above.
+They make no native/local-only proof claim.
 
 Unsubscribe and `detach()` never issue Stop/Cancel; the owning host keeps capture
 alive and handles shutdown safely. Record stores general facts only. Consumers

@@ -4,7 +4,12 @@ export const fixtureScenarios = [
   "permission-granted-relaunch-needed", "external-shortcut-save-failure",
   "pen-write-failure-preserves-effective", "unrelated-capture",
   "reconnect-with-saved-history", "ambiguous-command-preserves-capture",
-  "unsubscribe-during-recording",
+  "unsubscribe-during-recording", "shortcut-trial-idle", "shortcut-trial-physical-press-release", "shortcut-trial-no-event",
+  "shortcut-trial-unrelated-request", "shortcut-trial-stale-epoch", "shortcut-trial-changed-binding",
+  "shortcut-trial-expired", "shortcut-trial-cancelled", "shortcut-trial-unknown", "shortcut-trial-reconnect",
+  "practice-note-draft", "practice-note-empty", "practice-note-failed", "practice-note-cancelled", "practice-note-saved",
+  "practice-note-early-stroke", "practice-note-first-post-stroke", "practice-note-unrelated-history",
+  "practice-note-unrelated-capture", "practice-note-late-pre-note-receipt", "practice-note-late-finalization",
 ] as const;
 export type FixtureScenario = (typeof fixtureScenarios)[number];
 type ScriptedResult = "accepted" | "refused" | "cancelled" | "outcome-unknown";
@@ -30,6 +35,8 @@ function initial(scenario: FixtureScenario): CapabilitySnapshot {
     pen: { effective: "coral", supported: ["coral", "purple", "blue", "green"] }, captures: [],
     // No current production adapter owns an armed-shortcut reservation.
     nextShortcutAdmission: { state: "unavailable" },
+    // Capability fixtures are controlled facts; production providers default unavailable.
+    shortcutTrial: { state: "unavailable" },
   };
   if (scenario === "permission-granted-relaunch-needed") snapshot.readiness.requirements[0] = {
     id: "screen-capture", required: true, status: "granted", usableNow: false, relaunchNeeded: true, allowedRepairActions: ["request-safe-relaunch"],
@@ -39,6 +46,41 @@ function initial(scenario: FixtureScenario): CapabilitySnapshot {
   if (scenario === "unrelated-capture") snapshot.captures = [{ captureId: "capture-unrelated", delivery: "unknown", phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00.000Z", ok: true }] }];
   if (scenario === "reconnect-with-saved-history") snapshot.captures = [{ captureId: "capture-saved", delivery: "unknown", phase: "saved", outcomes: [{ kind: "save", at: "2025-01-01T00:00:01.000Z", ok: true }] }];
   if (scenario === "ambiguous-command-preserves-capture" || scenario === "unsubscribe-during-recording") snapshot.captures = [{ captureId: "capture-active", delivery: "unknown", phase: "recording", outcomes: [{ kind: "first-frame-start", at: "2025-01-01T00:00:00.000Z", ok: true }] }];
+  if (scenario.startsWith("shortcut-trial-")) {
+    const bindingId = scenario === "shortcut-trial-changed-binding" ? "binding-changed" : "binding-fixture-1";
+    snapshot.shortcut = { ...snapshot.shortcut, bindingId };
+    const reservationId = scenario === "shortcut-trial-unrelated-request" ? "other-request-reservation" : "fixture-trial-reservation";
+    const sourceEpoch = scenario === "shortcut-trial-stale-epoch" || scenario === "shortcut-trial-reconnect" ? "retired-native-epoch" : "fixture-native-epoch";
+    const binding = { sourceEpoch, sourceRevision: 1, bindingId: "binding-fixture-1", effectiveBinding: "Ctrl+Shift+R" };
+    if (scenario === "shortcut-trial-idle") snapshot.shortcutTrial = { state: "idle", ...binding };
+    else if (["shortcut-trial-stale-epoch", "shortcut-trial-changed-binding", "shortcut-trial-reconnect"].includes(scenario))
+      snapshot.shortcutTrial = { state: "unknown", ...binding, reservationId };
+    else if (scenario === "shortcut-trial-no-event") snapshot.shortcutTrial = { state: "reserved", ...binding, reservationId, expiresAt: "2025-01-01T00:01:00.000Z" };
+    else if (scenario === "shortcut-trial-physical-press-release" || scenario === "shortcut-trial-unrelated-request" || scenario === "shortcut-trial-stale-epoch" || scenario === "shortcut-trial-changed-binding" || scenario === "shortcut-trial-reconnect")
+      snapshot.shortcutTrial = { state: "observed", ...binding, reservationId, pressId: "fixture-physical-press-release", pressedAt: "2025-01-01T00:00:01.000Z", releasedAt: "2025-01-01T00:00:01.100Z" };
+    else snapshot.shortcutTrial = { state: scenario.slice("shortcut-trial-".length) as "expired" | "cancelled" | "unknown", ...binding, reservationId };
+  }
+  if (scenario.startsWith("practice-note-")) {
+    const captureId = scenario === "practice-note-unrelated-capture" ? "another-capture" : "practice-capture";
+    const at = "2025-01-01T00:00:05.000Z";
+    let note: CapabilitySnapshot["captures"][number]["outcomes"][number];
+    if (["practice-note-draft", "practice-note-empty", "practice-note-failed", "practice-note-cancelled"].includes(scenario)) {
+      const reason = scenario === "practice-note-draft" ? "draft" : scenario === "practice-note-empty" ? "empty" : scenario === "practice-note-cancelled" ? "cancelled" : "failed";
+      note = { kind: "note-save", at, ok: false, reason };
+    } else note = { kind: "note-save", at, ok: true, noteId: "opaque-note-1", receiptId: "opaque-note-receipt-1", screenStrokeBarrier: { historyId: "screen-history-1", sequence: 10 } };
+    const historyId = scenario === "practice-note-unrelated-history" ? "screen-history-other" : "screen-history-1";
+    const sequence = scenario === "practice-note-first-post-stroke" ? 11 : scenario === "practice-note-late-finalization" ? 12 : scenario === "practice-note-unrelated-history" ? 11 : 9;
+    const stroke = { kind: "accepted-stroke" as const, at: "2025-01-01T00:00:04.000Z", ok: true as const, surface: "screen" as const, strokeId: "opaque-stroke-1", cursor: { historyId, sequence } };
+    const outcomes = scenario === "practice-note-late-finalization"
+      ? [stroke, { ...note, screenStrokeBarrier: { historyId, sequence } }, { kind: "save" as const, at, ok: true }]
+      : scenario === "practice-note-saved" || ["practice-note-draft", "practice-note-empty", "practice-note-failed", "practice-note-cancelled"].includes(scenario) ? [note] : [note, stroke];
+    if (scenario === "practice-note-unrelated-capture") {
+      snapshot.captures = [
+        { captureId: "practice-capture", delivery: "unknown", phase: "recording", outcomes: [note] },
+        { captureId, delivery: "unknown", phase: "recording", outcomes: [stroke] },
+      ];
+    } else snapshot.captures = [{ captureId, delivery: "unknown", phase: scenario === "practice-note-late-finalization" ? "saved" : "recording", outcomes }];
+  }
   return snapshot;
 }
 
@@ -85,6 +127,20 @@ export function createRecordFixture(scenario: FixtureScenario = "permission-gran
     }
     if (command.type === "arm-next-shortcut" && snapshot.nextShortcutAdmission.state !== "idle") return "next-shortcut admission is unavailable or not idle";
     if (command.type === "cancel-next-shortcut" && (snapshot.nextShortcutAdmission.state !== "armed" || snapshot.nextShortcutAdmission.admissionId !== command.admissionId)) return "matching next-shortcut admission is not armed";
+    if (command.type === "begin-shortcut-trial") {
+      const trial = snapshot.shortcutTrial;
+      if (trial?.state !== "idle") return "physical shortcut trial producer unavailable or not idle";
+      if (command.sourceEpoch !== trial.sourceEpoch || command.sourceRevision !== trial.sourceRevision || command.bindingId !== trial.bindingId ||
+          command.effectiveBinding !== trial.effectiveBinding || snapshot.shortcut.bindingId !== trial.bindingId || snapshot.shortcut.effective !== trial.effectiveBinding ||
+          snapshot.shortcut.registration !== "registered" || snapshot.shortcut.externallyManaged || snapshot.shortcut.draft !== null || !command.reservationId.trim() ||
+          !Number.isFinite(Date.parse(command.expiresAt))) return "physical shortcut trial binding or source revision changed";
+    }
+    if (command.type === "cancel-shortcut-trial") {
+      const trial = snapshot.shortcutTrial;
+      if ((trial?.state !== "reserved" && trial?.state !== "pressing") || trial.reservationId !== command.reservationId ||
+          trial.bindingId !== snapshot.shortcut.bindingId || trial.effectiveBinding !== snapshot.shortcut.effective)
+        return "matching physical shortcut trial reservation unavailable";
+    }
     if (command.type === "request-permission" || command.type === "open-system-settings") {
       const requirement = snapshot.readiness.requirements.find(r => r.id === command.requirementId);
       if (!requirement?.allowedRepairActions.includes(command.type)) return "repair action unavailable";

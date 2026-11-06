@@ -42,9 +42,13 @@ try {
     import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, type AbsentDestinationBinding } from '@apparent/record/host';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
-    import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
+    import { createRecordCapabilityProvider, hasConfirmedArtifactOpen, type DurableNoteSaveOutcome, type ScreenStrokeCursor, type ShortcutTrialFact } from '@apparent/record/capabilities';
     import { createRecordNativePort, type NativeHostPortInput } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
+    declare const cursor: ScreenStrokeCursor;
+    declare const trial: ShortcutTrialFact;
+    declare const note: DurableNoteSaveOutcome;
+    void [cursor, trial, note];
     declare const destinations: AbsentDestinationAllocator;
     const exact: Promise<AbsentDestinationBinding> = destinations.reserveExact('request', '/home/user/output/requested.apparent');
     declare const nativePort: NativeHostPortInput;
@@ -79,6 +83,11 @@ try {
     assert.equal(typeof createRecordNativePort, 'function');
     assert.equal(typeof hasConfirmedArtifactOpen, 'function');
     assert.equal(hasConfirmedArtifactOpen(createRecordFixture().driver.current(), 'unknown'), false);
+    const trial = createRecordFixture('shortcut-trial-physical-press-release').driver.current().shortcutTrial;
+    assert.equal(trial?.state, 'observed');
+    const note = createRecordFixture('practice-note-first-post-stroke').driver.current().captures[0].outcomes[0];
+    assert.equal(note?.kind, 'note-save');
+    assert.deepEqual(note?.kind === 'note-save' && note.ok ? note.screenStrokeBarrier : null, { historyId: 'screen-history-1', sequence: 10 });
     console.log('headless packed runtime and declaration consumer passed');
   `], { cwd: headless });
   process.stdout.write(runtime.stdout);

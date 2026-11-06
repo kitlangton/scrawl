@@ -8,7 +8,7 @@ const command = (snapshot: CapabilitySnapshot, payload: Payload): RecordCommand 
 });
 
 test("permission relaunch and active capture refuse start without manufactured facts", async () => {
-  assert.equal(fixtureScenarios.length, 7);
+  assert.ok(fixtureScenarios.length > 20);
   for (const scenario of ["permission-granted-relaunch-needed", "unrelated-capture"] as const) {
     const { client, driver } = createRecordFixture(scenario);
     const before = driver.current();
@@ -17,6 +17,51 @@ test("permission relaunch and active capture refuse start without manufactured f
     assert.deepEqual(driver.current(), before);
     assert.deepEqual(driver.commands(), []);
   }
+});
+
+test("synthetic onboarding capability fixtures keep physical trials and durable-note stroke barriers explicit", () => {
+  const observed = createRecordFixture("shortcut-trial-physical-press-release").driver.current();
+  assert.equal(observed.shortcutTrial?.state, "observed");
+  if (observed.shortcutTrial?.state === "observed") {
+    assert.equal(observed.shortcutTrial.effectiveBinding, observed.shortcut.effective);
+    assert.ok(observed.shortcutTrial.reservationId && observed.shortcutTrial.pressId);
+    assert.ok(Date.parse(observed.shortcutTrial.releasedAt) >= Date.parse(observed.shortcutTrial.pressedAt));
+  }
+  assert.equal(createRecordFixture("shortcut-trial-no-event").driver.current().shortcutTrial?.state, "reserved");
+  const unrelatedTrial = createRecordFixture("shortcut-trial-unrelated-request").driver.current().shortcutTrial;
+  assert.equal(unrelatedTrial?.state, "observed");
+  if (unrelatedTrial?.state === "observed") assert.equal(unrelatedTrial.reservationId, "other-request-reservation");
+  assert.equal(createRecordFixture("shortcut-trial-stale-epoch").driver.current().shortcutTrial?.state, "unknown");
+  assert.equal(createRecordFixture("shortcut-trial-changed-binding").driver.current().shortcutTrial?.state, "unknown");
+  for (const state of ["expired", "cancelled", "unknown"] as const)
+    assert.equal(createRecordFixture(`shortcut-trial-${state}`).driver.current().shortcutTrial?.state, state);
+
+  for (const [scenario, reason] of [["practice-note-draft", "draft"], ["practice-note-empty", "empty"], ["practice-note-failed", "failed"], ["practice-note-cancelled", "cancelled"]] as const) {
+    const capture = createRecordFixture(scenario).driver.current().captures[0]!;
+    assert.deepEqual(capture.outcomes[0], { kind: "note-save", at: "2025-01-01T00:00:05.000Z", ok: false, reason });
+  }
+  const savedNote = createRecordFixture("practice-note-saved").driver.current().captures[0]!.outcomes[0]!;
+  assert.equal(savedNote.kind, "note-save");
+  if (savedNote.kind === "note-save" && savedNote.ok) {
+    assert.ok(savedNote.noteId && savedNote.receiptId);
+    assert.deepEqual(savedNote.screenStrokeBarrier, { historyId: "screen-history-1", sequence: 10 });
+    assert.equal(JSON.stringify(savedNote).includes("content"), false);
+  }
+  const strokeSequence = (scenario: import("../src/capabilities/fixtures.ts").FixtureScenario) => {
+    const facts = createRecordFixture(scenario).driver.current();
+    return facts.captures.flatMap(capture => capture.outcomes).filter((outcome): outcome is Extract<typeof outcome, { kind: "accepted-stroke"; ok: true; surface: "screen" }> => outcome.kind === "accepted-stroke" && outcome.ok && outcome.surface === "screen");
+  };
+  assert.equal(strokeSequence("practice-note-early-stroke")[0]?.cursor?.sequence, 9);
+  assert.equal(strokeSequence("practice-note-first-post-stroke")[0]?.cursor?.sequence, 11);
+  assert.equal(strokeSequence("practice-note-unrelated-history")[0]?.cursor?.historyId, "screen-history-other");
+  const unrelated = createRecordFixture("practice-note-unrelated-capture").driver.current().captures;
+  assert.notEqual(unrelated[0]?.captureId, unrelated[1]?.captureId);
+  assert.equal(strokeSequence("practice-note-late-pre-note-receipt")[0]?.cursor?.sequence, 9);
+  const finalized = createRecordFixture("practice-note-late-finalization").driver.current();
+  assert.equal(finalized.captures[0]?.phase, "saved");
+  const finalNote = finalized.captures[0]?.outcomes.find((outcome): outcome is Extract<typeof outcome, { kind: "note-save" }> => outcome.kind === "note-save");
+  assert.deepEqual(finalNote?.ok ? finalNote.screenStrokeBarrier : null, { historyId: "screen-history-1", sequence: 12 });
+  assert.equal(strokeSequence("practice-note-late-finalization")[0]?.cursor?.sequence, 12);
 });
 
 test("external shortcut save and failed pen write preserve effective facts", async () => {
@@ -266,4 +311,26 @@ test('explicit Start resumes only after next-shortcut reservation is no longer a
   driver.publish({...armed,revision:armed.revision+1,nextShortcutAdmission:{state:'cancelled',admissionId:'one'}});
   assert.equal((await client.execute(command(driver.current(),{type:'start-capture',delivery:'host-default'}))).status,'accepted');
   assert.deepEqual(driver.current().captures,initial.captures);
+});
+
+
+test("shortcut trial fixtures admit only the exact idle binding and never create captures", async () => {
+  const fixture = createRecordFixture("shortcut-trial-idle");
+  const before = fixture.driver.current();
+  const trial = before.shortcutTrial;
+  assert.equal(trial?.state, "idle");
+  if (trial?.state !== "idle") throw new Error("missing fixture idle binding");
+  const input = { type: "begin-shortcut-trial" as const, reservationId: "trial-request", bindingId: trial.bindingId, effectiveBinding: trial.effectiveBinding,
+    sourceEpoch: trial.sourceEpoch, sourceRevision: trial.sourceRevision, expiresAt: "2026-11-07T00:00:00Z" };
+  assert.equal((await fixture.client.execute(command(before, { ...input, bindingId: "different" }))).status, "refused");
+  assert.equal((await fixture.client.execute(command(before, input))).status, "accepted");
+  assert.equal(fixture.driver.current().shortcutTrial?.state, "idle", "dispatch is not an observed press or reservation");
+  assert.deepEqual(fixture.driver.current().captures, []);
+  const unavailable = createRecordFixture("unsubscribe-during-recording");
+  assert.equal((await unavailable.client.execute(command(unavailable.driver.current(), input))).status, "refused");
+  for (const scenario of ["shortcut-trial-stale-epoch", "shortcut-trial-changed-binding", "shortcut-trial-reconnect"] as const) {
+    const current = createRecordFixture(scenario).driver.current();
+    assert.equal(current.shortcutTrial?.state, "unknown");
+    assert.ok(current.shortcutTrial && "reservationId" in current.shortcutTrial);
+  }
 });
