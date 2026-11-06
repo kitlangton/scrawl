@@ -245,6 +245,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.ok(reconnectSource);
     const fourth = startInput(reconnectSource, id(), token(), "cancel");
     await client.start(fourth);
+    await until(client, { captureId: fourth.captureId, ownerToken: fourth.ownerToken }, ["recording"]);
     process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
     const coldCancelClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
     try {
