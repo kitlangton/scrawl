@@ -81,9 +81,10 @@ handoff: Record must preflight and show a typed oversize refusal without
 truncating, splitting, normalizing, or substituting other content.
 
 An applied receipt contains only the lowercase SHA-256 digest and exact UTF-8
-byte length of the supplied string. Linux confirms the active clipboard owner and
-exact text using the existing X11/Wayland backends; macOS requires the pasteboard
-change count to advance and reads back the exact string type. Unsupported backends
+byte length of the supplied string. X11 can confirm its live owner and exact text.
+Wayland performs the write/readback but reports `outcome-unknown`: matching bytes
+cannot establish compositor selection ownership. macOS requires the pasteboard
+change count to advance and remain stable across exact string readback. Unsupported backends
 refuse before writing. A mismatch, timeout after possible effect, or lost reply is
 `outcome-unknown`; this port has no read operation and never restores or returns
 ambient clipboard contents. The bounded native worker admits one write at a time.
