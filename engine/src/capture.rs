@@ -828,9 +828,10 @@ fn active_status(shared: &Shared) -> Result<Value, &'static str> {
         .map_err(|_| "internal")?;
     let durable = read_journal(&shared.directory, &prior.capture_id, &prior.owner_token)?;
     drop(transaction);
-    let mut j = shared.journal.lock().map_err(|_| "internal")?;
-    *j = durable;
-    Ok(status(&j))
+    // The worker can have admitted a native file identity in memory before
+    // its next durable write. Inspection is read-only: replacing that working
+    // state with this earlier disk snapshot can erase the recovery binding.
+    Ok(status(&durable))
 }
 
 fn same_catalog(left: &[Source], right: &[Source]) -> bool {
@@ -1779,6 +1780,50 @@ mod unsealed_cleanup_tests {
             cancel_requested: true,
         };
         (base, capture_root, root, journal)
+    }
+
+    #[test]
+    fn status_read_cannot_erase_an_unpersisted_movie_binding_before_crash_recovery() {
+        let (base, directory, root, mut journal) = fixture();
+        journal.state = "starting".into();
+        journal.cancel_requested = false;
+        let mut durable = journal.clone();
+        durable.partial_movie = None;
+        let store = apparent_capture_engine::SecureStore::open(&directory).unwrap();
+        store
+            .write_new(
+                &path_id(&journal.capture_id),
+                &serde_json::to_vec(&durable).unwrap(),
+            )
+            .unwrap();
+        let shared = Shared {
+            journal: Mutex::new(journal),
+            directory: directory.clone(),
+            runtime: Runtime::open(&base).unwrap(),
+            stop: AtomicBool::new(false),
+            cancel: AtomicBool::new(false),
+            epoch: Instant::now(),
+        };
+        // Exact worker window: its file identity is in memory, but its next
+        // persist has not happened. RPC inspection must not replace that state.
+        assert_eq!(active_status(&shared).unwrap()["state"], "starting");
+        persist(&shared).unwrap();
+        shared.journal.lock().unwrap().state = "recording".into();
+        persist(&shared).unwrap();
+        let saved = read_journal(&directory, &durable.capture_id, &durable.owner_token).unwrap();
+        let cleanup = remove_unsealed(&directory, &saved);
+        if cleanup.is_err() {
+            eprintln!("retained status-race fixture: {}", base.display());
+        }
+        assert_eq!(
+            cleanup,
+            Ok(()),
+            "cold recovery must retain the admitted movie identity"
+        );
+        assert!(!root.exists());
+        drop(shared);
+        drop(store);
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]

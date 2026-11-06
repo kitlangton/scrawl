@@ -24,8 +24,12 @@ async function readyXvfb(command = xvfbCommand, prefix: string[] = []) {
   let diagnostics = "";
   let announcement = "";
   let launchError: Error | undefined;
-  const server = spawn(command, [...prefix, "-displayfd", "3", "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe", "pipe"] });
+  let announcementEnded = false;
+  let childClosed = false;
+  const server = spawn(command, [...prefix, "-displayfd", "3", "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe", "pipe"], detached: true });
   server.on("error", (error) => { launchError = error; });
+  server.once("close", () => { childClosed = true; });
+  server.stdio[3]?.once("end", () => { announcementEnded = true; });
   server.stderr?.on("data", (chunk: Buffer) => { diagnostics = (diagnostics + chunk.toString()).slice(-8192); });
   server.stdio[3]?.on("data", (chunk: Buffer) => { announcement = (announcement + chunk.toString()).slice(0, 128); });
   const deadline = Date.now() + 10_000;
@@ -46,17 +50,18 @@ async function readyXvfb(command = xvfbCommand, prefix: string[] = []) {
     throw new Error("endpoint readiness deadline exceeded");
   } catch (error) {
     if (server.exitCode === null && server.signalCode === null && server.pid) {
-      server.kill("SIGTERM");
+      // The delayed fixture can still be a shell with an owned sleep child.
+      try { process.kill(-server.pid, "SIGTERM"); } catch (signalError) { if ((signalError as NodeJS.ErrnoException).code !== "ESRCH") throw signalError; }
       await Promise.race([new Promise<void>((done) => server.once("close", () => done())), delay(1_000)]);
     }
-    throw new Error(`private Xvfb startup failed: ${String(error)}; ${diagnostics.trim() || "no Xvfb stderr"}`);
+    throw new Error(`private Xvfb startup failed: ${String(error)}; pid=${server.pid ?? "none"} exit=${server.exitCode} signal=${server.signalCode} closed=${childClosed} displayfdEnded=${announcementEnded} announcement=${JSON.stringify(announcement)}; ${diagnostics.trim() || "no Xvfb stderr"}`);
   }
 }
 
 test("private Xvfb readiness waits beyond the former fixed delay and diagnoses launch failure", { skip: !binary }, async () => {
   const fixture = mkdtempSync(join(tmpdir(), "capture-xvfb-readiness-"));
   const wrapper = join(fixture, "delayed-xvfb.sh");
-  writeFileSync(wrapper, '#!/bin/sh\nsleep 1\nexec "$@"\n', { mode: 0o700 });
+  writeFileSync(wrapper, '#!/bin/sh\nprintf "delayed fixture: waiting\\n" >&2\nsleep 1\nprintf "delayed fixture: executing Xvfb\\n" >&2\nexec "$@"\n', { mode: 0o700 });
   let ready: Awaited<ReturnType<typeof readyXvfb>> | undefined;
   try {
     const began = Date.now();
