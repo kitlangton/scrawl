@@ -86,8 +86,19 @@ provider restart; the Record projection does not manufacture a counter.
 These are public additive contracts, not claims that the producers exist.
 Production currently has no physical shortcut-trial producer, durable nonempty
 note receipt/barrier producer, or screen-stroke history cursor producer. Their
-host owners must supply authoritative scoped facts (and guarded begin/cancel
-dispatch for trial) before these capabilities can become available. Fixtures
+owners must supply authoritative scoped facts before these capabilities become
+available. Platform must publish guarded non-recording trial reservation and
+physical press/release readback for the exact effective registration incarnation;
+its current permission/shortcut port does not provide that operation. Engine must
+publish a durable capture-scoped screen-stroke history and an authoritative
+cursor barrier. Record retains note orchestration and receipt translation: the
+existing authoritative note persistence remains
+`capture/engine/runtime/recording/notes.rs::Store::save/commit`. Its empty-save
+`Ok` and Desktop's `saved_count` are not new durable-note receipts. A producer
+must bind an actual nonempty committed save to an opaque receipt and subsequent
+native cursor barrier; this schema creates no competing note writer or native
+protocol. Native Linux/Mac effect and published artifact evidence remain required
+for those producers. Fixtures
 are synthetic controlled facts only; they establish no native effect or durable
 save. The fixtures cover physical pair/no event, unrelated request, stale
 epoch/binding, expiry/cancellation/unknown/reconnect and note draft/empty/
