@@ -140,6 +140,18 @@ test("stale source or destination identities leave both entries unchanged", asyn
   } finally { await f.close(); }
 });
 
+test("replacing a hard-linked destination preserves the other name's old bytes", async () => {
+  const f = await fixture(); try {
+    const src = await fileStage(f.directory, "stage", "new bytes");
+    const dst = await fileStage(f.directory, "final", "old bytes");
+    await link(join(f.directory, "final"), join(f.directory, "alias"));
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: identity(src), destination: identity(dst) }), { state: "replaced" });
+    assert.equal(await readFile(join(f.directory, "final"), "utf8"), "new bytes");
+    assert.equal(await readFile(join(f.directory, "alias"), "utf8"), "old bytes");
+    assert.equal((await stat(join(f.directory, "alias"))).ino, dst.ino);
+  } finally { await f.close(); }
+});
+
 test("replacement refuses symlinks, traversal, unsafe descriptors, modes and hard-linked source", async () => {
   const f = await fixture(); try {
     await fileStage(f.directory, "target", "safe"); await symlink("target", join(f.directory, "link"));

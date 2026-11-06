@@ -286,7 +286,10 @@ where F: FnMut(RawFd) -> i32 {
     if sync(raw) != 0 { return "refused"; }
     let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
     if unsafe { libc::fstatat(pfd, src.as_ptr(), current.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 { return "destination_changed"; }
-    if !same(&unsafe { current.assume_init() }, sd, si) { return "destination_changed"; }
+    let current_source = unsafe { current.assume_init() };
+    if !same(&current_source, sd, si) { return "destination_changed"; }
+    if !private_regular(&current_source) || !no_allow_acl_fd(raw)
+        || !matches!(fstat(pfd), Ok(ref st) if private_directory(st)) || !no_allow_acl_fd(pfd) { return "refused"; }
     let mut current_dst = std::mem::MaybeUninit::<libc::stat>::uninit();
     let dst_rc = unsafe { libc::fstatat(pfd, dst.as_ptr(), current_dst.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
     if destination_present {
@@ -303,7 +306,11 @@ where F: FnMut(RawFd) -> i32 {
     let final_rc = unsafe { libc::fstatat(pfd, dst.as_ptr(), final_st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
     let mut source_st = std::mem::MaybeUninit::<libc::stat>::uninit();
     let source_rc = unsafe { libc::fstatat(pfd, src.as_ptr(), source_st.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) };
-    if final_rc != 0 || source_rc == 0 || errno() != libc::ENOENT || !same(&unsafe { final_st.assume_init() }, sd, si) { return "publication_uncertain"; }
+    let source_error = errno();
+    if final_rc != 0 || source_rc == 0 || source_error != libc::ENOENT { return "publication_uncertain"; }
+    let final_st = unsafe { final_st.assume_init() };
+    if !same(&final_st, sd, si) || !private_regular(&final_st) || !no_allow_acl_at(pfd, dst.as_ptr())
+        || !matches!(fstat(pfd), Ok(ref st) if private_directory(st)) || !no_allow_acl_fd(pfd) { return "publication_uncertain"; }
     drop(source_fd); "replaced"
 }
 
@@ -737,6 +744,39 @@ mod tests {
         );
         assert!(dir.join("stage").exists());
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replacement_rechecks_private_metadata_after_source_sync() {
+        for changed in ["source_mode", "source_links", "parent_mode"] {
+            let dir = temp();
+            let parent = fs::File::open(&dir).unwrap();
+            fs::write(dir.join("stage"), b"new").unwrap();
+            fs::write(dir.join("final"), b"old").unwrap();
+            for name in ["stage", "final"] { fs::set_permissions(dir.join(name), fs::Permissions::from_mode(0o600)).unwrap(); }
+            let src = fs::metadata(dir.join("stage")).unwrap();
+            let dst = fs::metadata(dir.join("final")).unwrap();
+            let mut calls = 0;
+            let state = replace_at(parent.as_raw_fd(), "stage", "final", &src.dev().to_string(), &src.ino().to_string(), true,
+                &dst.dev().to_string(), &dst.ino().to_string(), |fd| {
+                    calls += 1;
+                    if calls == 1 {
+                        match changed {
+                            "source_mode" => fs::set_permissions(dir.join("stage"), fs::Permissions::from_mode(0o644)).unwrap(),
+                            "source_links" => fs::hard_link(dir.join("stage"), dir.join("alias")).unwrap(),
+                            _ => fs::set_permissions(&dir, fs::Permissions::from_mode(0o777)).unwrap(),
+                        }
+                    }
+                    real_fsync(fd)
+                });
+            let source_present = dir.join("stage").exists();
+            let destination = fs::read(dir.join("final")).unwrap();
+            fs::set_permissions(&dir, fs::Permissions::from_mode(0o700)).unwrap();
+            fs::remove_dir_all(dir).unwrap();
+            assert_eq!(state, "refused", "changed={changed}");
+            assert!(source_present, "changed={changed}");
+            assert_eq!(destination, b"old", "changed={changed}");
+        }
     }
 
     #[test]

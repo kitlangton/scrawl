@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { test } from "node:test";
 import { NativeResources, NativeResourceError } from "../src/index.ts";
 import { fixture } from "./helpers.ts";
+import { readFile, watch } from "node:fs/promises";
 
 test("lock ownership transfer, held state, release and idempotence", async () => {
   const f = await fixture(); try {
@@ -89,6 +90,28 @@ test("replaceFile consumes the parent, validates identities, and fails closed on
   } finally { await f.close(); }
 });
 
+test("malformed replacement identities are refused without leaking the parent descriptor", async () => {
+  const bad = [Symbol("private"), 1, null, "1".repeat(1000), { toString() { throw new Error("private"); } }];
+  const f = await fixture("replaced");
+  try {
+    for (const device of bad) {
+      const handle = await f.handle();
+      try {
+        const expected = { source: { device, inode: "2" }, destination: null } as unknown as Parameters<NativeResources["replaceFile"]>[3];
+        const outcome = await new NativeResources(f.provider).replaceFile(handle, "stage", "final", expected).catch(() => ({ state: "threw" }));
+        assert.equal(handle.fd, -1, "invalid identity must consume its descriptor");
+        assert.deepEqual(outcome, { state: "refused" });
+      } finally { await handle.close().catch(() => {}); }
+    }
+    const handle = await f.handle();
+    try {
+      const expected = { get source(): never { throw new Error("private"); }, destination: null };
+      assert.deepEqual(await new NativeResources(f.provider).replaceFile(handle, "stage", "final", expected), { state: "refused" });
+      assert.equal(handle.fd, -1);
+    } finally { await handle.close().catch(() => {}); }
+  } finally { await f.close(); }
+});
+
 test("replaceFile cancellation is refused before dispatch and uncertain after one dispatch", async () => {
   const earlyFixture = await fixture(); try {
     const controller = new AbortController(); controller.abort(); const handle = await earlyFixture.handle();
@@ -97,8 +120,17 @@ test("replaceFile cancellation is refused before dispatch and uncertain after on
   } finally { await earlyFixture.close(); }
   const lateFixture = await fixture("silent-count"); try {
     const controller = new AbortController(), handle = await lateFixture.handle();
-    const result = new NativeResources(lateFixture.provider).replaceFile(handle, "stage", "final", { source: { device: "1", inode: "2" }, destination: null }, { timeoutMs: 1000, signal: controller.signal });
-    setTimeout(() => controller.abort(), 50);
+    const events = watch(lateFixture.directory, { signal: AbortSignal.timeout(2000) });
+    const ready = (async () => {
+      try {
+        for await (const event of events) if (event.filename === "peer-count" && await readFile(lateFixture.marker, "utf8").catch(() => "") === "x") {
+          controller.abort(); return;
+        }
+        throw new Error("peer readiness missing");
+      } finally { await events.return(); }
+    })();
+    const result = new NativeResources(lateFixture.provider).replaceFile(handle, "stage", "final", { source: { device: "1", inode: "2" }, destination: null }, { timeoutMs: 2000, signal: controller.signal });
+    await ready;
     assert.deepEqual(await result, { state: "publication_uncertain" }); assert.equal(handle.fd, -1);
     assert.equal(await (await import("node:fs/promises")).readFile(lateFixture.marker, "utf8"), "x");
   } finally { await lateFixture.close(); }

@@ -49,7 +49,7 @@ export type PublicationResult = { state: "published" | "destination_exists" | "r
 export type FileIdentity = { device: string; inode: string };
 export type ReplaceFileResult = { state: "replaced" | "destination_changed" | "refused" | "publication_uncertain" };
 function identity(value: FileIdentity): boolean {
-  const canonical = (x: string) => /^(0|[1-9][0-9]*)$/.test(x) && BigInt(x) <= 18446744073709551615n;
+  const canonical = (x: unknown) => typeof x === "string" && /^(0|[1-9][0-9]{0,19})$/.test(x) && BigInt(x) <= 18446744073709551615n;
   return !!value && typeof value === "object" && canonical(value.device) && canonical(value.inode);
 }
 function basename(value: string): boolean {
@@ -132,30 +132,36 @@ export class NativeResources {
   /** Consumes parent on every outcome. Replacement is atomic under the caller's
    * cooperative lock; expected identities are admission checks, not a same-UID CAS. */
   async replaceFile(parent: FileHandle, source: string, destination: string, expected: { source: FileIdentity; destination: FileIdentity | null }, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<ReplaceFileResult> {
-    const timeout = options.timeoutMs ?? 10_000;
-    if (!basename(source) || !basename(destination) || source === destination || !expected || !identity(expected.source) || (expected.destination !== null && !identity(expected.destination)) || !Number.isInteger(timeout) || timeout < 1 || timeout > 60_000) {
-      await parent.close(); return { state: "refused" };
+    let timeout: number, signal: AbortSignal | undefined, args: string[];
+    try {
+      timeout = options.timeoutMs ?? 10_000; signal = options.signal;
+      const sourceIdentity = expected.source, destinationIdentity = expected.destination;
+      const src = { device: sourceIdentity.device, inode: sourceIdentity.inode };
+      const dst = destinationIdentity === null ? null : { device: destinationIdentity.device, inode: destinationIdentity.inode };
+      if (!basename(source) || !basename(destination) || source === destination || !identity(src) || dst !== null && !identity(dst)
+        || !Number.isInteger(timeout) || timeout < 1 || timeout > 60_000 || signal !== undefined && !(signal instanceof AbortSignal)) throw new Error("invalid_request");
+      args = ["replace", "--source", source, "--destination", destination, "--source-device", src.device, "--source-inode", src.inode,
+        "--destination-present", dst === null ? "0" : "1", "--destination-device", dst?.device ?? "0", "--destination-inode", dst?.inode ?? "0"];
+    } catch {
+      await parent.close().catch(() => {}); return { state: "refused" };
     }
-    if (options.signal?.aborted) { await parent.close(); return { state: "refused" }; }
-    const dst = expected.destination ?? { device: "0", inode: "0" };
+    if (signal?.aborted) { await parent.close(); return { state: "refused" }; }
     let session: ResourceProcess;
     try {
-      session = await launch(this.#provider, ["replace", "--source", source, "--destination", destination,
-        "--source-device", expected.source.device, "--source-inode", expected.source.inode,
-        "--destination-present", expected.destination === null ? "0" : "1", "--destination-device", dst.device, "--destination-inode", dst.inode], parent, options.signal);
+      session = await launch(this.#provider, args, parent, signal);
     } catch (error) {
       if (error instanceof NativeResourceError && error.category === "cancelled") return { state: "refused" };
       if (error instanceof NativeResourceError && error.category === "ownership_transfer_failed") return { state: "publication_uncertain" };
       throw error;
     }
     const cancel = () => session.fail("process_failed");
-    options.signal?.addEventListener("abort", cancel, { once: true });
+    signal?.addEventListener("abort", cancel, { once: true });
     try {
-      if (options.signal?.aborted) cancel();
+      if (signal?.aborted) cancel();
       const state = await session.next(timeout);
       if (!["replaced", "destination_changed", "refused", "publication_uncertain"].includes(state)) throw new NativeResourceError("protocol_error");
       await session.exit(); return { state: state as ReplaceFileResult["state"] };
     } catch { session.fail("process_failed"); return { state: "publication_uncertain" }; }
-    finally { options.signal?.removeEventListener("abort", cancel); }
+    finally { signal?.removeEventListener("abort", cancel); }
   }
 }
