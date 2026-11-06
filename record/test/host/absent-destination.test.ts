@@ -217,3 +217,14 @@ test("subprocess reservations serialize same-request and same-path races durably
   ]);
   assert.equal(samePath.filter(result => result.status === "fulfilled").length, 1);
 });
+
+
+test("exact destination cannot contain private control storage, even when both paths are absent", async t => {
+  const parent = await temporary(t);
+  const destination = join(parent, "requested.apparent");
+  const control = join(destination, "private-control");
+  const allocator = new AbsentDestinationAllocator(control, join(parent, "default-output"));
+  await assert.rejects(allocator.reserveExact("ancestor-overlap", destination), /storage is unavailable/u);
+  await assertAbsent(destination);
+  await assertAbsent(control);
+});

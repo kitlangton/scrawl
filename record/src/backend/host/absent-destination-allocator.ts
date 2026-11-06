@@ -66,7 +66,7 @@ export class AbsentDestinationAllocator {
   async reserveExact(requestId: string, absoluteBundlePath: string): Promise<AbsentDestinationBinding> {
     if (!validRequestId(requestId) || !validBundlePath(absoluteBundlePath) ||
         !isAbsolute(this.#controlRoot) || resolve(this.#controlRoot) !== this.#controlRoot ||
-        finalPathOverlapsRoot(this.#controlRoot, absoluteBundlePath)) throw hostError();
+        rootsOverlap(this.#controlRoot, absoluteBundlePath)) throw hostError();
     const parent = resolve(absoluteBundlePath, "..");
     if (await realpath(parent).catch(() => "") !== parent) throw hostError();
     const parentInfo = await lstat(parent).catch(() => undefined);
@@ -118,11 +118,6 @@ function validBundlePath(path: string): boolean {
   return typeof path === "string" && path.length > 0 && Buffer.byteLength(path, "utf8") <= 4096 &&
     !path.includes("\0") && Buffer.from(path, "utf8").toString("utf8") === path &&
     isAbsolute(path) && resolve(path) === path && path !== resolve(path, "..");
-}
-
-function finalPathOverlapsRoot(root: string, path: string): boolean {
-  const beneath = (parent: string, candidate: string) => candidate === parent || candidate.startsWith(parent.endsWith(sep) ? parent : parent + sep);
-  return beneath(root, path) || path === root;
 }
 
 async function assertAbsent(path: string): Promise<void> {

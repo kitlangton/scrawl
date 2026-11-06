@@ -62,6 +62,12 @@ try {
     for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
+    const requested = process.cwd() + '/requested.apparent';
+    const exactDestinations = new AbsentDestinationAllocator(process.cwd() + '/private-control', process.cwd() + '/default-output');
+    const binding = await exactDestinations.reserveExact('packed-exact-request', requested);
+    assert.equal(binding.bundlePath, requested);
+    assert.deepEqual(await new AbsentDestinationAllocator(process.cwd() + '/private-control', process.cwd() + '/unused-default').reserveExact('packed-exact-request', requested), binding);
+    await assert.rejects((await import('node:fs/promises')).lstat(requested), error => error.code === 'ENOENT');
     assert.equal(typeof decodeSelectedFrames, 'function');
     for (const exported of [SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory]) assert.equal(typeof exported, 'function');
     assert.equal(typeof createRecordCapabilityProvider, 'function');
