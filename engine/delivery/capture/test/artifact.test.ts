@@ -23,6 +23,16 @@ test('capture entry forwards only normal or exact nonce-bound recovery argv', ()
       assert.equal(result.status, 0, result.stderr)
       assert.deepEqual(result.stdout.trimEnd().split('\n'), [...args, ...suffix])
     }
+    // Bash on Darwin uses locale collation for ranges; exercise that behavior on Linux too.
+    for (const locale of ['C', 'en_US.UTF-8']) {
+      const launch = (nonce: string) => spawnSync('/bin/bash', ['--posix', '-c', 'shopt -u globasciiranges 2>/dev/null || :; . "$0" "$@"', entry, ...args, '--recovery-peer-v1', nonce], { encoding: 'utf8', env: { ...process.env, LC_ALL: locale } })
+      assert.equal(launch('0123456789abcdef'.repeat(2)).status, 0)
+      for (const nonce of ['A', 'F', 'G', 'Z', 'é'].map(byte => byte.repeat(32))) {
+        const rejected = launch(nonce)
+        assert.equal(rejected.status, 2, JSON.stringify({ locale, nonce, stderr: rejected.stderr }))
+        assert.equal(rejected.stdout, '', 'invalid nonce must not reach the worker')
+      }
+    }
     for (const suffix of [['--recovery-peer-v1'], ['--recovery-peer-v2', 'a'.repeat(32)], ['--recovery-peer-v1', 'A'.repeat(32)], ['--recovery-peer-v1', 'a'.repeat(31)]]) assert.equal(spawnSync(entry, [...args, ...suffix]).status, 2)
   } finally { rmSync(root, { recursive: true, force: true }) }
 })
