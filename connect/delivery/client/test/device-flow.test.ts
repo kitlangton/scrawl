@@ -66,6 +66,20 @@ test('explicit read scope commits an approved read grant with only the safe appr
   assert.equal(JSON.stringify(approval).includes('access-secret'), false);
 });
 
+test('explicit upload preserves the existing upload authorization flow', async () => {
+  const f = fixture();
+  assert.equal(await authorizeDevice(f.transport, new AbortController().signal, () => {},
+    { expectedScope: 'upload', now: () => 0, sleep: async () => {} }), null);
+  assert.deepEqual(f.commits, ['https://accounts.example']);
+});
+
+test('the default Settings flow still refuses a read grant', async () => {
+  const f = fixture(approved({ scope: 'read' }));
+  assert.equal(await authorizeDevice(f.transport, new AbortController().signal, () => {},
+    { now: () => 0, sleep: async () => {} }), 'unavailable');
+  assert.deepEqual(f.commits, []);
+});
+
 for (const [expectedScope, replyScope] of [['read', 'upload'], ['upload', 'read']] as const) {
   test(`scope mismatch (${expectedScope} expected, ${replyScope} received) never commits`, async () => {
     const f = fixture(approved({ scope: replyScope }));

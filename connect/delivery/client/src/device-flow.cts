@@ -70,7 +70,8 @@ export async function authorizeDevice(
   onApproval: (value: Approval) => void,
   options: Options = {},
 ): Promise<SafeError | null> {
-  const expectedScope: unknown = options.expectedScope === undefined ? 'upload' : options.expectedScope;
+  const requestedScope = options.expectedScope;
+  const expectedScope: unknown = requestedScope === undefined ? 'upload' : requestedScope;
   const now = options.now ?? (() => performance.now());
   const sleep = options.sleep ?? defaultSleep;
   const checkAbort = () => { if (signal.aborted) throw cancelled(); };
