@@ -113,10 +113,10 @@ or production capture availability.
 
 `createCompletedCapturePublisher` composes the existing APIs for a host that has
 an observed SDK `materials-ready` status and the original materials manifest and
-payload bytes. `publishCompletedCapture` checks their capture/materials/lease
-binding against explicit Record admission before assembly or filesystem effects,
-then calls `assembleCanonicalBundle`, `prepareRecordPublication`, and the durable
-recovery publisher in order. `reconcile` accepts the caller's persisted capture,
+payload bytes. `publishCompletedCapture` checks the observed capture/materials/lease
+binding against explicit Record admission before assembly. It assembles the bundle,
+checks existing durable publication ownership before staging, then calls the private
+stager and recovery publisher. `reconcile` accepts the caller's persisted capture,
 publication, materials, lease, bundle, and destination binding and delegates to
 recovery without rerunning assembly or staging. Returned values are SDK recovery
 statuses; the owner token is never returned. This is a composition seam only:
