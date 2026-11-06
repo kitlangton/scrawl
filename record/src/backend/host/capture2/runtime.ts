@@ -66,7 +66,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
     if (event.type === "readiness-changed") {
       ++operationRevision;
       readiness = event.readiness.ready ? { ready: true } : { ready: false, reason: event.readiness.reason ?? "Native Record capture/2 unavailable" };
-      if (!("captureId" in state)) publish({ phase: "idle", readiness });
+      publish({ ...state, readiness });
     } else if (event.type === "capture-changed") { ++operationRevision; accept(event.receipt); }
   };
   const schedulePoll = () => {
@@ -88,7 +88,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
     } finally { polling = false; schedulePoll(); }
   };
   const readinessResult = await options.host.readiness();
-  if (!disposed) readiness = readinessResult.ready ? { ready: true } : { ready: false, reason: readinessResult.reason ?? "Native Record capture/2 unavailable" };
+  if (!disposed) { readiness = readinessResult.ready ? { ready: true } : { ready: false, reason: readinessResult.reason ?? "Native Record capture/2 unavailable" }; publish({ ...state, readiness }); }
   const reconcileStartup = async (): Promise<HostStartupState> => {
     if (disposed) return startup;
     const scanRevision = operationRevision;
@@ -154,7 +154,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
     if (disposed) return state;
     if (command.type === "refresh-readiness") {
       const value = await options.host.readiness();
-      if (!disposed) { readiness = value.ready ? { ready: true } : { ready: false, reason: value.reason ?? "Native Record capture/2 unavailable" }; if (!("captureId" in state)) publish({ phase: "idle", readiness }); }
+      if (!disposed) { readiness = value.ready ? { ready: true } : { ready: false, reason: value.reason ?? "Native Record capture/2 unavailable" }; publish({ ...state, readiness }); }
       return state;
     }
     if (command.type === "start") {

@@ -175,3 +175,27 @@ test("a delayed stop failure cannot overwrite a newer stopped-materials event", 
     assert.deepEqual(runtime.completionEligibleCaptureIds?.(), ['ordered']);
   } finally { runtime.dispose(); }
 });
+
+test("readiness readback and events update an owned capture without changing its phase", async () => {
+  let emit!: (event: import('../../src/backend/host/capture2.ts').Capture2Event) => void;
+  const host = {
+    subscribe(listener: typeof emit) { emit = listener; return () => undefined; },
+    readiness: async () => ({ ready: true }), reconcile: async () => [],
+    discoverSources: async () => ({ state: 'available' as const, sources: [source] }),
+    start: async () => ({ requestId: 'readiness-owned', phase: 'recording' as const }),
+    inspect: async () => ({ requestId: 'readiness-owned', phase: 'recording' as const }),
+    stop: async () => ({ requestId: 'readiness-owned', phase: 'materials-ready' as const }),
+    cancel: async () => ({ requestId: 'readiness-owned', phase: 'cancelled' as const }), dispose() {},
+  };
+  const runtime = await createCapture2RecordRuntime({ host, createStartIntent: () => ({ source, options: { audio: 'none', localOnly: true }, invocation, destinationPath: '/synthetic/not-created.apparent' }) });
+  try {
+    assert.equal(runtime.state.readiness.ready, true, 'initial explicit readback is visible without a push event');
+    await runtime.startCapture('readiness-owned');
+    emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic denied' } });
+    assert.equal(runtime.state.phase, 'recording');
+    assert.equal(runtime.state.readiness.ready, false);
+    assert.equal((await runtime.dispatch({ type: 'refresh-readiness' })).readiness.ready, true);
+    assert.equal(runtime.state.phase, 'recording');
+    assert.equal((await runtime.dispatch({ type: 'stop' })).phase, 'processing');
+  } finally { runtime.dispose(); }
+});
