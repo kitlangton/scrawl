@@ -73,7 +73,7 @@ const manifest: MediaManifest = { schema: 1, sourceSha, target: 'linux-x64', rus
 writeFileSync(resolve(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx', mode: 0o644 })
 if (frozen() !== sourceSha) throw new Error('source changed during media build')
 validateArtifact(output)
-const test = spawnSync('node', ['--experimental-strip-types', '--test', 'test/contract.test.ts', 'test/packaged-h264.test.ts', resolve(root, 'engine/tests/media-peer.test.ts')], { cwd: pkg, encoding: 'utf8', env: { ...process.env, APPARENT_ENGINE_FRAMES_BIN: resolve(output, 'apparent-engine-frames') } })
+const test = spawnSync('node', ['--experimental-strip-types', '--test', 'test/contract.test.ts', 'test/packaged-h264.test.ts', resolve(root, 'engine/tests/media-peer.test.ts')], { cwd: pkg, encoding: 'utf8', env: { ...process.env, APPARENT_ENGINE_FRAMES_BIN: resolve(output, 'apparent-engine-frames'), APPARENT_RETAINED_MEDIA_FIXTURE: resolve(root, 'engine/core/tests/fixtures/tiny.mp4') } })
 process.stdout.write(test.stdout ?? ''); process.stderr.write(test.stderr ?? '')
 if (test.status !== 0) throw new Error('SDK to packaged native worker tests failed')
 if (frozen() !== sourceSha) throw new Error('source changed during packaged media verification')
