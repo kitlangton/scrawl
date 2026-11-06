@@ -74,9 +74,9 @@ function fixtureDependencies(overrides: Partial<InstallerDependencies> = {}): In
     mkdirSync(join(installRoot, 'node_modules/@apparent'), { recursive: true, mode: 0o700 });
     mkdirSync(join(agentRoot, 'dist'), { recursive: true, mode: 0o700 });
     mkdirSync(join(sdkRoot, 'dist/src'), { recursive: true, mode: 0o700 });
-    writeFileSync(join(agentRoot, 'package.json'), JSON.stringify({ name: '@apparent/agent', version: '0.1.0', type: 'module', bin: { 'apparent-agent': './dist/cli.js' }, dependencies: { '@apparent/engine-sdk': 'file:../engine/sdk' } }), { mode: 0o600 });
+    writeFileSync(join(agentRoot, 'package.json'), JSON.stringify({ name: '@apparent/agent', version: '0.1.0', type: 'module', bin: { 'apparent-agent': './dist/cli.js' }, dependencies: { '@apparent/engine-sdk': 'file:vendor/apparent-engine-sdk-0.3.2.tgz' } }), { mode: 0o600 });
     writeFileSync(join(agentRoot, 'dist/cli.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");', { mode: 0o700 });
-    writeFileSync(join(sdkRoot, 'package.json'), JSON.stringify({ name: '@apparent/engine-sdk', version: '0.2.0', exports: { './media': { import: './dist/src/media.js', types: './dist/src/media.d.ts' } } }), { mode: 0o600 });
+    writeFileSync(join(sdkRoot, 'package.json'), JSON.stringify({ name: '@apparent/engine-sdk', version: '0.3.2', exports: { './media': { import: './dist/src/media.js', types: './dist/src/media.d.ts' } } }), { mode: 0o600 });
     writeFileSync(join(sdkRoot, 'dist/src/media.js'), '', { mode: 0o600 });
     writeFileSync(join(sdkRoot, 'dist/src/media.d.ts'), '', { mode: 0o600 });
     assert.equal(sha256(readFileSync(snapshotPath)), sha256(agentTar));
@@ -163,7 +163,7 @@ test('small synthetic fixture installs into a private prefix and shell metachara
   await assert.rejects(lstat(marker), { code: 'ENOENT' });
   assert.deepEqual(await readFile(archive), archiveBefore);
   assert.deepEqual(await readFile(join(native.root, 'manifest.json')), manifestBefore);
-  assert.equal(JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8')).sdkVersion, '0.2.0');
+  assert.equal(JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8')).sdkVersion, '0.3.2');
   assert.equal(await readdir(join(prefix, 'native-media/libexec')).then((entries) => entries.includes('apparent-engine-frames')), true);
 }));
 
@@ -336,8 +336,8 @@ test('test-double handshake and uncertain worker shutdown never publish success 
 }));
 
 test('stable patch releases in reviewed SDK lines install and record the actual SDK version', async () => withTemp(async (directory) => {
-  for (const version of ['0.2.1', '0.3.0', '0.3.1', '0.3.17']) {
-    const { input, prefix } = await fixtureInputs(directory, `sdk-${version}`);
+  for (const legacy of [false, true]) for (const version of ['0.2.1', '0.3.0', '0.3.1', '0.3.2', '0.3.17']) {
+    const { input, prefix } = await fixtureInputs(directory, `sdk-${version}-${legacy}`);
     const dependencies = fixtureDependencies({
       installNpm(snapshot, root, home) {
         fixtureDependencies().installNpm(snapshot, root, home);
@@ -345,11 +345,30 @@ test('stable patch releases in reviewed SDK lines install and record the actual 
         const pkg = JSON.parse(readFileSync(path, 'utf8'));
         pkg.version = version;
         writeFileSync(path, JSON.stringify(pkg));
+        const agentPath = join(root, 'node_modules/@apparent/agent/package.json');
+        const agent = JSON.parse(readFileSync(agentPath, 'utf8'));
+        agent.dependencies['@apparent/engine-sdk'] = legacy ? 'file:../engine/sdk' : `file:vendor/apparent-engine-sdk-${version}.tgz`;
+        writeFileSync(agentPath, JSON.stringify(agent));
       },
     });
     await installLocal(input, dependencies);
     const receipt = JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8'));
     assert.equal(receipt.sdkVersion, version);
+  }
+}));
+
+test('unrecognized SDK declarations and mismatched published versions fail without a receipt', async () => withTemp(async (directory) => {
+  for (const [index, source] of ['file:vendor/apparent-engine-sdk-0.3.1.tgz', 'file:../../engine/sdk', 'https://example.invalid/sdk.tgz'].entries()) {
+    const { input, prefix } = await fixtureInputs(directory, `sdk-source-${index}`);
+    const dependencies = fixtureDependencies({ installNpm(snapshot, root, home) {
+      fixtureDependencies().installNpm(snapshot, root, home);
+      const path = join(root, 'node_modules/@apparent/agent/package.json');
+      const agent = JSON.parse(readFileSync(path, 'utf8'));
+      agent.dependencies['@apparent/engine-sdk'] = source;
+      writeFileSync(path, JSON.stringify(agent));
+    } });
+    await assert.rejects(installLocal(input, dependencies), /Agent package metadata mismatch/);
+    await assert.rejects(lstat(join(prefix, 'install-receipt.json')), { code: 'ENOENT' });
   }
 }));
 

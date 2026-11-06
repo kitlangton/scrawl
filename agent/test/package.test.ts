@@ -8,14 +8,15 @@ import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {PNG} from 'pngjs';
 
-test('Agent installs and builds from an isolated owner source copy',async()=>{
+// The isolated run executes this suite too; only its own source-copy driver is omitted.
+if (process.env.APPARENT_AGENT_ISOLATED_TEST !== '1') test('Agent installs, builds and tests from an isolated owner source copy',async()=>{
   const root=await mkdtemp(join(tmpdir(),'agent-source-isolation-'));
   try {
     const npm=process.env.npm_execpath!; assert(npm);
     const source=fileURLToPath(new URL('..',import.meta.url));
     const isolated=join(root,'agent');
     cpSync(source,isolated,{recursive:true,filter:path=>!path.split('/').some(part=>part==='node_modules'||part==='dist')});
-    const env={...process.env,HOME:root};
+    const env={...process.env,HOME:root,APPARENT_AGENT_ISOLATED_TEST:'1'};
     const run=(args:string[])=>{
       const result=spawnSync(process.execPath,args,{cwd:isolated,encoding:'utf8',timeout:120000,env});
       assert.equal(result.status,0,result.stderr);return result.stdout;
@@ -23,7 +24,8 @@ test('Agent installs and builds from an isolated owner source copy',async()=>{
     run([npm,'ci','--no-audit','--no-fund']);
     run([npm,'run','build']);
     run([npm,'run','typecheck']);
-    const packed=JSON.parse(run([npm,'pack','--ignore-scripts','--json','--pack-destination',root]));
+    run([npm,'test']);
+    const packed=JSON.parse(run([npm,'pack','--json','--pack-destination',root]));
     assert.equal(packed[0].name,'@apparent/agent');
   }finally{await rm(root,{recursive:true,force:true});}
 });
