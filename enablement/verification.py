@@ -142,6 +142,34 @@ MACHINERY_TEST_INPUTS = {
         "enablement/owner_lanes.py", ".github/workflows/verification-platform.yml",
     },
 }
+# The hook fixture copies these live inputs rather than replacing them with
+# constants. They belong to its regression closure even for owner-local edits.
+MACHINERY_TEST_INPUTS["test_pre_push_guard.py"].update({
+    f"{package}/{name}"
+    for package in ("composition/app", "composition/architecture", "record",
+                    "capture/desktop/ui/frontend", "connect/delivery/client")
+    for name in ("package.json", "package-lock.json")
+})
+MACHINERY_TEST_INPUTS["test_pre_push_guard.py"].update({
+    "composition/app/tsconfig.json", "composition/app/.gitignore",
+    "connect/delivery/client/tsconfig.json",
+    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts",
+    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.test.ts",
+    "composition/delivery/core.ts", "composition/delivery/cli.ts",
+    "composition/delivery/core.test.ts", "composition/delivery/runtime/pr-candidate.ts",
+    "composition/delivery/runtime/pr-candidate.test.ts",
+    ".githooks/pre-commit", "enablement/directory-width/check.py",
+    "enablement/directory-width/tests/test_hook.py",
+    "enablement/file-length/check.ts", "enablement/file-length/check.test.ts",
+    "shared/ui/scripts/check-theme.py", "shared/ui/scripts/check-theme.ts",
+    "shared/ui/scripts/legacy-colors.json",
+    *{f"public/site/{name}" for name in
+      ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html")},
+})
+MACHINERY_TEST_INPUTS["test_verification.py"].update({
+    "public/site/package.json", "composition/app/package.json",
+    "composition/app/package-lock.json", "composition/app/tsconfig.json",
+})
 MACHINERY_TEST_FILES = {"enablement/tests/" + name for name in MACHINERY_TEST_INPUTS}
 MACHINERY_WORKFLOW_INPUTS = {
     ".github/workflows/" + name for name in (
@@ -175,10 +203,16 @@ def machinery_tests_selected(paths, history_known=True):
     for name, inputs in MACHINERY_TEST_INPUTS.items():
         if "enablement/tests/" + name in paths or paths & inputs:
             selected.add(name)
+    # The hook copies every tracked Onboarding input; the selector's real
+    # prerequisite fixture also consumes the owner's committed input inventory.
+    if any(path.startswith("onboarding/") for path in paths):
+        selected.update(("test_pre_push_guard.py", "test_verification.py"))
     if paths & MACHINERY_WORKFLOW_INPUTS:
         selected.add("test_release_gate.py")
     if paths & MACHINERY_OWNER_WORKFLOW_INPUTS:
         selected.add("test_owner_lanes.py")
+    if any(path.startswith(".github/workflows/") for path in paths):
+        selected.add("test_verification.py")  # Reads every workflow's job budgets.
     if any(path.startswith("composition/architecture/") for path in paths):
         selected.add("test_verification.py")
     # Unknown hook/workflow files may alter verification behavior.

@@ -1200,9 +1200,9 @@ class SelectionTests(unittest.TestCase):
             "capture/desktop/scripts/mac/cache.py": ["test_mac_cache_push.py"],
             "enablement/release_gate.py": ["test_release_gate.py"],
             "enablement/owner_lanes.py": ["test_owner_lanes.py"],
-            ".github/workflows/release-linux.yml": ["test_release_gate.py"],
-            ".github/workflows/verification-platform.yml": ["test_release_gate.py", "test_owner_lanes.py"],
-            ".github/workflows/verification.yml": ["test_release_gate.py"],
+            ".github/workflows/release-linux.yml": ["test_verification.py", "test_release_gate.py"],
+            ".github/workflows/verification-platform.yml": ["test_verification.py", "test_release_gate.py", "test_owner_lanes.py"],
+            ".github/workflows/verification.yml": ["test_verification.py", "test_release_gate.py"],
             "composition/architecture/src/cli.ts": ["test_verification.py"],
             "enablement/tests/test_temp_preflight.py": ["test_temp_preflight.py"],
             "enablement/tests/test_release_gate.py": ["test_release_gate.py"],
@@ -1219,6 +1219,24 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual(verification.machinery_tests_selected(
             ["enablement/tests/test_mac_cache_push.py", "enablement/tests/test_cache.py"]),
             list(verification.MACHINERY_TEST_INPUTS))
+
+    def test_live_machinery_fixture_inputs_select_their_consumers(self):
+        for package in ("composition/app", "composition/architecture", "record",
+                        "capture/desktop/ui/frontend", "connect/delivery/client", "onboarding"):
+            for name in ("package.json", "package-lock.json"):
+                path = f"{package}/{name}"
+                with self.subTest(path=path):
+                    self.assertIn("test_pre_push_guard.py", verification.machinery_tests_selected([path]))
+        for path in ("composition/app/package.json", "composition/app/package-lock.json",
+                     "onboarding/vendor/replacement.tgz", "onboarding/src/controller.ts",
+                     "public/site/package.json", ".github/workflows/verification-mac.yml"):
+            with self.subTest(path=path):
+                self.assertIn("test_verification.py", verification.machinery_tests_selected([path]))
+        for path in ("shared/ui/scripts/check-theme.ts", "composition/delivery/core.ts",
+                     "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts"):
+            with self.subTest(path=path):
+                self.assertIn("test_pre_push_guard.py", verification.machinery_tests_selected([path]))
+        self.assertEqual(verification.machinery_tests_selected(["record/src/ui/recording-pill.tsx"]), [])
 
     def test_skipped_machinery_does_not_admit_architecture_install_for_docs_or_mac_script(self):
         with tempfile.TemporaryDirectory() as directory, patch.object(
