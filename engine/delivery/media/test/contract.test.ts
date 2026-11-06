@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
-import { BASELINE_LIBRARIES, REQUIRED_PLUGINS, validateArtifact } from '../src/contract.ts'
+import { BASELINE_LIBRARIES, REQUIRED_PLUGINS, validateArtifact, VISUAL_OBSERVATIONS } from '../src/contract.ts'
 
 function artifact() {
   const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-media-contract-'))
@@ -67,12 +67,19 @@ test('retained media advertises an explicit shared-capture-runtime launch withou
   try {
     const path = resolve(root, 'manifest.json')
     const manifest = JSON.parse(requireBytes(path, 'utf8'))
+    manifest.visualObservations = VISUAL_OBSERVATIONS
+    writeFileSync(path, JSON.stringify(manifest))
+    assert.throws(() => validateArtifact(root), /visual observation/)
     manifest.capabilities = ['media/1', 'media/2']
     writeFileSync(path, JSON.stringify(manifest))
     assert.throws(() => validateArtifact(root), /retained media launch identity/)
     manifest.media2Launch = { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }
     writeFileSync(path, JSON.stringify(manifest))
     validateArtifact(root)
+    manifest.visualObservations = { ...VISUAL_OBSERVATIONS, chunkType: 'wrong' }
+    writeFileSync(path, JSON.stringify(manifest))
+    assert.throws(() => validateArtifact(root), /visual observation/)
+    manifest.visualObservations = VISUAL_OBSERVATIONS
     manifest.media2Launch.sharesCaptureRuntime = false
     writeFileSync(path, JSON.stringify(manifest))
     assert.throws(() => validateArtifact(root), /retained media launch identity/)
