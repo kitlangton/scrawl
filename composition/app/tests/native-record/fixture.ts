@@ -1,11 +1,11 @@
-import { chmod, mkdir, mkdtemp, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, realpath, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { digest } from '../../scripts/artifacts.ts';
 import type { RecordNativeArtifacts } from '../../scripts/record-native.ts';
 
 export async function fixture() {
-  const work = await mkdtemp(join(tmpdir(), 'record-native-closure-'));
+  const work = await realpath(await mkdtemp(join(tmpdir(), 'record-native-closure-')));
   const sourceSha = 'a'.repeat(40);
   const input: RecordNativeArtifacts = { target: 'linux-x64' } as RecordNativeArtifacts;
   for (const slot of ['capture', 'media', 'config'] as const) {

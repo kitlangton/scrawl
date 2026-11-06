@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
 import { chmod, open, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import { readShell } from '../../scripts/artifacts.ts';
@@ -8,6 +9,26 @@ import { buildShell } from '../../scripts/build.ts';
 import { assemble, verifyAssembly } from '../../scripts/assemble.ts';
 
 import { fixture } from './fixture.ts';
+
+test('fixture canonicalizes an aliased OS temporary directory without relaxing artifact admission', async t => {
+  const f = await fixture(); t.after(() => rm(f.work, { recursive: true, force: true }));
+  const alias = join(f.work, 'temporary-alias');
+  await symlink(f.work, alias);
+  execFileSync(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
+    import assert from 'node:assert/strict';
+    import {realpath,rm} from 'node:fs/promises';
+    import {basename,join} from 'node:path';
+    import {fixture} from ${JSON.stringify(new URL('./fixture.ts', import.meta.url).href)};
+    import {stageRecordNative} from ${JSON.stringify(new URL('../../scripts/record-native.ts', import.meta.url).href)};
+    const f=await fixture();
+    try {
+      assert.equal(f.work,await realpath(f.work));await stageRecordNative(f.output,f.input);
+      const aliased={...f.input,capture:{...f.input.capture,directory:join(process.env.TMPDIR,basename(f.work),'capture')}};
+      await assert.rejects(stageRecordNative(f.output,aliased),/must be canonical/);
+    }
+    finally {await rm(f.work,{recursive:true,force:true});}
+  `], { env: { ...process.env, TMPDIR: alias, TMP: alias, TEMP: alias }, stdio: 'pipe', timeout: 10_000 });
+});
 
 test('complete native closures preserve manifests, adjacent workers and executable modes; existing output is refused', async t => {
   const f = await fixture(); t.after(() => rm(f.work, { recursive: true, force: true }));
