@@ -323,7 +323,11 @@ pub trait DerivativeOutputSink {
 /// Linux reader, encode valid PNGs, and prepare SDK-compatible detached bytes.
 /// Owner authentication, lease acquisition, durable job reservation and sink
 /// safety are explicit caller responsibilities; this routine does not claim
-/// those authorities or alter capture admission.
+/// those authorities or alter capture admission. `checkpoint` must reject a
+/// cancelled or expired job. It runs before expensive phases and every write.
+/// The reused reader may block for up to ten seconds inside one native read;
+/// callers MUST run this port in their existing supervised native job process,
+/// whose hard timeout/cancel reaps it. Never run it on a UI/RPC service thread.
 #[cfg(all(target_os = "linux", feature = "linux-media"))]
 pub fn derive_linux(
     video: &File,
@@ -338,7 +342,9 @@ pub fn derive_linux(
     requested_bundle_ms: &[u64],
     max_edge: u32,
     sink: &mut dyn DerivativeOutputSink,
+    checkpoint: &mut dyn FnMut() -> Result<()>,
 ) -> Result<(Vec<u8>, Vec<u8>)> {
+    checkpoint()?;
     let video_offset_ms = check_pinned_material(
         video,
         key,
@@ -354,17 +360,20 @@ pub fn derive_linux(
             .iter()
             .all(|ms| *ms <= 9_007_199_254_740_991)
     );
+    checkpoint()?;
     let reader = crate::linux::media::PinnedVideoReader::open(video)?;
     let duration_ms = reader.duration_ms();
     let mut slots = Vec::with_capacity(requested_bundle_ms.len());
     let mut total_pixels = 0u64;
     for (i, requested) in requested_bundle_ms.iter().copied().enumerate() {
+        checkpoint()?;
         let effective = requested.saturating_sub(video_offset_ms);
         let frame = reader.frame(effective, max_edge, 256 * 1024 * 1024)?;
         total_pixels = total_pixels
             .checked_add(u64::from(frame.width) * u64::from(frame.height))
             .ok_or_else(|| anyhow::anyhow!("frame pixel budget overflow"))?;
         ensure!(total_pixels <= 64_000_000, "frame pixel budget exceeded");
+        checkpoint()?;
         let mut png_bytes = Vec::new();
         {
             let mut encoder = png::Encoder::new(&mut png_bytes, frame.width, frame.height);
@@ -375,6 +384,7 @@ pub fn derive_linux(
             writer.finish()?;
         }
         let path = format!("frames/frame-{:03}.png", i + 1);
+        checkpoint()?;
         let sealed = sink.write_new_synced(&path, &png_bytes)?;
         verify_output(&sealed, &path, &png_bytes)?;
         slots.push(DecodedSlot {
@@ -396,6 +406,7 @@ pub fn derive_linux(
         requested_bundle_ms,
         &slots,
     )?;
+    checkpoint()?;
     let receipt = sink.write_new_synced("receipt.json", &detached)?;
     verify_output(&receipt, "receipt.json", &detached)?;
     let envelope = envelope_document(key, job_id, receipt_id, root, &detached, &receipt)?;
@@ -869,8 +880,45 @@ mod tests {
             &requests,
             160,
             &mut sink,
+            &mut || Ok(()),
         )
         .unwrap();
+        // A cancellation/deadline checkpoint after the first sealed frame must
+        // prevent another frame or detached receipt from becoming observable.
+        let stopped_output = TempDir::new("materials-media-stopped");
+        let writes = std::rc::Rc::new(std::cell::Cell::new(0usize));
+        struct StoppingSink(FsSink, std::rc::Rc<std::cell::Cell<usize>>);
+        impl DerivativeOutputSink for StoppingSink {
+            fn write_new_synced(&mut self, path: &str, bytes: &[u8]) -> Result<SealedFile> {
+                let file = self.0.write_new_synced(path, bytes)?;
+                self.1.set(self.1.get() + 1);
+                Ok(file)
+            }
+        }
+        let mut stopped_sink = StoppingSink(FsSink(stopped_output.0.clone()), writes.clone());
+        let error = derive_linux(
+            &video,
+            &key,
+            &material_payload,
+            &expected_identity,
+            source_root.0.to_str().unwrap(),
+            &lease_id,
+            &"f".repeat(32),
+            &"1".repeat(32),
+            stopped_output.0.to_str().unwrap(),
+            &requests,
+            160,
+            &mut stopped_sink,
+            &mut || {
+                ensure!(writes.get() == 0, "cancelled or deadline exceeded");
+                Ok(())
+            },
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("cancelled or deadline exceeded"));
+        assert_eq!(writes.get(), 1);
+        assert!(!stopped_output.0.join("frames/frame-002.png").exists());
+        assert!(!stopped_output.0.join("receipt.json").exists());
         let payload: Value = serde_json::from_slice(&detached).unwrap();
         let envelope: Value = serde_json::from_slice(&envelope_bytes).unwrap();
         assert_eq!(envelope["payload"], payload);
