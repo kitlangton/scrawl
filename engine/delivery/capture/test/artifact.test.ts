@@ -16,6 +16,7 @@ test('capture artifact inventory and absolute SDK launch contract', { skip: !art
   assert.deepEqual(manifest.capabilities, ['capture/2', 'x11-display', 'x11-area', 'retained-materials'])
   assert.deepEqual(manifest.launch.argv, ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2'])
   assert.equal(manifest.launch.pathLookup, false)
+  assert.equal(manifest.launch.shutdownTimeoutMs, 40_000)
   const actual: Array<{ path: string; mode: number; sha256: string }> = []
   const walk = (dir: string) => {
     for (const name of readdirSync(dir).sort()) {
