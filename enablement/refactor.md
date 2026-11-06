@@ -4,7 +4,7 @@ Status: **integration in progress** from `ba9de38097ec76454b57e095a1254d330b62eb
 
 ## Historical proposal, superseded by AGENTS.md
 
-Keep one root `Cargo.toml`/`Cargo.lock` Rust application package and root composition entrypoint. Organize Rust owners as ordinary modules beneath `src/{capture,desktop,agent_proof,connect,shared,composition}`; use normal `mod` declarations and nested `mod.rs`, never `#[path]` relocation shims. The already-existing top-level `capture/engine` and `connect/client` packages remain at those exact paths; this campaign neither adopts nor creates packages for them. Existing user behavior and external identities stay unchanged.
+Keep one root `Cargo.toml`/`Cargo.lock` Rust application package and root composition entrypoint. Organize Rust owners as ordinary modules beneath `src/{capture,desktop,agent_proof,connect,shared,composition}`; use normal `mod` declarations and nested `mod.rs`, never `#[path]` relocation shims. The standalone Store/admission core now lives at `engine/core`; legacy root-app capture runtime, bundle, export and native modules remain under `capture/engine`. The existing `connect/client` package remains at its exact path. Existing user behavior and external identities stay unchanged.
 
 The physical final tree has these anchors (all paths not shown here are enumerated, without omission, in the exhaustive 634-row ledger below):
 
@@ -17,7 +17,8 @@ capture/engine/runtime/mod.rs                      # capture owner module, with 
 capture/desktop/mod.rs                      # GPUI/Desktop owner module; web SDK under capture/desktop/sdk.js
 src/agent_proof/                        # request/evidence owner modules; no standalone runtime/package
 src/connect/                             # in-crate adapter modules; existing connect/client package stays at root
-capture/engine/                          # existing package, unchanged ownership and path
+engine/core/                             # standalone Store/admission crate consumed by Engine
+capture/engine/                          # legacy root-app runtime, bundle, export, native and docs
 connect/client/                          # existing package, unchanged ownership and path
 capture/native/, desktop/native/, shared/native/ # explicit owner-native helper inputs
 public/site/                             # existing public site, moved by its reserved lane with complete wiring
@@ -108,22 +109,23 @@ The following exhaustive baseline ledger documents an earlier campaign proposal 
 | `assets/settings/frog-puzzled.png` | `capture/desktop/assets/settings/frog-puzzled.png` | MOVE | desktop |
 | `build.rs` | `build.rs` | RETAIN | shared-infrastructure |
 | `enablement/build_version.rs` | `enablement/build_version.rs` | RETAIN | shared-infrastructure |
-| `capture/engine/.gitignore` | `capture/engine/.gitignore` | RETAIN | capture |
-| `capture/engine/Cargo.lock` | `capture/engine/Cargo.lock` | RETAIN | capture |
-| `capture/engine/Cargo.toml` | `capture/engine/Cargo.toml` | RETAIN | capture |
-| `capture/engine/README.md` | `capture/engine/README.md` | RETAIN | capture |
-| `capture/engine/src/finalizer.rs` | `capture/engine/src/finalizer.rs` | RETAIN | capture |
-| `capture/engine/src/identity.rs` | `capture/engine/src/identity.rs` | RETAIN | capture |
-| `capture/engine/src/lease.rs` | `capture/engine/src/lease.rs` | RETAIN | capture |
-| `capture/engine/src/lib.rs` | `capture/engine/src/lib.rs` | RETAIN | capture |
-| `capture/engine/src/locking.rs` | `capture/engine/src/locking.rs` | RETAIN | capture |
-| `capture/engine/src/receipt.rs` | `capture/engine/src/receipt.rs` | RETAIN | capture |
-| `capture/engine/src/secure.rs` | `capture/engine/src/secure.rs` | RETAIN | capture |
-| `capture/engine/src/session.rs` | `capture/engine/src/session.rs` | RETAIN | capture |
-| `capture/engine/tests/bootstrap.rs` | `capture/engine/tests/bootstrap.rs` | RETAIN | capture |
-| `capture/engine/tests/finalizer.rs` | `capture/engine/tests/finalizer.rs` | RETAIN | capture |
-| `capture/engine/tests/process.rs` | `capture/engine/tests/process.rs` | RETAIN | capture |
-| `capture/engine/tests/review_regressions.rs` | `capture/engine/tests/review_regressions.rs` | RETAIN | capture |
+| `capture/engine/.gitignore` | `engine/core/.gitignore` | MOVE | engine |
+| `capture/engine/Cargo.lock` | `engine/core/Cargo.lock` | MOVE | engine |
+| `capture/engine/Cargo.toml` | `engine/core/Cargo.toml` | MOVE | engine |
+| `capture/engine/README.md` | `engine/core/README.md` | MOVE | engine |
+| `capture/engine/src/finalizer.rs` | `engine/core/src/finalizer.rs` | MOVE | engine |
+| `capture/engine/src/identity.rs` | `engine/core/src/identity.rs` | MOVE | engine |
+| `capture/engine/src/lease.rs` | `engine/core/src/lease.rs` | MOVE | engine |
+| `capture/engine/src/lib.rs` | `engine/core/src/lib.rs` | MOVE | engine |
+| `capture/engine/src/locking.rs` | `engine/core/src/locking.rs` | MOVE | engine |
+| `capture/engine/src/receipt.rs` | `engine/core/src/receipt.rs` | MOVE | engine |
+| `capture/engine/src/secure.rs` | `engine/core/src/secure.rs` | MOVE | engine |
+| `capture/engine/src/session.rs` | `engine/core/src/session.rs` | MOVE | engine |
+| `capture/engine/tests/bootstrap.rs` | `engine/core/tests/bootstrap.rs` | MOVE | engine |
+| `capture/engine/tests/finalizer.rs` | `engine/core/tests/finalizer.rs` | MOVE | engine |
+| `capture/engine/tests/process.rs` | `engine/core/tests/process.rs` | MOVE | engine |
+| `capture/engine/tests/provider_binding.rs` | `engine/core/tests/provider_binding.rs` | MOVE | engine |
+| `capture/engine/tests/review_regressions.rs` | `engine/core/tests/review_regressions.rs` | MOVE | engine |
 | `connect/client/.gitignore` | `connect/client/.gitignore` | RETAIN | connect |
 | `connect/client/Cargo.lock` | `connect/client/Cargo.lock` | RETAIN | connect |
 | `connect/client/Cargo.toml` | `connect/client/Cargo.toml` | RETAIN | connect |
@@ -859,7 +861,7 @@ clean only verified idle regenerable artifacts, never active work or retained pr
 Checked boxes below certify only the named merged slice, not the complete target.
 PR links use the canonical repository; main ancestry was checked at the pinned base.
 
-- [x] **Staged Engine admission/lease package** — [#220](https://github.com/tryapparent/apparent/pull/220), merge `77dd5bbf`. Independent package/process contract accepted; 22 package tests and retained source-identical Mac package evidence. Root combined Linux evidence reported 668 passed/3 ignored with #222. No production recorder, finalizer or retention caller consumes Engine; no native capture acceptance is implied. See `capture/engine/README.md`.
+- [x] **Staged Engine admission/lease package** — [#220](https://github.com/tryapparent/apparent/pull/220), merge `77dd5bbf`. Independent package/process contract accepted; 22 package tests and retained source-identical Mac package evidence. Root combined Linux evidence reported 668 passed/3 ignored with #222. This package was subsequently moved to `engine/core/`; the legacy root-app recorder remains under `capture/engine/` and has not been extracted into this Store crate. See `engine/core/README.md`.
 - [x] **Connect entry isolation** — [#222](https://github.com/tryapparent/apparent/pull/222), merge `d21115b5`. Canonical/legacy routes, built dependency closure and synthetic packaged/dev/preview auth/consent/browser checks retained. `site/` still owns build/package/publisher; no independent Connect package or live OAuth claim. See `connect/docs/hosted-web.md`.
 - [x] **Recording versus Desktop completion seam** — [#233](https://github.com/tryapparent/apparent/pull/233), implementation `b6c3fd39478c357f6f79b3a5d6e2199bb02707c1`, merge `92b76040`. Linux UI selection 51 passed; full suite 668 passed/3 ignored; build and independent source review passed. Native/GUI/E2E intentionally omitted, not claimed. `capture/desktop/ui/recording_completion.rs` still uses the crate-root finalizer; whiteboard and GPUI coupling remain. No Engine adoption or standalone Agent.
 - [x] **Bounded verification-routing follow-through** — [#241](https://github.com/tryapparent/apparent/pull/241), tested head `c3f72f7a`, merge `1ca21c67`. Exact source-pair and additive browser rules above are merged, not extraction acceptance. Retained normal-hook evidence reports Linux root build/671 passed/3 ignored, Engine build/22 passed and 15 hook + 13 selector contracts; final-head CI checks passed. The real browser driver receipt at `c5bb1b78` is historical synthetic evidence, not a fresh current-main run.
