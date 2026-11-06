@@ -180,8 +180,14 @@ The active native caller remains authoritative migration debt. This source chang
 The `./queue` export decodes legacy private queue records and proposes guarded
 transitions. Callers must supply fresh facts under the authoritative writer lock,
 including the captured cancellation epoch before applying upload results. These
-functions do not read private files, renew credentials, commit proposals or start
-a worker. Renewal-journal recovery and production state adoption remain with the
+transition functions do not read private files, renew credentials, commit proposals or start
+a worker. `readQueueSnapshot` reads the direct legacy `<id>.job` layout under the
+existing queue lease, with private descriptor/ACL admission and a 100-record bound.
+It preserves data-hardlink compatibility, returns detached frozen records, and fails
+the entire snapshot on unsafe or malformed entries. An admitted empty directory
+returns an empty queue; a missing directory is an admission failure. It may create
+the stable empty lock file, but never writes queue JSON. This library reader does
+not route installed status commands. Renewal-journal recovery and production state adoption remain with the
 parent migration; Rust remains the sole active writer.
 
 The `./recipient-command` export prepares headless fetch/remote-inspect behavior
