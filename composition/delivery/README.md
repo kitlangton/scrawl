@@ -26,7 +26,8 @@ The producer uses the installed runtime and refuses plugin-source
 overrides in CI. The catalog fingerprints `engine/`, `capture/engine/` and
 `.cargo/`; packaged-media verification remains inside the owner producer.
 The Mac lane runs on native `macos-26-intel`, qualifies Swift 6.2+/SDK 26+,
-and skips Linux apt setup. Its producer builds thin x86_64 Rust and Swift helpers
+and skips Linux apt setup. Fresh Mac builds ensure fixture-only FFmpeg is
+available, using a bounded Homebrew bottle install when absent. Its producer builds thin x86_64 Rust and Swift helpers
 and runs packaged public SDK/H264 tests. Receipts and discovery retain the same
 owner ID with a distinct target fingerprint. The compilation minimum of macOS 15
 is not runtime proof on macOS 15; ARM proof is not Intel artifact admission.

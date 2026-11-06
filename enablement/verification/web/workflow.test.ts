@@ -180,5 +180,9 @@ test('media native targets use the same producer with platform-specific fresh se
   assert.match(mac, /steps.admit.outputs.reuse != 'true'/);
   assert.match(mac, /process.arch !== 'x64'/);
   assert.match(mac, /Swift 6.2\+ and SDK 26\+ required/);
-  assert.doesNotMatch(mac, /apt-get|brew install|--target/);
+  assert.doesNotMatch(mac, /apt-get|--target/);
+  assert.match(mac, /'brew', \['install', '--force-bottle', 'ffmpeg'\]/);
+  assert.match(mac, /timeout: 180_000/);
+  assert.match(mac, /error.code !== 'ENOENT'/);
+  assert.match(mac, /HOMEBREW_NO_AUTO_UPDATE: '1'/);
 });

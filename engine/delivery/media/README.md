@@ -43,8 +43,8 @@ with separate target fingerprints, receipts and admission.
 
 On a native x86_64 Mac, run `npm ci`, `npm run verify`, then
 `OWNER_TARGET=macos-x64 npm run build`. It requires Xcode with Swift 6.2+ and
-the macOS 26+ SDK and the same Node and Rust versions. Mac synthetic fixtures
-use the committed Swift generator. It compiles
+the macOS 26+ SDK and the same Node and Rust versions. FFmpeg generates the
+synthetic fixture movies only; it is not part of the sealed Mac runtime. It compiles
 the existing worker plus the private `FramesBridge.swift`/`Media.swift` helper;
 no Desktop application or GStreamer is linked. The artifact has three executable
 files: the absolute launch entry and the worker/helper under `libexec/`, plus
