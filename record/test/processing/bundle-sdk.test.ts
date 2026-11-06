@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
-import { chmod, lstat, mkdir, mkdtemp, readFile, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
@@ -77,6 +77,21 @@ async function fixture(): Promise<BundleAssemblyInput & { manifest: MaterialsDoc
     ],
     transcriptBounds: { policy: "estimated", basis: "SDK fixture provides explicit segment end time" },
   };
+}
+
+function addAudioMaterial(input: BundleAssemblyInput & { manifest: MaterialsDocument["manifest"] }) {
+  const payload = JSON.parse(new TextDecoder().decode(input.payloadBytes));
+  const audioBytes = new TextEncoder().encode("synthetic-audio-material");
+  const audioFile = sealed("capture.m4a", audioBytes, "inode-audio");
+  payload.files.push({ relativePath: audioFile.relativePath, sha256: audioFile.sha256, identity: audioFile.identity });
+  payload.audio = { file: audioFile.relativePath, durationMs: 4000, sampleRate: 48000, channels: 2 };
+  payload.clock.audioOffsetMs = 0;
+  input.payloadBytes = bytes(payload);
+  input.manifest.key.revision = sha(input.payloadBytes);
+  input.manifest.payloadFile.sha256 = sha(input.payloadBytes);
+  input.manifest.payloadFile.identity.size = input.payloadBytes.byteLength;
+  for (const artifact of input.artifacts) artifact.materials = { ...input.manifest.key };
+  return audioFile;
 }
 
 function stagingInput(input: BundleAssemblyInput, assembly: ReturnType<typeof assembleCanonicalBundle>, root: string,
@@ -156,6 +171,114 @@ test("assembles an SDK-validated materials envelope and sealed facts with defaul
   assert.deepEqual(document.context, { workspace: "demo" });
   assert.deepEqual(document.events.map((event: { kind: string }) => event.kind), ["app_change", "click"]);
   assert.deepEqual(result.validatedFacts.transcript?.identity, identity);
+});
+
+test("material references derive original media seals without caller media bytes and stage from materials", async () => {
+  const input = await fixture();
+  const destination = join(tmpdir(), "record-material-reference.apparent");
+  const baselineInput = structuredClone(input);
+  baselineInput.admission.bundlePath = destination;
+  baselineInput.frames = baselineInput.frames.map(frame => ({ ...frame, absolutePath: join(destination, frame.artifactPath) }));
+  const baseline = assembleCanonicalBundle(baselineInput);
+  input.artifacts = input.artifacts.filter(artifact => artifact.role !== "video");
+  input.materialReferences = [{ role: "video", relativePath: "capture.mp4" }];
+  input.admission.bundlePath = destination;
+  input.frames = input.frames.map(frame => ({ ...frame, absolutePath: join(destination, frame.artifactPath) }));
+  const assembly = assembleCanonicalBundle(input);
+  assert.deepEqual(assembly.apparentJson, baseline.apparentJson);
+  assert.deepEqual(assembly.summaryMd, baseline.summaryMd);
+  assert.deepEqual(assembly.inventory, baseline.inventory);
+  const videoEntry = assembly.inventory.entries.find(entry => entry.path === "capture.mp4")!;
+  const originalVideo = assembly.materials.payload.files.find(file => file.relativePath === "capture.mp4")!;
+  assert.deepEqual(videoEntry, { path: "capture.mp4", role: "video", sha256: originalVideo.sha256,
+    byteLength: originalVideo.identity.size, provenance: "material-reference", identity: originalVideo.identity });
+
+  const root = await mkdtemp(join(tmpdir(), "record-reference-stage-"));
+  try {
+    const staged = await prepareRecordPublication({ ownerToken: "c".repeat(64), publicationId: "6".repeat(32),
+      stagingRoot: join(root, "private"), destinationPath: destination, materialsManifest: input.manifest,
+      materialsPayloadBytes: input.payloadBytes, assembly,
+      artifactBytes: Object.fromEntries(input.artifacts.filter(artifact => artifact.role === "frame" || artifact.role === "contact-sheet")
+        .map(artifact => [artifact.relativePath, artifact.bytes])) });
+    assert.equal(staged.plan.entries.find(entry => entry.role === "video")?.input.kind, "material");
+    assert.equal(staged.plan.entries.find(entry => entry.role === "frame")?.input.kind, "assembled");
+    assert.equal(staged.plan.entries.find(entry => entry.role === "contact-sheet")?.input.kind, "assembled");
+    await assertAbsent(destination);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("completed-capture composition forwards only image bytes for material-backed media", async () => {
+  const input = await fixture();
+  input.artifacts = input.artifacts.filter(artifact => artifact.role !== "video");
+  input.materialReferences = [{ role: "video", relativePath: "capture.mp4" }];
+  const root = await mkdtemp(join(tmpdir(), "record-reference-composition-"));
+  const destinationPath = join(root, "final.apparent");
+  assemblyForDestination(input, destinationPath);
+  let planBytes: Uint8Array | undefined;
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish(request: { planBytes: Uint8Array; captureId: string; publicationId: string; planFile: { planSha256: string } }) {
+      planBytes = new Uint8Array(request.planBytes);
+      return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 };
+    },
+  } as unknown as CaptureClient;
+  const publisher = createCompletedCapturePublisher(sdk, join(root, "control"), preflightCapturePublication);
+  try {
+    const status = await publisher.publishCompletedCapture({ status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+      assembly: input, ownerToken: "c".repeat(64), publicationId: "7".repeat(32), stagingRoot: join(root, "staging"), destinationPath });
+    assert.equal(status.state, "publishing");
+    const plan = JSON.parse(new TextDecoder().decode(planBytes!));
+    assert.equal(plan.entries.find((entry: { role: string }) => entry.role === "video")?.input.kind, "material");
+    assert.equal(plan.entries.find((entry: { role: string }) => entry.role === "frame")?.input.kind, "assembled");
+    assert.equal(plan.entries.find((entry: { role: string }) => entry.role === "contact-sheet")?.input.kind, "assembled");
+    const stage = join(root, "staging", "7".repeat(32));
+    assert.equal((await readdir(stage, { recursive: true })).some(path => path === "capture.mp4"), false);
+    await assertAbsent(destinationPath);
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("material references reject missing, duplicate, unknown, mismatched, unsafe, and dual-bound media", async () => {
+  const input = await fixture();
+  const withoutVideoBytes = structuredClone(input);
+  withoutVideoBytes.artifacts = withoutVideoBytes.artifacts.filter(artifact => artifact.role !== "video");
+  assert.throws(() => assembleCanonicalBundle(withoutVideoBytes), /lacks its supplied sealed video artifact/u);
+  const check = (references: BundleAssemblyInput["materialReferences"]) => {
+    const candidate = structuredClone(withoutVideoBytes);
+    candidate.materialReferences = references;
+    assert.throws(() => assembleCanonicalBundle(candidate));
+  };
+  check([{ role: "video", relativePath: "capture.mp4" }, { role: "video", relativePath: "capture.mp4" }]);
+  check([{ role: "video", relativePath: "facts/context.json" }]);
+  check([{ role: "audio", relativePath: "capture.mp4" }]);
+  check([{ role: "video", relativePath: "../capture.mp4" }]);
+  const dualBound = structuredClone(input);
+  dualBound.materialReferences = [{ role: "video", relativePath: "capture.mp4" }];
+  assert.throws(() => assembleCanonicalBundle(dualBound), /conflicts with supplied artifact bytes/u);
+  check([{ role: "audio", relativePath: "capture.m4a" }]);
+
+  const withAudio = await fixture();
+  const audioFile = addAudioMaterial(withAudio);
+  const noAudio = structuredClone(withAudio);
+  noAudio.artifacts = noAudio.artifacts.filter(artifact => artifact.role !== "video");
+  noAudio.materialReferences = [{ role: "video", relativePath: "capture.mp4" }];
+  assert.throws(() => assembleCanonicalBundle(noAudio), /lacks its supplied sealed audio artifact/u);
+
+  const withReferences = structuredClone(noAudio);
+  withReferences.materialReferences = [{ role: "video", relativePath: "capture.mp4" }, { role: "audio", relativePath: audioFile.relativePath }];
+  const result = assembleCanonicalBundle(withReferences);
+  for (const file of ["capture.mp4", audioFile.relativePath]) {
+    const declared = result.materials.payload.files.find(item => item.relativePath === file)!;
+    const entry = result.inventory.entries.find(item => item.path === file)!;
+    assert.equal(entry.sha256, declared.sha256);
+    assert.equal(entry.byteLength, declared.identity.size);
+    assert.deepEqual(entry.identity, declared.identity);
+    assert.equal(entry.provenance, "material-reference");
+  }
+  const forged = structuredClone(withoutVideoBytes);
+  forged.materialReferences = [{ role: "video", relativePath: "capture.mp4", sha256: "0".repeat(64), identity: { device: "9", inode: "forged", size: 0, modifiedNs: "0" } } as never];
+  const forgedAssembly = assembleCanonicalBundle(forged);
+  assert.equal(forgedAssembly.inventory.entries.find(entry => entry.path === "capture.mp4")?.sha256,
+    forgedAssembly.materials.payload.files.find(file => file.relativePath === "capture.mp4")?.sha256);
 });
 
 test("public assembler emits canonical videoOnly when interaction collection is unavailable", async () => {
