@@ -31,6 +31,7 @@ const id = () => randomBytes(16).toString("hex");
 const token = () => randomBytes(32).toString("hex");
 const binary = process.env.APPARENT_ENGINE_CAPTURE_BIN;
 const mediaBinary = process.env.APPARENT_ENGINE_MEDIA2_BIN;
+const realCaptureMode = process.env.APPARENT_RECORD_PEER_REAL_CAPTURE === "1" || process.env.SCRAWL_GUI_OUTPUT !== undefined;
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
 function privateDir(path: string) {
@@ -235,7 +236,9 @@ test("Record preserves collected interactions and uses the canonical videoOnly p
   }
 });
 
-test("Record fixture-only assembly and recovery interoperate with native publication and committed restart recovery", { skip: !binary }, async () => {
+// This fixture injects the pre-receipt crash window; packaged real-capture
+// runs select the release-compatible publication case below instead.
+test("Record fixture-only assembly and recovery interoperate with native publication and committed restart recovery", { skip: !binary || realCaptureMode }, async () => {
   const f = await fixture(false);
   const oldReadiness = process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
   const oldDelay = process.env.APPARENT_CAPTURE_TEST_PUBLICATION_AFTER_COMMIT_DELAY_MS;
@@ -355,7 +358,7 @@ test("Record fixture-only assembly and recovery interoperate with native publica
 });
 
 test("Record publishes explicitly selected native media2 frames and sheet from retained materials", { skip: !binary || !mediaBinary }, async () => {
-  const realCapture = process.env.APPARENT_RECORD_PEER_REAL_CAPTURE === "1" || process.env.SCRAWL_GUI_OUTPUT !== undefined;
+  const realCapture = realCaptureMode;
   const f: any = realCapture ? await nativeWorkspace() : await fixture(false);
   let capture: CaptureClient | undefined;
   let media: Media2Client | undefined;
