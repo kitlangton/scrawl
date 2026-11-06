@@ -39,12 +39,13 @@ const fields: readonly (keyof StoredCredential)[] = [
   'server', 'site', 'scope', 'token', 'generation', 'refreshToken', 'expiresAt', 'refreshExpiresAt', 'grantId',
   'authRequired', 'encryption_identity', 'accountInitial',
 ];
-const sameCredential = (a: StoredCredential, b: StoredCredential): boolean => fields.every(key => a[key] === b[key]);
+/** Exact comparison of the complete known stored credential wire shape. */
+export const sameStoredCredential = (a: StoredCredential, b: StoredCredential): boolean => fields.every(key => a[key] === b[key]);
 
 /** A completed journal is recoverable only for the exact, still-renewable login incarnation. */
 export function isCompletedRenewalFor(current: StoredCredential, journal: RenewalJournal): boolean {
   return journal.completed && !current.authRequired && current.refreshToken !== null && current.grantId !== null &&
-    current.expiresAt !== null && current.refreshExpiresAt !== null && sameCredential(current, journal.base);
+    current.expiresAt !== null && current.refreshExpiresAt !== null && sameStoredCredential(current, journal.base);
 }
 
 /** Merge a previously completed response using its original issue time. */
