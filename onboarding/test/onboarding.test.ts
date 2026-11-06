@@ -82,9 +82,34 @@ test("host factory loads before rendering and applies first-launch versus explic
 });
 
 test("renders the actual React contribution with accessible controls and packed Record fixture pen choices", async () => {
-  const f = fixture(); await f.controller.load(); await f.controller.dispatch("continue");
+  const f = fixture(); await f.controller.load();
+  const welcome = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
+  assert.match(welcome, /Welcome\./); assert.match(welcome, /Sign-in is not available yet/); assert.match(welcome, /alt="apparent"/); assert.match(welcome, /assets\/apparent-app-icon\.svg/);
+  await f.controller.dispatch("continue");
   const html = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
-  assert.match(html, /Choose your pen color/); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen/); assert.match(html, /Frog guide/); assert.match(html, /Try later/); f.controller.dispose();
+  assert.match(html, /Pick your pen\./); for (const color of ["coral", "purple", "blue", "green"]) assert.match(html, new RegExp(`aria-label="${color} pen"`)); assert.equal((html.match(/<span aria-hidden="true" style="--pencil:/g) ?? []).length, 4); assert.match(html, /Choose a color for your pen/); assert.doesNotMatch(html, /ink pen|laser pen|cursor pen/); assert.match(html, /Frog guide/); assert.match(html, /Try later/); f.controller.dispose();
+});
+
+test("mounted permission rows use readable names and provider-factual states", async () => {
+  const f = fixture();
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "permissions" };
+  const current = f.driver.current();
+  f.driver.publish({ ...current, revision: current.revision + 1, readiness: { requirements: [
+    { id: "screen-capture", required: true, status: "granted", usableNow: false, relaunchNeeded: true, allowedRepairActions: ["request-safe-relaunch"] },
+    { id: "microphone", required: true, status: "denied", usableNow: false, relaunchNeeded: false, allowedRepairActions: ["open-system-settings"] },
+    { id: "future-internal-id", required: false, status: "not-determined", usableNow: false, relaunchNeeded: false, allowedRepairActions: [] },
+  ] } });
+  await f.controller.load();
+  const dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window });
+  Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document });
+  Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
+  const root = createRoot(dom.window.document.getElementById("root")!);
+  await act(async () => { root.render(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} })); await Promise.resolve(); });
+  const text = dom.window.document.body.textContent ?? "";
+  assert.match(text, /Review recording access\./); assert.match(text, /Screen Recording/); assert.match(text, /Reopen Apparent to use this access/);
+  assert.match(text, /Microphone/); assert.match(text, /Not allowed/); assert.match(text, /Access/); assert.doesNotMatch(text, /screen-capture|future-internal-id/);
+  await act(async () => { root.unmount(); }); f.controller.dispose(); dom.window.close();
 });
 
 test("Record acceptance is dispatch only and failed pen writes preserve the effective value", async () => {
