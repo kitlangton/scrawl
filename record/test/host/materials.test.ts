@@ -12,7 +12,7 @@ const sha = (b: Uint8Array) => createHash("sha256").update(b).digest("hex");
 const identity = { captureId: "a".repeat(32), materialsId: "b".repeat(32) };
 const expected: CaptureMaterialsExpected = { key: { ...identity, revision: "0".repeat(64) }, leaseId: "c".repeat(32), bundleId: "materials-test" };
 
-async function fixture(factIdentity = identity, safeForProcessing = true) {
+async function fixture(factIdentity = identity, safeForProcessing = true, includeStroke = false) {
   const root = await realpath(await mkdtemp(join(tmpdir(), "record-material-reader-"))); await chmod(root, 0o700);
   await mkdir(join(root, "facts"), { mode: 0o700 });
   const source = { id: "display", generation: "d".repeat(32), confirmedAtMs: 0, kind: "display" as const, displayId: 1,
@@ -30,17 +30,32 @@ async function fixture(factIdentity = identity, safeForProcessing = true) {
   };
   const contextFile = await sealed("facts/context.json", ctx);
   const videoFile = await sealed("capture.mp4", video);
+  const strokeBytes = includeStroke ? enc({ schema: "apparent.capture-strokes/1", identity: factIdentity, coordinates: "target-normalized-10000",
+    surfaces: [{ surfaceId: "screen-a", transformId: "transform-a", width: 10, height: 10, target: "capture-rectangle" }],
+    strokes: [{ id: "1".repeat(32), surface: "screen", surfaceId: "screen-a", transformId: "transform-a", startMs: 0, endMs: 100, acceptedAtMs: 100, rgb: [0, 0, 0], points: [{ timeMs: 50, x: 5000, y: 5000 }] }] }) : undefined;
+  if (strokeBytes) await writeFile(join(root, "facts/strokes.json"), strokeBytes, { mode: 0o600 });
+  const strokeFile = strokeBytes ? await sealed("facts/strokes.json", strokeBytes) : undefined;
   const payload = { schema: "apparent.capture-materials-payload/1", identity, bundleId: expected.bundleId, root, leaseId: expected.leaseId,
     clock: { epoch: "capture-admission-monotonic", units: "integer-milliseconds", durationMs: 1000, videoOffsetMs: 0 },
-    confirmedSource: source, invocation, files: [contextFile, videoFile], video: { file: "capture.mp4", width: 10, height: 10, durationMs: 1000 },
-    facts: { context: { file: contextFile.relativePath, schema: "apparent.capture-context/1" } },
-    collection: { context: "collected", interactions: "unavailable", candidates: "unavailable", transcript: "unavailable", acceptedStrokes: "unavailable" },
+    confirmedSource: source, invocation, files: [contextFile, videoFile, ...(strokeFile ? [strokeFile] : [])], video: { file: "capture.mp4", width: 10, height: 10, durationMs: 1000 },
+    facts: { context: { file: contextFile.relativePath, schema: "apparent.capture-context/1" }, ...(strokeFile ? { acceptedStrokes: { file: strokeFile.relativePath, schema: "apparent.capture-strokes/1" } } : {}) },
+    collection: { context: "collected", interactions: "unavailable", candidates: "unavailable", transcript: "unavailable", acceptedStrokes: strokeFile ? "collected" : "unavailable" },
     warnings: [], safety: { nativeRemoteDelivery: "forbidden", safeForProcessing } };
   const payloadBytes = new TextEncoder().encode(JSON.stringify(payload, null, 2) + "\n"); await writeFile(join(root, "materials.json"), payloadBytes, { mode: 0o600 });
   const payloadFile = await sealed("materials.json", payloadBytes);
   const manifest: MaterialsManifest = { schema: "apparent.capture-materials/1", key: { ...identity, revision: sha(payloadBytes) }, root, leaseId: expected.leaseId, payloadFile };
-  return { root, manifest, expected: { ...expected, key: manifest.key }, ctx, payloadBytes };
+  return { root, manifest, expected: { ...expected, key: manifest.key }, ctx, strokeBytes, payloadBytes };
 }
+
+test("retained materials reader preserves validated observed stroke RGB bytes for assembly", async () => {
+  const f = await fixture(identity, true, true);
+  try {
+    const result = await readCaptureMaterials({ manifest: f.manifest, expected: f.expected, trustedRoot: f.root });
+    assert.deepEqual(result.materials.payload.collection.acceptedStrokes, "collected");
+    assert.deepEqual([...result.assemblyFacts.acceptedStrokes!.bytes], [...f.strokeBytes!]);
+    assert.deepEqual(JSON.parse(new TextDecoder().decode(result.assemblyFacts.acceptedStrokes!.bytes)).strokes[0].rgb, [0, 0, 0]);
+  } finally { await rm(f.root, { recursive: true, force: true }); }
+});
 
 test("reads SDK-validated retained bytes while preserving unavailable facts and has no effects", async () => {
   const f = await fixture();
