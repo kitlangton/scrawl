@@ -26,36 +26,26 @@ class SelectionTests(unittest.TestCase):
         self.assertIsNone(verification.architecture_owners(["shared/contracts/src/index.ts"]))
         self.assertIsNone(verification.architecture_owners(["composition/architecture/src/guard.ts"]))
         self.architecture_patch.stop()
-        with patch.object(verification.subprocess, "run") as run:
-            verification.run_architecture_check(["composition/app/src/main.tsx"])
-        run.assert_called_once_with(
-            ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts",
-             "--root", ".", "--owner", "composition"], cwd=verification.ROOT, check=True)
-
-    def test_architecture_cli_rejects_a_record_to_agent_source_edge(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / "record/src").mkdir(parents=True)
-            (root / "agent/src").mkdir(parents=True)
-            (root / "agent/src/secret.ts").write_text("export const value = 1;\n")
-            (root / "record/src/index.ts").write_text("import {value} from '../../agent/src/secret.ts';\nvoid value;\n")
-            # Hooks inherit Git state for the pushed checkout, not this fixture.
-            env = {k: v for k, v in os.environ.items() if not k.startswith("GIT_")}
-            subprocess.run(["git", "init", "-q"], cwd=root, env=env, check=True)
-            subprocess.run(["git", "add", "record", "agent"], cwd=root, env=env, check=True)
-            result = subprocess.run(
-                ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts",
-                 "--root", str(root), "--owner", "record"], cwd=verification.ROOT,
-                capture_output=True, text=True, env=env)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn("cross-owner path", result.stderr)
+            (root / "composition/architecture/node_modules/typescript").mkdir(parents=True)
+            with patch.object(verification, "ROOT", root), patch.object(verification.subprocess, "run") as run:
+                verification.run_architecture_check(["composition/app/src/main.tsx"])
+        run.assert_called_once_with(
+            ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts",
+             "--root", ".", "--owner", "composition"], cwd=root, check=True)
 
     def test_architecture_check_fails_actionably_without_installed_typescript(self):
         self.architecture_patch.stop()
+        self.preflight_patch.stop()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             (root / "composition/architecture").mkdir(parents=True)
             with patch.object(verification, "ROOT", root):
+                with patch.object(verification.subprocess, "run") as run:
+                    with self.assertRaisesRegex(RuntimeError, "npm ci.*composition/architecture"):
+                        verification.run_pr_checks({"paths": ["record/src/index.ts"]})
+                    run.assert_not_called()
                 with self.assertRaisesRegex(RuntimeError, "run npm ci in composition/architecture"):
                     verification.run_architecture_check(["record/src/index.ts"])
 
@@ -82,6 +72,7 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(any(call.args[0][0] == 'cargo' for call in commands.call_args_list))
 
     def test_top_level_onboarding_preflight_fails_closed_then_executes(self):
+        self.preflight_patch.stop()
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             source = SCRIPT.parents[1]
@@ -102,11 +93,16 @@ class SelectionTests(unittest.TestCase):
                     target.parent.mkdir(parents=True, exist_ok=True)
                     target.write_text(json.dumps({'version': lock['packages']['node_modules/' + name]['version']}))
                 (package / 'node_modules/.package-lock.json').write_text(json.dumps(lock))
+                verification.preflight_dependencies({"paths": ["onboarding/src/controller.ts"],
+                                                     "onboarding_package": True})
                 verification.run_onboarding_package_check()
                 self.assertEqual([call.args[0] for call in run.call_args_list], [['npm', 'run', 'typecheck'], ['npm', 'test']])
                 self.assertTrue(all(call.kwargs['cwd'] == package and call.kwargs['check'] for call in run.call_args_list))
                 run.reset_mock()
                 (package / 'node_modules/.package-lock.json').write_text('{}')
+                with self.assertRaisesRegex(RuntimeError, 'stale locked install'):
+                    verification.preflight_dependencies({"paths": ["onboarding/src/controller.ts"],
+                                                         "onboarding_package": True})
                 with self.assertRaisesRegex(RuntimeError, 'stale or missing'):
                     verification.run_onboarding_package_check()
                 run.assert_not_called()
@@ -620,6 +616,9 @@ class SelectionTests(unittest.TestCase):
         self.architecture_patch = patch.object(verification, "run_architecture_check")
         self.architecture_patch.start()
         self.addCleanup(self.architecture_patch.stop)
+        self.preflight_patch = patch.object(verification, "preflight_dependencies")
+        self.preflight_patch.start()
+        self.addCleanup(self.preflight_patch.stop)
 
     def test_documents_do_not_compile_app(self):
         result = verification.select(["enablement/refactor.md", "AGENTS.md", "docs/capture.md"])

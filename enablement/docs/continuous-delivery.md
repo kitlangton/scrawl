@@ -21,7 +21,20 @@ manual triggering does not waive publication gates.
 Feature-branch pushes without a PR retain inexpensive local selector, push-hook
 and release-admission contracts, plus affected-owner architecture checks. Install
 the architecture checker once with `npm --prefix composition/architecture ci`;
-the hook fails clearly if it is unavailable and never installs packages.
+the hook fails clearly if it is unavailable and never installs packages. Before
+contract checks in either PR or changed-tree verification, a read-only dependency
+preflight checks selected architecture, Record/renderer, Agent, App Shell,
+onboarding, resources, Connect client and Public packages for required locked
+installs and npm lock freshness. Existing package selectors control the check:
+docs-only and unaffected owners stay skipped, and unknown history remains
+conservative. Missing or stale installs stop before contracts/builds and print a
+package-specific locked-install repair command. App Shell's existing check still
+compares copied shared contracts/UI against source; Record/Desktop checks reuse the
+frontend's read-only shared UI and Record snapshot guard. Public checks reuse the
+build's manifest, input and installed-package prerequisites. The changed-tree
+browser lane checks its Bun executable and lock inputs before the existing selected
+`bun install --frozen-lockfile` step. The preflight itself performs no install,
+fetch or dependency mutation.
 Applicable Value-stream PR checks must pass
 before merge; standalone Linux/macOS and Connect workflows remain manual-only.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
