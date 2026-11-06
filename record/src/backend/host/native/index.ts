@@ -162,9 +162,13 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
       if (command.type === 'shortcut-submit') {
         if (!edit || edit.sessionId !== command.sessionId || !latest.shortcuts.record.canValidate) return 'refused';
         awaitingSaveReadback = undefined; // A new explicit edit supersedes only the local pending display, never the admitted effect.
+        candidate = undefined;
+        edit = { sessionId: edit.sessionId, value: command.value };
         const decoded = decodeShortcut(command.value);
         if (!decoded) { edit = { ...edit, value: command.value, error: 'Use an unambiguous modifier+key shortcut such as Ctrl+Shift+R' }; candidate = undefined; latestFacts = factsFor(latest); notify(); return 'refused'; }
-        const result = await port.validateRecordShortcut(decoded.key, decoded.modifiers, state);
+        let result: Awaited<ReturnType<NativeHostPortInput['validateRecordShortcut']>>;
+        try { result = await port.validateRecordShortcut(decoded.key, decoded.modifiers, state); }
+        catch { result = {status:'outcome-unknown'}; }
         if (detached || !latestFacts || latestFacts.providerEpoch !== observed.providerEpoch || latestFacts.revision !== observed.revision || edit?.sessionId !== command.sessionId) return 'refused';
         if (result.status === 'accepted' && validShortcut(result.shortcut)) {
           candidate = { sessionId: edit.sessionId, value: command.value, state: { providerEpoch: observed.providerEpoch, revision: observed.revision }, shortcut: structuredClone(result.shortcut) };
@@ -176,7 +180,9 @@ export function createRecordNativePort(port: NativeHostPortInput, options: Nativ
       if (command.type === 'shortcut-save') {
         if (!edit || edit.sessionId !== command.sessionId || !candidate || candidate.sessionId !== command.sessionId || !sameObservedState(candidate.state, observed) || !latest.shortcuts.record.canSave) return 'refused';
         const admitted = candidate; candidate = undefined;
-        const result = await port.saveRecordShortcut(structuredClone(admitted.shortcut), state);
+        let result: NativeMutationResultInput;
+        try { result = await port.saveRecordShortcut(structuredClone(admitted.shortcut), state); }
+        catch { result = {status:'outcome-unknown'}; }
         if (!detached && edit?.sessionId === admitted.sessionId) {
           if (result.status === 'accepted') awaitingSaveReadback = { sessionId: admitted.sessionId, shortcut: admitted.shortcut };
           edit = { ...edit, error: result.status === 'accepted' ? 'Awaiting native shortcut save readback' : result.status === 'refused' ? `Native save refused (${result.reason})` : 'Native save outcome unknown' };

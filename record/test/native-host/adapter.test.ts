@@ -229,3 +229,19 @@ test('malformed runtime snapshots disable direct adapter effects until a valid o
   supplied=snap(); const valid=await native.readFacts();
   assert.equal(await native.dispatch!(action,valid),'accepted'); assert.equal(effects,1); native.dispose!();
 });
+
+
+test('failed replacement validation cannot retain the previous save candidate', async () => {
+  const current=snap(); current.shortcuts.record.registration='registered'; current.shortcuts.record.canSave=true;
+  const port=supportedPort(async()=>current); let validates=0,saves=0;
+  port.validateRecordShortcut=async()=>{if(++validates===2)throw new Error('lost validation reply');return{status:'accepted',shortcut:{keyCode:82,modifiers:2560,label:'⌥⇧R'}};};
+  port.saveRecordShortcut=async()=>{saves++;return{status:'accepted'};};
+  const client=createRecordCapabilityProvider({runtime:runtime(),native:createRecordNativePort(port,{requiredPermissionIds:[]}),providerEpoch:'replacement-validation'});
+  await until(()=>client.current().shortcut.configured==='⌥⇧S');
+  await command(client,'shortcut-begin-edit');const sessionId=client.current().shortcut.draft!.sessionId;
+  await command(client,'shortcut-submit',{sessionId,value:'Alt+Shift+R'});
+  assert.equal((await command(client,'shortcut-submit',{sessionId,value:'Alt+Shift+T'})).status,'outcome-unknown');
+  assert.equal(client.current().shortcut.draft?.value,'Alt+Shift+T');
+  assert.equal((await command(client,'shortcut-save',{sessionId})).status,'refused');assert.equal(saves,0);
+  assert.equal(validates,2);client.detach();
+});
