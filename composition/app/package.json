@@ -14,7 +14,8 @@
     "prestart": "npm run prepare:electron",
     "start": "electron dist/app",
     "package": "node scripts/package.ts dist/app dist/packages",
-    "test:electron": "node --experimental-strip-types --test tests/electron.test.ts"
+    "test:electron": "node --experimental-strip-types --test tests/electron.test.ts",
+    "test:electron:onboarding": "node --experimental-strip-types --test tests/onboarding-bridge.electron.test.ts"
   },
   "dependencies": {
     "@apparent/app-contracts": "file:../../shared/contracts",
