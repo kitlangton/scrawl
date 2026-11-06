@@ -5,7 +5,7 @@ import { verifyEnvelope, type Asset, type Context } from "./crypto.ts";
 import { validateRecipientEnvelopeBytesWithVerifier } from "../recipient-envelope.ts";
 import { decodeStrictJson } from "./json.ts";
 import { exact, record, recipientAssets, validateRecipientReferences } from "./manifest.ts";
-import { RecipientTransport, RecipientTransportError } from "./transport.ts";
+import { RecipientTransport, RecipientTransportError, type RecipientAuthorization } from "./transport.ts";
 
 export type RecipientReadCredential = {
   server: string; token: string; grantId: string;
@@ -16,6 +16,8 @@ export type RetrieveRecipientInput = {
   waitSeconds?: number; allowLegacyPlaintext?: boolean; signal?: AbortSignal;
   /** Borrowed identity, loaded only after the service explicitly selects encryption. */
   resolveIdentity?: () => Promise<{ age: string; signing: Uint8Array }>;
+  /** Private same-login authorization, refreshed for each bounded GET. */
+  authorize?: RecipientAuthorization;
 };
 /** Data verified for a subsequent private publication, not a published bundle. */
 export type RetrievedRecipientCapture = {
@@ -115,7 +117,8 @@ export async function retrieveRecipientCapture(input: RetrieveRecipientInput): P
   } } : {}) };
   const files: RetrievedRecipientCapture["files"] = [];
   try {
-    const transport = new RecipientTransport(credential.server, credential.token, { signal });
+    const authorize = input.authorize;
+    const transport = new RecipientTransport(credential.server, credential.token, { signal, authorize });
     const deadline = performance.now() + wait * 1000, base = `/v1/captures/${captureId}`;
     let manifest: Record<string, unknown>;
     for (;;) {
@@ -124,7 +127,7 @@ export async function retrieveRecipientCapture(input: RetrieveRecipientInput): P
       if (wait > 0 && remaining <= 0) fail("not_ready");
       const readinessDeadline = wait > 0 && remaining <= 30_000;
       try {
-        const poll = new RecipientTransport(credential.server, credential.token, { signal, timeoutMs: wait === 0 ? 30_000 : Math.max(1, Math.min(30_000, Math.ceil(remaining))) });
+        const poll = new RecipientTransport(credential.server, credential.token, { signal, authorize, timeoutMs: wait === 0 ? 30_000 : Math.max(1, Math.min(30_000, Math.ceil(remaining))) });
         const value = await poll.getJson(base);
         if (!record(value) || value.id !== captureId || !["ready", "pending"].includes(value.status as string)) fail("invalid_manifest");
         if (value.status === "ready" || input.evidenceOnly === true && value.delivery === "evidence-first-v1" && value.evidenceReady === true) { manifest = value; break; }
