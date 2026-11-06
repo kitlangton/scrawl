@@ -180,3 +180,20 @@ manifest writer or authenticated publication consumer is supplied here. A new
 capture-channel allocator must persist its
 identity/plan binding in a separate private control namespace and leave the final
 destination absent. The existing v1 reservation-directory allocator is incompatible.
+
+## Recorded stroke RGB (SDK 0.3.2)
+
+`StrokeFacts.strokes[].rgb?: StrokeRgb` is an optional exact `[r,g,b]` tuple of
+three integer bytes (0–255), snapshotted when the native stroke begins. Black
+`[0,0,0]` is a color; absence is distinct and retains the existing unnamed legacy
+renderer default. Null, palette names, fractional bytes and other tuple lengths
+are invalid. `validateFactFile(..., "acceptedStrokes")` validates and preserves
+these bytes with the existing detached identity/hash/surface/clock checks.
+Colors do not change coordinate, timing or acceptance authority.
+
+This patch leaves the capture/2 wire version unchanged and does not advertise
+native accepted-stroke collection. SDK 0.3.1 rejects added RGB fields because its
+fact validator is strict; a producer must require the upgraded consumer before
+emitting colored facts. Absent-color facts retain their previous bytes/meaning.
+Record must carry the optional RGB into canonical `apparent.json` strokes rather
+than discard it. Engine does not interpret palette names or read/write pen config.

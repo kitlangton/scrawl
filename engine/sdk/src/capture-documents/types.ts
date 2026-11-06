@@ -67,7 +67,10 @@ export interface DerivativeDocumentInput { envelope: unknown; bytes: Uint8Array;
 export interface InferencePayload { schema: "apparent.transcript-result-payload/1"; materials: MaterialsKey; jobId: Id; receiptId: Id; root: string; clock: "bundle"; state: "complete" | "unavailable"; transcript?: { provider: string; model: string; text: string; segments: Array<{ startMs: number; endMs?: number; text: string }> }; warning?: { code: "transcript_unavailable"; retryable: boolean } }
 export interface InferenceEnvelope { schema: "apparent.transcript-result/1"; materials: MaterialsKey; jobId: Id; receiptId: Id; root: string; receiptFile: SealedFile; payload: InferencePayload }
 
-export interface StrokeFacts { schema: "apparent.capture-strokes/1"; identity: { captureId: Id; materialsId: Id }; coordinates: "target-normalized-10000"; surfaces: Array<{ surfaceId: string; transformId: string; width: number; height: number; target: "capture-rectangle" | "whiteboard-canvas" }>; strokes: Array<{ id: Id; surface: "screen" | "whiteboard"; surfaceId: string; transformId: string; startMs: number; endMs: number; acceptedAtMs: number; points: Array<{ timeMs: number; x: number; y: number }> }> }
+/** Exact encoded RGB bytes; absence retains the unnamed legacy renderer default. */
+export type StrokeRgb = [number, number, number];
+
+export interface StrokeFacts { schema: "apparent.capture-strokes/1"; identity: { captureId: Id; materialsId: Id }; coordinates: "target-normalized-10000"; surfaces: Array<{ surfaceId: string; transformId: string; width: number; height: number; target: "capture-rectangle" | "whiteboard-canvas" }>; strokes: Array<{ id: Id; surface: "screen" | "whiteboard"; surfaceId: string; transformId: string; startMs: number; endMs: number; acceptedAtMs: number; rgb?: StrokeRgb; points: Array<{ timeMs: number; x: number; y: number }> }> }
 
 export type ArtifactInput =
   | { kind: "material"; relativePath: string }
