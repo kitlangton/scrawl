@@ -219,7 +219,8 @@ contain the new hook. Server-side policy is separate.
 ## PR verification reuse
 
 The Engine SDK Linux lane, native Engine/media Linux/Intel Mac lanes and App Shell
-Linux/Intel Mac lanes and Config Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
+Linux/Intel Mac lanes, Config Linux/Intel Mac lanes and Onboarding Linux/Intel Mac
+lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
 synthetic merge commit's base/head parents and requires its complete Git tree to
@@ -278,6 +279,14 @@ The Config helper, its embedded source SHA and protocol manifest are promoted
 byte-for-byte with original build provenance. Its workflow retains fresh staged
 helper/client integration tests on PRs. No config writer, permission, activation,
 installed routing or native-helper implementation changes in this reuse slice.
+
+Onboarding promotes the exact packed TypeScript library only after its existing
+fresh checks/build and disposable public-export consumer verification. Its
+committed vendor tarballs and lockfile remain the complete package dependency
+inputs. Node/npm/esbuild overrides join its fingerprint; Electron-only overrides
+remain App Shell-specific. Shared package-build identity also captures esbuild
+overrides for App Shell. Onboarding gains no Rust dependency or native setup, and
+this delivery change does not activate or alter any installed onboarding route.
 
 ## Checks and artifact identity
 
