@@ -28,7 +28,7 @@ const journalSnapshot = (journal: RenewalJournal): RenewalJournal => Object.free
 /** Pure proposal matching the legacy renew() decision order after its scope lock is held. */
 export function planRenewal(input: RenewalPlanInput): RenewalPlan {
   if (!Number.isSafeInteger(input.now) || input.now < 0) throw new RenewalPlanError();
-  const responseBytes = input.responseBytes === null ? null : new Uint8Array(input.responseBytes);
+  const responseBytes = input.responseBytes === null || input.responseBytes.byteLength > 2_000_000 ? null : new Uint8Array(input.responseBytes);
   try { return decideRenewal(input, responseBytes); }
   finally { responseBytes?.fill(0); }
 }

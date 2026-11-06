@@ -93,3 +93,9 @@ test('invalid issue clocks fail with an allowlisted category before a journal ca
     assert.throws(() => planRenewal(input({ force: true, now })), error => error instanceof RenewalPlanError && error.category === 'invalid_plan' && error.message === 'invalid_plan');
   }
 });
+
+test('oversized completed replies fail closed while unrelated orphan bytes remain ignored', () => {
+  const oversized = new Uint8Array(2_000_001);
+  assert.deepEqual(planRenewal(input({ force: true, journal: journal(), responseBytes: oversized })), { kind: 'auth_required', reason: 'invalid_saved_response' });
+  assert.equal(planRenewal(input({ force: true, responseBytes: oversized })).kind, 'prepare_request');
+});
