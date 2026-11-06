@@ -1,8 +1,9 @@
-// Preserved public-package conformance from 4ad8f1582. Run a copy in a fresh
-// consumer of admitted Record/SDK tarballs, with repository-root fixture paths.
-// Synthetic materials and caller-attested images do not establish real capture
-// or native derivative provenance.
+// Composition consumer conformance from 4ad8f1582. Run against admitted public
+// Record/SDK tarballs; this stays outside Engine because it imports Record.
+// Fixture materials remain a separate conformance case. The explicit real-X11
+// mode exercises the public native capture and publication path end to end.
 import assert from "node:assert/strict";
+import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
 import { chmodSync, copyFileSync, createReadStream, mkdirSync, mkdtempSync, readFileSync, rmSync, statSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
@@ -126,7 +127,7 @@ async function fixture(interactionsCollected = true) {
   };
   const materials = validateMaterialsDocument(materialsManifest, payloadBytes) as MaterialsDocument;
 
-  const imageBytes = readFileSync(resolve("record/test/fixtures/take.apparent/frames/frame-01.png"));
+  const imageBytes = readFileSync(resolve("engine/core/tests/fixtures/frame.png"));
   privateDir(join(base, "frames"));
   const framePath = join(base, "frames/frame-01.png");
   const sheetPath = join(base, "contact-sheet.png");
@@ -183,6 +184,36 @@ async function fixture(interactionsCollected = true) {
     base, runtime, captureRoot, captureId, materialsId, leaseId, ownerToken, publicationId, bundleId, bundlePath,
     materialRoot, stagingParent, privateControlRoot, materials, materialsManifest, payloadBytes, assemblyInput,
   };
+}
+
+async function nativeWorkspace() {
+  const base = mkdtempSync(join(tmpdir(), "apparent-record-native-peer-"));
+  chmodSync(base, 0o700);
+  const runtime = join(base, "runtime");
+  const captureRoot = join(runtime, "capture-v2");
+  const bundleRoot = join(base, "bundles");
+  const stagingParent = join(base, "record-stage");
+  const privateControlRoot = join(base, "record-control");
+  for (const path of [runtime, captureRoot, bundleRoot, stagingParent]) privateDir(path);
+  const allocator = new AbsentDestinationAllocator(join(base, "destination-control"), bundleRoot);
+  const destination = await allocator.allocate(`record-native-peer-${id()}`);
+  return {
+    base, runtime, captureRoot, bundleRoot, stagingParent, privateControlRoot,
+    captureId: id(), materialsId: "", leaseId: "", ownerToken: token(), publicationId: id(),
+    bundleId: destination.bundleId, bundlePath: destination.bundlePath,
+  };
+}
+
+async function waitCaptureState(client: CaptureClient, authority: { captureId: string; ownerToken: string }, state: string) {
+  const deadline = Date.now() + 20_000;
+  let last: Awaited<ReturnType<CaptureClient["inspect"]>> | undefined;
+  while (Date.now() < deadline) {
+    last = await client.inspect(authority, 5000);
+    if (last.state === state) return last;
+    if (last.state === "failed" || last.state === "cancelled") throw new Error(`native capture ended as ${last.state}:${last.error?.code ?? "none"}`);
+    await delay(40);
+  }
+  throw new Error(`native capture did not reach ${state}; last=${last?.state ?? "none"}`);
 }
 
 test("Record preserves collected interactions and uses the canonical videoOnly profile when unavailable", async () => {
@@ -323,52 +354,132 @@ test("Record fixture-only assembly and recovery interoperate with native publica
   }
 });
 
-test("Record publishes explicitly selected native media2 frames and sheet from the retained fixture", { skip: !binary || !mediaBinary }, async () => {
-  const f = await fixture(false);
+test("Record publishes explicitly selected native media2 frames and sheet from retained materials", { skip: !binary || !mediaBinary }, async () => {
+  const realCapture = process.env.APPARENT_RECORD_PEER_REAL_CAPTURE === "1" || process.env.SCRAWL_GUI_OUTPUT !== undefined;
+  const f: any = realCapture ? await nativeWorkspace() : await fixture(false);
   let capture: CaptureClient | undefined;
   let media: Media2Client | undefined;
+  let xserver: ReturnType<typeof spawn> | undefined;
+  const oldDisplay = process.env.DISPLAY;
+  const oldWayland = process.env.WAYLAND_DISPLAY;
+  const oldGstDebug = process.env.GST_DEBUG;
+  const oldGstDebugFile = process.env.GST_DEBUG_FILE;
+  let read: Awaited<ReturnType<typeof readCaptureMaterials>>;
+  let createdAtMs = Date.now();
+  let scenarioPassed = false;
   try {
     privateDir(f.privateControlRoot);
-    const read = await readCaptureMaterials({
-      manifest: f.materials.manifest,
-      expected: { key: f.materials.manifest.key, leaseId: f.leaseId, bundleId: f.bundleId },
-      trustedRoot: f.materialRoot,
-    });
-    assert.deepEqual(read.materials.manifest.key, f.materials.manifest.key);
-    assert.equal(read.materials.payload.leaseId, f.leaseId);
 
-    capture = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 3000));
-    const captureHello = await capture.handshake(5000);
-    assert.equal(captureHello.implementation, "native");
-    assert.equal(captureHello.capabilities.publication, true);
+    if (realCapture) {
+      const xvfb = process.env.APPARENT_XVFB ?? "Xvfb";
+      const xsetroot = process.env.APPARENT_XSETROOT ?? "xsetroot";
+      let displayNumber = 101 + Math.floor(Math.random() * 80);
+      let foundDisplay = false;
+      for (let attempt = 0; attempt < 80; attempt++) {
+        try { statSync(`/tmp/.X${displayNumber}-lock`); displayNumber = 101 + ((displayNumber - 100) % 80); }
+        catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") { foundDisplay = true; break; } throw error; }
+      }
+      assert.ok(foundDisplay, "a private Xvfb display must be available for the Record publication scenario");
+      const display = `:${displayNumber}`;
+      xserver = spawn(xvfb, [display, "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: "ignore" });
+      process.env.DISPLAY = display;
+      delete process.env.WAYLAND_DISPLAY;
+      await delay(500);
+      execFileSync(xsetroot, ["-solid", "#cc2211"]);
+      capture = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 3000));
+      const captureHello = await capture.handshake(5000);
+      assert.equal(captureHello.implementation, "native");
+      assert.equal(captureHello.capabilities.publication, true);
+      const sources = await capture.discoverSources(5000);
+      assert.equal(sources.state, "available");
+      const source = sources.sources.find(item => item.kind === "display");
+      assert.ok(source, "the owned synthetic Xvfb display must be discoverable through CaptureClient");
+      assert.deepEqual(source.bounds, { x: 0, y: 0, width: 1366, height: 768, scale: 1 });
+      const invocationId = id();
+      createdAtMs = Date.now();
+      const started = await capture.start({
+        captureId: f.captureId, ownerToken: f.ownerToken, bundleId: f.bundleId, bundlePath: f.bundlePath,
+        source, options: { audio: "none", localOnly: true },
+        invocation: { kind: "explicit", invocationId, observedAtMs: createdAtMs },
+      }, 5000);
+      assert.ok(["starting", "recording"].includes(started.state));
+      await waitCaptureState(capture, { captureId: f.captureId, ownerToken: f.ownerToken }, "recording");
+      for (const color of ["#e65b32", "#37c6a1", "#a842d4"]) {
+        execFileSync(xsetroot, ["-solid", color]);
+        await delay(180);
+      }
+      await capture.stop({ captureId: f.captureId, ownerToken: f.ownerToken }, 5000);
+      const stopped = await waitCaptureState(capture, { captureId: f.captureId, ownerToken: f.ownerToken }, "materials-ready");
+      assert.ok(stopped.materials, "native stop must return authenticated retained materials");
+      const manifest = stopped.materials;
+      f.materialsId = manifest.key.materialsId;
+      f.leaseId = manifest.leaseId;
+      read = await readCaptureMaterials({
+        manifest,
+        expected: { key: manifest.key, leaseId: manifest.leaseId, bundleId: f.bundleId },
+        trustedRoot: manifest.root,
+        limits: { maxAggregateBytes: 128 * 1024 * 1024 },
+      });
+      assert.equal(read.materials.payload.identity.captureId, f.captureId);
+      assert.equal(read.materials.payload.confirmedSource.id, source.id);
+      assert.deepEqual(read.materials.payload.confirmedSource.rectangle, source.bounds);
+      assert.equal(read.materials.payload.video.width, 1366);
+      assert.equal(read.materials.payload.video.height, 768);
+      assert.ok(read.materials.payload.clock.durationMs > 0);
+      assert.ok(read.materials.payload.clock.videoOffsetMs >= 0);
+      assert.ok(Object.values(read.materials.payload.collection).every(value => value === "unavailable"), "the synthetic X11 case supplies no caller-created interaction facts");
+      assert.equal(read.materials.payload.invocation.invocationId, invocationId);
+      const moviePath = join(read.materials.manifest.root, read.materials.payload.video.file);
+      const ffmpeg = process.env.APPARENT_FFMPEG ?? "ffmpeg";
+      const frameHashes = execFileSync(ffmpeg, ["-v", "error", "-i", moviePath, "-f", "framemd5", "-"], { encoding: "utf8" })
+        .split("\n").filter(line => line && !line.startsWith("#")).map(line => line.split(",").at(-1)?.trim()).filter(Boolean);
+      assert.ok(new Set(frameHashes).size > 1, "native retained movie contains the changing synthetic X11 scene");
+    } else {
+      capture = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 3000));
+      const captureHello = await capture.handshake(5000);
+      assert.equal(captureHello.implementation, "native");
+      assert.equal(captureHello.capabilities.publication, true);
+      read = await readCaptureMaterials({
+        manifest: f.materials.manifest,
+        expected: { key: f.materials.manifest.key, leaseId: f.leaseId, bundleId: f.bundleId },
+        trustedRoot: f.materialRoot,
+      });
+      assert.deepEqual(read.materials.manifest.key, f.materials.manifest.key);
+      assert.equal(read.materials.payload.leaseId, f.leaseId);
+    }
 
     const outputDirectory = join(f.base, "native-media2-output");
+    const frameWidth = realCapture ? 320 : 16;
+    const frameHeight = realCapture ? Math.round(frameWidth * read.materials.payload.video.height / read.materials.payload.video.width) : 16;
+    const firstTimeMs = realCapture ? Math.min(read.materials.payload.clock.durationMs, read.materials.payload.clock.videoOffsetMs) : 0;
+    const secondTimeMs = read.materials.payload.clock.durationMs;
+    const sheetWidth = frameWidth * 2;
     const request = {
       schema: "apparent.retained-frame-request/1" as const,
       materials: read.materials.manifest.key,
       leaseId: read.materials.payload.leaseId,
       jobId: id(),
       outputDirectory,
-      requestedBundleMs: [0, read.materials.payload.clock.durationMs],
-      limits: { maxFrames: 2, maxEdge: 16, maxTotalPixels: 1024, deadlineMs: 10_000 },
+      requestedBundleMs: [firstTimeMs, secondTimeMs],
+      limits: { maxFrames: 2, maxEdge: frameWidth, maxTotalPixels: frameWidth * frameHeight * 4, deadlineMs: 20_000 },
       contactSheet: {
         schema: "apparent.contact-sheet-layout/1" as const,
-        width: 32,
-        height: 16,
+        width: sheetWidth,
+        height: frameHeight,
         backgroundRgb: [11, 22, 33] as [number, number, number],
         fit: "stretch" as const,
         sampling: "legacy-bilinear" as const,
         clipping: "reject" as const,
         tiles: [
-          { requestIndex: 1, x: 0, y: 0, width: 16, height: 16 },
-          { requestIndex: 2, x: 16, y: 0, width: 16, height: 16 },
+          { requestIndex: 1, x: 0, y: 0, width: frameWidth, height: frameHeight },
+          { requestIndex: 2, x: frameWidth, y: 0, width: frameWidth, height: frameHeight },
         ],
       },
     };
     const layoutBytes = encodeContactSheetLayout(request.contactSheet);
     const preparedRequest = prepareMedia2Request(request, read.materials);
-    assert.equal(preparedRequest.request.materials.revision, f.materials.manifest.key.revision);
-    assert.equal(preparedRequest.request.leaseId, f.leaseId);
+    assert.equal(preparedRequest.request.materials.revision, read.materials.manifest.key.revision);
+    assert.equal(preparedRequest.request.leaseId, read.materials.manifest.leaseId);
 
     media = new Media2Client(launchMedia2Worker(resolve(mediaBinary!), f.runtime));
     const mediaHello = await media.handshake(5000);
@@ -391,7 +502,7 @@ test("Record publishes explicitly selected native media2 frames and sheet from t
     assert.ok(derivative, "RecordMedia2Job retains the exact completed native document");
     const envelope = derivative.envelope as Derivative2Envelope;
     assert.deepEqual(envelope.payload.materials, read.materials.manifest.key);
-    assert.equal(envelope.payload.leaseId, f.leaseId);
+    assert.equal(envelope.payload.leaseId, read.materials.manifest.leaseId);
     assert.equal(envelope.payload.jobId, request.jobId);
     assert.equal(envelope.payload.requestSha256, preparedRequest.sha256);
     assert.equal(envelope.payload.root, outputDirectory);
@@ -399,12 +510,14 @@ test("Record publishes explicitly selected native media2 frames and sheet from t
     assert.deepEqual(envelope.payload.frames.map(frame => frame.requestIndex), [1, 2]);
     assert.equal(envelope.payload.contactSheet?.layoutSha256, hash(layoutBytes));
     assert.deepEqual(Buffer.from(derivative.layoutBytes!), Buffer.from(layoutBytes), "Record keeps the exact canonical detached layout bytes");
-    assert.equal(envelope.payload.contactSheet?.width, 32);
-    assert.equal(envelope.payload.contactSheet?.height, 16);
+    assert.equal(envelope.payload.contactSheet?.width, sheetWidth);
+    assert.equal(envelope.payload.contactSheet?.height, frameHeight);
     for (const image of [...envelope.payload.frames, envelope.payload.contactSheet!]) {
       const original = readFileSync(join(outputDirectory, image.file.relativePath));
       assert.equal(original.subarray(0, 8).toString("hex"), "89504e470d0a1a0a");
       assert.equal(original.length, image.byteLength);
+      assert.equal(original.readUInt32BE(16), image.width);
+      assert.equal(original.readUInt32BE(20), image.height);
       assert.equal(hash(original), image.file.sha256);
       const info = statSync(join(outputDirectory, image.file.relativePath), { bigint: true });
       assert.deepEqual({ device: info.dev.toString(), inode: info.ino.toString(), size: Number(info.size), modifiedNs: info.mtimeNs.toString() }, image.file.identity);
@@ -435,19 +548,36 @@ test("Record publishes explicitly selected native media2 frames and sheet from t
       assert.deepEqual(artifact.materials, read.materials.manifest.key);
     }
 
-    assert.deepEqual(f.assemblyInput.materialReferences, [{ role: "video", relativePath: "recording.mp4" }]);
+    const confirmed = read.materials.payload.confirmedSource;
+    const target = confirmed.kind === "display"
+      ? { mode: "display" as const, displayId: confirmed.displayId, frame: confirmed.rectangle }
+      : { mode: "region" as const, displayId: confirmed.displayId, frame: confirmed.rectangle };
     const assemblyInput: BundleAssemblyInput = {
-      ...f.assemblyInput,
       manifest: read.materials.manifest,
       payloadBytes: read.payloadBytes,
       facts: read.assemblyFacts,
+      admission: {
+        captureId: read.materials.payload.identity.captureId,
+        materialsId: read.materials.payload.identity.materialsId,
+        createdAtMs,
+        bundleId: read.materials.payload.bundleId,
+        bundlePath: f.bundlePath,
+        target,
+      },
       frames: [
-        { index: 1, timeMs: request.requestedBundleMs[0], absolutePath: join(f.bundlePath, "frames/frame-01.png"), artifactPath: "frames/frame-01.png", canonicalReason: "initial", event: "explicit-media2-fixture-selection" },
-        { index: 2, timeMs: request.requestedBundleMs[1], absolutePath: join(f.bundlePath, "frames/frame-02.png"), artifactPath: "frames/frame-02.png", canonicalReason: "scene_change", event: "explicit-media2-fixture-selection" },
+        { index: 1, timeMs: request.requestedBundleMs[0], absolutePath: join(f.bundlePath, "frames/frame-01.png"), artifactPath: "frames/frame-01.png", canonicalReason: "initial", event: "explicit Record selection from native media2 request" },
+        { index: 2, timeMs: request.requestedBundleMs[1], absolutePath: join(f.bundlePath, "frames/frame-02.png"), artifactPath: "frames/frame-02.png", canonicalReason: "scene_change", event: "explicit Record selection from native media2 request" },
       ],
+      marks: [],
       artifacts: retained.artifacts,
+      materialReferences: [{ role: "video", relativePath: read.materials.payload.video.file }],
     };
     const assembly = assembleCanonicalBundle(assemblyInput);
+    if (realCapture) {
+      const canonical = JSON.parse(Buffer.from(assembly.apparentJson).toString("utf8"));
+      assert.equal(canonical.interactionTelemetry, "videoOnly", "Record applies its canonical profile to the genuinely unavailable native interaction facts");
+      assert.deepEqual(read.materials.payload.confirmedSource.rectangle, target.frame, "Record admission uses the original confirmed source geometry");
+    }
     const prepared = await prepareRecordPublication({
       ownerToken: f.ownerToken,
       publicationId: f.publicationId,
@@ -487,15 +617,71 @@ test("Record publishes explicitly selected native media2 frames and sheet from t
       assert.deepEqual(readFileSync(join(f.bundlePath, artifact.relativePath)), Buffer.from(artifact.bytes));
     }
     const publishedVideo = await seal(f.bundlePath, "recording.mp4");
-    const sourceVideo = read.materials.payload.files.find(file => file.relativePath === "recording.mp4");
+    const sourceVideo = read.materials.payload.files.find(file => file.relativePath === read.materials.payload.video.file);
     assert.ok(sourceVideo);
     assert.equal(publishedVideo.sha256, sourceVideo.sha256);
-    assert.equal(publishedVideo.identity.size, sourceVideo.identity.size);
+    assert.equal(publishedVideo.identity.size, sourceVideo.identity.size, "Record publishes the sealed media bytes into a new owned file");
     assert.throws(() => statSync(join(f.bundlePath, ".record-publication")), { code: "ENOENT" });
     assert.throws(() => statSync(join(f.bundlePath, "publication-plan.json")), { code: "ENOENT" });
+    if (realCapture) {
+      const retainedMovie = await seal(read.materials.manifest.root, read.materials.payload.video.file);
+      assert.deepEqual(retainedMovie.identity, sourceVideo.identity, "original native movie seal remains unchanged through publication");
+      assert.equal(retainedMovie.sha256, sourceVideo.sha256);
+
+      const evidence = process.env.APPARENT_CAPTURE_EVIDENCE_DIR;
+      if (evidence) {
+        const root = resolve(evidence);
+        privateDir(root);
+        mkdirSync(join(root, "bundle"), { recursive: true, mode: 0o700 });
+        mkdirSync(join(root, "native"), { recursive: true, mode: 0o700 });
+        for (const name of ["apparent.json", "summary.md", "recording.mp4"]) copyFileSync(join(f.bundlePath, name), join(root, "bundle", name));
+        for (const image of retained.artifacts) {
+          const destination = join(root, "bundle", image.relativePath);
+          mkdirSync(join(destination, ".."), { recursive: true, mode: 0o700 });
+          copyFileSync(join(f.bundlePath, image.relativePath), destination);
+        }
+        copyFileSync(join(read.materials.manifest.root, read.materials.manifest.payloadFile.relativePath), join(root, "native", "materials.json"));
+        writeFileSync(join(root, "native", "materials-manifest.json"), `${JSON.stringify(read.materials.manifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+        writeFileSync(join(root, "native", "media2-request.json"), `${JSON.stringify(request, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+        writeFileSync(join(root, "native", "media2-receipt.json"), derivative.bytes, { mode: 0o600, flag: "wx" });
+        writeFileSync(join(root, "native", "media2-envelope.json"), `${JSON.stringify(envelope, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+        writeFileSync(join(root, "native", "evidence.json"), `${JSON.stringify({
+          captureId: f.captureId, materials: read.materials.manifest.key, leaseId: read.materials.manifest.leaseId,
+          jobId: request.jobId, requestSha256: preparedRequest.sha256, receiptId: envelope.payload.receiptId,
+          publicationId: f.publicationId, bundleId: f.bundleId, bundlePath: f.bundlePath,
+          movie: { relativePath: read.materials.payload.video.file, sha256: sourceVideo.sha256, identity: sourceVideo.identity },
+          frames: envelope.payload.frames.map(frame => ({ requestIndex: frame.requestIndex, requestedBundleMs: frame.requestedBundleMs, file: frame.file })),
+          contactSheet: envelope.payload.contactSheet?.file,
+          saved: { manifestSha256: saved.publication?.manifestSha256, inventorySha256: saved.publication?.inventorySha256 },
+        }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      }
+
+      const released = await capture.releaseMaterials({ ownerToken: f.ownerToken, captureId: f.captureId, materialsId: f.materialsId, leaseId: f.leaseId }, 5000);
+      assert.equal(released.released, true, "authenticated release removes only this scenario's retained materials after Saved");
+      assert.equal(released.materialsId, f.materialsId);
+      rmSync(prepared.input.planFile.stagingRoot, { recursive: true, force: true });
+      await capture.close();
+      capture = new CaptureClient(launchCaptureEngine(resolve(binary!), f.runtime, 3000));
+      await capture.handshake(5000);
+      const recoveredSaved = await capture.inspectPublication({
+        ownerToken: f.ownerToken, captureId: f.captureId, publicationId: f.publicationId,
+        planSha256: prepared.input.planFile.planSha256,
+        expected: { materials: read.materials.manifest.key, bundleId: f.bundleId, bundlePath: f.bundlePath, manifestSha256: hash(assembly.apparentJson) },
+      }, 5000);
+      assert.equal(recoveredSaved.state, "saved", "authenticated reconnect retains Saved after source release and staging removal");
+      assert.deepEqual(recoveredSaved.publication, saved.publication);
+      scenarioPassed = true;
+      console.log("Real synthetic X11 capture -> retained materials -> native media2 -> Record staging -> authenticated Saved and cold inspect passed");
+    }
   } finally {
     await media?.close();
     await capture?.close();
-    rmSync(f.base, { recursive: true, force: true });
+    xserver?.kill("SIGTERM");
+    if (oldDisplay === undefined) delete process.env.DISPLAY; else process.env.DISPLAY = oldDisplay;
+    if (oldWayland === undefined) delete process.env.WAYLAND_DISPLAY; else process.env.WAYLAND_DISPLAY = oldWayland;
+    if (oldGstDebug === undefined) delete process.env.GST_DEBUG; else process.env.GST_DEBUG = oldGstDebug;
+    if (oldGstDebugFile === undefined) delete process.env.GST_DEBUG_FILE; else process.env.GST_DEBUG_FILE = oldGstDebugFile;
+    if (!realCapture || scenarioPassed) rmSync(f.base, { recursive: true, force: true });
+    else process.stderr.write(`Record native failure workspace retained: ${f.base}\n`);
   }
 });
