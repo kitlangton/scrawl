@@ -13,10 +13,24 @@ const fail = (category: PrivateFileFailure): never => { throw new PrivateFileErr
 export async function consumePrivateFile<T>(handle: FileHandle,
   options: { maximumBytes: number; signal?: AbortSignal }, resources: PrivateFileResources,
   decode: (bytes: Uint8Array) => T): Promise<T> {
+  return consume(handle, options, resources, decode, 2_000_000);
+}
+
+/** Bounded sealed-asset reader. Returns a detached caller-owned buffer; always
+ * consumes the descriptor and wipes the internal read buffer. JSON readers keep
+ * their existing 2 MB ceiling above. No plaintext asset admission is implied. */
+export function consumePrivateSealedAsset(handle: FileHandle,
+  options: { maximumBytes: number; signal?: AbortSignal }, resources: PrivateFileResources): Promise<Uint8Array> {
+  return consume(handle, options, resources, bytes => new Uint8Array(bytes), 32 * 1024 * 1024);
+}
+
+async function consume<T>(handle: FileHandle,
+  options: { maximumBytes: number; signal?: AbortSignal }, resources: PrivateFileResources,
+  decode: (bytes: Uint8Array) => T, ceiling: number): Promise<T> {
   const signal = options.signal, maximumBytes = options.maximumBytes;
   let owns = true, bytes: Buffer | undefined;
   try {
-    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0 || maximumBytes > 2_000_000) fail("unavailable");
+    if (!Number.isSafeInteger(maximumBytes) || maximumBytes < 0 || maximumBytes > ceiling) fail("unavailable");
     if (signal?.aborted) fail("cancelled");
     const before = await handle.stat({ bigint: true });
     if (typeof process.getuid !== "function" || !before.isFile() || before.uid !== BigInt(process.getuid())

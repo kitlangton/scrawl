@@ -177,6 +177,19 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+`./sender-spool` opens an existing committed encrypted job and its Rust-format
+`<id>.sealed/spool-state.json`. It never repairs or regenerates a spool. Every
+receipt/asset read uses the existing queue lease, private descriptor/ACL admission,
+job and credential-generation checks, cancellation/revocation fences, directory
+identity and immutable receipt checks. Assets must match the saved size and hash.
+The caller owns provider lifetime and returned ciphertext buffers, and must wipe
+each buffer after its consumer settles. The sealed-asset reader has a separate
+32 MiB ceiling; existing credential/JSON readers keep their 2 MB ceiling. This
+local handle is not service authorization or cryptographic envelope validation;
+the prepared uploader and its trusted authorization caller retain those checks.
+An incomplete job/spool publication fails rather than triggering a second writer.
+No installed command or worker uses this API yet; Rust remains the sole writer.
+
 `./sender-upload/encrypted` transfers an already sealed root or grouped
 evidence/media snapshot. Discriminated profile options prevent mixed layouts.
 Before reservation it verifies envelope hashes, signatures, exact signed context
