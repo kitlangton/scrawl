@@ -91,6 +91,8 @@ export interface RecordCaptureShutdownWork {
   reason: string;
 }
 export interface RecordCaptureCoordinatorShutdownReport {
+  /** Clearance covers this coordinator, not other owners sharing the SDK/runtime. */
+  scope: "record-coordinator";
   admission: "closed";
   localDrain: "complete";
   runtimeClearance: "clear" | "unresolved" | "unknown";
@@ -261,6 +263,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       const saved = binding.state === "saved" && await output.resolveHandoff({ captureId: binding.output?.requestId ?? "", artifactId: binding.bundleId });
       if (saved) { clearIssue(requestId); return; }
       if (!/^[0-9a-f]{64}$/u.test(mapping.ownerToken)) return;
+      if (admissionClosed) { pending.add(requestId); return; }
       try {
         await output.reconcile({ captureId: mapping.captureId, ownerToken: mapping.ownerToken, publicationId: binding.publicationId,
           materials: binding.materials, leaseId: binding.leaseId, bundleId: binding.bundleId, bundlePath: binding.bundlePath });
@@ -455,6 +458,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       // Stop native observation before the remaining durable reads. Its cached
       // snapshot remains available, and no later poll can change this report.
       runtime.dispose();
+      await runtime.drainObservation();
       host.dispose();
       if (ownership.storageUnavailable) addWork({ owner: "storage", state: "unknown", reason: "capture-mapping-storage-unavailable" });
       if (ownership.reconciliation !== "complete")
@@ -552,7 +556,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
 
       const clearance: RecordCaptureCoordinatorShutdownReport["runtimeClearance"] = work.some(item => item.state === "unknown") ? "unknown"
         : work.some(item => item.state === "active" || item.state === "pending") ? "unresolved" : "clear";
-      const snapshot = Object.freeze({ admission: "closed" as const, localDrain: "complete" as const, runtimeClearance: clearance,
+      const snapshot = Object.freeze({ scope: "record-coordinator" as const, admission: "closed" as const, localDrain: "complete" as const, runtimeClearance: clearance,
         nextShortcutAdmission: Object.freeze({ state: "unsupported" as const, reason: "Capture/2 coordinator has no next-shortcut reservation producer" }),
         work: Object.freeze([...work]) });
       disposed = true;

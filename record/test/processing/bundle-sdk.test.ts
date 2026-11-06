@@ -1118,7 +1118,7 @@ test("publication database atomically admits immutable processing policy beside 
 });
 
 // All ports and receipts below are synthetic offline consistency fixtures; this is not native authority or platform proof.
-type CoordinatorCase = "complete" | "media-failed" | "media-unknown" | "media-blocked" | "publication-unknown" | "publication-reserved" | "selection-failed";
+type CoordinatorCase = "complete" | "media-failed" | "media-unknown" | "media-blocked" | "publication-unknown" | "publication-reserved" | "publication-reserved-close" | "selection-failed";
 async function coordinatorCase(mode: CoordinatorCase) {
   const input = await fixture();
   const root = await realpath(await mkdtemp(join(tmpdir(), "record-capture-coordinator-")));
@@ -1133,7 +1133,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
   const ownerToken = "c".repeat(64), materialsId = identity.materialsId, leaseId = "c".repeat(32);
   const originalPublicationReserve = SqlitePublicationBindingStore.prototype.reserve;
   let restoreReserve = () => undefined;
-  if (mode === "publication-reserved") {
+  if (mode === "publication-reserved" || mode === "publication-reserved-close") {
     let faulted = false;
     SqlitePublicationBindingStore.prototype.reserve = async function(binding) {
       const reserved = await originalPublicationReserve.call(this, binding);
@@ -1276,6 +1276,32 @@ async function coordinatorCase(mode: CoordinatorCase) {
         assert.ok(shutdown.work.some(item => item.owner === "media" && item.state === "pending"));
         return;
       }
+      if (mode === "publication-reserved-close") {
+        await coordinator.reconcile().catch(() => undefined);
+        assert.equal(publishes, 0, "fault left an undispatched durable reservation");
+        const originalGet = SqlitePublicationBindingStore.prototype.get;
+        let entered!: () => void, release!: () => void;
+        const gateEntered = new Promise<void>(resolve => { entered = resolve; });
+        const gate = new Promise<void>(resolve => { release = resolve; });
+        let gated = false;
+        SqlitePublicationBindingStore.prototype.get = async function(capture) {
+          const binding = await originalGet.call(this, capture);
+          if (!gated && binding?.state === "reserved") { gated = true; entered(); await gate; }
+          return binding;
+        };
+        const inspecting = coordinator.reconcile().catch(() => undefined);
+        try {
+          await gateEntered;
+          const closing = coordinator.shutdown();
+          release();
+          await inspecting;
+          const report = await closing;
+          assert.equal(publishes, 0, "shutdown cannot resume a reserved publication after admission closes");
+          assert.equal((await originalGet.call(new SqlitePublicationBindingStore(controlRoot), captureId))?.state, "reserved");
+          assert.equal(report.runtimeClearance, "unresolved");
+        } finally { release(); await inspecting; SqlitePublicationBindingStore.prototype.get = originalGet; }
+        return;
+      }
       if (mode !== "complete") {
         let notices = 0;
         const detach = coordinator.observeProcessingIssues(() => { notices++; });
@@ -1313,6 +1339,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
         const shutdown = await coordinator.shutdown();
         assert.equal(shutdown.admission, "closed");
         assert.equal(shutdown.localDrain, "complete");
+        assert.equal(shutdown.scope, "record-coordinator");
         assert.equal(shutdown.nextShortcutAdmission.state, "unsupported", "an unavailable shortcut producer is not evidence of idle");
         assert.equal(JSON.stringify(shutdown).includes(ownerToken), false, "shutdown facts do not expose private authority or exception text");
         assert.equal(derives, beforeShutdown.derives, "shutdown inspection never dispatches retained media");
@@ -1376,7 +1403,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
   } finally { restoreReserve(); releaseMediaHandshake(); await rm(root, { recursive: true, force: true }); }
 }
 
-for (const mode of ["complete", "media-failed", "media-unknown", "media-blocked", "publication-unknown", "publication-reserved", "selection-failed"] as const)
+for (const mode of ["complete", "media-failed", "media-unknown", "media-blocked", "publication-unknown", "publication-reserved", "publication-reserved-close", "selection-failed"] as const)
   test(`capture coordinator retains the original identity and exposes ${mode}`, () => coordinatorCase(mode));
 
 for (const mode of ["pending", "failed"] as const) test(`coordinator startup ${mode} is observable and drains before cleanup`, { timeout: 5000 }, async () => {
@@ -1421,7 +1448,8 @@ for (const mode of ["pending", "failed"] as const) test(`coordinator startup ${m
   } finally { await coordinator.dispose(); await rm(root, { recursive: true, force: true }); }
 });
 
-test("coordinator shutdown closes start admission and drains an already admitted source discovery", { timeout: 5000 }, async () => {
+for (const blocked of ["discovery", "background-poll"] as const)
+test(`coordinator shutdown drains an admitted ${blocked}`, { timeout: 5000 }, async () => {
   const root = await realpath(await mkdtemp(join(tmpdir(), "record-coordinator-start-drain-")));
   await Promise.all([mkdir(join(root, "control"), { mode: 0o700 }), mkdir(join(root, "bundles"), { mode: 0o755 })]);
   let entered!: () => void, release!: () => void;
@@ -1431,46 +1459,56 @@ test("coordinator shutdown closes start admission and drains an already admitted
     displayId: 1, bounds: { x: 0, y: 0, width: 1280, height: 720, scale: 1 } };
   const rows = new Map<string, { requestId: string; captureId: string; ownerToken: string; bundleId: string; bundlePath: string; capture2Intent: string }>();
   const mappings = {
-    async listRequestIds(protocol?: "v1" | "capture2") { return protocol === "capture2" ? [...rows.keys()] : []; },
+    async listRequestIds(protocol?: "v1" | "capture2") { if (blocked === "background-poll" && pollEntered) throw new Error("mapping read failed during shutdown"); return protocol === "capture2" ? [...rows.keys()] : []; },
     async getByRequestId(requestId: string) { return rows.get(requestId); },
     async getByCaptureId(captureId: string) { return [...rows.values()].find(row => row.captureId === captureId); },
     async putIfAbsent() { throw new Error("unused"); },
     async putCapture2IfUnchanged(value: (typeof rows extends Map<string, infer T> ? T : never)) { rows.set(value.requestId, structuredClone(value)); return structuredClone(value); },
   };
-  let startDispatches = 0, cancelDispatches = 0;
+  let startDispatches = 0, cancelDispatches = 0, pollEntered = false;
   const captureClient = {
     clientId: "d".repeat(32),
     async handshake() { return { implementation: "native", readiness: "ready", capabilities: { sourceDiscovery: true, displayCapture: true, retainedMaterials: true } }; },
-    async discoverSources() { entered(); await discoveryGate; return { state: "available", sources: [source] }; },
+    async discoverSources() { if (blocked === "discovery") { entered(); await discoveryGate; } return { state: "available", sources: [source] }; },
     async start(request: { captureId: string }) { startDispatches++; return { captureId: request.captureId, state: "recording" }; },
-    async inspect(request: { captureId: string }) { return { captureId: request.captureId, state: "recording" }; },
+    async inspect(request: { captureId: string }) { if (blocked === "background-poll" && !pollEntered) { pollEntered = true; entered(); await discoveryGate; } return { captureId: request.captureId, state: "recording" }; },
     async cancel() { cancelDispatches++; throw new Error("shutdown must not cancel native work"); },
     async stop() { throw new Error("unused"); }, async publish() { throw new Error("unused"); }, async inspectPublication() { throw new Error("unused"); },
   } as unknown as CaptureClient;
   const coordinator = await createRecordCaptureCoordinator({
     captureClient, mediaClient: {} as Media2Client, mappings: mappings as never,
-    destinations: new AbsentDestinationAllocator(join(root, "control"), join(root, "bundles")), privateControlRoot: join(root, "control"),
+    destinations: new AbsentDestinationAllocator(join(root, "control"), join(root, "bundles")), privateControlRoot: join(root, "control"), pollIntervalMs: 100,
     createStartIntent(_requestId, discovery) { return { source: discovery.sources[0]!, options: { audio: "none", localOnly: true },
       invocation: { invocationId: "c".repeat(32), observedAtMs: 1000, kind: "explicit" }, destinationPath: join(root, "bundles", "capture.apparent") }; },
     trustedMaterialsRoot() { throw new Error("unused"); }, selectProcessing() { throw new Error("unused"); }, preflight: preflightCapturePublication,
   });
+  const originalList = SqlitePublicationBindingStore.prototype.list;
+  const originalPlans = SqlitePublicationBindingStore.prototype.listProcessing;
   try {
     const starting = coordinator.capture2Start.startCapture("shutdown-start");
-    await discoveryEntered;
+    let readyDeadline: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([discoveryEntered, new Promise<never>((_, reject) => {
+      readyDeadline = setTimeout(() => reject(new Error("owned observation did not enter")), 2000);
+    })]).finally(() => clearTimeout(readyDeadline));
+    if (blocked === "background-poll") {
+      // Isolate the owned RPC drain from unrelated filesystem scheduling.
+      SqlitePublicationBindingStore.prototype.list = async () => [];
+      SqlitePublicationBindingStore.prototype.listProcessing = async () => [];
+    }
     let settled = false;
     const stopping = coordinator.shutdown().then(report => { settled = true; return report; });
     assert.equal((await coordinator.capture2Start.startCapture("late-start")).outcome, "refused");
     await new Promise(resolve => setImmediate(resolve));
-    assert.equal(settled, false, "shutdown drains the already admitted discovery/start operation");
+    assert.equal(settled, false, `shutdown drains the already admitted ${blocked} operation`);
     release();
     const startResult = await starting;
     assert.equal(startResult.outcome, "accepted");
     const report = await stopping;
-    assert.equal(report.runtimeClearance, "unresolved");
+    assert.equal(report.runtimeClearance, blocked === "background-poll" ? "unknown" : "unresolved");
     assert.ok(report.work.some(item => item.owner === "capture" && item.state === "active" && item.requestId === "shutdown-start"));
     assert.equal(startDispatches, 1, JSON.stringify({ startResult, mapped: rows.has("shutdown-start"), report }));
     assert.equal(cancelDispatches, 0, "shutdown does not cancel a native capture");
-  } finally { release(); await coordinator.dispose(); await rm(root, { recursive: true, force: true }); }
+  } finally { release(); await coordinator.dispose(); SqlitePublicationBindingStore.prototype.list = originalList; SqlitePublicationBindingStore.prototype.listProcessing = originalPlans; await rm(root, { recursive: true, force: true }); }
 });
 
 test("coordinator disposal drains provider and direct output reads before private cleanup", { timeout: 5000 }, async () => {
