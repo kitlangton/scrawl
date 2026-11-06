@@ -1,4 +1,5 @@
 import './runtime/pr-candidate.test.ts'
+import './consumer/handoff.test.ts'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -9,7 +10,7 @@ import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
 import { assertBuildWorkflowIdentity } from './cli.ts'
-import { mediaBuildIdentity, supportsPrCandidate, appShellBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
+import { mediaBuildIdentity, supportsPrCandidate, packageBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -231,6 +232,24 @@ test('admission requires canonical repo, exact workflow, owner job, audit and un
   assert.equal(assess(run, goodJobs, [{ id: 11, name: `stream-record-linux-x64-${inputDigest(path, owner)}`, expired: false }]).reuse, false)
 })
 
+test('exact-commit handoff admits only the producer receipt digest without a hosted runner identity', () => {
+  const path = resolve(temp, 'exact-admit-repo'); const sha = newRepo(path)
+  const exactDigest = 'b'.repeat(64)
+  const run = { id: 77, run_attempt: 1, head_sha: sha, head_branch: 'main', event: 'push', conclusion: 'success', path: workflowPathFor(owner.id) }
+  const jobs = [{ name: 'deliver / stream (record, linux-x64)', status: 'completed', conclusion: 'success' }, { name: 'deliver / Delivery contracts', status: 'completed', conclusion: 'success' }, { name: 'deliver / Workflow runtime budget', status: 'completed', conclusion: 'success' }]
+  const artifacts = [{ id: 88, name: `stream-record-linux-x64-${exactDigest}`, expired: false }]
+  const imageOS = process.env.ImageOS, imageVersion = process.env.ImageVersion
+  try {
+    delete process.env.ImageOS; delete process.env.ImageVersion
+    const accepted = assessPrior(path, owner, 'linux-x64', sha, 'tryapparent/apparent', [run], () => jobs, () => artifacts, sha, exactDigest)
+    assert.equal(accepted.reuse, true)
+    assert.throws(() => assessPrior(path, owner, 'linux-x64', sha, 'tryapparent/apparent', [run], () => jobs, () => artifacts, 'f'.repeat(40), exactDigest), /same explicit source commit/)
+  } finally {
+    if (imageOS) process.env.ImageOS = imageOS
+    if (imageVersion) process.env.ImageVersion = imageVersion
+  }
+})
+
 test('sealing only archives contained payloads under canonical main identity', () => {
   const input = resolve(temp, 'payload'); const output = resolve(temp, 'sealed')
   mkdirSync(input); writeFileSync(resolve(input, 'package.tgz'), 'bundle')
@@ -405,11 +424,11 @@ test('native fingerprints invalidate when the actual compiler output or flags ch
 
 
 test('App Shell reuse fingerprints packaging overrides without unrelated workflow settings', () => {
-  const baseline = appShellBuildEnvironment({})
-  for (const name of ['ELECTRON_OVERRIDE_DIST_PATH', 'ELECTRON_MIRROR', 'ELECTRON_RUN_AS_NODE', 'npm_config_arch', 'NPM_CONFIG_PLATFORM', 'NODE_OPTIONS', 'NODE_ENV']) {
-    assert.notDeepEqual(appShellBuildEnvironment({ [name]: 'changed' }), baseline, name)
+  const baseline = packageBuildEnvironment({}, true)
+  for (const name of ['ELECTRON_OVERRIDE_DIST_PATH', 'ELECTRON_MIRROR', 'ELECTRON_RUN_AS_NODE', 'npm_config_arch', 'NPM_CONFIG_PLATFORM', 'NODE_OPTIONS', 'NODE_ENV', 'NODE_PATH', 'ESBUILD_BINARY_PATH']) {
+    assert.notDeepEqual(packageBuildEnvironment({ [name]: 'changed' }, true), baseline, name)
   }
-  assert.deepEqual(appShellBuildEnvironment({ GITHUB_RUN_ID: 'different', PUBLIC_POSTHOG_TOKEN: 'synthetic' }), baseline)
+  assert.deepEqual(packageBuildEnvironment({ GITHUB_RUN_ID: 'different', PUBLIC_POSTHOG_TOKEN: 'synthetic' }, true), baseline)
   assert.equal(supportsPrCandidate('app-shell', 'linux-x64'), true)
   assert.equal(supportsPrCandidate('app-shell', 'macos-x64'), true)
   assert.equal(supportsPrCandidate('app-shell', 'web'), false)
@@ -419,12 +438,12 @@ test('App Shell promotion retains the exact packaged archive and original build 
   const app: Owner = { ...owner, id: 'app-shell', kind: 'app-shell', package: 'composition/app', inputs: ['composition/app/'], targets: ['linux-x64', 'macos-x64'], stage: 'development-app' }
   const input = resolve(temp, 'app-package-candidate'); mkdirSync(resolve(input, 'bundle'), { recursive: true })
   writeFileSync(resolve(input, 'bundle/app'), 'synthetic packaged runtime bytes')
-  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/pull/9/merge', GITHUB_RUN_ID: '887', GITHUB_RUN_ATTEMPT: '1' }
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/pull/9/merge', GITHUB_RUN_ID: '887', GITHUB_RUN_ATTEMPT: '1' }
   for (const target of app.targets) {
     const sealed = resolve(temp, 'app-sealed-' + target), promoted = resolve(temp, 'app-promoted-' + target)
     const receipt = sealPayload(repo, app, target, input, sealed, 'a'.repeat(64), prEnv, true)
     const zip = resolve(temp, 'app-' + target + '.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: sealed })
-    const next = reusePayload(repo, app, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '887', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-app-shell.yml@refs/heads/main', GITHUB_RUN_ID: '888' })
+    const next = reusePayload(repo, app, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '887', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/heads/main', GITHUB_RUN_ID: '888' })
     assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '887')
     assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
   }
@@ -463,4 +482,70 @@ test('media fingerprint includes the actual dependency probe results and media o
     writeFileSync(resolve(bin, 'ffmpeg'), '#!/bin/sh\nexit 1\n')
     assert.throws(() => inputDigest(root, media))
   } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
+})
+
+test('Config fingerprints include compiler and flag changes before candidate admission', () => {
+  const root = resolve(temp, 'config-fingerprint'); newRepo(root)
+  const bin = resolve(temp, 'config-toolchain-bin'); mkdirSync(bin)
+  for (const tool of ['rustc', 'cargo', 'cc', 'xcrun']) { const path = resolve(bin, tool); writeFileSync(path, '#!/bin/sh\nprintf "config compiler version one\\n"\n'); chmodSync(path, 0o755) }
+  const config: Owner = { ...owner, id: 'platform-config', package: 'composition/config/native', inputs: ['composition/config/', 'shared/config-native/', 'shared/contracts/', '.cargo/'], language: 'native' }
+  const saved = { PATH: process.env.PATH, RUSTC: process.env.RUSTC, CC: process.env.CC, CFLAGS: process.env.CFLAGS }
+  try {
+    process.env.PATH = bin + ':' + process.env.PATH; delete process.env.CC; delete process.env.RUSTC
+    const initial = inputDigest(root, config)
+    writeFileSync(resolve(bin, 'rustc'), '#!/bin/sh\nprintf "config compiler version two\\n"\n')
+    assert.notEqual(inputDigest(root, config), initial)
+    const changed = inputDigest(root, config); process.env.CFLAGS = '-DSYNTHETIC_CONFIG_TEST=1'
+    assert.notEqual(inputDigest(root, config), changed)
+    writeFileSync(resolve(bin, 'rustc'), '#!/bin/sh\nexit 1\n')
+    assert.throws(() => inputDigest(root, config))
+  } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
+})
+
+test('Config candidate sealing retains each staged helper manifest under its own workflow', () => {
+  const config: Owner = { ...owner, id: 'platform-config', kind: 'directory', package: 'composition/config/native', inputs: ['composition/config/'], language: 'native', targets: ['linux-x64', 'macos-x64'] }
+  const input = resolve(temp, 'config-helper-payload'); mkdirSync(input)
+  writeFileSync(resolve(input, 'manifest.json'), JSON.stringify({ sourceSha: 'b'.repeat(40), protocol: 1 }))
+  writeFileSync(resolve(input, 'apparent-config-host'), 'synthetic helper')
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-platform.yml@refs/pull/9/merge', GITHUB_RUN_ID: '997', GITHUB_RUN_ATTEMPT: '1' }
+  for (const target of config.targets) {
+    const sealed = resolve(temp, 'config-helper-sealed-' + target)
+    const receipt = sealPayload(repo, config, target, input, sealed, 'c'.repeat(64), prEnv, true)
+    assert.equal(receipt.buildSourceSha, receipt.sourceSha)
+    const manifest = execFileSync('tar', ['-xOzf', resolve(sealed, 'component.tar.gz'), 'config-helper-payload/manifest.json'], { encoding: 'utf8' })
+    assert.equal(JSON.parse(manifest).sourceSha, 'b'.repeat(40))
+  }
+  assert.throws(() => sealPayload(repo, config, 'linux-x64', input, resolve(temp, 'config-wrong-workflow'), 'c'.repeat(64), { ...prEnv, GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/pull/9/merge' }, true), /canonical/)
+})
+
+test('Onboarding fingerprints package build overrides without probing a native toolchain', () => {
+  const root = resolve(temp, 'onboarding-fingerprint'); newRepo(root)
+  const bin = resolve(temp, 'onboarding-no-native'); mkdirSync(bin)
+  for (const tool of ['rustc', 'cargo']) { const path = resolve(bin, tool); writeFileSync(path, '#!/bin/sh\nexit 99\n'); chmodSync(path, 0o755) }
+  const onboarding: Owner = { ...owner, id: 'onboarding', package: 'onboarding', inputs: ['onboarding/'] }
+  const saved = { PATH: process.env.PATH, ESBUILD_BINARY_PATH: process.env.ESBUILD_BINARY_PATH, npm_config_ignore_scripts: process.env.npm_config_ignore_scripts }
+  try {
+    process.env.PATH = bin + ':' + process.env.PATH
+    const initial = inputDigest(root, onboarding)
+    process.env.ESBUILD_BINARY_PATH = '/synthetic/pinned-esbuild'
+    assert.notEqual(inputDigest(root, onboarding), initial)
+    const changed = inputDigest(root, onboarding); process.env.npm_config_ignore_scripts = 'true'
+    assert.notEqual(inputDigest(root, onboarding), changed)
+  } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
+  assert.deepEqual(packageBuildEnvironment({ ELECTRON_MIRROR: 'unrelated' }), packageBuildEnvironment({}))
+})
+
+test('Onboarding promotion retains its verified npm package and build provenance on both targets', () => {
+  const onboarding: Owner = { ...owner, id: 'onboarding', package: 'onboarding', inputs: ['onboarding/'], targets: ['linux-x64', 'macos-x64'] }
+  const input = resolve(temp, 'onboarding-candidate'); mkdirSync(input)
+  writeFileSync(resolve(input, 'apparent-onboarding.tgz'), 'synthetic packaged JS and CSS')
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-onboarding.yml@refs/pull/9/merge', GITHUB_RUN_ID: '1001', GITHUB_RUN_ATTEMPT: '1' }
+  for (const target of onboarding.targets) {
+    const sealed = resolve(temp, 'onboarding-sealed-' + target), promoted = resolve(temp, 'onboarding-promoted-' + target)
+    const receipt = sealPayload(repo, onboarding, target, input, sealed, 'a'.repeat(64), prEnv, true)
+    const zip = resolve(temp, 'onboarding-' + target + '.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: sealed })
+    const next = reusePayload(repo, onboarding, target, zip, promoted, receipt.inputDigest, receipt.sourceSha, '99', '1001', '1', { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-onboarding.yml@refs/heads/main', GITHUB_RUN_ID: '1002' })
+    assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '1001')
+    assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
+  }
 })

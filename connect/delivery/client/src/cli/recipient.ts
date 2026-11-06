@@ -1,5 +1,5 @@
 import { retrieveRecipientCapture, RecipientRetrievalError, type RecipientReadCredential, type RetrievedRecipientCapture } from "../recipient/retrieve.ts";
-import { RecipientTransportError } from "../recipient/transport.ts";
+import { RecipientTransportError, type RecipientAuthorization } from "../recipient/transport.ts";
 
 const ID = /^[a-f0-9]{32}$/;
 export type RecipientCommand =
@@ -10,7 +10,8 @@ export type CliFailure = { category: string; message: string };
 export type RecipientCliDependencies = {
   /** Caller supplies a fresh read credential; this boundary must not discover or persist secrets. */
   loadCredential(): Promise<RecipientReadCredential>;
-  /** Must publish privately without overwrite and return only after verified output is committed. */
+  /** Bytes are borrowed until this promise settles; copy them for longer retention.
+   * Publish privately without overwrite; report committed only after verified output. */
   publish(capture: RetrievedRecipientCapture, destination: string): Promise<
     | { state: "committed"; path: string; evidenceOnlyReceipt?: boolean }
     | { state: "publication-uncertain"; path?: string }
@@ -19,6 +20,7 @@ export type RecipientCliDependencies = {
   cancelled?: AbortSignal;
   allowLegacyPlaintext?: boolean;
   resolveIdentity?: () => Promise<{ age: string; signing: Uint8Array }>;
+  authorize?: RecipientAuthorization;
 };
 export type RecipientCliResult = { ok: true; path: string } | { ok: false; error: CliFailure };
 
@@ -26,7 +28,7 @@ function invalid(message: string): never { throw new CliArgumentError(message); 
 export class CliArgumentError extends Error { readonly category = "invalid_arguments"; }
 const COMMAND_FAILURES = ["auth_required", "renewal_required", "encryption_identity_missing", "encryption_identity_unavailable",
   "state_unavailable", "stale_snapshot", "revocation_pending", "invalid_server", "cancelled", "destination_exists",
-  "publication_refused", "unsafe_directory", "unsafe_file", "operation_failed"] as const;
+  "publication_refused", "unsafe_directory", "unsafe_file", "operation_failed", "offline"] as const;
 export type RecipientCommandFailure = typeof COMMAND_FAILURES[number];
 /** Closed adapter errors; arbitrary diagnostics never reach CLI output. */
 export class RecipientCommandError extends Error {
@@ -89,9 +91,13 @@ export async function runRecipientCommand(command: RecipientCommand, dependencie
       signal: dependencies.cancelled,
       allowLegacyPlaintext: dependencies.allowLegacyPlaintext,
       resolveIdentity: dependencies.resolveIdentity,
+      authorize: dependencies.authorize,
     });
-    if (dependencies.cancelled?.aborted) throw new RecipientRetrievalError("cancelled");
-    return await publishVerified(retrieved, command.out, dependencies.publish);
+    const plaintext = retrieved.files.map(file => file.bytes);
+    try {
+      if (dependencies.cancelled?.aborted) throw new RecipientRetrievalError("cancelled");
+      return await publishVerified(retrieved, command.out, dependencies.publish);
+    } finally { for (const bytes of plaintext) bytes.fill(0); }
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
 }
 
@@ -113,9 +119,10 @@ export async function publishVerified(
   destination: string,
   publish: RecipientCliDependencies["publish"],
 ): Promise<RecipientCliResult> {
+  const evidenceOnly = capture.evidenceOnly;
   const publication = await publish(capture, destination);
   if (publication.state !== "committed") return { ok: false, error: { category: "publication_uncertain", message: "publication outcome is uncertain; inspect the destination before taking further action" } };
-  if (capture.evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } };
+  if (evidenceOnly && publication.evidenceOnlyReceipt !== true) return { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } };
   return { ok: true, path: publication.path };
 }
 

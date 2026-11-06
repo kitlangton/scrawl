@@ -63,6 +63,16 @@ test("publication uncertainty and missing evidence receipt never project success
   assert.equal(calls, 1);
 });
 
+test("a publisher cannot change the required evidence-only receipt by mutating its input", async () => {
+  const capture = { captureId: id, server: "https://connect.example", evidenceOnly: true, files: [] };
+  const result = await publishVerified(capture, "./out", async value => {
+    value.evidenceOnly = false;
+    return { state: "committed", path: "./out" };
+  });
+  assert.equal(result.ok, false);
+  if (!result.ok) assert.equal(result.error.category, "publication_unverified");
+});
+
 test("duplicate wait flags are rejected even when the first value is zero", () => {
   assert.throws(() => parseRecipientCommand(["fetch", id, "--out", "x", "--wait", "0", "--wait", "1"]), { category: "invalid_arguments" });
 });

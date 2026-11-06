@@ -7,7 +7,7 @@ The isolated TypeScript architecture checker in `composition/architecture` rejec
 `engine-native` consumes `engine/delivery/native/delivery.json` independently of the SDK slot. That native lane installs Rust and produces the exact executable/manifest inventory through the Engine-owned producer. Its inputs include `engine/` and inherited `.cargo/` settings. The separate `engine-media-native` producer also fingerprints `capture/engine/` because its Linux media worker still uses that legacy implementation. Packaging does not enable installed routing.
 
 `platform-resources` consumes `shared/resources/delivery/delivery.json` through
-`stream-platform-resources.yml`, with fixed Linux x64 and Intel Mac targets. Its
+`stream-platform.yml`, with fixed Linux x64 and Intel Mac targets. Its
 native helper remains owned by the producer and staged before the public
 TypeScript adapter tests. The registration must fingerprint both
 `shared/resources/` and inherited `.cargo/`; the synthetic contract rejects an
@@ -50,7 +50,29 @@ node --experimental-strip-types composition/delivery/cli.ts plan
 node --experimental-strip-types composition/delivery/cli.ts admit record linux-x64
 node --experimental-strip-types composition/delivery/cli.ts build record linux-x64 /controlled/payload
 node --experimental-strip-types composition/delivery/cli.ts seal record linux-x64 /controlled/payload /controlled/sealed "$INPUT_DIGEST"
+node --experimental-strip-types composition/delivery/cli.ts consume engine linux-x64 "$PRODUCER_COMMIT" /controlled/empty-consumer-dir
 ```
+
+`consume ID TARGET PRODUCER_SHA [EMPTY_DESTINATION]` admits only that exact
+canonical main producer commit through the existing admission rules for owner
+job, contracts, runtime audit, exact artifact name/expiry and receipt identity.
+The producer receipt's input digest must match that exact artifact name and its
+tracked source digest must match the requested commit. It verifies the GitHub build provenance attestation for the component
+archive and checks its exact producer run/attempt before caching bytes. It never
+selects a different commit or starts a producer. Without a destination it prints
+JSON containing the immutable component archive and receipt paths; with a
+destination it stages those two files into an empty directory. Consumers remain
+responsible for their owner checks and any paired component contract. No package
+or native dependency is installed automatically.
+
+The private cache is `${XDG_CACHE_HOME:-~/.cache}/apparent/delivery`, with
+owner-only directories/files. Its content key includes repository, owner,
+target, source commit, input digest and authenticated archive hash. Cold handoff
+downloads once; warm and concurrent calls reuse the content after checking its
+receipt/hash, current producer admission, tar inventory and online attestation.
+Corrupt cache entries are discarded and fetched again; unavailable or failed
+GitHub/attestation checks fail closed. The consumer validates archive paths and
+rejects links/special entries without extracting them.
 
 `plan` remains a local diagnostic and reports registrations; owner workflows contain checked-in target matrices, so a run cannot schedule unrelated owners. Package source must be covered by a declared input root. `admit` runs on a hosted runner with its `ImageOS` and `ImageVersion` identity set. It looks only at push runs on main from the exact owner workflow path, with the historical owner stream job, `Delivery contracts` and runtime audit all terminal-success, an ancestor source SHA and a matching unexpired artifact. API/auth/identity uncertainty causes a rebuild. Fingerprints use Git tree mode, path and blob IDs for all owner input roots, registration, `LICENSE`, the delivery core, owner workflow and shared component action, and runtime budget checker/action, and include Node, runner image, OS/architecture and exact target identities.
 
@@ -61,7 +83,8 @@ On reuse the workflow downloads the admitted artifact by its numeric ID. `reuse 
 ## PR verification reuse
 
 The Engine SDK Linux lane, native Engine/media Linux/Intel Mac lanes and App Shell
-Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
+Linux/Intel Mac lanes, Config Linux/Intel Mac lanes and Onboarding Linux/Intel Mac
+lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
 synthetic merge commit's base/head parents and requires its complete Git tree to
@@ -113,6 +136,22 @@ H264/SDK checks. Embedded build manifests and all archived runtime bytes remain
 unchanged; main retains original build provenance. Capture is not enabled for PR
 reuse by this media slice.
 
+Config uses the same actual native compiler/SDK/flag identity and conservative
+whole-tree admission on both supported targets. Supported native candidates
+install Rust before admission; unsupported native lanes keep fresh-only setup.
+The Config helper, its embedded source SHA and protocol manifest are promoted
+byte-for-byte with original build provenance. Its workflow retains fresh staged
+helper/client integration tests on PRs. No config writer, permission, activation,
+installed routing or native-helper implementation changes in this reuse slice.
+
+Onboarding promotes the exact packed TypeScript library only after its existing
+fresh checks/build and disposable public-export consumer verification. Its
+committed vendor tarballs and lockfile remain the complete package dependency
+inputs. Node/npm/esbuild overrides join its fingerprint; Electron-only overrides
+remain App Shell-specific. Shared package-build identity also captures esbuild
+overrides for App Shell. Onboarding gains no Rust dependency or native setup, and
+this delivery change does not activate or alter any installed onboarding route.
+
 ## Public web artifacts
 
 `public/delivery.json` registers Public's `dist-apparent` directory as a `website`
@@ -161,3 +200,20 @@ Ubuntu installer. Existing `engine-native` and `engine-media-native` retain thei
 own routes. Select the absolute manifest launch entry and its 40-second shutdown
 grace; registration does not activate installed routing or certify unsupported
 Wayland, macOS, audio, drawing or publication capabilities.
+
+
+Platform config, resources and App Shell share `stream-platform.yml`. One contracts
+job selects changed components from the full PR merge-base diff or main push
+before/after diff, including deleted files and both rename sides. Missing history
+selects all; shared delivery/architecture inputs select all; unrelated inputs
+select none. Registrations supply each selected component's target matrix.
+Main concurrency locks belong to each selected component/target, so an unrelated
+push cannot replace another component's pending producer.
+Native producers and the TypeScript shell remain isolated jobs with unchanged
+verification, packaging and artifact IDs. The audit requires successful contracts
+and selected execution before a receipt can authorize reuse. A failure in any
+selected component therefore blocks the shared audit and candidate reuse for that
+run; component jobs still run independently with fail-fast disabled.
+The new canonical workflow path participates in fingerprints and admission;
+old workflow receipts are not promoted across the migration and the first new
+producer run builds fresh. Broad manual platform verification remains separate.

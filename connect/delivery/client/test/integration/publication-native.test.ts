@@ -1,8 +1,10 @@
 import assert from "node:assert/strict";
+import { replacePrivateStateFile, type StateReplacementResources } from "../../src/state/replacement.ts";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
+import { spawn } from "node:child_process";
 import { chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
@@ -15,6 +17,7 @@ import { parseRecipientCommand, runRecipientCommand } from "../../src/cli/recipi
 import { publishRecipientCapture, RecipientPublicationError } from "../../src/recipient/publication.ts";
 import { readCredentialSnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources } from "../../src/state/namespace.ts";
 import { readStoredCredentialHandle, CredentialReadError } from "../../src/credentials/private-read.ts";
+import { decodeRecipientRenewalReply, type RecipientRenewalOwner } from "../../src/state/renewal-owner.ts";
 import type { RetrievedRecipientCapture } from "../../src/recipient/retrieve.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
@@ -30,7 +33,7 @@ async function packedResourceSdk() {
   absoluteEnv("APPARENT_RESOURCE_SDK_CONSUMER", consumer);
   const entry = `${consumer}/node_modules/@apparent/native-resources/dist/index.js`;
   return await import(pathToFileURL(entry).href) as {
-  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => NamespaceResources & {
+  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => NamespaceResources & StateReplacementResources & {
     checkAcl(handle: import("node:fs/promises").FileHandle): Promise<{ state: "accepted" | "refused" }>;
     publish(parent: import("node:fs/promises").FileHandle, source: string, destination: string, options?: { signal?: AbortSignal }): Promise<{ state: "published" | "destination_exists" | "refused" | "publication_uncertain" }>;
   };
@@ -205,7 +208,101 @@ test("recipient CLI retrieves a synthetic encrypted capture and publishes throug
     });
     assert.deepEqual(stateResult, { ok: true, path: stateDestination });
     assert.equal(await readFile(path.join(stateDestination, "summary.md"), "utf8"), "synthetic CLI handoff\n");
+    const credentialFile = path.join(state, "read.credential");
+    const base = { ...JSON.parse(await readFile(credentialFile, "utf8")), token: "consumed-access", expiresAt: 1, refreshExpiresAt: 1 };
+    await writeFile(credentialFile, JSON.stringify(base), { mode: 0o600 });
+    await writeFile(path.join(state, "read.renewal"), JSON.stringify({ base, issued: Math.floor(Date.now() / 1000), completed: true }), { mode: 0o600 });
+    await writeFile(path.join(state, "read.response"), JSON.stringify({ scope: "read", grantId: "reader", accessToken: token, refreshToken: "rotated-refresh", expiresIn: 3600, refreshExpiresIn: 7200 }), { mode: 0o600 });
+    const beforeRecovery = await readFile(credentialFile), recoveredDestination = path.join(root, "recovered-cli.apparent");
+    assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", recoveredDestination]), {
+      directory: state, approvedServer: origin, resources, inspectLocal: async source => source,
+    }), { ok: true, path: recoveredDestination });
+    assert.deepEqual(await readFile(credentialFile), beforeRecovery);
 
+
+  } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
+}));
+
+test("recipient requests use the actual sole writer for due renewal, one GET retry and terminal rejection",
+  { skip: !process.env.APPARENT_RECIPIENT_WRITER_BIN }, async () => fixture(async root => {
+  const writer = absoluteEnv("APPARENT_RECIPIENT_WRITER_BIN", process.env.APPARENT_RECIPIENT_WRITER_BIN);
+  assert.equal(digest(await readFile(writer)), process.env.APPARENT_RECIPIENT_WRITER_SHA256, "pin the externally built writer bytes; no consumer compilation");
+  const id = "1".repeat(32), state = path.join(root, "hosted"), config = path.join(root, "config.json");
+  await mkdir(state, { mode: 0o700 });
+  const configBytes = JSON.stringify({ unknown: "preserved", cloud: { enabled: false, uploadConsent: false } });
+  await writeFile(config, configBytes, { mode: 0o600 });
+  const upload = JSON.stringify({ server: "https://other.example", token: "untouched-upload" });
+  await writeFile(path.join(state, "upload.credential"), upload, { mode: 0o600 });
+  let refreshes = 0, metadata = 0, calls = 0, rejectAll = false, midTransfer = false;
+  let cancelRefresh: AbortController | undefined;
+  let access = "old-access", refresh = "old-refresh";
+  const content = Buffer.from("synthetic renewal recipient\n");
+  const assets = new Map([["summary.md", content], ["apparent.json", Buffer.from("{}")], ["contact-sheet.png", Buffer.from([1, 2, 3])]]);
+  const files = [...assets].map(([path, bytes]) => ({ path, size: bytes.length, sha256: digest(bytes) }));
+  const server = createServer(async (request, response) => {
+    calls++;
+    if (request.url === "/v1/token/refresh") {
+      assert.equal(request.method, "POST"); assert.equal(request.headers.authorization, undefined);
+      let body = ""; for await (const chunk of request) body += chunk;
+      assert.deepEqual(JSON.parse(body), { refreshToken: refresh });
+      if (cancelRefresh) { cancelRefresh.abort(); return; } // Hold response until cancellation stops the real writer.
+      refreshes++; access = `access-${refreshes}`; refresh = `refresh-${refreshes}`;
+      response.end(JSON.stringify({ scope: "read", grantId: "reader", accessToken: access, refreshToken: refresh, expiresIn: 3600, refreshExpiresIn: 7200 })); return;
+    }
+    assert.equal(request.method, "GET"); assert.equal(request.headers.cookie, undefined);
+    if (request.url === `/v1/captures/${id}`) metadata++;
+    if (rejectAll || midTransfer && request.url?.endsWith("/summary.md") && refreshes === 1) {
+      response.writeHead(401); response.end("private upstream diagnostic"); return;
+    }
+    assert.equal(request.headers.authorization, `Bearer ${access}`);
+    if (request.url === `/v1/captures/${id}`) response.end(JSON.stringify({ id, status: "ready", files }));
+    else if (request.url?.startsWith(`/v1/captures/${id}/files/`) && assets.has(request.url.slice(`/v1/captures/${id}/files/`.length))) response.end(assets.get(request.url.slice(`/v1/captures/${id}/files/`.length)));
+    else response.writeHead(404).end();
+  });
+  server.listen(0, "127.0.0.1"); await once(server, "listening");
+  const address = server.address(); assert(address && typeof address !== "string");
+  const origin = `http://127.0.0.1:${address.port}`, credentialFile = path.join(state, "read.credential");
+  const renewRead: RecipientRenewalOwner = async (request, signal) => {
+    const child = spawn(writer, [], { env: { ...process.env, APPARENT_CONFIG: config }, stdio: ["pipe", "pipe", "pipe"] });
+    const output: Buffer[] = []; let size = 0;
+    child.stdout.on("data", (chunk: Buffer) => { size += chunk.length; if (size > 4096) child.kill("SIGKILL"); else output.push(chunk); });
+    child.stderr.resume();
+    const cancel = () => child.kill("SIGTERM"); signal?.addEventListener("abort", cancel, { once: true });
+    const timer = setTimeout(() => child.kill("SIGKILL"), 35_000);
+    try {
+      if (signal?.aborted) cancel();
+      child.stdin.on("error", () => {}); child.stdin.end(JSON.stringify(request));
+      const [code] = await once(child, "close");
+      if (size > 4096) return { state: "state_unavailable" };
+      return decodeRecipientRenewalReply(Buffer.concat(output), typeof code === "number" ? code : -1, request.operation.kind);
+    } finally { clearTimeout(timer); signal?.removeEventListener("abort", cancel); }
+  };
+  try {
+    await writeFile(credentialFile, JSON.stringify({ server: origin, scope: "read", token: access, refreshToken: refresh,
+      generation: "a".repeat(32), grantId: "reader", expiresAt: 1, refreshExpiresAt: Math.floor(Date.now() / 1000) + 7200 }), { mode: 0o600 });
+    const options = { directory: state, approvedServer: origin, resources, renewRead, allowLegacyPlaintext: true, inspectLocal: async (source: string) => source };
+    const destination = path.join(root, "renewed.apparent"); midTransfer = true;
+    assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", destination]), options), { ok: true, path: destination });
+    assert.equal(refreshes, 2); assert.equal(metadata, 1, "retry only the rejected file GET, not the whole retrieval");
+    assert.equal(await readFile(path.join(destination, "summary.md"), "utf8"), content.toString());
+    assert.equal(JSON.parse(await readFile(credentialFile, "utf8")).token, access);
+    assert.equal(await readFile(config, "utf8"), configBytes); assert.equal(await readFile(path.join(state, "upload.credential"), "utf8"), upload);
+    rejectAll = true; const before = refreshes;
+    const rejected = await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", path.join(root, "denied.apparent")]), options);
+    assert.deepEqual(rejected, { ok: false, error: { category: "auth_required", message: "auth_required" } });
+    assert.equal(refreshes, before + 1); assert.equal(JSON.parse(await readFile(credentialFile, "utf8")).authRequired, true);
+    const beforeCalls = calls;
+    assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", path.join(root, "again.apparent")]), options), rejected);
+    assert.equal(calls, beforeCalls, "authRequired never starts another request or renewal");
+    assert.equal(await readFile(config, "utf8"), configBytes); assert.equal(await readFile(path.join(state, "upload.credential"), "utf8"), upload);
+    const expired = { ...JSON.parse(await readFile(credentialFile, "utf8")), expiresAt: 1, authRequired: false };
+    await writeFile(credentialFile, JSON.stringify(expired), { mode: 0o600 });
+    const beforeCancellation = await readFile(credentialFile), beforeMetadata = metadata;
+    cancelRefresh = new AbortController();
+    assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", path.join(root, "cancelled.apparent")]), {
+      ...options, signal: cancelRefresh.signal,
+    }), { ok: false, error: { category: "cancelled", message: "cancelled" } });
+    assert.deepEqual(await readFile(credentialFile), beforeCancellation); assert.equal(metadata, beforeMetadata);
   } finally { server.closeAllConnections(); server.close(); await once(server, "close"); }
 }));
 
@@ -286,4 +383,38 @@ test("native snapshots refuse Darwin cancellation-record ACL grants", { skip: pr
     execFileSync("/bin/chmod", ["+a", "everyone allow read", cancellation]);
     await assert.rejects(readCredentialSnapshot(state, { scope: "read", approvedServer: server }, resources), error => error instanceof CredentialSnapshotError && error.category === "unsafe_file");
   } finally { execFileSync("/bin/chmod", ["-N", cancellation]); }
+}));
+
+test("native private-state replacement commits bounded bytes under the real queue lease", async () => fixture(async root => {
+  const state = path.join(root, "synthetic-state"); await mkdir(state, { mode: 0o700 });
+  const lock = await open(path.join(state, "queue.lock"), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  const acquired = await resources.lock(lock, { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired"); if (acquired.state !== "acquired") return;
+  try {
+    const destination = path.join(state, "synthetic.test");
+    const input = Buffer.from('{"version":1,"synthetic":true}');
+    assert.deepEqual(await replacePrivateStateFile(state, "synthetic.test", input, null, acquired.lease, resources), { state: "committed" });
+    assert.equal((await readFile(destination)).toString(), input.toString());
+    const previous = await lstat(destination, { bigint: true });
+    const expected = { device: String(previous.dev), inode: String(previous.ino) };
+    const next = Buffer.from('{"version":1,"synthetic":"replacement"}');
+    assert.deepEqual(await replacePrivateStateFile(state, "synthetic.test", next, expected, acquired.lease, resources), { state: "committed" });
+    assert.equal((await readFile(destination)).toString(), next.toString());
+    assert.equal((await lstat(destination)).mode & 0o777, 0o600);
+    assert.deepEqual((await readdir(state)).sort(), ["queue.lock", "synthetic.test"]);
+  } finally { await acquired.lease.release(); }
+}));
+
+test("native stale replacement refuses effect and removes only its private stage", async () => fixture(async root => {
+  const destination = path.join(root, "synthetic.test"); await writeFile(destination, "old", { mode: 0o600 });
+  const previous = await lstat(destination, { bigint: true });
+  const lock = await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  const acquired = await resources.lock(lock, { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired"); if (acquired.state !== "acquired") return;
+  try {
+    const expected = { device: String(previous.dev), inode: String(previous.ino + 1n) };
+    assert.deepEqual(await replacePrivateStateFile(root, "synthetic.test", Buffer.from("new"), expected, acquired.lease, resources), { state: "destination_changed" });
+    assert.equal(await readFile(destination, "utf8"), "old");
+    assert.deepEqual((await readdir(root)).sort(), ["queue.lock", "synthetic.test"]);
+  } finally { await acquired.lease.release(); }
 }));

@@ -1,9 +1,13 @@
 # Website and Connect continuous delivery
 
-Each value stream has an independent native GitHub paths-filtered workflow.
+Value streams use native GitHub paths-filtered workflows; Platform groups config, resources and App Shell behind component selection.
 Engine SDK, native core, media and capture components share `stream-engine.yml`
 with separate component/target matrix jobs and artifacts. Linux/macOS targets
 remain defined by each component registration.
+Platform's selector preserves separate config/resources/App Shell jobs and artifacts;
+missing history selects all. Its shared audit requires selected jobs to succeed.
+The canonical workflow path changes, so prior producer receipts rebuild once.
+See [delivery core](../../composition/delivery/README.md) for selection and reuse rules.
 Owner entrypoints in `.github/workflows/stream-<owner>.yml` own their PR and main
 jobs, permissions, fixed owner/target matrix and runtime audit. Small composite
 actions under `.github/actions/delivery-contracts` and `delivery-component` share
@@ -18,11 +22,18 @@ This trigger policy supersedes other automatic pipeline descriptions below.
 Existing release admission still rejects diagnostic manual verification receipts;
 manual triggering does not waive publication gates.
 
-Feature-branch pushes without a PR retain inexpensive local selector, push-hook
-and release-admission contracts, plus affected-owner architecture checks. Install
-the architecture checker once with `npm --prefix composition/architecture ci`;
-the hook fails clearly if it is unavailable and never installs packages. Before
-contract checks in either PR or changed-tree verification, a read-only dependency
+Feature-branch pushes without a PR retain affected-owner checks, applicable
+boundary contracts, and exact-HEAD/clean-tree/index/runtime-budget enforcement.
+The hook regression suites for push guards, verification selection, release
+admission, temporary-environment checks and owner lanes run when their test or
+production input closure changes. A change to the shared `verification.py`
+selector runs the complete machinery matrix; unknown history and uncertain
+verification/tooling inputs do the same. Owner-only and documentation-only
+changes keep their owner checks without rerunning unrelated machinery suites.
+Install the architecture checker once with `npm --prefix composition/architecture ci`
+when a selected architecture check needs it; the hook fails clearly if it is
+unavailable and never installs packages. Before contract checks in either PR or
+changed-tree verification, a read-only dependency
 preflight checks selected architecture, Record/renderer, Agent, App Shell,
 onboarding, resources, Connect client and Public packages for required locked
 installs and npm lock freshness. Existing package selectors control the check:
@@ -208,7 +219,8 @@ contain the new hook. Server-side policy is separate.
 ## PR verification reuse
 
 The Engine SDK Linux lane, native Engine/media Linux/Intel Mac lanes and App Shell
-Linux/Intel Mac lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
+Linux/Intel Mac lanes, Config Linux/Intel Mac lanes and Onboarding Linux/Intel Mac
+lanes retain seven-day PR candidates after their fresh checks and build. Main jobs first try existing verified-main reuse, then a same-repository
 merged PR candidate. Admission authenticates the merged PR, exact workflow/run and
 successful attempt jobs (including contracts and runtime audit), then checks the
 synthetic merge commit's base/head parents and requires its complete Git tree to
@@ -259,6 +271,22 @@ successful PR archive. Both platform PR producers continue their real staged
 H264/SDK checks. Embedded build manifests and all archived runtime bytes remain
 unchanged; main retains original build provenance. Capture is not enabled for PR
 reuse by this media slice.
+
+Config uses the same actual native compiler/SDK/flag identity and conservative
+whole-tree admission on both supported targets. Supported native candidates
+install Rust before admission; unsupported native lanes keep fresh-only setup.
+The Config helper, its embedded source SHA and protocol manifest are promoted
+byte-for-byte with original build provenance. Its workflow retains fresh staged
+helper/client integration tests on PRs. No config writer, permission, activation,
+installed routing or native-helper implementation changes in this reuse slice.
+
+Onboarding promotes the exact packed TypeScript library only after its existing
+fresh checks/build and disposable public-export consumer verification. Its
+committed vendor tarballs and lockfile remain the complete package dependency
+inputs. Node/npm/esbuild overrides join its fingerprint; Electron-only overrides
+remain App Shell-specific. Shared package-build identity also captures esbuild
+overrides for App Shell. Onboarding gains no Rust dependency or native setup, and
+this delivery change does not activate or alter any installed onboarding route.
 
 ## Checks and artifact identity
 

@@ -11,7 +11,7 @@ export type Owner = { schema: 1; id: string; kind: Kind; package: string; inputs
 export const auditJob = 'Workflow runtime budget'
 export const contractsJob = 'Delivery contracts'
 export function workflowPathFor(ownerId: string): string {
-  const stream = ['engine-native', 'engine-media-native', 'engine-capture-native'].includes(ownerId) ? 'engine' : ownerId
+  const stream = ['platform-config', 'platform-resources', 'app-shell'].includes(ownerId) ? 'platform' : ['engine-native', 'engine-media-native', 'engine-capture-native'].includes(ownerId) ? 'engine' : ownerId
   return `.github/workflows/stream-${stream}.yml`
 }
 const roots = [
@@ -138,10 +138,10 @@ export function mediaBuildIdentity(env = process.env, os = platform(), probe = (
   throw new Error('Media reuse requires Linux or macOS')
 }
 export function supportsPrCandidate(id: string, target: string): boolean {
-  return id === 'engine' ? target === 'linux-x64' : ['engine-native', 'app-shell', 'engine-media-native'].includes(id) && ['linux-x64', 'macos-x64'].includes(target)
+  return id === 'engine' ? target === 'linux-x64' : ['engine-native', 'app-shell', 'engine-media-native', 'platform-config', 'onboarding'].includes(id) && ['linux-x64', 'macos-x64'].includes(target)
 }
-export function appShellBuildEnvironment(env = process.env) {
-  return [...new Set(['NODE_OPTIONS', 'NODE_ENV', ...Object.keys(env).filter(key => /^(ELECTRON_|npm_config_|NPM_CONFIG_)/.test(key))])].sort().map(key => [key, env[key] ?? ''])
+export function packageBuildEnvironment(env = process.env, electron = false) {
+  return [...new Set(['NODE_OPTIONS', 'NODE_ENV', 'NODE_PATH', 'ESBUILD_BINARY_PATH', 'ESBUILD_WORKER_THREADS', ...Object.keys(env).filter(key => /^(npm_config_|NPM_CONFIG_)/.test(key) || (electron && key.startsWith('ELECTRON_')))])].sort().map(key => [key, env[key] ?? ''])
 }
 function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEAD') {
   if (target !== 'linux-x64' && target !== 'macos-x64' && target !== 'web' || !owner.targets.includes(target)) throw new Error('Owner is not registered for this target')
@@ -149,7 +149,7 @@ function fingerprint(root: string, owner: Owner, target: Target, revision = 'HEA
   const imageOS = process.env.ImageOS ?? ''
   const imageVersion = process.env.ImageVersion ?? ''
   if (!imageOS || !imageVersion) throw new Error('Runner image identity is unavailable')
-  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(['engine-native', 'engine-media-native'].includes(owner.id) ? { native: nativeBuildIdentity() } : {}), ...(owner.id === 'app-shell' ? { packaging: appShellBuildEnvironment() } : {}), ...(owner.id === 'engine-media-native' ? { media: mediaBuildIdentity() } : {}) })).digest('hex')
+  return createHash('sha256').update(JSON.stringify({ source, environment: environmentDigest(owner), node: process.version, imageOS, imageVersion, platform: platform(), arch: arch(), target, ...(supportsPrCandidate(owner.id, target) && owner.language === 'native' ? { native: nativeBuildIdentity() } : {}), ...(['app-shell', 'onboarding'].includes(owner.id) ? { packaging: packageBuildEnvironment(process.env, owner.id === 'app-shell') } : {}), ...(owner.id === 'engine-media-native' ? { media: mediaBuildIdentity() } : {}) })).digest('hex')
 }
 export function sourceDigest(root: string, owner: Owner, revision = 'HEAD'): string { return trackedInputs(root, owner, revision).digest }
 export function environmentDigest(owner: Owner, env = process.env): string { return createHash('sha256').update(JSON.stringify([...(owner.environment ?? [])].sort().map(key => [key, env[key] ?? '']))).digest('hex') }
@@ -264,15 +264,17 @@ type Run = { id: number; run_attempt: number; head_sha: string; head_branch: str
 type Job = { name: string; status: string; conclusion: string | null }
 type Artifact = { id: number; name: string; expired: boolean }
 export type AdmissionResult = { reuse: boolean; reason: string; input_digest: string; prior_artifact_id: number | null; prior_source_sha: string | null; prior_run_id: number | null; prior_run_attempt: number | null }
-export function assessPrior(root: string, owner: Owner, target: Target, currentSha: string, repository: string, runs: Run[], jobsFor: (run: Run) => Job[], artifactsFor: (run: Run) => Artifact[]): AdmissionResult {
-  const digest = inputDigest(root, owner, target)
+export function assessPrior(root: string, owner: Owner, target: Target, currentSha: string, repository: string, runs: Run[], jobsFor: (run: Run) => Job[], artifactsFor: (run: Run) => Artifact[], exactSourceSha?: string, exactInputDigest?: string): AdmissionResult {
+  if (exactInputDigest && (!exactSourceSha || exactSourceSha !== currentSha)) throw new Error('Exact artifact digest requires the same explicit source commit')
+  const digest = exactInputDigest ?? (exactSourceSha ? fingerprint(root, owner, target, exactSourceSha) : inputDigest(root, owner, target))
+  if (!/^[0-9a-f]{64}$/.test(digest)) throw new Error('Invalid exact artifact input digest')
   const rebuild = (reason: string): AdmissionResult => ({ reuse: false, reason, input_digest: digest, prior_artifact_id: null, prior_source_sha: null, prior_run_id: null, prior_run_attempt: null })
   if (!owner.targets.includes(target)) return rebuild('owner is not registered for this target')
   if (repository !== 'tryapparent/apparent') return rebuild('repository identity is not canonical')
   for (const run of [...runs].sort((a, b) => b.id - a.id)) {
-    if (!Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0 || !/^[0-9a-f]{40,64}$/.test(run.head_sha) || run.event !== 'push' || run.head_branch !== 'main' || run.path !== workflowPathFor(owner.id) || run.head_sha === currentSha) continue
-    try { execFileSync('git', ['merge-base', '--is-ancestor', run.head_sha, currentSha], { cwd: root, stdio: 'ignore' }) } catch { continue }
-    if (fingerprint(root, owner, target, run.head_sha) !== digest) continue
+    if (!Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0 || !/^[0-9a-f]{40,64}$/.test(run.head_sha) || run.event !== 'push' || run.head_branch !== 'main' || run.path !== workflowPathFor(owner.id) || (exactSourceSha ? run.head_sha !== exactSourceSha : run.head_sha === currentSha)) continue
+    try { execFileSync('git', ['merge-base', '--is-ancestor', run.head_sha, exactSourceSha ?? currentSha], { cwd: root, stdio: 'ignore' }) } catch { continue }
+    if (!exactInputDigest && fingerprint(root, owner, target, run.head_sha) !== digest) continue
     const jobName = `deliver / stream (${owner.id}, ${target})`
     const jobs = jobsFor(run)
     if (jobs.filter(j => j.name === jobName && j.status === 'completed' && j.conclusion === 'success').length !== 1 ||

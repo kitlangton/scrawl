@@ -12,11 +12,12 @@ import { decodeFrames, hasSourceVideo, savedKeyframes, selectFrameTimes, verifyF
 import { runZoom } from './zoom/zoom.js';
 import { generateDemo } from './demo/generate.js';
 import { localCopyText, writeCopyText } from './handoff/copy.js';
+import { createNativeHostPort } from '@apparent/native-host';
 
 const VERSION = '0.1.0';
-function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection, synthetic demo generation, and Engine foreground recording/frame selection.\n\nUsage: apparent-agent copy [BUNDLE|latest]\n       apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent demo [--out FRESH.apparent] [--json]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n       apparent-agent skill\n       apparent-agent record [--duration <seconds>] --out <absolute.apparent-path>\n       apparent-agent record --protocol capture2 [--duration <seconds>] [--out <absolute.apparent-path>] --source <discovered-id>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent capture --protocol capture2 <inspect|stop|cancel> <request-id>\n       apparent-agent capture --protocol capture2 sources [--json]\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nRecord duration defaults to 5 seconds; capture timing begins after native readiness.\nDemo creates illustrative synthetic local data only; it does not record a screen or audio.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nCapture/2 requires explicit --protocol capture2 and APPARENT_ENGINE_CAPTURE_EXECUTABLE; it never falls back to V1. capture --protocol capture2 sources [--json] is read-only public SDK discovery.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
+function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection, synthetic demo generation, and Engine foreground recording/frame selection.\n\nUsage: apparent-agent copy [BUNDLE|latest]\n       apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n       apparent-agent skill\n       apparent-agent record [--duration <seconds>] --out <absolute.apparent-path>\n       apparent-agent record --protocol capture2 [--duration <seconds>] [--out <absolute.apparent-path>] --source <discovered-id>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent capture --protocol capture2 <inspect|stop|cancel> <request-id>\n       apparent-agent capture --protocol capture2 sources [--json]\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nRecord duration defaults to 5 seconds; capture timing begins after native readiness.\nDemo creates illustrative synthetic local data only; it does not record a screen or audio.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nCapture/2 requires explicit --protocol capture2 and APPARENT_ENGINE_CAPTURE_EXECUTABLE; it never falls back to V1. capture --protocol capture2 sources [--json] is read-only public SDK discovery.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
 async function main(args: string[]) {
-  if(args[0]==='demo'&&args.length===2&&['--help','-h'].includes(args[1])) { process.stdout.write('Usage: apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\nGenerate a local illustrative synthetic bundle; no capture, Engine, Desktop, provider, or network is used. --clipboard currently fails before writing until a native clipboard route is published.\n'); return 0; }
+  if(args[0]==='demo'&&args.length===2&&['--help','-h'].includes(args[1])) { process.stdout.write('Usage: apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\nGeneration uses no capture, Engine, Desktop, provider, or network. --clipboard requires a compatible running Apparent GUI; it copies only text and keeps the generated bundle if the clipboard result is refused or unknown.\n'); return 0; }
   if (args[0] === 'zoom' && args.length === 2 && ['--help','-h'].includes(args[1])) {
     process.stdout.write('Usage: apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n');
     return 0;
@@ -26,15 +27,7 @@ async function main(args: string[]) {
   if (args[0] === 'copy') {
     if (args.length > 2 || args[1]?.startsWith('-')) throw new Error('Usage: apparent-agent copy [BUNDLE|latest]');
     const result = await writeCopyText(await localCopyText(args[1]));
-    if (result.status === 'applied') { process.stdout.write('Copied bundle text to clipboard. Images were not copied.\n'); return 0; }
-    if (result.status === 'outcome-unknown') {
-      process.stderr.write('Clipboard outcome is unknown; it may have changed. Do not retry automatically.\n'); return 3;
-    }
-    process.stderr.write(result.reason === 'too-large'
-      ? 'Bundle handoff exceeds the 21800-byte clipboard text limit; no text was truncated or copied.\n'
-      : result.reason === 'unavailable' ? 'Clipboard unavailable: a compatible running Apparent GUI is required; it was not launched.\n'
-      : 'Clipboard refused this handoff (' + result.reason + '); it was not retried.\n');
-    return 2;
+    return reportCopyOutcome(result,{success:()=>'Copied bundle text to clipboard. Images were not copied.\n',refusalSubject:'this handoff'});
   }
   if (args[0] === 'skill') {
     if (args.length !== 1) throw new Error('skill takes no operands or options');
@@ -135,11 +128,38 @@ async function demo(args:string[]) {
     else if(arg==='--clipboard'&&!clipboard)clipboard=true;
     else throw new Error(`Unknown or duplicate demo option: ${arg}`);
   }
-  if(clipboard)throw new Error('demo --clipboard is unavailable: no published native clipboard route');
+  if(out!==undefined&&(!isAbsolute(out)||resolve(out)!==out||out.includes('\0')))throw new Error('--out requires a fresh canonical absolute .apparent directory');
+  if(clipboard) {
+    try { await createNativeHostPort().readSnapshot(); }
+    catch { throw new Error('demo --clipboard unavailable: a compatible running Apparent GUI is required; no bundle was generated.'); }
+  }
   const result=await generateDemo(out);
-  if(json)process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
-  else {process.stdout.write(`${result.summary}\nSynthetic demo bundle: ${result.path}\nImages:\n${result.images.map(image=>`  ${image}`).join('\n')}\n`);}
-  return 0;
+  if(!clipboard) {
+    if(json)process.stdout.write(`${JSON.stringify(result,null,2)}\n`);
+    else process.stdout.write(`${result.summary}\nSynthetic demo bundle: ${result.path}\nImages:\n${result.images.map(image=>`  ${image}`).join('\n')}\n`);
+    return 0;
+  }
+  let copyResult:Awaited<ReturnType<typeof writeCopyText>>;
+  try { copyResult=await writeCopyText(await localCopyText(result.path)); }
+  catch(error) {
+    if(json)process.stdout.write(`${JSON.stringify({...result,clipboardResult:{status:'refused',reason:'handoff-formatting-failed'}},null,2)}\n`);
+    else process.stdout.write(`${result.summary}\nSynthetic demo bundle: ${result.path}\nImages:\n${result.images.map(image=>`  ${image}`).join('\n')}\n`);
+    process.stderr.write(`Could not format the demo text handoff (${error instanceof Error?error.message:'operation failed'}). Synthetic demo bundle retained at ${result.path}.\n`);
+    return 2;
+  }
+  if(json)process.stdout.write(`${JSON.stringify({...result,clipboardResult:copyResult},null,2)}\n`);
+  else process.stdout.write(`${result.summary}\nSynthetic demo bundle: ${result.path}\nImages:\n${result.images.map(image=>`  ${image}`).join('\n')}\n`);
+  return reportCopyOutcome(copyResult,{success:json?()=> '':applied=>`Copied demo text to clipboard (${applied.byteLength} UTF-8 bytes, SHA-256 ${applied.digest}). Images were not copied.\n`,refusalSubject:'this demo handoff',retainedPath:result.path});
+}
+function reportCopyOutcome(result:Awaited<ReturnType<typeof writeCopyText>>,options:{success:(result:Extract<Awaited<ReturnType<typeof writeCopyText>>,{status:'applied'}>)=>string;refusalSubject:string;retainedPath?:string}):number {
+  if(result.status==='applied'){const message=options.success(result);if(message)process.stdout.write(message);return 0;}
+  const retained=options.retainedPath?` Synthetic demo bundle retained at ${options.retainedPath}.`:'';
+  if(result.status==='outcome-unknown'){process.stderr.write(`Clipboard outcome is unknown; it may have changed. Do not retry automatically.${retained}\n`);return 3;}
+  process.stderr.write(result.reason==='too-large'
+    ? `Bundle handoff exceeds the 21800-byte clipboard text limit; no text was truncated or copied.${retained}\n`
+    : result.reason==='unavailable' ? `Clipboard unavailable: a compatible running Apparent GUI is required; it was not launched.${retained}\n`
+    : `Clipboard refused ${options.refusalSubject} (${result.reason}); it was not retried.${retained}\n`);
+  return 2;
 }
 async function zoom(args: string[]) {
   let bundle='latest', seenBundle=false, at: string|undefined, mark: string|undefined, frame: number|undefined;

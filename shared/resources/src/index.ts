@@ -46,6 +46,12 @@ export class NativeLockLease {
 
 export type LockResult = { state: "acquired"; lease: NativeLockLease } | { state: "busy" | "cancelled" | "failed" | "refused" };
 export type PublicationResult = { state: "published" | "destination_exists" | "refused" | "publication_uncertain" };
+export type FileIdentity = { device: string; inode: string };
+export type ReplaceFileResult = { state: "replaced" | "destination_changed" | "refused" | "publication_uncertain" };
+function identity(value: FileIdentity): boolean {
+  const canonical = (x: unknown) => typeof x === "string" && /^(0|[1-9][0-9]{0,19})$/.test(x) && BigInt(x) <= 18446744073709551615n;
+  return !!value && typeof value === "object" && canonical(value.device) && canonical(value.inode);
+}
 function basename(value: string): boolean {
   if (typeof value !== "string" || !value.length || value.length > 4096 || value === "." || value === ".." || value.includes("/") || value.includes("\0") || Buffer.byteLength(value, "utf8") > 4096) return false;
   for (const character of value) { const cp = character.codePointAt(0)!; if (cp >= 0xd800 && cp <= 0xdfff) return false; }
@@ -122,5 +128,40 @@ export class NativeResources {
       await session.exit(); return { state: state as PublicationResult["state"] };
     } catch { session.fail("process_failed"); return { state: "publication_uncertain" }; }
     finally { options.signal?.removeEventListener("abort", cancel); }
+  }
+  /** Consumes parent on every outcome. Replacement is atomic under the caller's
+   * cooperative lock; expected identities are admission checks, not a same-UID CAS. */
+  async replaceFile(parent: FileHandle, source: string, destination: string, expected: { source: FileIdentity; destination: FileIdentity | null }, options: { timeoutMs?: number; signal?: AbortSignal } = {}): Promise<ReplaceFileResult> {
+    let timeout: number, signal: AbortSignal | undefined, args: string[];
+    try {
+      timeout = options.timeoutMs ?? 10_000; signal = options.signal;
+      const sourceIdentity = expected.source, destinationIdentity = expected.destination;
+      const src = { device: sourceIdentity.device, inode: sourceIdentity.inode };
+      const dst = destinationIdentity === null ? null : { device: destinationIdentity.device, inode: destinationIdentity.inode };
+      if (!basename(source) || !basename(destination) || source === destination || !identity(src) || dst !== null && !identity(dst)
+        || !Number.isInteger(timeout) || timeout < 1 || timeout > 60_000 || signal !== undefined && !(signal instanceof AbortSignal)) throw new Error("invalid_request");
+      args = ["replace", "--source", source, "--destination", destination, "--source-device", src.device, "--source-inode", src.inode,
+        "--destination-present", dst === null ? "0" : "1", "--destination-device", dst?.device ?? "0", "--destination-inode", dst?.inode ?? "0"];
+    } catch {
+      await parent.close().catch(() => {}); return { state: "refused" };
+    }
+    if (signal?.aborted) { await parent.close(); return { state: "refused" }; }
+    let session: ResourceProcess;
+    try {
+      session = await launch(this.#provider, args, parent, signal);
+    } catch (error) {
+      if (error instanceof NativeResourceError && error.category === "cancelled") return { state: "refused" };
+      if (error instanceof NativeResourceError && error.category === "ownership_transfer_failed") return { state: "publication_uncertain" };
+      throw error;
+    }
+    const cancel = () => session.fail("process_failed");
+    signal?.addEventListener("abort", cancel, { once: true });
+    try {
+      if (signal?.aborted) cancel();
+      const state = await session.next(timeout);
+      if (!["replaced", "destination_changed", "refused", "publication_uncertain"].includes(state)) throw new NativeResourceError("protocol_error");
+      await session.exit(); return { state: state as ReplaceFileResult["state"] };
+    } catch { session.fail("process_failed"); return { state: "publication_uncertain" }; }
+    finally { signal?.removeEventListener("abort", cancel); }
   }
 }

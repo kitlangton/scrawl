@@ -1,12 +1,13 @@
 import {test} from 'node:test';
 import {strict as assert} from 'node:assert';
-import {mkdtemp,rm,mkdir,writeFile,readFile,access} from 'node:fs/promises';
+import {mkdtemp,rm,mkdir,writeFile,readFile,access,chmod} from 'node:fs/promises';
 import {cpSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join,resolve} from 'node:path';
 import {fileURLToPath} from 'node:url';
 import {spawnSync} from 'node:child_process';
 import {PNG} from 'pngjs';
+import {createHash} from 'node:crypto';
 
 // The isolated run executes this suite too; only its own source-copy driver is omitted.
 if (process.env.APPARENT_AGENT_ISOLATED_TEST !== '1') test('Agent installs, builds and tests from an isolated owner source copy',async()=>{
@@ -98,6 +99,11 @@ test('packed CLI installs offline outside checkout and prints its standalone ski
       ].join('')],packageRoot);
     } finally { await rm(recordConsumer,{force:true}); }
     assert.match(run([cli,'--help']),/Local Apparent/);assert.equal(run([cli,'--version']),'0.1.0\n');
+    const hostDir=join(root,'.config','apparent','agent-control');await mkdir(hostDir,{recursive:true,mode:0o700});await chmod(join(root,'.config'),0o700);await chmod(join(root,'.config','apparent'),0o700);
+    const socketPath=join(hostDir,'capture.sock');const {createServer}=await import('node:net');const {once}=await import('node:events');let snapshots=0,writes=0,clipboardText='';
+    const host=createServer(socket=>{let buffer='';socket.on('error',()=>{});socket.on('data',chunk=>{buffer+=chunk.toString();if(!buffer.includes('\n'))return;const request=JSON.parse(buffer.trim());if(request.operation==='readSnapshot'){snapshots++;socket.end(JSON.stringify({protocol:1,id:request.id,result:{api:1,processEpoch:'packed-demo',revision:snapshots,scope:'running-desktop-process',freshness:'cached-gui-observation',permissions:[],shortcuts:{record:{configured:null,effective:null,registration:'unknown',canValidate:true,canSave:false},paste:{configured:null,effective:null,registration:'unknown',canValidate:true,canSave:false}}}})+'\n');return;}assert.equal(request.operation,'writeClipboardText');writes++;clipboardText=request.text;assert.deepEqual(request.observed,{processEpoch:'packed-demo',revision:2});socket.end(JSON.stringify({protocol:1,id:request.id,result:{status:'applied',digest:createHash('sha256').update(request.text).digest('hex'),byteLength:Buffer.byteLength(request.text)}})+'\n');});});
+    host.listen(socketPath);await once(host,'listening');await chmod(socketPath,0o600);
+    try {const syntheticOut=join(root,'packed-demo.apparent');const {execFile}=await import('node:child_process');const {promisify}=await import('node:util');const copied=await promisify(execFile)(process.execPath,[cli,'demo','--out',syntheticOut,'--clipboard','--json'],{cwd:root,encoding:'utf8',timeout:30000,env});const demoResult=JSON.parse(copied.stdout),demoManifest=JSON.parse(await readFile(join(syntheticOut,'apparent.json'),'utf8'));assert.equal(demoResult.path,syntheticOut);assert.equal(demoManifest.synthetic,true);assert.equal(demoManifest.provenance.kind,'synthetic-demo');assert.equal(demoResult.clipboardResult.status,'applied');assert.equal(writes,1);assert.equal(snapshots,2);assert(clipboardText.startsWith('apparent-agent inspect '));assert.match(clipboardText,/Synthetic demonstration only/);assert.match(clipboardText,/Use make-it-apparent/);assert.doesNotMatch(clipboardText,/Images were not copied/);} finally {await new Promise<void>(resolve=>host.close(()=>resolve()));}
     const captureV1=runRaw([cli,'capture','inspect','fixture-id']);
     assert.equal(captureV1.status,2);assert.equal(captureV1.stdout,'');assert.match(captureV1.stderr,/Set explicit absolute Engine executable and runtime paths/);
     for(const protocolArgs of [['--protocol','capture-v9','inspect','fixture-id'],['--protocol','capture2','--protocol','capture2','inspect','fixture-id']]) {

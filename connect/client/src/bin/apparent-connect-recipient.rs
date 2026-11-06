@@ -4,6 +4,15 @@ use std::{io::{Read, Write}, sync::{Arc, atomic::{AtomicBool, Ordering}}};
 static CANCELLED: AtomicBool = AtomicBool::new(false);
 extern "C" fn cancel(_: i32) { CANCELLED.store(true, Ordering::Relaxed); }
 fn emit(value: Value) { println!("{value}"); let _ = std::io::stdout().flush(); }
+fn renewal_error(error: apparent_connect_client::settings::SafeError) -> anyhow::Error {
+    anyhow::anyhow!(match error {
+        apparent_connect_client::settings::SafeError::Cancelled => "cancelled",
+        apparent_connect_client::settings::SafeError::AuthRequired => "auth_required",
+        apparent_connect_client::settings::SafeError::InvalidServer => "invalid_server",
+        apparent_connect_client::settings::SafeError::Offline => "offline",
+        _ => "state_unavailable",
+    })
+}
 fn run() -> anyhow::Result<Value> {
     let mut input = String::new();
     std::io::stdin().take(65537).read_to_string(&mut input)?;
@@ -25,6 +34,16 @@ fn run() -> anyhow::Result<Value> {
         },
         Operation::Fetch { id, out, wait, evidence_only } => {
             Ok(json!({"path": client.fetch_recipient(&id, &out, wait, evidence_only, &allowed)?}))
+        }
+        Operation::RenewRead { server, generation, token, cancellation, force } => {
+            client.renew_recipient_access(&server, &generation, &token, cancellation.as_deref(), force, &allowed)
+                .map_err(renewal_error)?;
+            Ok(json!({"scope":"read","state":"current"}))
+        }
+        Operation::RejectRead { server, generation, token, cancellation } => {
+            client.reject_recipient_access(&server, &generation, &token, cancellation.as_deref(), &allowed)
+                .map_err(renewal_error)?;
+            Ok(json!({"scope":"read","state":"rejected"}))
         }
     }
 }

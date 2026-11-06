@@ -38,6 +38,17 @@
       ]
     },
     {
+      "id": "hermes-recording-tools",
+      "added": "2026-11-06",
+      "group": "cli",
+      "name": "Hermes recording inspection plugin candidate",
+      "says": "Native Hermes tools read Apparent transcripts with contact-sheet and keyframe images and zoom into moments or marks through an installed full Apparent CLI. A bundled setup skill guides installation and existing onboarding; read-only status checks identify the next unfinished checkpoint.",
+      "status": "main",
+      "platforms": ["mac", "linux"],
+      "note": "Unreleased candidate. Linux installed-CLI synthetic-file inspection and zoom are checked; guided native recorder/CLI installation and onboarding on both platforms, native Hermes Desktop/model vision and Connect retrieval remain acceptance gates. Setup does not run automatically on plugin installation. No automatic send or conversation picker.",
+      "docs": ["hermes/README.md"]
+    },
+    {
       "id": "connect-aggregate-daily-activity",
       "added": "2026-11-04",
       "group": "settings",
@@ -1230,7 +1241,7 @@
       "status": "main",
       "added": "2026-11-05",
       "platforms": ["mac", "linux"],
-      "note": "No screen, window, session, microphone, provider, UI, Engine or network is read or launched. Default output follows configured capture storage; --out requires a fresh absolute .apparent directory. PNG and semantic files are private, the manifest is published last, and synthetic provenance is explicit. --clipboard fails truthfully before output because native clipboard parity remains pending.",
+      "note": "No screen, window, session, microphone, provider, UI, Engine or network is read or launched. Default output follows configured capture storage; --out requires a fresh absolute .apparent directory. PNG and semantic files are private, the manifest is published last, and synthetic provenance is explicit. --clipboard requires a compatible already-running GUI before generation, copies only Record-formatted semantic text, and never launches the GUI or copies images. Refusal or unknown retains the valid bundle and reports its path; unknown exits 3 without retry. Native effect, GUI archive and installed activation remain separate platform gates.",
       "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
     },
     {
@@ -1279,7 +1290,7 @@
       "id": "cli-copy",
       "group": "cli",
       "name": "copy",
-      "says": "Copy a saved capture to the clipboard without contacting an agent session. The confirmation explains that copy is text-only by default and points to the contact sheet; the user checks the unsent draft for an image.",
+      "says": "Copy a saved capture to the clipboard without contacting an agent session. The local handoff honors the configured agentContext preference and remains text-only; the user checks the unsent draft for an image.",
       "status": "main",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],

@@ -41,18 +41,39 @@ Stored credential wire decoding, private-descriptor reading and queue-locked
 credential snapshots are TypeScript capabilities with Linux/Mac native consumer
 proof. Directory admission, inode/ACL checks, cancellation, revocation and local
 login-incarnation fences preserve the legacy lock protocol; stored facts do not
-authorize transport or clear `authRequired`. Renewal journals, token expiry and
-service authorization policy, installed caller adoption and writer cutover remain
-parent integration work. Rust remains the sole credential and queue JSON writer.
+authorize transport or clear `authRequired`. Completed legacy renewal responses
+can now be read under the same queue lock when the full journal base matches;
+recovery uses the original issue time and leaves all durable files unchanged.
+Active renewal and durable journal publication, service authorization policy,
+installed caller adoption and writer cutover remain parent integration work.
+Rust remains the sole credential and queue JSON writer.
 
 The state-backed recipient command now joins these read capabilities with the
 legacy `<login-id>.identity` format, authenticated retrieval and native private
 publication. It checks local credential lifetime, lazily reads keys only for
 encrypted manifests and rechecks the local snapshot before publication. Explicit
 legacy plaintext policy remains separate. Expired renewable access reports
-`renewal_required`; durable renewal/recovery and installed routing remain open.
+`renewal_required` unless a matching completed response supplies a usable token.
+A 401 permits one reload/retry only if writer state supplies a different token in
+the same login. No refresh request or durable write occurs; active renewal and
+installed routing remain open.
 The package API has Linux/Mac native joined-consumer proof, not installed CLI
 adoption or writer-cutover proof.
+
+
+The next recipient adoption prerequisite adds a bounded private request to the
+existing writer for read-grant renewal and terminal rejection. The TypeScript
+transport prepares fresh authority for each GET, renews within 30 seconds,
+retries only a rejected GET once and delegates `authRequired` marking after a
+second 401. The writer pins server, generation, token and cancellation; it owns
+all journal/credential commits and cannot select upload scope or config effects.
+This is the temporary same-writer adapter permitted by step 2 below, not the
+zero-Rust target or installed adoption. Its source-bound joined Linux/Mac proof uses
+a synthetic service, the real writer executable and the native resource adapter;
+installed proof remains required. Published resource/provider assembly
+and the separate legacy writer launch/admission are also required before routing
+production consumers. Rust still owns renewal product behavior in this bridge;
+move it with the coordinated writer and remove the bridge at that cutover.
 
 
 Read with [hosted-client.md](hosted-client.md), [hosted-api.md](hosted-api.md),

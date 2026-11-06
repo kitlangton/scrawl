@@ -86,10 +86,8 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(b"src/shared: 0 files, 11 subdirectories (limit 10 each)", result.stderr)
 
-    def test_root_allows_ten_owner_directories_and_any_dot_directories(self) -> None:
-        # Fixture infrastructure contributes enablement as one ordinary root
-        # directory, so nine more ordinary directories make ten total.
-        paths = [f"owner-{i:02d}/file.txt" for i in range(9)]
+    def test_root_allows_many_owner_and_dot_directories(self) -> None:
+        paths = [f"owner-{i:02d}/file.txt" for i in range(15)]
         paths += [f"{name}/config" for name in (".cargo", ".githooks", ".github", ".unknown")]
         for path in paths:
             self.put(path)
@@ -97,13 +95,15 @@ class DirectoryWidthHookTests(unittest.TestCase):
         result = self.run_hook()
         self.assertEqual(result.returncode, 0, result.stderr.decode())
 
-    def test_root_rejects_eleven_ordinary_directories(self) -> None:
+    def test_root_file_edit_does_not_enforce_directory_count(self) -> None:
         for i in range(11):
             self.put(f"owner-{i:02d}/file.txt")
-        self.stage("owner-*")
+        self.put("README.md", "before\n")
+        self.commit("owner-*", "README.md")
+        self.put("README.md", "after\n")
+        self.stage("README.md")
         result = self.run_hook()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b"<root>: 0 files, 11 subdirectories", result.stderr)
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
 
     def test_hidden_root_directory_contents_are_checked(self) -> None:
         for i in range(10):
@@ -137,13 +137,14 @@ class DirectoryWidthHookTests(unittest.TestCase):
 
     def test_workflow_directory_allows_exact_workflow_files(self) -> None:
         workflows = (
+            "hermes-plugin.yml",
             "connect-delivery.yml", "linux-updater-harness.yml", "native-proof-mac.yml",
             "release-linux.yml", "release-mac-preview.yml", "release-windows.yml",
             "verification-mac.yml",
             "verification-platform.yml", "verification.yml", "web-delivery.yml",
-            "stream-agent.yml", "stream-app-shell.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
+            "stream-agent.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
             "stream-engine.yml",
-            "stream-onboarding.yml", "stream-platform-config.yml", "stream-platform-resources.yml", "stream-public.yml", "stream-record.yml",
+            "stream-onboarding.yml", "stream-platform.yml", "stream-public.yml", "stream-record.yml",
         )
         for name in workflows:
             self.put(f".github/workflows/{name}")
@@ -155,7 +156,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.stage(".github/workflows/unreviewed.yml")
         blocked = self.run_hook()
         self.assertEqual(blocked.returncode, 1)
-        self.assertIn(b".github/workflows: 21 files", blocked.stderr)
+        self.assertIn(b".github/workflows: 20 files", blocked.stderr)
 
     def test_workflow_directory_rejects_unknown_entry_within_file_limit(self) -> None:
         for name in (
@@ -163,16 +164,16 @@ class DirectoryWidthHookTests(unittest.TestCase):
             "release-linux.yml", "release-mac-preview.yml", "release-windows.yml",
             "verification-mac.yml",
             "verification-platform.yml", "verification.yml",
-            "stream-agent.yml", "stream-app-shell.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
+            "stream-agent.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
             "stream-engine.yml",
-            "stream-onboarding.yml", "stream-platform-config.yml", "stream-platform-resources.yml", "stream-public.yml", "stream-record.yml",
+            "stream-onboarding.yml", "stream-platform.yml", "stream-public.yml", "stream-record.yml",
         ):
             self.put(f".github/workflows/{name}")
         self.put(".github/workflows/unreviewed.yml")
         self.stage(".github/workflows")
         result = self.run_hook()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(b".github/workflows: 20 files", result.stderr)
+        self.assertIn(b".github/workflows: 18 files", result.stderr)
 
     def test_unrelated_staged_change_does_not_enforce_existing_overwidth(self) -> None:
         files = self.seed_code_files(11)
@@ -208,13 +209,32 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(b"<root>: 12 files, 0 subdirectories", result.stderr)
 
-    def test_top_level_entry_change_enforces_root_width(self) -> None:
+    def test_top_level_directory_count_is_unlimited(self) -> None:
         for i in range(11):
             self.put(f"root-dir-{i:02d}/mod.rs")
         self.stage("root-dir-*")
         result = self.run_hook()
+        self.assertEqual(result.returncode, 0, result.stderr.decode())
+
+    def test_top_level_directories_do_not_hide_root_file_overflow(self) -> None:
+        paths = [f"root-dir-{i:02d}/mod.rs" for i in range(11)]
+        paths += [f"root-{i:02d}.txt" for i in range(11)]
+        for path in paths:
+            self.put(path)
+        self.stage(*paths)
+        result = self.run_hook()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(b"<root>: 0 files, 11 subdirectories", result.stderr)
+        self.assertIn(b"<root>: 11 files, 11 subdirectories", result.stderr)
+        self.assertIn(b"limit 10 files; root directories unlimited", result.stderr)
+
+    def test_nested_directory_limit_survives_root_directory_exemption(self) -> None:
+        paths = [f"owner/sub-{i:02d}/mod.rs" for i in range(11)]
+        for path in paths:
+            self.put(path)
+        self.stage(*paths)
+        result = self.run_hook()
+        self.assertEqual(result.returncode, 1)
+        self.assertIn(b"owner: 0 files, 11 subdirectories", result.stderr)
 
     def test_tracked_first_party_html_beneath_public_root_is_enforced(self) -> None:
         paths = [f"public/site/public/feature-demos/page-{i}.html" for i in range(11)]

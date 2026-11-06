@@ -33,6 +33,8 @@ export interface BundleAssemblyInput {
   frames: Array<SelectedFrame & { artifactPath: string; canonicalReason:CanonicalKeyframeReason }>;
   marks: unknown[];
   artifacts: SealedArtifact[];
+  /** Media files retained by the host; seals come only from the validated original materials document. */
+  materialReferences?: Array<{ role: "video" | "audio"; relativePath: string }>;
   processingWarnings?: ProcessingWarning[];
   /** Full canonical mapping that SDK facts cannot establish (e.g. calibrated legacy stroke transform, screen spans, cursor projection). */
   additionalCanonicalFacts?: { strokes?: CanonicalStroke[]; marks?: CanonicalMark[]; screens?: unknown[]; autocrop?: unknown };
@@ -55,6 +57,8 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   const materialsValidator=validators.materials??((manifest,bytes)=>validateMaterialsDocument(manifest,bytes));
   const factValidator=validators.fact??((file,bytes,materials,kind)=>validateFactFile(file,bytes,materials,kind));
   const m = materialsValidator(input.manifest, input.payloadBytes);
+  const originalMaterials = input.materialReferences === undefined ? m : validateMaterialsDocument(input.manifest, input.payloadBytes);
+  if (input.materialReferences !== undefined && !isDeepStrictEqual(m, originalMaterials)) fail("material reference source differs from SDK-validated original materials");
   if (!m.payload.safety.safeForProcessing) fail("materials are not declared safe for processing");
   if (input.admission.captureId !== m.payload.identity.captureId || input.admission.materialsId !== m.payload.identity.materialsId) fail("admission identity does not match materials");
   if(input.admission.bundleId!==m.payload.bundleId) fail("admission bundle identity does not match materials");
@@ -80,10 +84,32 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
     const listed=m.payload.files.find(f=>f.relativePath===a.relativePath);
     if(!listed||listed.sha256!==a.sha256||!isDeepStrictEqual(listed.identity,a.identity)) fail(`media artifact differs from sealed materials reference: ${a.relativePath}`);
   }
-  const videoArtifact=byPath.get(artifactPath(m.payload.video.file));
-  if(!videoArtifact||videoArtifact.role!=="video")fail("canonical video reference lacks its supplied sealed video artifact");
-  matchMaterial(videoArtifact);
-  if(m.payload.audio){const audioArtifact=byPath.get(artifactPath(m.payload.audio.file));if(!audioArtifact||audioArtifact.role!=="audio")fail("canonical audio reference lacks its supplied sealed audio artifact");matchMaterial(audioArtifact);}
+  const materialReferences = new Map<string, { role: "video" | "audio"; file: MaterialsDocument["payload"]["files"][number] }>();
+  for (const reference of input.materialReferences ?? []) {
+    if (reference.role !== "video" && reference.role !== "audio") fail("material reference has an unsupported media role");
+    const path = artifactPath(reference.relativePath);
+    if (path !== reference.relativePath || materialReferences.has(path)) fail(`duplicate or non-canonical material reference: ${path}`);
+    if (path === "apparent.json" || path === "summary.md") fail(`material reference collides with generated document: ${path}`);
+    if (byPath.has(path)) fail(`material reference conflicts with supplied artifact bytes: ${path}`);
+    const expectedPath = reference.role === "video" ? originalMaterials.payload.video.file : originalMaterials.payload.audio?.file;
+    if (!expectedPath || path !== expectedPath) fail(`material reference is not the declared ${reference.role} file: ${path}`);
+    const file = originalMaterials.payload.files.find(item => item.relativePath === path);
+    if (!file) fail(`declared ${reference.role} file is missing from validated materials: ${path}`);
+    materialReferences.set(path, { role: reference.role, file });
+  }
+  const videoPath = artifactPath(m.payload.video.file);
+  const videoArtifact=byPath.get(videoPath);
+  const videoReference = materialReferences.get(videoPath);
+  if(videoArtifact){if(videoArtifact.role!=="video")fail("canonical video reference has a mismatched supplied media role");matchMaterial(videoArtifact);}
+  if(videoReference && videoReference.role!=="video")fail("canonical video reference has a mismatched material-reference role");
+  if(!videoArtifact&&!videoReference)fail("canonical video reference lacks its supplied sealed video artifact or material reference");
+  if(m.payload.audio){
+    const audioPath=artifactPath(m.payload.audio.file), audioArtifact=byPath.get(audioPath), audioReference=materialReferences.get(audioPath);
+    if(audioArtifact){if(audioArtifact.role!=="audio")fail("canonical audio reference has a mismatched supplied media role");matchMaterial(audioArtifact);}
+    if(audioReference && audioReference.role!=="audio")fail("canonical audio reference has a mismatched material-reference role");
+    if(!audioArtifact&&!audioReference)fail("canonical audio reference lacks its supplied sealed audio artifact or material reference");
+  }
+  for(const reference of materialReferences.values())if(reference.role==="audio"&&!m.payload.audio)fail("audio material reference is not declared by validated materials");
   for(const artifact of input.artifacts)if((artifact.role==="video"&&artifact!==videoArtifact)||(artifact.role==="audio"&&artifact.relativePath!==m.payload.audio?.file))fail("unreferenced media artifact");
   let previousIndex=0, previousTime=-1;
   const frameFacts = input.frames.map(f=>{
@@ -141,7 +167,9 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   if(input.admission.destination&&(!input.admission.destination.session||typeof input.admission.destination.title!=="string"||!input.admission.destination.via))fail("explicit destination metadata is incomplete");
   const processing: ProcessingInput={durationMs:m.payload.clock.durationMs,bundlePath:input.admission.bundlePath,target:{app:target.app,windowTitle:target.windowTitle},transcript:{text:transcript.text,segments:transcript.segments.map(s=>({startMs:s.t0,text:s.text}))},frames:frameFacts.map(f=>({...f,absolutePath:resolve(input.admission.bundlePath,f.file)})),marks:input.marks as ProcessingInput["marks"],context:context?.values,contextChanges:context?.changes.map(c=>({timeMs:c.timeMs,key:c.key,value:c.value??undefined})),contactSheetPath:resolve(input.admission.bundlePath,sheet.relativePath),videoPath:resolve(input.admission.bundlePath,m.payload.video.file),destination:input.admission.destination,events:events.map(e=>({kind:e.kind,timeMs:e.t,...(e.kind==="note"?{pin:e.pin,text:e.text}:e.kind==="app_event"?{label:e.label}:{})} as never)),warnings:input.processingWarnings};
   const summary=utf8(assembleProcessingOutput(processing).summaryMarkdown), apparentJson=utf8(`${JSON.stringify(document,null,2)}\n`);
-  const entries=[{path:"apparent.json",role:"manifest",bytes:apparentJson,provenance:"record-generated" as const},{path:"summary.md",role:"summary",bytes:summary,provenance:"record-generated" as const},...input.artifacts.map(a=>({path:artifactPath(a.relativePath),role:a.role,bytes:a.bytes,identity:a.identity,provenance:(a.role==="video"||a.role==="audio"?"material-reference":"caller-attested") as "material-reference"|"caller-attested"}))].map(e=>({path:e.path,role:e.role,sha256:hash(e.bytes),byteLength:e.bytes.byteLength,provenance:e.provenance,...("identity" in e?{identity:e.identity}:{})})).sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
+  const entries=[{path:"apparent.json",role:"manifest",bytes:apparentJson,provenance:"record-generated" as const},{path:"summary.md",role:"summary",bytes:summary,provenance:"record-generated" as const},...input.artifacts.map(a=>({path:artifactPath(a.relativePath),role:a.role,bytes:a.bytes,identity:a.identity,provenance:(a.role==="video"||a.role==="audio"?"material-reference":"caller-attested") as "material-reference"|"caller-attested"}))].map(e=>({path:e.path,role:e.role,sha256:hash(e.bytes),byteLength:e.bytes.byteLength,provenance:e.provenance,...("identity" in e?{identity:e.identity}:{})}));
+  for (const [path, reference] of materialReferences) entries.push({path,role:reference.role,sha256:reference.file.sha256,byteLength:reference.file.identity.size,provenance:"material-reference",identity:reference.file.identity});
+  entries.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
   const inventory:PublicationInventory={schema:"apparent.record-bundle-inventory/1",materials:{...m.manifest.key},retainedFacts:{confirmedSource:structuredClone(m.payload.confirmedSource),invocation:structuredClone(m.payload.invocation),references:structuredClone(m.payload.facts)},collection:{...m.payload.collection},observations:{context:contextDoc?.context.state??"unavailable",session:contextDoc?.session.state??"unavailable",windows:contextDoc?.windows.state??"unavailable",cursor:contextDoc?.cursor.state??"unavailable",interactions:m.payload.collection.interactions,transcript:m.payload.collection.transcript,acceptedStrokes:m.payload.collection.acceptedStrokes},warnings:m.payload.warnings.map(w=>({...w})),entries};
   return {bundlePath:input.admission.bundlePath,apparentJson,summaryMd:summary,inventory,materials:m,validatedFacts:{...(contextDoc?{context:contextDoc}:{}),...(interactionDoc?{interactions:interactionDoc}:{}),...(transcriptDoc?{transcript:transcriptDoc}:{}),...(strokesDoc?{acceptedStrokes:strokesDoc}:{})}};
 }
