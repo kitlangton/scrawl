@@ -11,20 +11,24 @@ Public owns the homepage, marketing assets, feature demos and approved movie on
 `app.tryapparent.com`. Its existing `apparent-capture` Cloudflare Pages project
 (account `a54dcebead3b8ad688f891da0ab54d1f`) remains the Public target.
 
-Connect owns `/connect` and `/hosted`, their device/shares pages, slash/query
-compatibility, browser assets and authentication/privacy behavior. Its independent
-static-only Worker routes those path prefixes on the same hostname; its assets
-are namespaced under `/connect/`. The API/callback/capability viewer stays at
-`hosted.tryapparent.com`. Public neither deploys nor validates those bytes or
-provider resources. No origin, consent, API, credential or storage migration is
-part of Public publication.
+Connect independently owns the canonical /connect pages, /connect/v1/ API,
+/connect/auth/ sign-in, /connect/s/ recording links and their resources.
+The existing apparent-hosted-beta Worker serves app.tryapparent.com/connect*
+and /hosted*; legacy aliases preserve queries and the old API transport.
+Public neither deploys Connect bytes nor changes its provider resources.
 
-**Cutover hold:** the existing Pages snapshot also contains Connect. Keep it in
-production until the Connect owner supplies explicit verified Worker/route cutover
-evidence, including route/resource/auth/privacy preservation. Uploading the new
-Public-only snapshot before that point would remove the existing Connect pages.
-The artifact-refresh wait is superseded by this hosting/routing prerequisite.
-After cutover, an unavailable Connect build cannot block Public deployment.
+The Connect owner verified the authorized live cutover from source
+4cad1dd5d626bf0e55bfad48ffc25c2aec5548d5, run 42171680833, artifact
+13481396964, Worker version e12adf28-b174-4191-8acf-a7c132e45f14.
+Real Google callback/session/logout checks, canonical pages/assets, privacy and
+provider resource preservation cleared the former Public cutover hold.
+Installed native-client publication is a separate adoption gate.
+
+After Public-only publication, retain the independent app Worker routes.
+Restore a known-good gateway version for Connect rollback, or restore combined
+Pages before removing those routes. Removing them against a Public-only Pages
+snapshot would make Connect unavailable. Public publication/readback still needs
+its own exact-main evidence.
 
 ## Build and artifact admission
 

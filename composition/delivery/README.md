@@ -68,10 +68,10 @@ The Public owner workflow’s `deploy (public, web)` job needs only its dedicate
 producer. It validates the same-run component, Public resource graph, metadata,
 browser/theme/movie behavior and byte preservation, then seals and publishes only
 Public files. It has no Connect artifact, browser, API-origin or completion-trigger
-dependency. Connect pages/resources and path routing belong to its independent
-static Worker. Existing Pages activation, environment, source ordering, readback
-and publication lock remain in force. Cut over only after that Connect-owned route
-seam is verified; the current combined production snapshot must remain until then.
+dependency. Connect pages, API/auth/viewer resources and path routing belong to its
+independent Worker. Existing Pages activation, environment, source ordering, readback
+and publication lock remain in force. The Connect owner has verified the live route/auth/privacy cutover. Retain
+its app routes when publishing or rolling back the Public-only snapshot.
 
 
 PR readiness is established from the affected owner workflows directly. Each owner

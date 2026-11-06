@@ -1,5 +1,9 @@
 # Connect web design V4
 
+This records the selected V4 presentation and original API/alias mapping. Current
+deployment URLs and compatibility behavior are authoritative in ../README.md and
+../../docs/hosted-web.md; the original transport names below are historical.
+
 The Connect React UI implements the selected V4 paper-sheet composition. It uses the existing Host Grotesk font and Apparent wordmark unchanged, with revisioned illustrations in `public/hosted/`. Canonical routes are `/connect`, `/connect/device` and `/connect/shares`; `/hosted` counterparts remain rendering aliases. Visible headings are “Upload new captures” and “Read your captures”; read grants still cover current and future uploads. The API remains `https://hosted.tryapparent.com`, independently configured with `VITE_HOSTED_API_ORIGIN`. There are no prototype controls, native capsule, simulated clipboard, native launch, or locally invented connection states.
 
 ## Supported mapping
@@ -33,16 +37,11 @@ The V4 account-design slice does not implement a native connected/upload-enabled
 
 ## Verification and delivery
 
-From `public/site/`:
-
-```sh
-APPARENT_PUBLIC_SITE=1 npm run build
-node scripts/site-build/package-apparent.ts
-SITE_EVIDENCE="$TMPDIR/hosted-v4-evidence" npm run test:hosted
-```
-
-The public build intentionally omits the private feature-map route; the ordinary build has a separately recorded pre-existing feature-map validation failure unrelated to this slice. Do not repair unrelated feature entries to validate this UI.
-
-The browser script serves the exact `dist-apparent` artifact by default against a controlled synthetic API. It compares packaged art, font and wordmark bytes with public source assets, verifies SSR privacy and noindex, scopes, explicit consent, CSRF, duplicate-write protection, approval readback failures, loading/errors, expiry, waitlist, logout, tab keyboard behavior, disclosures, modal focus return and loaded illustrations. Layouts cover 1440, 1280, 390 and 320 CSS pixels plus 640×450 (the layout equivalent of a 1280×900 viewport at 200%, not actual browser zoom). Evidence stays outside git and includes screenshots and an asset-hash receipt.
-
-These checks are synthetic, not live OAuth, service, native platform or deployed-site proof. Parent review and deployment are separate steps; this implementation does not publish a site or backend.
+Connect owns its independent browser artifact and synthetic API/browser matrix.
+From connect/web run npm test; npm run test:browser exercises the generated
+synthetic artifact with CONNECT_ARTIFACT and CONNECT_EVIDENCE overrides.
+The hosting package verifies its exact compiled gateway payload separately.
+See ../README.md and ../../docs/hosted-web.md for current canonical /connect
+routing, asset layout, production verification and compatibility contracts.
+The retired Public test:hosted command required combined Pages output and is no
+longer a supported verifier. Public-only Pages neither packages nor tests Connect.

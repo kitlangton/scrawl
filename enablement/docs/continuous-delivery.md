@@ -66,10 +66,10 @@ Its dedicated producer builds or reuses only the Public website component. Its
 and Public-only resource/browser/theme/movie seams, then seals and publishes under
 existing Pages environment/CD/lock/readback gates. It never fetches, composes,
 tests or publishes Connect browser bytes and has no Connect completion trigger.
-Connect owns an independent static Worker for the same-origin /connect* and /hosted*
-paths, with assets namespaced under /connect/. Preserve the combined production
-Pages snapshot until the Connect owner supplies verified routing-cutover evidence.
-The old browser-artifact wait does not clear that cutover condition.
+Connect independently owns canonical /connect UI, API, authentication, recording
+links and resources through its existing Worker. Its verified live cutover clears
+the former composition dependency. Retain the app Worker routes after Public-only
+publication; restore combined Pages before removing them during rollback.
 Connect's paired browser/Worker producer combines that input selection with existing
 authenticated artifact compatibility checks; missing compatible bytes still requires
 production. Its recipient matrix has an independent cheap selector, so web artifact
@@ -83,7 +83,7 @@ Public and Connect builds invoke the color guard for their own frontend surfaces
 plus shared sources. The default repository-wide color guard still checks all
 owners, including Desktop; no fixed-color allowances or global checks were removed.
 Public produces and publishes only its website artifact. Connect browser bytes,
-route/resource/auth/privacy verification and static Worker publication belong to
+route/resource/auth/privacy verification and gateway Worker publication belong to
 Connect. Public neither admits nor republishes Connect artifacts. The separate
 Worker call invokes Connect's reusable publisher through its manual entrypoint;
 it does not depend on Public checks. Existing activation/environment gates remain.
