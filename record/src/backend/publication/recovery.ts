@@ -1,6 +1,6 @@
 import { lstat } from "node:fs/promises";
 import type { CaptureClient, CaptureStatus, PublicationExpectation, CapturePublishInput, CapturePublicationPreflight } from "@apparent/engine-sdk/capture";
-import { SqlitePublicationBindingStore, type PublicationBinding } from "./store.js";
+import { SqlitePublicationBindingStore, type PublicationBinding, type PublicationOutputMetadata } from "./store.js";
 
 type PublishInput = CapturePublishInput;
 export type PublicationPreflight = (input: PublishInput, timeoutMs?: number) => CapturePublicationPreflight;
@@ -9,6 +9,9 @@ const publishTimeoutMs = 10000;
 export interface RecordPublicationRecovery {
   publish(input: PublishInput): Promise<CaptureStatus>;
   reconcile(captureId: string, ownerToken: string, expected?: PublicationBindingExpectation): Promise<CaptureStatus>;
+}
+export interface RecordPublicationRecoveryInternal extends RecordPublicationRecovery {
+  publishWithOutput(input: PublishInput, output: PublicationOutputMetadata): Promise<CaptureStatus>;
 }
 
 export interface PublicationBindingExpectation {
@@ -28,15 +31,27 @@ export function createRecordPublicationRecovery(
   privateRoot: string,
   preflight: PublicationPreflight,
 ): RecordPublicationRecovery {
+  const internal = createRecordPublicationRecoveryInternal(client, privateRoot, preflight);
+  return { publish: input => internal.publish(input), reconcile: (captureId, ownerToken, expected) => internal.reconcile(captureId, ownerToken, expected) };
+}
+
+/** Module-internal composition hook; only the completed publisher supplies assembler-authored processing. */
+export function createRecordPublicationRecoveryInternal(
+  client: CaptureClient,
+  privateRoot: string,
+  preflight: PublicationPreflight,
+): RecordPublicationRecoveryInternal {
   if (typeof preflight !== "function") throw new TypeError("Record requires the public SDK publication preflight");
   const store = new SqlitePublicationBindingStore(privateRoot);
   const inflight = new Map<string, { binding: PublicationBinding; promise: Promise<CaptureStatus> }>();
 
   return {
-    async publish(input) {
+    async publish(input) { return this.publishWithOutput(input, undefined as never); },
+    async publishWithOutput(input, output) {
       const snapshot = structuredClone(input);
+      const outputSnapshot = output && structuredClone(output);
       const prepared = preflight(snapshot, publishTimeoutMs);
-      const binding = bindingFrom(snapshot, prepared.expected);
+      const binding = bindingFrom(snapshot, prepared.expected, outputSnapshot);
       const current = inflight.get(snapshot.captureId);
       if (current) {
         if (!sameBinding(current.binding, binding)) throw new Error("Record publication identity conflicts with its in-flight binding");
@@ -62,7 +77,7 @@ export function createRecordPublicationRecovery(
           planSha256: binding.planSha256,
           expected: expectation(binding),
         });
-        if (!await store.observe(binding, publicationState(status))) throw new Error("Stale publication observation");
+        if (!await store.observe(binding, checkedState(status, binding), status.publication)) throw new Error("Stale publication observation");
         return structuredClone(status);
       } catch {
         throw new Error("Record publication outcome remains unresolved; inspect the same durable binding again");
@@ -95,7 +110,7 @@ export function createRecordPublicationRecovery(
           planSha256: won.planSha256,
           expected: expectation(won),
         });
-        if (!await store.observe(won, publicationState(status))) throw new Error("Stale publication observation");
+        if (!await store.observe(won, checkedState(status, won), status.publication)) throw new Error("Stale publication observation");
         return structuredClone(status);
       } catch {
         throw new Error("Record publication outcome remains unresolved; reconcile the same durable binding");
@@ -106,7 +121,7 @@ export function createRecordPublicationRecovery(
     if (!await store.beginDispatch(won)) throw new Error("Record publication dispatch is already owned; reconcile the same durable binding");
     try {
       const status = await client.publish(input, publishTimeoutMs);
-      if (!await store.observe(won, publicationState(status))) throw new Error("Stale publication observation");
+      if (!await store.observe(won, checkedState(status, won), status.publication)) throw new Error("Stale publication observation");
       return structuredClone(status);
     } catch {
       // The row deliberately stays dispatching. No timeout/error implies cancel,
@@ -133,7 +148,7 @@ async function assertDestinationAbsent(path: string): Promise<void> {
   throw new Error("Record publication destination already exists");
 }
 
-function bindingFrom(input: PublishInput, expected: PublicationExpectation): PublicationBinding {
+function bindingFrom(input: PublishInput, expected: PublicationExpectation, output?: PublicationOutputMetadata): PublicationBinding {
   return {
     captureId: input.captureId,
     publicationId: input.publicationId,
@@ -143,6 +158,7 @@ function bindingFrom(input: PublishInput, expected: PublicationExpectation): Pub
     bundleId: expected.bundleId,
     bundlePath: expected.bundlePath,
     manifestSha256: expected.manifestSha256,
+    ...(output ? { output } : {}),
     state: "reserved",
   };
 }
@@ -157,14 +173,34 @@ function expectation(binding: PublicationBinding): PublicationExpectation {
 }
 
 function publicationState(status: CaptureStatus): "publishing" | "saved" | "failed" | "cancelled" {
+  if (!status || typeof status !== "object") throw new Error("Engine returned an invalid publication observation");
   if (["publishing", "saved", "failed", "cancelled"].includes(status.state))
     return status.state as "publishing" | "saved" | "failed" | "cancelled";
   throw new Error("Engine returned a non-publication observation");
+}
+
+function checkedState(status: CaptureStatus, binding: PublicationBinding): "publishing" | "saved" | "failed" | "cancelled" {
+  const state = publicationState(status);
+  if (status.captureId !== binding.captureId || (status.publicationId !== undefined && status.publicationId !== binding.publicationId) ||
+      (status.planSha256 !== undefined && status.planSha256 !== binding.planSha256) ||
+      (status.materials !== undefined && JSON.stringify(status.materials.key) !== JSON.stringify(binding.materials)))
+    throw new Error("Engine publication observation conflicts with the durable binding");
+  if (state === "saved") {
+    const receipt = status.publication;
+    if (!receipt || receipt.captureId !== binding.captureId || JSON.stringify(receipt.materials) !== JSON.stringify(binding.materials) ||
+      receipt.publicationId !== binding.publicationId || receipt.planSha256 !== binding.planSha256 || receipt.bundleId !== binding.bundleId ||
+      receipt.bundlePath !== binding.bundlePath || receipt.manifestSha256 !== binding.manifestSha256 || receipt.artifactVersion !== 1 || receipt.artifactProvenance !== "native")
+      throw new Error("Engine Saved receipt conflicts with the durable publication binding");
+    if (!/^[0-9a-f]{64}$/u.test(receipt.inventorySha256) || Object.keys(receipt).sort().join(",") !==
+      ["artifactProvenance", "artifactVersion", "bundleId", "bundlePath", "captureId", "inventorySha256", "manifestSha256", "materials", "planSha256", "publicationId"].join(","))
+      throw new Error("Engine Saved receipt shape is invalid");
+  }
+  return state;
 }
 
 function sameBinding(left: PublicationBinding, right: PublicationBinding): boolean {
   return left.captureId === right.captureId && left.publicationId === right.publicationId &&
     left.planSha256 === right.planSha256 && JSON.stringify(left.materials) === JSON.stringify(right.materials) &&
     left.leaseId === right.leaseId && left.bundleId === right.bundleId && left.bundlePath === right.bundlePath &&
-    left.manifestSha256 === right.manifestSha256;
+    left.manifestSha256 === right.manifestSha256 && JSON.stringify(left.output) === JSON.stringify(right.output);
 }

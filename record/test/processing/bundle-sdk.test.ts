@@ -7,6 +7,7 @@ import test from "node:test";
 import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
 import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
+import { createRecordPublicationOutput } from "../../dist/backend/publication/output.js";
 import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validateFactFile, validateMaterialsDocument, type MaterialsDocument, type StrokeFacts } from "@apparent/engine-sdk/capture";
 import { createRecordPublicationRecovery } from "../../dist/backend/publication/recovery.js";
 import { ReferenceCapturePeer } from "@apparent/engine-sdk/capture/testing";
@@ -946,6 +947,65 @@ test("ambiguous composed publication reconciles the same durable binding after r
     original.publicationId = "b".repeat(32);
     original.materials.materialsId = "9".repeat(32);
     assert.equal((await pending).state, "publishing", "reconciliation snapshots expectations before awaiting storage");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("publication output exposes only durably matched Saved facts and handoff after restart", async () => {
+  const input = await fixture();
+  const root = await mkdtemp(join(tmpdir(), "record-publication-output-"));
+  const destinationPath = join(root, "final.apparent");
+  const assembly = assemblyForDestination(input, destinationPath);
+  const ownerToken = "c".repeat(64), publicationId = "a".repeat(32), requestId = "public-request-1";
+  let planSha256 = "";
+  const sdk = {
+    async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+    async publish(request: { captureId: string; publicationId: string; planBytes: Uint8Array; planFile: { planSha256: string } }) {
+      planSha256 = request.planFile.planSha256;
+      return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256 };
+    },
+    async inspectPublication(request: { captureId: string; publicationId: string; planSha256: string; expected: { materials: MaterialsDocument["manifest"]["key"]; bundleId: string; bundlePath: string; manifestSha256: string } }) {
+      return { captureId: request.captureId, state: "saved", publicationId: request.publicationId, planSha256: request.planSha256,
+        materials: input.manifest, publication: { captureId: request.captureId, materials: request.expected.materials, publicationId: request.publicationId,
+          planSha256: request.planSha256, bundleId: request.expected.bundleId, bundlePath: request.expected.bundlePath, artifactVersion: 1 as const,
+          artifactProvenance: "native" as const, manifestSha256: request.expected.manifestSha256, inventorySha256: "9".repeat(64) } };
+    },
+  } as unknown as CaptureClient;
+  const args = { status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+    assembly: input, ownerToken, publicationId, stagingRoot: join(root, "staging"), destinationPath, requestId, requestVideoProof: true };
+  try {
+    const first = createRecordPublicationOutput(sdk, join(root, "control"), preflightCapturePublication);
+    assert.equal((await first.captureFacts.readFacts()).captures.length, 0);
+    assert.equal(await first.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" }), null);
+    assert.equal((await first.publish(args)).state, "publishing");
+    const reserved = await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId);
+    assert.equal(reserved?.state, "publishing");
+    assert.equal(reserved?.output?.requestId, requestId);
+    assert.equal(reserved?.output?.processing.bundlePath, destinationPath);
+    assert.equal(JSON.stringify(reserved).includes(ownerToken), false);
+    assert.ok(planSha256);
+    await assert.rejects(first.publish({ ...args, requestId: "changed-public-request", stagingRoot: join(root, "changed-staging") }), /already bound to publication/u);
+    await assertAbsent(join(root, "changed-staging"));
+
+    const reopened = createRecordPublicationOutput(sdk, join(root, "control"), preflightCapturePublication);
+    let notifications = 0;
+    reopened.captureFacts.observe!(() => { throw new Error("observer isolation"); });
+    const detach = reopened.captureFacts.observe!(() => { notifications++; });
+    const saved = await reopened.reconcile({ captureId: identity.captureId, ownerToken, publicationId, materials: input.manifest.key,
+      leaseId: input.manifest.leaseId, bundleId: "sdk-bundle", bundlePath: destinationPath });
+    assert.equal(saved.state, "saved");
+    assert.equal(notifications, 1, "durable output updates wake the existing provider without another capture event");
+    detach();
+    const facts = await reopened.captureFacts.readFacts();
+    assert.deepEqual(facts.captures, [{ captureId: requestId, artifactId: "sdk-bundle", delivery: "unknown", phase: "saved",
+      outcomes: [{ kind: "save", ok: true, at: (await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId))!.savedObservedAt }] }]);
+    const resolution = await reopened.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" });
+    assert.equal(resolution?.handoff.savedBundle.bundlePath, destinationPath);
+    assert.equal(resolution?.handoff.requestVideoProof, true);
+    assert.equal(resolution?.handoff.processing.bundlePath, destinationPath);
+    resolution!.handoff.processing.frames.length = 0;
+    assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" }))?.handoff.processing.frames.length, assembly.processing.frames.length);
+    assert.equal((await reopened.captureFacts.readFacts()).captures[0]?.delivery, "unknown", "nativeRemoteDelivery forbidden is not local-only proof");
+    assert.equal(await reopened.resolveHandoff({ captureId: identity.captureId, artifactId: "sdk-bundle" }), null, "private Engine capture ID is not the public request ID");
   } finally { await rm(root, { recursive: true, force: true }); }
 });
 
