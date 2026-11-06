@@ -34,8 +34,6 @@ version = "0.1.0"
 dependencies = [
  "apparent-capture-engine",
  "gstreamer",
- "gstreamer-app",
- "gstreamer-video",
  "libc",
  "png",
  "serde",

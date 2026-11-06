@@ -2,6 +2,8 @@
 //!
 //! This is deliberately a small native execution boundary. Callers retain frame selection,
 //! product metadata, WAV encoding and output policy.
+use std::fs::File;
+use std::os::fd::AsRawFd;
 use std::path::Path;
 
 use anyhow::{Context, Result, anyhow, ensure};
@@ -41,6 +43,27 @@ pub struct VideoTiming {
     pub first_pts_ns: u64,
 }
 
+/// Reader for an already-open Linux movie. It binds GStreamer to the descriptor,
+/// so callers can retain their own path and lease checks without reopening it.
+pub struct PinnedVideoReader(VideoReader);
+
+impl PinnedVideoReader {
+    pub fn open(file: &File) -> Result<Self> {
+        Ok(Self(VideoReader::open_location(
+            &format!("/proc/self/fd/{}", file.as_raw_fd()),
+            0,
+        )?))
+    }
+
+    pub fn duration_ms(&self) -> u64 { self.0.duration_ms }
+
+    /// Decode the last frame at or before the requested time, enforcing limits
+    /// before copying pixels out of GStreamer.
+    pub fn frame(&self, requested_ms: u64, max_edge: u32, max_bytes: u64) -> Result<Frame> {
+        self.0.at_limited(requested_ms, max_edge, max_bytes)
+    }
+}
+
 pub fn validate_file(file: &std::fs::File) -> Result<VideoTiming> {
     use std::os::fd::AsRawFd;
     let path = std::path::PathBuf::from(format!("/proc/self/fd/{}", file.as_raw_fd()));
@@ -78,6 +101,10 @@ struct VideoReader {
 
 impl VideoReader {
     fn open(movie: &Path, max_edge: u32) -> Result<Self> {
+        Self::open_location(&movie.display().to_string(), max_edge)
+    }
+
+    fn open_location(location: &str, max_edge: u32) -> Result<Self> {
         init_gstreamer()?;
         let caps = if max_edge > 0 {
             "video/x-raw,format=RGBA,pixel-aspect-ratio=1/1"
@@ -86,7 +113,7 @@ impl VideoReader {
         };
         let launch = format!(
             "filesrc location=\"{}\" ! decodebin ! videoconvert ! {caps} ! appsink name=sink sync=false max-buffers=1",
-            movie.display().to_string().replace('"', "\\\"")
+            location.replace('"', "\\\"")
         );
         let pipeline = gst::parse::launch(&launch)?
             .downcast::<gst::Pipeline>()
@@ -98,7 +125,7 @@ impl VideoReader {
             .map_err(|_| anyhow!("Not an appsink"))?;
         pipeline.set_state(gst::State::Paused)?;
         let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(10));
-        result.with_context(|| format!("Could not open {}", movie.display()))?;
+        result.with_context(|| format!("Could not open {location}"))?;
         let duration_ms = pipeline
             .query_duration::<gst::ClockTime>()
             .map_or(0, gst::ClockTime::mseconds);
@@ -111,6 +138,10 @@ impl VideoReader {
 
     /// Return the last frame at or before the requested movie time.
     fn at(&self, ms: u64) -> Result<Frame> {
+        self.at_limited(ms, u32::MAX, u64::MAX)
+    }
+
+    fn at_limited(&self, ms: u64, max_edge: u32, max_bytes: u64) -> Result<Frame> {
         let target = ms.min(self.duration_ms.saturating_sub(1));
         self.pipeline.seek_simple(
             gst::SeekFlags::FLUSH | gst::SeekFlags::ACCURATE,
@@ -124,6 +155,17 @@ impl VideoReader {
         let caps = sample.caps().context("No caps")?;
         let info = gstreamer_video::VideoInfo::from_caps(caps)?;
         let (width, height) = (info.width(), info.height());
+        ensure!(width > 0 && height > 0 && width <= max_edge && height <= max_edge,
+            "Decoded frame exceeds edge limit");
+        let stride = info.stride().first().copied().unwrap_or_default();
+        ensure!(stride >= 0, "Decoded frame has invalid row stride");
+        let source_bytes = u64::try_from(stride).ok()
+            .and_then(|row| row.checked_mul(u64::from(height)));
+        ensure!(source_bytes.is_some_and(|bytes| bytes <= max_bytes),
+            "Decoded frame exceeds byte limit");
+        let bytes = u64::from(width).checked_mul(u64::from(height))
+            .and_then(|n| n.checked_mul(4));
+        ensure!(bytes.is_some_and(|n| n <= max_bytes), "Decoded frame exceeds byte limit");
         let rgba = rgba_of(&sample, width, height).context("Short frame")?;
         let t_ms = sample
             .buffer()
@@ -335,6 +377,15 @@ mod tests {
         let selected = super::frames(&path, FrameTimes::At(&requested), 0).unwrap();
         assert_eq!(selected.iter().map(|frame| frame.t_ms).collect::<Vec<_>>(), requested);
         assert_eq!(selected[0].rgba, selected[2].rgba);
+
+        let file = std::fs::File::open(&path).unwrap();
+        let pinned = PinnedVideoReader::open(&file).unwrap();
+        assert_eq!(pinned.duration_ms(), probe.duration_ms);
+        let pinned_frame = pinned.frame(700, 16_384, 256 * 1024 * 1024).unwrap();
+        assert_eq!(pinned_frame.t_ms, selected[0].t_ms);
+        assert_eq!(pinned_frame.rgba, selected[0].rgba);
+        assert!(pinned.frame(700, 100, 256 * 1024 * 1024).is_err());
+        assert!(pinned.frame(700, 16_384, 1).is_err());
     }
 
     #[test]

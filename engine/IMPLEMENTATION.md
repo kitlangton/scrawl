@@ -9,8 +9,8 @@ are verified. A source package or producer build does not establish adoption.
 
 | Scoped capability | Current standalone state | Required acceptance / consumer return condition |
 | --- | --- | --- |
-| Installable runtime and discovery | The capture-v1 producer remains unavailable. The packaged Linux media/1 runtime and discovery were delivered at PR722 (`463f0053`), with exact-artifact handoff to Record and Agent. SDK0.3.2 retains capture/2 preflight and adds optional stroke RGB. The separate Linux capture/2 producer candidate has a closed, guest-tested runtime; registration/discovery and exact-main admission remain open. | Preserve published packages/contracts. The repaired capture/2 candidate is unmerged; its native adoption and platform gates remain open. |
-| Real capture and readiness | Capture-v1 remains unavailable. The separate capture/2 candidate uses the moved Recorder/Source and Store for real X11 display/preset-area capture, first-frame readiness, cold authenticated controls, retained sealed materials and crash/EOF reconciliation. Linux synthetic guest proof passed; broader platform/product adoption remains open. | Real first-frame readiness, authoritative permission/source facts, authenticated start/inspect/stop/cancel, durable valid native artifact, EOF/crash reconciliation and consumer integration on macOS/Linux. Never substitute a reference-peer receipt. |
+| Installable runtime and discovery | The capture-v1 producer remains unavailable. The packaged Linux media/1 runtime and discovery were delivered at PR722 (`463f0053`), with exact-artifact handoff to Record and Agent. SDK0.3.2 retains capture/2 preflight and adds optional stroke RGB. The capture/2 producer and native integration were merged in PR788 (`main` at `4ad3cb9239d5559ab6a209d266d01e6860c11b2e`); registration/admission and broader platform gates remain open. | Preserve published packages/contracts. Capture/2 installed adoption and platform gates remain open. |
+| Real capture and readiness | Capture-v1 remains unavailable. PR788 moved Recorder/Source and Store into Core for real X11 display/preset-area capture, first-frame readiness, cold authenticated controls, retained sealed materials and crash/EOF reconciliation. Linux synthetic guest proof passed; broader platform/product adoption remains open. | Real first-frame readiness, authoritative permission/source facts, authenticated start/inspect/stop/cancel, durable valid native artifact, EOF/crash reconciliation and consumer integration on macOS/Linux. Never substitute a reference-peer receipt. |
 | Native input, picker, drawing and capture exclusion | No standalone published capability. Platform owns the existing permission/shortcut Host transport; Record owns workflow and local-only/pen policy. | Publish actual input/geometry/exclusion facts and enforced native operations, with explicit unavailable methods. Coordinate existing Host mechanics rather than duplicate them. A stored preference or admission lock is not shortcut reservation, accepted drawing or local-only proof. |
 | Frame decoding and media measurements | SDK 0.2 `media/1` and Linux worker are implemented; macOS decoder is absent. | Installable Linux runtime/discovery plus real conformance; separate macOS implementation/proof. Preserve source identity, ordering/clocks, leases, bounded jobs, cancellation and durable PNG references. Visual measurements needed by Record policy remain unpublished. |
 | Export/render/encode/synthesis | Authoritative behavior remains in `capture/engine/export/` and native adapters; no standalone SDK export operation. | Published native execution for caller-selected crop/zoom/ink/audio/encoding plans, destination/source protection, bounded cancellation and validated durable media on claimed platforms. Record/Agent keep their respective export recipes and audio choices. |
@@ -38,8 +38,14 @@ New durable protocol identity/reconnect adapters may be necessary; new capture,
 media or filesystem execution requires a concrete gap in the existing donor.
 This extraction does not close publication, macOS, export, inference or retention.
 
-This reader slice reuses the existing decode/seek/scale/probe/PCM mechanisms; its
-new code is limited to the feature module/API types and Desktop conversions. Remaining
+The Linux media/1 worker now uses Core's `PinnedVideoReader` for descriptor-bound
+GStreamer decode, seek, timestamp and RGBA extraction, with Core enforcing the
+source edge/byte bounds before copying. The worker retains a small adapter for its
+published output pixel budget and byte-compatible box shrink, while its lease,
+identity, job and publication policy remain local. Legacy path-based Desktop
+decode/probe/PCM callers continue through `VideoReader`. Engine's optional `media`
+feature selects Core's existing `linux-media` feature on Linux; neither the Core
+default closure nor the Rust-free SDK closure changes. Remaining
 donors include Desktop's warning/sampler/window-mask policy, WAV file encoding, iPhone
 re-encoding and portal/source negotiation. No Rust reuse percentage is asserted.
 
