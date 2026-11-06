@@ -11,6 +11,7 @@ import type {
 } from "./capture-documents/types.ts";
 import { validatePublicationPlan } from "./capture-documents/publication.ts";
 import type { DerivativeDocumentInput } from "./capture-documents/types.ts";
+import type { Derivative2DocumentInput } from "./media2/types.ts";
 import { MAX_DOCUMENT_BYTES, relativePath, validateSealedFile, validateMaterialEnvelopeIdentity } from "./capture-documents/common.ts";
 export { validatePublicationPlan } from "./capture-documents/publication.ts";
 export {
@@ -29,6 +30,8 @@ export type {
   StrokeFacts,
   StrokeRgb,
   PublicationPlan,
+  PublicationEntry,
+  ArtifactInput,
   PublishEnvelope,
   InvocationFact,
 } from "./capture-documents/index.ts";
@@ -169,6 +172,7 @@ export interface CapturePublishInput {
   /** Obtain from validateMaterialsDocument with the original detached bytes. */
   materials: MaterialsDocument;
   derivatives?: readonly DerivativeDocumentInput[];
+  derivatives2?: readonly Derivative2DocumentInput[];
 }
 export interface CapturePublicationPreflight {
   plan: PublicationPlan;
@@ -188,11 +192,11 @@ export function preflightCapturePublication(input: CapturePublishInput, timeoutM
   try {
     timeout(timeoutMs);
     input = structuredClone(input);
-    exact(object(input, "publish input"), ["ownerToken", "captureId", "leaseId", "publicationId", "planFile", "planBytes", "materials", "derivatives"], ["ownerToken", "captureId", "leaseId", "publicationId", "planFile", "planBytes", "materials"]);
+    exact(object(input, "publish input"), ["ownerToken", "captureId", "leaseId", "publicationId", "planFile", "planBytes", "materials", "derivatives", "derivatives2"], ["ownerToken", "captureId", "leaseId", "publicationId", "planFile", "planBytes", "materials"]);
     validateStatus({ captureId: input.captureId, state: "materials-ready", materials: input.materials.manifest }, input.captureId, true);
     validateMaterialEnvelopeIdentity(input.materials.payload, input.materials.manifest);
     if (input.leaseId !== input.materials.manifest.leaseId) throw new Error("publication lease binding mismatch");
-    const plan = validatePublicationPlan(input.planFile, input.planBytes, input.materials, input.derivatives);
+    const plan = validatePublicationPlan(input.planFile, input.planBytes, input.materials, input.derivatives, input.derivatives2);
     if (plan.publicationId !== input.publicationId || plan.materials.captureId !== input.captureId) throw new Error("publication binding mismatch");
     text(plan.bundleId, "expected bundleId", 255);
     // Fixed-size placeholder envelope IDs make this deterministic and offline.
