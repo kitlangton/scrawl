@@ -1,11 +1,12 @@
 import assert from "node:assert/strict";
 import { replacePrivateStateFile, type StateReplacementResources } from "../../src/state/replacement.ts";
+import { commitCompletedRenewal } from "../../src/state/renewal-commit.ts";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createServer } from "node:http";
 import { once } from "node:events";
 import { spawn } from "node:child_process";
-import { chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, open, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -451,4 +452,63 @@ test("installed provider cannot retire during Connect calls or an owned queue le
     assert.deepEqual(await replacePrivateStateFile(root, "synthetic.test", input, null, acquired.lease, resources), { state: "committed" });
     assert.deepEqual(await readFile(path.join(root, "synthetic.test")), input);
   } finally { await acquired.lease.release(); }
+}));
+
+async function completedRenewalState(root: string, scope: "read" | "upload" = "read") {
+  const state = path.join(root, "synthetic-state"); await mkdir(state, { mode: 0o700 });
+  const context = { scope, approvedServer: "https://sync.example/connect" };
+  const base = { server: context.approvedServer, scope, token: "synthetic-old-access", generation: "c".repeat(32),
+    refreshToken: "synthetic-old-refresh", expiresAt: 1900, refreshExpiresAt: 3000, grantId: "synthetic-grant" };
+  const put = (name: string, value: unknown) => writeFile(path.join(state, name), JSON.stringify(value), { mode: 0o600 });
+  await put(`${scope}.credential`, base); await put(`${scope}.renewal`, { base, issued: 2000, completed: true });
+  await put(`${scope}.response`, { scope, accessToken: "synthetic-new-access", refreshToken: "synthetic-new-refresh", grantId: "synthetic-grant", expiresIn: 60, refreshExpiresIn: 300 });
+  return { state, context, snapshot: await readCredentialSnapshot(state, context, resources), put };
+}
+
+test("native completed renewal recovery commits both scopes and durably clears only their evidence", async () => {
+  for (const scope of ["read", "upload"] as const) await fixture(async root => {
+    const f = await completedRenewalState(root, scope), other = scope === "read" ? "upload" : "read";
+    await f.put(`${other}.credential`, { unrelated: true });
+    const result = await commitCompletedRenewal(f.state, f.context, f.snapshot, resources);
+    assert.equal(result.state, "committed");
+    const stored = JSON.parse(await readFile(path.join(f.state, `${scope}.credential`), "utf8"));
+    assert.equal(stored.token, "synthetic-new-access"); assert.equal(stored.expiresAt, 2060); assert.equal(stored.refreshExpiresAt, 2300);
+    assert.equal((await lstat(path.join(f.state, `${scope}.credential`))).mode & 0o777, 0o600);
+    assert.deepEqual(JSON.parse(await readFile(path.join(f.state, `${other}.credential`), "utf8")), { unrelated: true });
+    assert.deepEqual((await readdir(f.state)).sort(), ["queue.lock", `${scope}.credential`, `${scope}.renewal.lock`, `${other}.credential`].sort());
+  });
+});
+
+test("native scope contention refuses recovery before queue mutation and preserves the lock inode", async () => fixture(async root => {
+  const f = await completedRenewalState(root);
+  const scopeFile = path.join(f.state, "read.renewal.lock");
+  const acquired = await resources.lock(await open(scopeFile, constants.O_CREAT | constants.O_RDWR | constants.O_NOFOLLOW, 0o600), { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired"); if (acquired.state !== "acquired") return;
+  const original = await lstat(scopeFile);
+  try {
+    assert.deepEqual(await commitCompletedRenewal(f.state, f.context, f.snapshot, resources, { lockTimeoutMs: 0 }), { state: "unchanged", reason: "lock_refused" });
+    assert.equal(JSON.parse(await readFile(path.join(f.state, "read.credential"), "utf8")).token, "synthetic-old-access");
+    assert.ok((await readdir(f.state)).includes("read.response"));
+  } finally { await acquired.lease.release(); }
+  assert.equal((await commitCompletedRenewal(f.state, f.context, f.snapshot, resources)).state, "committed");
+  assert.equal((await lstat(scopeFile)).ino, original.ino);
+}));
+
+test("native recovery retains substituted evidence after a verified credential effect", async () => fixture(async root => {
+  const f = await completedRenewalState(root); let calls = 0;
+  const observed: NamespaceResources & StateReplacementResources = {
+    checkAcl: handle => resources.checkAcl(handle), lock: (handle, options) => resources.lock(handle, options),
+    async replaceFile(...args) {
+      calls++; const result = await resources.replaceFile(...args);
+      if (result.state === "replaced") {
+        await rename(path.join(f.state, "read.renewal"), path.join(f.state, "original.renewal"));
+        await f.put("read.renewal", { substituted: true });
+      }
+      return result;
+    },
+  };
+  assert.deepEqual(await commitCompletedRenewal(f.state, f.context, f.snapshot, observed), { state: "publication_uncertain" });
+  assert.equal(JSON.parse(await readFile(path.join(f.state, "read.credential"), "utf8")).token, "synthetic-new-access");
+  assert.deepEqual(JSON.parse(await readFile(path.join(f.state, "read.renewal"), "utf8")), { substituted: true });
+  assert.ok((await readdir(f.state)).includes("read.response")); assert.equal(calls, 1);
 }));

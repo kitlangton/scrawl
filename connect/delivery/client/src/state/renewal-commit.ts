@@ -1,0 +1,118 @@
+import { lstat, unlink } from "node:fs/promises";
+import path from "node:path";
+import { decodeStoredCredential, type StoredCredential } from "../credentials/wire.ts";
+import { decodeRenewalJournal, isCompletedRenewalFor, recoverCompletedRenewal, sameStoredCredential } from "../credentials/renewal-journal.ts";
+import type { CredentialSnapshot } from "./namespace.ts";
+import { readCredential, readCancellation, readOptionalStateFile, pendingIntent } from "./credential-files.ts";
+import { directoryIdentity } from "./directory.ts";
+import { CredentialSnapshotError, checkSignal, samePathFd, withRenewalScope, withStateQueue, type NamespaceResources, type StateDirectory } from "./queue-transaction.ts";
+import { replacePrivateStateFile, type StateReplacementResources } from "./replacement.ts";
+import { PrivateFileError } from "./private-file.ts";
+
+type Reason = "not_recoverable" | "stale_snapshot" | "revocation_pending" | "cancelled" | "lock_refused" | "unsafe_directory" | "unsafe_file" | "unavailable" | "publication_refused";
+export type RenewalCommitResult =
+  | { state: "committed"; credential: StoredCredential }
+  | { state: "unchanged"; reason: Reason }
+  | { state: "publication_uncertain" };
+const reject = (reason: "stale_snapshot" | "revocation_pending" | "unsafe_file" | "unavailable"): never => { throw new CredentialSnapshotError(reason); };
+const stamp = (s: Awaited<ReturnType<typeof privateStat>>) => `${directoryIdentity(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.nlink}`;
+const privateStat = (file: string) => lstat(file, { bigint: true });
+
+async function readEvidence<T extends object>(directory: StateDirectory, name: string, limit: number,
+  resources: NamespaceResources, signal: AbortSignal, decode: (bytes: Uint8Array) => T) {
+  const file = path.join(directory.path, name);
+  const before = await privateStat(file).catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; });
+  if (!before) return null;
+  const expectedStamp = stamp(before);
+  const value = await readOptionalStateFile(directory, name, limit, resources, signal, decode);
+  const after = await privateStat(file);
+  if (value === null || !after.isFile() || after.isSymbolicLink() || stamp(after) !== expectedStamp) reject("unsafe_file");
+  return { value: value!, file, expectedStamp };
+}
+
+/** Internal coordinated-writer preparation; no production caller or package export.
+ * Caller must own the sole state writer before using this against live state.
+ * Acquire scope then queue, recover only completed exact-base evidence, publish
+ * the credential durably, then remove only the evidence inodes actually consumed.
+ * No HTTP, expiry extension, config changes, retry or competing writer activation.
+ */
+export async function commitCompletedRenewal(directoryPath: string,
+  context: { scope: "read" | "upload"; approvedServer: string }, expected: CredentialSnapshot,
+  resources: NamespaceResources & StateReplacementResources,
+  options: { signal?: AbortSignal; lockTimeoutMs?: number } = {}): Promise<RenewalCommitResult> {
+  const publication: { state: "not_started" | "in_progress" | "verified" } = { state: "not_started" };
+  let encoded: Buffer | undefined;
+  try {
+    const ctx = { scope: context.scope, approvedServer: context.approvedServer };
+    const opts = { signal: options.signal, lockTimeoutMs: options.lockTimeoutMs };
+    const expectedDirectory = expected.directoryIdentity, expectedCancellation = expected.cancellation;
+    const snapshotBytes = Buffer.from(JSON.stringify(expected.credential));
+    let original: StoredCredential;
+    try { original = decodeStoredCredential(snapshotBytes, ctx.scope, ctx.approvedServer); }
+    finally { snapshotBytes.fill(0); }
+    return await withRenewalScope(directoryPath, ctx, resources, opts, async (scopeDirectory, scopeLease) => {
+      if (scopeDirectory.identity !== expectedDirectory) reject("stale_snapshot");
+      const signal = AbortSignal.any([scopeLease.signal, ...(opts.signal ? [opts.signal] : [])]);
+      return withStateQueue(scopeDirectory.path, ctx, resources, { ...opts, signal }, async (directory, queueLease): Promise<RenewalCommitResult> => {
+        const fence = () => { scopeLease.assertHeld(); queueLease.assertHeld(); checkSignal(signal, queueLease.signal); };
+        const current = async () => {
+          fence();
+          if (directory.identity !== expectedDirectory || !await samePathFd(directory)) reject("stale_snapshot");
+          if (await pendingIntent(directory.path)) reject("revocation_pending");
+          if (await readCancellation(directory, resources, signal) !== expectedCancellation) reject("stale_snapshot");
+          const credentialFile = path.join(directory.path, `${ctx.scope}.credential`);
+          const before = stamp(await privateStat(credentialFile));
+          const value = await readCredential(directory, ctx, resources, signal);
+          if (stamp(await privateStat(credentialFile)) !== before) reject("unsafe_file");
+          if (!sameStoredCredential(value, original) || value.authRequired) reject("stale_snapshot");
+          if (await pendingIntent(directory.path)) reject("revocation_pending");
+          fence(); return value;
+        };
+        const stored = await current();
+        const journalName = `${ctx.scope}.renewal`, responseName = `${ctx.scope}.response`;
+        const journal = await readEvidence(directory, journalName, 65_536, resources, signal, bytes => decodeRenewalJournal(bytes, ctx));
+        if (!journal || !isCompletedRenewalFor(stored, journal.value)) return { state: "unchanged", reason: "not_recoverable" };
+        const recovered = await readEvidence(directory, responseName, 2_000_000, resources, signal,
+          bytes => recoverCompletedRenewal(stored, journal.value, bytes));
+        if (!recovered) return { state: "unchanged", reason: "not_recoverable" };
+        const evidence = [journal, recovered];
+        await current();
+        for (const { file, expectedStamp } of evidence) {
+          const named = await privateStat(file);
+          if (!named.isFile() || named.isSymbolicLink() || stamp(named) !== expectedStamp) reject("unsafe_file");
+        }
+        const credentialName = `${ctx.scope}.credential`;
+        const destination = await privateStat(path.join(directory.path, credentialName));
+        encoded = Buffer.from(JSON.stringify(recovered.value));
+        // Every published record must remain readable by the existing bounded wire reader.
+        let credential: StoredCredential;
+        try { credential = decodeStoredCredential(encoded, ctx.scope, ctx.approvedServer); }
+        catch { return { state: "unchanged", reason: "not_recoverable" }; }
+        publication.state = "in_progress";
+        const result = await replacePrivateStateFile(directory.path, credentialName, encoded,
+          { device: String(destination.dev), inode: String(destination.ino) }, queueLease, resources, { signal });
+        if (result.state === "publication_uncertain") return { state: "publication_uncertain" };
+        if (result.state !== "committed") {
+          publication.state = "not_started";
+          return { state: "unchanged", reason: result.state === "destination_changed" ? "stale_snapshot" : "publication_refused" };
+        }
+        publication.state = "verified";
+        if (await pendingIntent(directory.path)) reject("revocation_pending");
+        if (await readCancellation(directory, resources, signal) !== expectedCancellation) reject("stale_snapshot");
+        for (const { file, expectedStamp } of evidence) {
+          fence(); if (!await samePathFd(directory)) reject("unavailable");
+          const named = await privateStat(file);
+          if (!named.isFile() || named.isSymbolicLink() || stamp(named) !== expectedStamp) reject("unavailable");
+          await unlink(file);
+        }
+        await directory.handle.sync(); fence();
+        return { state: "committed", credential };
+      });
+    });
+  } catch (error) {
+    if (publication.state !== "not_started") return { state: "publication_uncertain" };
+    if (error instanceof CredentialSnapshotError) return { state: "unchanged", reason: error.category === "invalid_credential" ? "not_recoverable" : error.category };
+    if (error instanceof PrivateFileError) return { state: "unchanged", reason: error.category === "invalid_data" ? "not_recoverable" : error.category };
+    return { state: "unchanged", reason: "unavailable" };
+  } finally { encoded?.fill(0); }
+}

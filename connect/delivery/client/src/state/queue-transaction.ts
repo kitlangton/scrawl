@@ -28,10 +28,10 @@ export const samePathFd = async (directory: { handle: FileHandle; path: string; 
   } catch { return false; }
 };
 async function lockFile(directory: { handle: FileHandle; path: string; identity: string }, resources: NamespaceResources,
-  timeoutMs: number, signal?: AbortSignal) {
+  timeoutMs: number, signal?: AbortSignal, lockName = "queue.lock") {
   checkSignal(signal);
   if (!Number.isSafeInteger(timeoutMs) || timeoutMs < 0 || timeoutMs > 60_000 || !await samePathFd(directory)) fail("unsafe_directory");
-  const lockPath = path.join(directory.path, "queue.lock");
+  const lockPath = path.join(directory.path, lockName);
   let handle: FileHandle | undefined;
   try { handle = await open(lockPath, C.O_RDWR | C.O_CREAT | (C.O_NOFOLLOW ?? 0) | (C.O_NONBLOCK ?? 0), 0o600); }
   catch { fail("unsafe_file"); }
@@ -65,8 +65,19 @@ async function lockFile(directory: { handle: FileHandle; path: string; identity:
 async function release(lease: NamespaceLease) {
   try { await lease.release(); } catch { fail("unavailable"); }
 }
-export async function withStateQueue<T>(directoryPath: string, context: { scope: "read" | "upload"; approvedServer: string }, resources: NamespaceResources,
-  options: { signal?: AbortSignal; lockTimeoutMs?: number }, body: (directory: { handle: FileHandle; path: string; identity: string }, lease: NamespaceLease) => Promise<T>): Promise<T> {
+type StateContext = { scope: "read" | "upload"; approvedServer: string };
+type StateOptions = { signal?: AbortSignal; lockTimeoutMs?: number };
+export type StateDirectory = { handle: FileHandle; path: string; identity: string };
+type StateBody<T> = (directory: StateDirectory, lease: NamespaceLease) => Promise<T>;
+export function withStateQueue<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: StateBody<T>): Promise<T> {
+  return withStateLock(directoryPath, context, resources, options, body, "queue");
+}
+/** Scope lock precedes short queue transactions; never call this while queue is held. */
+export function withRenewalScope<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: StateBody<T>): Promise<T> {
+  return withStateLock(directoryPath, context, resources, options, body, "renewal");
+}
+async function withStateLock<T>(directoryPath: string, context: StateContext, resources: NamespaceResources,
+  options: StateOptions, body: StateBody<T>, kind: "queue" | "renewal"): Promise<T> {
   const signal = options.signal, lockTimeoutMs = options.lockTimeoutMs, scope = context?.scope, approvedServer = context?.approvedServer;
   if ((scope !== "read" && scope !== "upload") || typeof approvedServer !== "string") fail("invalid_credential");
   checkSignal(signal);
@@ -74,7 +85,7 @@ export async function withStateQueue<T>(directoryPath: string, context: { scope:
   try { directory = await admitTrustedDirectory(directoryPath, resources, "private-state", signal); }
   catch (e) { if (e instanceof DirectoryAdmissionFailure) return fail(e.category); return fail("unsafe_directory"); }
   try {
-    const lock = await lockFile(directory!, resources, lockTimeoutMs ?? 1000, signal);
+    const lock = await lockFile(directory!, resources, lockTimeoutMs ?? 1000, signal, kind === "queue" ? "queue.lock" : `${scope}.renewal.lock`);
     try {
       const lease = lock.lease;
       checkSignal(signal, lease.signal);
