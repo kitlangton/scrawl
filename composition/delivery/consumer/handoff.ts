@@ -21,6 +21,14 @@ type Api = {
 
 const fail = (message: string): never => { throw new Error(message) }
 const sha256 = (bytes: Buffer) => createHash('sha256').update(bytes).digest('hex')
+export function matchesInvocation(value: unknown, runId: number, attempt: number): boolean {
+  if (typeof value !== 'string') return false
+  try {
+    const url = new URL(value)
+    return url.origin === 'https://github.com' && !url.username && !url.password && !url.search && !url.hash
+      && url.pathname === `/${repository}/actions/runs/${runId}/attempts/${attempt}`
+  } catch { return false }
+}
 function receiptFor(zip: Buffer, owner: Owner, target: Target, admission: Admission, runId: number, attempt: number, expectedSourceDigest: string) {
   const tmp = join(process.env.TMPDIR || '/tmp', `apparent-artifact-${process.pid}-${Math.random().toString(16).slice(2)}.zip`)
   try {
@@ -41,7 +49,7 @@ function validateTarInventory(archive: Buffer) {
   const tmp = join(process.env.TMPDIR || '/tmp', `apparent-component-${process.pid}-${Math.random().toString(16).slice(2)}.tar.gz`)
   try {
     writeFileSync(tmp, archive, { mode: 0o600, flag: 'wx' })
-    const listing = execFileSync('tar', ['--absolute-names', '-tzf', tmp], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
+    const listing = execFileSync('tar', ['-P', '-tzf', tmp], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
     const names = listing.split('\n').filter(Boolean)
     if (!names.length || names.length > 200_000) fail('Component archive inventory is empty or too large')
     const canonical = names.map(name => name.replace(/\/$/, ''))
@@ -49,7 +57,7 @@ function validateTarInventory(archive: Buffer) {
     for (const name of names) {
       if (name.includes('\\') || name.startsWith('/') || /^[A-Za-z]:/.test(name) || name.includes('\0') || name.includes('\n') || name.includes('\r') || name.replace(/\/$/, '').split('/').some(part => !part || part === '.' || part === '..')) fail('Component archive contains an unsafe path')
     }
-    const verbose = execFileSync('tar', ['--absolute-names', '-tvzf', tmp], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
+    const verbose = execFileSync('tar', ['-P', '-tvzf', tmp], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
     const entries = verbose.split('\n').filter(Boolean)
     if (entries.length !== names.length || entries.some(line => !/^[d-][rwxStTs-]{9}/.test(line))) fail('Component archive contains links or unsupported filesystem entries')
   } finally { rmSync(tmp, { force: true }) }

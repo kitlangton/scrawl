@@ -5,7 +5,7 @@ import { mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'n
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { test } from 'node:test'
-import { handoff } from './handoff.ts'
+import { handoff, matchesInvocation } from './handoff.ts'
 import { sourceDigest } from '../core.ts'
 
 const root = execFileSync('git', ['rev-parse', '--show-toplevel'], { encoding: 'utf8' }).trim()
@@ -14,6 +14,16 @@ const owner = { schema: 1 as const, id: 'engine', kind: 'npm' as const, package:
 const digest = 'a'.repeat(64)
 const source = sourceDigest(root, owner, sha)
 const run = { id: 42, run_attempt: 2, head_sha: sha, head_branch: 'main', event: 'push', conclusion: 'success', path: '.github/workflows/stream-engine.yml' }
+
+test('attestation invocation binds the exact repository, run and attempt', () => {
+  const expected = 'https://github.com/tryapparent/apparent/actions/runs/42/attempts/2'
+  assert.equal(matchesInvocation(expected, 42, 2), true)
+  for (const value of [expected + '0', expected + '/extra', expected + '?other=1', expected + '#x',
+    expected.replace('/42/', '/420/'), expected.replace('tryapparent/apparent', 'other/repo'),
+    expected.replace('github.com', 'github.com.attacker.invalid'), undefined, 'not a URL']) {
+    assert.equal(matchesInvocation(value, 42, 2), false, String(value))
+  }
+})
 
 function artifact(contents: string, malformedTar = false) {
   const dir = mkdtempSync(join(tmpdir(), 'delivery-handoff-'))

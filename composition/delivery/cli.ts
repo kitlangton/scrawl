@@ -1,4 +1,5 @@
 import { admitPrCandidate } from './runtime/pr-candidate.ts'
+import { matchesInvocation } from './consumer/handoff.ts'
 import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
@@ -116,8 +117,7 @@ async function main(args: string[]) {
       attest: async (path: string, _owner: Owner, _target: Target, sha: string, runId: number, attempt: number) => {
         const output = execFileSync('gh', ['attestation', 'verify', path, '--repo', repo, '--signer-workflow', `${repo}/${workflowPathFor(owner.id)}`, '--source-digest', sha, '--source-ref', 'refs/heads/main', '--format', 'json'], { encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, env: { ...process.env, GH_REPO: repo } })
         const attestations = JSON.parse(output) as Array<{ verificationResult?: { statement?: { subject?: Array<{ digest?: { sha256?: string } }>; predicate?: { runDetails?: { metadata?: { invocationId?: string } } } } } }>
-        const expectedRun = `/actions/runs/${runId}/attempts/${attempt}`
-        if (!attestations.some(entry => entry.verificationResult?.statement?.predicate?.runDetails?.metadata?.invocationId?.includes(expectedRun))) throw new Error('Verified attestation does not identify the admitted producer run and attempt')
+        if (!attestations.some(entry => matchesInvocation(entry.verificationResult?.statement?.predicate?.runDetails?.metadata?.invocationId, runId, attempt))) throw new Error('Verified attestation does not identify the admitted producer run and attempt')
       },
     }
     const result = await handoff(root, owner, target, sourceSha, api, (runs, jobs, artifacts, exactDigest) => assessPrior(root, owner, target, sourceSha, repo, runs, jobs, artifacts, sourceSha, exactDigest), args[4])
