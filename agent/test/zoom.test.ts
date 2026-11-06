@@ -189,6 +189,55 @@ test('producer-shaped circle ink, focused whole stroke, crop mapping, click and 
   assert.deepEqual(Array.from(recentImage.data.subarray((120*400+360)*4,(120*400+360)*4+3)),[20,50,180]); // recent unassociated ink is time-clipped
 });
 
+test('recorded stroke RGB reaches plain ink, pin fills and timed laser ink while absent RGB keeps legacy colors',()=>{
+  const image=new PNG({width:400,height:300});
+  const bundle=manifest();
+  bundle.events=[];bundle.marks=[];
+  bundle.strokes=[
+    {t0:0,t1:200,fw:1000,fh:800,pin:null,laser:false,rgb:[17,203,81],pts:[2000,3000,0,8000,3000,200]},
+    {t0:1000,t1:1200,fw:1000,fh:800,pin:1,laser:false,rgb:[0,0,255],pts:[5000,5000,0]},
+    {t0:800,t1:1200,fw:1000,fh:800,pin:null,laser:true,rgb:[255,255,0],pts:[2000,7500,0,8000,7500,200]},
+  ];
+  annotateZoomFrame(image,bundle,1200,[0,0,1,1]);
+  const pixel=(x:number,y:number)=>Array.from(image.data.subarray((y*image.width+x)*4,(y*image.width+x)*4+4));
+  assert.deepEqual(pixel(200,90),[17,203,81,230]);
+  assert.deepEqual(pixel(207,150),[0,0,255,255]);
+  assert.deepEqual(pixel(200,225),[255,255,0,150]);
+
+  const legacy=new PNG({width:400,height:300});
+  const defaults=manifest();defaults.events=[];defaults.marks=[];
+  defaults.strokes=[{t0:0,t1:100,fw:1000,fh:800,pin:null,laser:false,pts:[2000,3000,0,8000,3000,100]}];
+  annotateZoomFrame(legacy,defaults,100,[0,0,1,1]);
+  assert.deepEqual(Array.from(legacy.data.subarray((90*400+200)*4,(90*400+200)*4+4)),[238,48,68,230]);
+
+  const black=manifest();black.events=[];black.marks=[];
+  black.strokes=[
+    {t0:0,t1:200,fw:1000,fh:800,pin:null,laser:false,rgb:[0,0,0],pts:[2000,2000,0,8000,2000,200]},
+    {t0:1000,t1:1200,fw:1000,fh:800,pin:1,laser:false,rgb:[0,0,0],pts:[5000,5000,0]},
+    {t0:800,t1:1200,fw:1000,fh:800,pin:null,laser:true,rgb:[0,0,0],pts:[2000,8000,0,8000,8000,200]},
+  ];
+  const blackImage=new PNG({width:400,height:300});annotateZoomFrame(blackImage,black,1200,[0,0,1,1]);
+  const blackPixel=(x:number,y:number)=>Array.from(blackImage.data.subarray((y*blackImage.width+x)*4,(y*blackImage.width+x)*4+4));
+  assert.deepEqual(blackPixel(200,60),[0,0,0,230]);
+  assert.deepEqual(blackPixel(207,150),[0,0,0,255]);
+  assert.deepEqual(blackPixel(200,240),[0,0,0,150]);
+  const faded=new PNG({width:400,height:300});annotateZoomFrame(faded,{...black,strokes:[black.strokes[2]]},1500,[0,0,1,1]);
+  assert.deepEqual(Array.from(faded.data.subarray((240*400+200)*4,(240*400+200)*4+4)),[0,0,0,0]);
+});
+
+test('present malformed stroke RGB is rejected before zoom output creation',async()=>{
+  const bundle=await bundleFixture(),parent=await mkdtemp(join(tmpdir(),'zoom-rgb-invalid-'));
+  try{
+    for(const [index,rgb] of [[0,null],[1,[0,0]],[2,[0,0,256]],[3,[0,1.5,0]],[4,['1',2,3]]] as const){
+      const value=manifest();value.strokes=[{t0:0,t1:100,fw:100,fh:100,rgb,pts:[0,0,0,10000,10000,100]}];
+      await writeFile(join(bundle,'apparent.json'),JSON.stringify(value));
+      const out=join(parent,`invalid-${index}`);
+      await assert.rejects(runZoom({bundle,at:'1',span:2,frames:1,full:false,out,json:false}),/Malformed stroke RGB/);
+      await assert.rejects(import('node:fs/promises').then(fs=>fs.lstat(out)),{code:'ENOENT'});
+    }
+  }finally{await rm(bundle,{recursive:true,force:true});await rm(parent,{recursive:true,force:true});}
+});
+
 test('PNG interlace, malformed geometry and aggregate source pixels fail before output',async()=>{
   const bundle=await bundleFixture(),parent=await mkdtemp(join(tmpdir(),'zoom-bounds-'));
   try{
