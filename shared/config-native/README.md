@@ -23,6 +23,16 @@ lock; it writes owner revision 1 and never removes the legacy key. Conflicts
 return a fresh snapshot. Reads and conflicts do not rewrite the file. Never
 retry an uncertain write without reading persisted state.
 
+For `onboarding`, a successful `adoptLegacy` writes the explicit
+`onboardingLegacyWriter: {schema: 1, state: "retired"}` ownership marker in
+the same config publication as revision 1. The existing legacy progress writer
+checks this marker while holding the same config writer lock, so its saves are
+ordered before adoption or refused afterward. When an owner entry already
+exists, privileged onboarding assembly may explicitly call
+`retireOnboardingLegacyWriter`; it is owner-bound, durable across restart, and
+does not block writes to other config keys. A malformed marker fails closed.
+The marker is not inferred from an owner entry or other config presence.
+
 The authoritative GUI process can use
 `with_pen_color_current_in(path, expected, effect)` for the native apply seam.
 It acquires that same config writer lock, validates and compares only the fixed

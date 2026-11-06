@@ -59,6 +59,8 @@ export interface ConfigHostOptions {
   timeoutMs?: number;
 }
 export interface ConfigBackend extends LegacyAdoptionBackend {
+  /** Explicitly and durably retire only the legacy onboarding progress writer. */
+  retireOnboardingLegacyWriter(): Promise<{ status: 'retired' } | { status: 'unknown'; message: string }>;
   close(): Promise<void>;
   readPenColor(): Promise<LegacyConfigValue>;
   compareAndSwapPenColor(expected: LegacyConfigValue, next: LegacyConfigValue): Promise<
@@ -169,6 +171,15 @@ export async function createConfigBackend(options: ConfigHostOptions): Promise<C
       owner(id);
       try { return adoptionSnapshot(await request('readForAdoption')); }
       catch { fail(); throw unavailable(); }
+    },
+    async retireOnboardingLegacyWriter() {
+      if (options.ownerId !== 'onboarding') throw new TypeError('Onboarding writer ownership requires the compiled onboarding owner');
+      try {
+        const result = await request('retireOnboardingLegacyWriter');
+        if (exact(result, ['status']) && result.status === 'retired') return { status: 'retired' as const };
+        fail();
+        return unknown();
+      } catch { return unknown(); }
     },
     async readPenColor() {
       recordOnly();
