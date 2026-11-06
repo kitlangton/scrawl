@@ -289,3 +289,30 @@ test("disposal from a reserved notification keeps the binding but prevents nativ
   assert.equal(ctx.transport.requests.some(r => r.method === "start"), false);
   assert.equal(ctx.transport.closed, false);
 });
+
+
+test("two hosts cannot admit different requests from the same stale durable scan", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  const second = createCapture2Host({ client: new CaptureClient(ctx.transport), mappings: ctx.mappings, destinations: ctx.destinations });
+  await second.discoverSources();
+  const bothScanned = deferred(); let scans = 0;
+  const list = ctx.mappings.listRequestIds.bind(ctx.mappings);
+  ctx.mappings.listRequestIds = async protocol => {
+    const ids = await list(protocol);
+    if (protocol === "capture2" && scans < 2) { if (++scans === 2) bothScanned.resolve(); await bothScanned.promise; }
+    return ids;
+  };
+  const results = await Promise.allSettled([
+    ctx.host.start({ requestId: "host-a", source, options: { audio: "none", localOnly: true }, invocation }),
+    second.start({ requestId: "host-b", source, options: { audio: "none", localOnly: true }, invocation }),
+  ]);
+  assert.equal(results.filter(result => result.status === "fulfilled").length, 1);
+  assert.equal(ctx.transport.requests.filter(r => r.method === "start").length, 1);
+  const ids = await list("capture2"); assert.equal(ids.length, 1);
+  const refused = results.find(result => result.status === "rejected");
+  assert.ok(refused?.status === "rejected" && /registry changed/u.test(String(refused.reason)));
+  await ctx.host.cancel(ids[0]!);
+  await second.reconcile();
+  assert.equal((await second.start({ requestId: "after-terminal", source, options: { audio: "none", localOnly: true }, invocation })).phase, "recording");
+  ctx.host.dispose(); second.dispose();
+});

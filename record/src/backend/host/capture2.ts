@@ -8,6 +8,10 @@ import { AbsentDestinationAllocator } from "./absent-destination-allocator.js";
 export type Capture2Phase = "reserved" | "submitted-unknown" | "starting" | "recording" | "stopping" | "materials-ready" | "processing" | "cancelled" | "failed" | "unknown";
 export interface Capture2Receipt { requestId: string; phase: Capture2Phase; lastKnownPhase?: Capture2Phase; materials?: CaptureStatus["materials"]; publication?: CaptureStatus["publication"] }
 export type Capture2Event = { type: "readiness-changed"; readiness: { ready: boolean; reason?: string } } | { type: "discovery-changed"; discovery: SourceDiscovery } | { type: "capture-changed"; receipt: Capture2Receipt };
+export interface Capture2MappingStore extends CaptureMappingStore {
+  /** Atomic compare-and-insert against the complete capture/2 registry inspected before admission. */
+  putCapture2IfUnchanged(mapping: CaptureMapping, inspectedRequestIds: readonly string[]): Promise<CaptureMapping>;
+}
 export interface Capture2StartIntent { requestId: string; source: SourceDescriptor; options: CaptureOptions; invocation: InvocationFact }
 export interface Capture2Host {
   readiness(): Promise<{ ready: boolean; reason?: string }>;
@@ -33,7 +37,7 @@ const publicReceipt = (requestId: string, status: CaptureStatus): Capture2Receip
 });
 
 /** Injected published capture/2 consumer. Ownership of the SDK and transports stays with the caller. */
-export function createCapture2Host(input: { client: CaptureClient; mappings: CaptureMappingStore; destinations: AbsentDestinationAllocator }): Capture2Host {
+export function createCapture2Host(input: { client: CaptureClient; mappings: Capture2MappingStore; destinations: AbsentDestinationAllocator }): Capture2Host {
   const { client, mappings, destinations } = input;
   const cache = new Map<string, CaptureMapping>();
   const phases = new Map<string, Capture2Phase>();
@@ -121,13 +125,14 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
       }
     };
     // Read-only reconciliation must not hold up Stop/Cancel. Mutating controls remain ordered.
-    return method === "inspect" ? work() : serial(`control:${requestId}`, work);
+    return method === "inspect" ? work() : serial(requestId, work);
   };
 
   return {
     readiness: hello,
     async discoverSources() {
       if (!(await hello()).ready) return { state: "unavailable", sources: [], reason: "Native Record capture/2 is unavailable" };
+      ensureLive();
       try { discovery = await client.discoverSources(); } catch { discovery = { state: "unavailable", sources: [], reason: "Source discovery is unavailable" }; }
       ensureLive();
       emit({ type: "discovery-changed", discovery: structuredClone(discovery) });
@@ -142,7 +147,7 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
         : Promise.reject(new Error("Record capture intent conflicts with its in-flight request binding"));
       if (freshAdmission || (active.size && !receipts.has(intent.requestId))) return Promise.reject(new Error("Another Record capture is active or unresolved; request ID was not reserved"));
       freshAdmission = true;
-      const work = serial(intent.requestId, async () => {
+      const work = Promise.resolve().then(async () => {
         const ready = await hello();
         if (!ready.ready || handshake?.implementation !== "native") throw Object.assign(new Error("Capture/2 is unavailable; no native start was dispatched"), { dispatched: false });
         if (!discovery || discovery.state !== "available" || !discovery.sources.some(source => isDeepStrictEqual(source, intent.source))) throw new Error("Capture source is not the exact descriptor in the current discovery generation");
@@ -159,7 +164,8 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
         }
         // Recheck durable capture/2 ownership before reserving a new public ID.
         // Unknown inspection is busy: it cannot prove that another capture ended.
-        for (const requestId of await mappings.listRequestIds("capture2")) {
+        const inspectedRequestIds = await mappings.listRequestIds("capture2");
+        for (const requestId of inspectedRequestIds) {
           if (requestId === intent.requestId) continue;
           const prior = await mappings.getByRequestId(requestId);
           if (!prior?.capture2Intent) continue;
@@ -175,7 +181,7 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
         const destination = await destinations.allocate(intent.requestId);
         ensureLive();
         const mapping: CaptureMapping = { requestId: intent.requestId, captureId: randomUUID().replaceAll("-", ""), ownerToken: randomBytes(32).toString("hex"), bundleId: destination.bundleId, bundlePath: destination.bundlePath, capture2Intent: serializedIntent };
-        const winner = await mappings.putIfAbsent(mapping);
+        const winner = await mappings.putCapture2IfUnchanged(mapping, inspectedRequestIds);
         ensureLive();
         if (!isDeepStrictEqual(winner, mapping)) {
           if (winner.capture2Intent !== serializedIntent) throw new Error("Record capture identity conflicts with its durable request binding");

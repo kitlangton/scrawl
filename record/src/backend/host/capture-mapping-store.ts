@@ -52,6 +52,16 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
   }
 
   async putIfAbsent(mapping: CaptureMapping): Promise<CaptureMapping> {
+    return this.#put(mapping);
+  }
+
+  /** Admit only if no capture/2 row appeared since the caller's authoritative ownership scan. */
+  async putCapture2IfUnchanged(mapping: CaptureMapping, inspectedRequestIds: readonly string[]): Promise<CaptureMapping> {
+    if (!mapping.capture2Intent) throw hostError();
+    return this.#put(mapping, [...inspectedRequestIds]);
+  }
+
+  async #put(mapping: CaptureMapping, inspectedRequestIds?: readonly string[]): Promise<CaptureMapping> {
     if (!valid(mapping)) throw hostError();
     let db: DatabaseSync | undefined;
     try {
@@ -64,6 +74,10 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
         if (winner.capture2Intent !== mapping.capture2Intent) throw new Error("capture2-intent-conflict");
         return winner;
       }
+      if (inspectedRequestIds) {
+        const current = db.prepare("SELECT request_id FROM capture_mapping WHERE capture2_intent IS NOT NULL").all().map(row => row.request_id).sort();
+        if (JSON.stringify(current) !== JSON.stringify([...inspectedRequestIds].sort())) throw new Error("capture2-admission-conflict");
+      }
       db.prepare("INSERT INTO capture_mapping (request_id, capture_id, owner_token, bundle_id, bundle_path, capture2_intent) VALUES (?, ?, ?, ?, ?, ?)")
         .run(mapping.requestId, mapping.captureId, mapping.ownerToken, mapping.bundleId, mapping.bundlePath, mapping.capture2Intent ?? null);
       db.exec("COMMIT");
@@ -71,6 +85,7 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
     } catch (error) {
       try { db?.exec("ROLLBACK"); } catch { /* transaction may already be committed */ }
       try { db?.close(); } catch { /* the handle may already be closed */ }
+      if (error instanceof Error && error.message === "capture2-admission-conflict") throw new Error("Record capture admission registry changed; rescan before starting");
       if (error instanceof Error && error.message === "capture2-intent-conflict") throw new Error("Record capture intent conflicts with its durable request binding");
       const reconciled = await this.#read("request_id", mapping.requestId).catch(() => undefined);
       if (reconciled) {
