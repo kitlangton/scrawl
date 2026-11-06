@@ -5,7 +5,8 @@ import { decodeStoredCredential, type StoredCredential } from "../credentials/wi
 import { decodeRenewalJournal, sameStoredCredential, type RenewalJournal } from "../credentials/renewal-journal.ts";
 import { planRenewal } from "../credentials/renewal-plan.ts";
 import { requestRenewalReply, RenewalRequestError, type RenewalRequestFailure } from "../credentials/renewal-request.ts";
-import type { CredentialSnapshot } from "./namespace.ts";
+import { readCredentialSnapshot, type CredentialSnapshot } from "./namespace.ts";
+import { commitCompletedRenewal, markCredentialAuthRequired } from "./renewal-commit.ts";
 import { pendingIntent, readCancellation, readCredential, readStateEvidence, stateFileStamp } from "./credential-files.ts";
 import { CredentialSnapshotError, checkSignal, samePathFd, withRenewalScope, withStateQueue, type NamespaceResources, type SnapshotFailure, type StateDirectory } from "./queue-transaction.ts";
 import { replacePrivateStateFile, type StateReplacementResources } from "./replacement.ts";
@@ -22,6 +23,8 @@ export type RenewalExchangeResult =
   | { state: "publication_uncertain"; phase: Phase };
 const fail = (category: SnapshotFailure): never => { throw new CredentialSnapshotError(category); };
 class WriteRefused extends Error {}
+type RenewalOptions = { force?: boolean; signal?: AbortSignal; timeoutMs?: number; lockTimeoutMs?: number;
+  now?: () => number; request?: typeof requestRenewalReply };
 
 /** Internal sole-writer prerequisite, without a production caller or public export.
  * Prepare a legacy journal before one POST; persist raw response bytes before the
@@ -35,8 +38,7 @@ class WriteRefused extends Error {}
 export async function persistRenewalExchange(directoryPath: string,
   context: { scope: "read" | "upload"; approvedServer: string }, expected: CredentialSnapshot,
   resources: NamespaceResources & StateReplacementResources,
-  options: { force?: boolean; signal?: AbortSignal; timeoutMs?: number; lockTimeoutMs?: number;
-    now?: () => number; request?: typeof requestRenewalReply } = {}): Promise<RenewalExchangeResult> {
+  options: RenewalOptions = {}): Promise<RenewalExchangeResult> {
   let phase: Phase = "before_request", uncertain = false, completedPublished = false, response: Uint8Array | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
   try {
@@ -159,4 +161,78 @@ export async function persistRenewalExchange(directoryPath: string,
       : error instanceof PrivateFileError ? error.category === "invalid_data" ? "invalid_credential" : error.category : "unavailable";
     return { state: "stopped", phase, reason };
   } finally { if (timer !== undefined) clearTimeout(timer); if (response instanceof Uint8Array) response.fill(0); }
+}
+
+export type CredentialRenewalResult =
+  | { state: "credential"; credential: StoredCredential; source: "stored" | "renewed" | "other_writer" }
+  | { state: "auth_required" }
+  | { state: "request_failed"; reason: RenewalRequestFailure }
+  | { state: "stopped"; reason: StopReason | "not_recoverable" }
+  | { state: "publication_uncertain" };
+
+/** Internal coordinated-writer workflow, not live writer authority or a public
+ * package export. One deadline includes exchange, recovery and terminal marking.
+ * Scope leases are released between the exchange and recovery transactions: a
+ * cooperating winner is reloaded, never overwritten or followed by a second POST.
+ * Ambiguous exchange/commit results stop immediately, retaining recovery evidence.
+ * A credential result reports stored facts, not unexpired access or service
+ * authorization; consumers retain request-time lifetime/authorization checks.
+ */
+export async function renewStateCredential(directoryPath: string,
+  context: { scope: "read" | "upload"; approvedServer: string }, expected: CredentialSnapshot,
+  resources: NamespaceResources & StateReplacementResources,
+  options: RenewalOptions = {}): Promise<CredentialRenewalResult> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  try {
+    const ctx = { scope: context.scope, approvedServer: context.approvedServer }, opts = { ...options };
+    const timeout = opts.timeoutMs ?? 30_000;
+    if (!Number.isSafeInteger(timeout) || timeout < 1 || timeout > 30_000) return { state: "stopped", reason: "invalid_request" };
+    const controller = new AbortController(), deadline = performance.now() + timeout;
+    timer = setTimeout(() => controller.abort(), timeout);
+    const signal = AbortSignal.any([controller.signal, ...(opts.signal ? [opts.signal] : [])]);
+    const encoded = Buffer.from(JSON.stringify(expected.credential));
+    let credential: StoredCredential;
+    try { credential = Object.freeze(decodeStoredCredential(encoded, ctx.scope, ctx.approvedServer)); }
+    finally { encoded.fill(0); }
+    const snapshot = Object.freeze({ credential, directoryIdentity: expected.directoryIdentity, cancellation: expected.cancellation });
+    const stateOptions = { signal, lockTimeoutMs: opts.lockTimeoutMs };
+    const observedChange = async (): Promise<CredentialRenewalResult | null> => {
+      const current = await readCredentialSnapshot(directoryPath, ctx, resources, stateOptions);
+      if (current.directoryIdentity !== snapshot.directoryIdentity || current.cancellation !== snapshot.cancellation
+        || current.credential.generation !== credential.generation || current.credential.grantId !== credential.grantId
+        || current.credential.encryption_identity !== credential.encryption_identity) fail("stale_snapshot");
+      checkSignal(signal);
+      if (current.credential.authRequired) return { state: "auth_required" };
+      return sameStoredCredential(current.credential, credential) ? null
+        : { state: "credential", source: "other_writer", credential: Object.freeze({ ...current.credential }) };
+    };
+    const rejectCurrent = async (): Promise<CredentialRenewalResult> => {
+      const result = await markCredentialAuthRequired(directoryPath, ctx, snapshot, resources, stateOptions);
+      if (result.state === "marked") return { state: "auth_required" };
+      if (result.state === "publication_uncertain") return result;
+      if (result.reason === "already_changed") return await observedChange() ?? { state: "stopped", reason: "stale_snapshot" };
+      return { state: "stopped", reason: result.reason };
+    };
+    const remaining = Math.floor(deadline - performance.now());
+    if (remaining < 1) fail("cancelled");
+    const exchange = await persistRenewalExchange(directoryPath, ctx, snapshot, resources, { ...opts, signal, timeoutMs: remaining });
+    if (exchange.state === "publication_uncertain") return { state: "publication_uncertain" };
+    if (exchange.state === "stopped") return { state: "stopped", reason: exchange.reason };
+    if (exchange.state === "request_failed") return exchange.reason === "auth_required" ? await rejectCurrent() : exchange;
+    if (exchange.state === "auth_required") return await rejectCurrent();
+    checkSignal(signal);
+    if (exchange.state === "use_current") return { state: "credential", credential: exchange.credential,
+      source: sameStoredCredential(exchange.credential, credential) ? "stored" : "other_writer" };
+    const committed = await commitCompletedRenewal(directoryPath, ctx, snapshot, resources, stateOptions);
+    if (committed.state === "committed") return { state: "credential", credential: Object.freeze({ ...committed.credential }), source: "renewed" };
+    if (committed.state === "publication_uncertain") return committed;
+    if (committed.reason === "stale_snapshot" || committed.reason === "not_recoverable") {
+      const changed = await observedChange();
+      if (changed) return changed;
+      if (committed.reason === "not_recoverable") return await rejectCurrent();
+    }
+    return { state: "stopped", reason: committed.reason };
+  } catch (error) {
+    return { state: "stopped", reason: error instanceof CredentialSnapshotError ? error.category : "unavailable" };
+  } finally { if (timer !== undefined) clearTimeout(timer); }
 }

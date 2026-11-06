@@ -371,7 +371,7 @@ evidence substitution under the cooperative protocol. They do not establish
 installed Mac or ARM admission. Full writer ownership and production caller
 adoption remain separate gates.
 
-The internal `state/renewal-exchange` phase durably prepares the legacy journal,
+The internal `persistRenewalExchange` phase durably prepares the legacy journal,
 sends one bounded refresh POST with the scope lease held and queue lease released,
 then publishes raw response bytes before the completed marker. It shares the
 existing planner, HTTP transport, stamped private readers and replacement path.
@@ -392,3 +392,17 @@ recovery/scope contention, with all client tests passing. It uses an owner-local
 Mac ARM helper and does not establish installed ARM or installed Mac adoption.
 Final rejection/renewal orchestration, coordinated writer ownership and production
 adoption remain acceptance gates.
+
+The internal `renewStateCredential` coordinator joins exchange, completed recovery
+and exact-record `authRequired` marking under one deadline. A terminal refresh
+401, missing refresh capability or invalid completed reply can mark only the
+unchanged credential; token rotation or another login cannot be overwritten.
+A cooperating recovery winner between phases is reloaded without another POST.
+Uncertain publication stops immediately, preserving the recovery evidence.
+A returned credential is a stored fact, not an assertion of unexpired access or
+service authorization; request-time checks remain with consumers. Terminal
+rejection changes no token, grant, cancellation state, other scope or
+config. Cancellation before recovery leaves completed evidence for a later call
+using its original issue time. These are isolated writer capabilities, with no
+public writer export or production caller. Rust remains the sole live writer;
+Mac coordinator proof, installed admission and coordinated adoption remain gates.
