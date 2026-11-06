@@ -338,3 +338,14 @@ precedence using the original issue time. It freezes detached credential/journal
 snapshots and wipes its bounded response copy without changing caller buffers.
 These are in-memory proposals; the caller still owns service approval, fresh
 cancellation/revocation facts, durable journal ordering and sole-writer authority.
+
+The native consumer fixture can exercise the protected installed wrapper with
+`APPARENT_RESOURCE_PROVIDER=installed`. Alongside its admitted SDK, artifact and
+source inputs, it requires `APPARENT_RESOURCE_MANIFEST_SHA256` from the trusted
+producer return; it never derives that admission value from the supplied files.
+This mode runs recipient/state/publication and replacement calls through the
+public `./installed` factory, checks pending-call/lease retention, then retires
+only the factory-owned snapshot. Missing or unsupported installed inputs fail
+closed. The retained direct fixture is not an installed fallback. Linux x64
+joined-consumer proof does not establish Mac joined proof or ARM admission;
+installed routing and the sole-writer cutover remain separate gates.
