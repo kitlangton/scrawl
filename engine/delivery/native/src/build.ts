@@ -34,7 +34,8 @@ mkdirSync(output, { recursive: true })
 const cargoTargetDir = resolve(packageRoot, '.build', 'cargo-target')
 const cargoCommon = ['--locked', '--target', targetConfig.triple, '--target-dir', cargoTargetDir]
 if (process.env.APPARENT_CARGO_OFFLINE === '1') cargoCommon.push('--offline')
-execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', resolve(repositoryRoot, 'engine/core/Cargo.toml'), '--features', 'publication'], { cwd: repositoryRoot, stdio: 'inherit' })
+const coreFeatures = targetConfig.target === 'macos-x64' ? 'publication,macos-capture' : 'publication'
+execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', resolve(repositoryRoot, 'engine/core/Cargo.toml'), '--features', coreFeatures], { cwd: repositoryRoot, stdio: 'inherit' })
 execFileSync('cargo', ['test', ...cargoCommon, '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
 execFileSync('cargo', ['build', ...cargoCommon, '--release', '--manifest-path', manifestPath], { cwd: repositoryRoot, stdio: 'inherit' })
 const binary = resolve(cargoTargetDir, targetConfig.triple, 'release', 'apparent-engine')

@@ -7,7 +7,7 @@ use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::MetadataExt;
 use std::path::{Component, Path, PathBuf};
 
-#[cfg(all(feature = "publication", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 unsafe extern "C" {
     fn renameatx_np(
         from_fd: i32,
@@ -422,9 +422,39 @@ impl Store {
         }
         result
     }
-    /// Replace a journal only if the currently named inode is the one observed by
-    /// `read`; Linux exchange lets us verify the displaced identity before unlink.
-    #[cfg(target_os = "linux")]
+    fn exchange(&self, from: &CString, to: &CString) -> io::Result<()> {
+        #[cfg(target_os = "linux")]
+        let rc = unsafe {
+            libc::syscall(
+                libc::SYS_renameat2,
+                self.dir.as_raw_fd(),
+                from.as_ptr(),
+                self.dir.as_raw_fd(),
+                to.as_ptr(),
+                2u32, // RENAME_EXCHANGE
+            ) as i32
+        };
+        #[cfg(target_os = "macos")]
+        let rc = unsafe {
+            renameatx_np(
+                self.dir.as_raw_fd(),
+                from.as_ptr(),
+                self.dir.as_raw_fd(),
+                to.as_ptr(),
+                libc::RENAME_SWAP,
+            )
+        };
+        if rc == 0 {
+            Ok(())
+        } else {
+            Err(io::Error::last_os_error())
+        }
+    }
+
+    /// Replace a journal only if the named inode is the one observed before the
+    /// exchange. Linux RENAME_EXCHANGE and Darwin RENAME_SWAP let us verify the
+    /// displaced identity before unlink. Unsupported filesystems fail closed;
+    /// there is no pathname rename fallback.
     pub fn replace_checked(&self, key: &str, bytes: &[u8]) -> io::Result<()> {
         use std::os::unix::fs::MetadataExt;
         self.check()?;
@@ -439,32 +469,11 @@ impl Store {
         let result = (|| {
             new.write_all(bytes)?;
             new.sync_all()?;
-            let rc = unsafe {
-                libc::syscall(
-                    libc::SYS_renameat2,
-                    self.dir.as_raw_fd(),
-                    from.as_ptr(),
-                    self.dir.as_raw_fd(),
-                    to.as_ptr(),
-                    2u32,
-                )
-            };
-            if rc != 0 {
-                return Err(io::Error::last_os_error());
-            }
+            self.exchange(&from, &to)?;
             let displaced = self.file(&tmp, false)?;
             let after = displaced.metadata()?;
             if before.dev() != after.dev() || before.ino() != after.ino() {
-                unsafe {
-                    libc::syscall(
-                        libc::SYS_renameat2,
-                        self.dir.as_raw_fd(),
-                        from.as_ptr(),
-                        self.dir.as_raw_fd(),
-                        to.as_ptr(),
-                        2u32,
-                    );
-                }
+                let _ = self.exchange(&from, &to);
                 return Err(invalid());
             }
             let published = self.file(key, false)?.metadata()?;
@@ -602,7 +611,6 @@ mod tests {
         fs::remove_dir_all(path).unwrap();
     }
 
-    #[cfg(target_os = "linux")]
     #[test]
     fn checked_replace_preserves_symlink_and_hardlink_targets() {
         let path = temp();
@@ -628,6 +636,28 @@ mod tests {
                 .file_type()
                 .is_symlink()
         );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn checked_replace_keeps_open_reader_on_original_inode_and_cleans_temporary_leaf() {
+        use std::io::Read;
+        let path = temp();
+        let store = Store::open(&path).unwrap();
+        store.write_new("record.json", b"original").unwrap();
+        let mut reader = store.file("record.json", false).unwrap();
+        store
+            .replace_checked("record.json", b"replacement")
+            .unwrap();
+        let mut original = Vec::new();
+        reader.read_to_end(&mut original).unwrap();
+        assert_eq!(original, b"original");
+        assert_eq!(store.read("record.json").unwrap().unwrap(), b"replacement");
+        let entries: Vec<_> = fs::read_dir(&path)
+            .unwrap()
+            .map(|e| e.unwrap().file_name())
+            .collect();
+        assert_eq!(entries, ["record.json"]);
         fs::remove_dir_all(path).unwrap();
     }
 }

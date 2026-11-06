@@ -1020,11 +1020,7 @@ fn replace_state(job: &SecureStore, value: &str) -> Result<()> {
     let bytes = serde_json::to_vec(&State {
         state: value.into(),
     })?;
-    #[cfg(target_os = "linux")]
     job.replace_checked("state.json", &bytes)?;
-    #[cfg(not(target_os = "linux"))]
-    return Err(std::io::Error::other("Media/2 registry is Linux-only").into());
-    #[cfg(target_os = "linux")]
     Ok(())
 }
 
@@ -1528,5 +1524,5 @@ fn hex(bytes: &[u8]) -> String {
     out
 }
 
-#[cfg(all(test, target_os = "linux"))]
+#[cfg(test)]
 mod tests;
