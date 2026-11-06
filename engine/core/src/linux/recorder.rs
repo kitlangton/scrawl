@@ -1,5 +1,6 @@
 //! GStreamer-backed Linux recording source and execution.
 use std::path::Path;
+use std::fs::File;
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, OnceLock};
@@ -174,6 +175,7 @@ pub struct Recorder {
     video: bool,
     first_frame_ms: Arc<AtomicU64>,
     last: Option<Vec<u8>>,
+    pinned_movie: Option<File>,
 }
 
 impl Recorder {
@@ -184,8 +186,28 @@ impl Recorder {
         movie: Option<&Path>,
         started_at: Instant,
     ) -> Result<Self> {
+        Self::new_output(source, out, candidate, movie, None, started_at)
+    }
+
+    /// Capture into a caller-created empty file. Retain our own descriptor so
+    /// replacing the original pathname cannot redirect the recording.
+    pub fn new_with_file(
+        source: &Source, out: (u32, u32), candidate: (u32, u32),
+        movie: &File, started_at: Instant,
+    ) -> Result<Self> {
         init_gstreamer()?;
-        let encoder = movie.and(encoder());
+        ensure!(encoder().is_some(), "No H.264 encoder is available");
+        ensure!(movie.metadata()?.is_file() && movie.metadata()?.len() == 0,
+            "Recording output must be an empty regular file");
+        Self::new_output(source, out, candidate, None, Some(movie.try_clone()?), started_at)
+    }
+
+    fn new_output(
+        source: &Source, out: (u32, u32), candidate: (u32, u32),
+        movie: Option<&Path>, pinned_movie: Option<File>, started_at: Instant,
+    ) -> Result<Self> {
+        init_gstreamer()?;
+        let encoder = if movie.is_some() || pinned_movie.is_some() { encoder() } else { None };
         let (w, h) = out;
         let (cw, ch) = candidate;
         let mut launch = format!(
@@ -193,10 +215,14 @@ impl Recorder {
              t. ! queue max-size-buffers=2 leaky=downstream ! videoconvert ! videoscale ! video/x-raw,format=RGBA,width={cw},height={ch},pixel-aspect-ratio=1/1 ! appsink name=candidates max-buffers=1 drop=true sync=false emit-signals=false",
             source_launch(source)
         );
-        if let (Some(encoder), Some(movie)) = (encoder, movie) {
+        if let Some(encoder) = encoder {
+            let sink = if let Some(file) = &pinned_movie {
+                format!("fdsink name=movie_sink fd={} sync=false", file.as_raw_fd())
+            } else if let Some(movie) = movie {
+                format!("filesink name=movie_sink location=\"{}\"", movie.display().to_string().replace('"', "\\\""))
+            } else { unreachable!() };
             launch.push_str(&format!(
-                " t. ! queue max-size-time=3000000000 max-size-buffers=0 max-size-bytes=0 ! videorate ! video/x-raw,framerate={FPS}/1 ! videoconvert ! video/x-raw,format=I420 ! {encoder} name=encoder ! h264parse ! mp4mux faststart=true ! filesink name=movie_sink location=\"{}\"",
-                movie.display().to_string().replace('"', "\\\"")
+                " t. ! queue max-size-time=3000000000 max-size-buffers=0 max-size-bytes=0 ! videorate ! video/x-raw,framerate={FPS}/1 ! videoconvert ! video/x-raw,format=I420 ! {encoder} name=encoder ! h264parse ! mp4mux faststart=true ! {sink}"
             ));
         }
         let pipeline = gst::parse::launch(&launch)
@@ -259,6 +285,7 @@ impl Recorder {
             video,
             first_frame_ms,
             last: None,
+            pinned_movie,
         })
     }
 
@@ -377,6 +404,15 @@ impl Recorder {
 }
 
 /// `videocrop`'s edges for keeping `[x, y, w, h]` of the stream, set once its size is known.
+impl Drop for Recorder {
+    fn drop(&mut self) {
+        if self.pinned_movie.is_some() {
+            // Stop native access before the retained output descriptor closes.
+            let _ = self.pipeline.set_state(gst::State::Null);
+        }
+    }
+}
+
 fn crop_edges(element: &gst::Element, crop: [u32; 4]) {
     let Some(pad) = element.static_pad("sink") else {
         return;
@@ -426,6 +462,34 @@ mod tests {
     use super::*;
 
     #[test]
+    fn pinned_movie_keeps_its_inode_when_the_original_path_is_replaced() {
+        use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
+        let dir = std::env::temp_dir().join(format!("apparent-pinned-{}", crate::new_id().unwrap()));
+        std::fs::DirBuilder::new().mode(0o700).create(&dir).unwrap();
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) { let _ = std::fs::remove_dir_all(&self.0); }
+        }
+        let _cleanup = Cleanup(dir.clone());
+        let original = dir.join("movie.mp4");
+        let retained = dir.join("retained.mp4");
+        let file = std::fs::OpenOptions::new().read(true).write(true)
+            .create_new(true).mode(0o600).open(&original).unwrap();
+        let mut recorder = Recorder::new_with_file(&Source::Test,
+            (160, 90), (80, 45), &file, Instant::now()).unwrap();
+        // The recorder owns a duplicate descriptor independently of this handle.
+        drop(file);
+        std::fs::rename(&original, &retained).unwrap();
+        std::fs::write(&original, b"replacement must survive").unwrap();
+        wait_for_candidate(&mut recorder);
+        assert!(recorder.finish(|error| panic!("finish failed: {error}")));
+        assert_eq!(std::fs::read(&original).unwrap(), b"replacement must survive");
+        let frames = super::super::media::frames(&retained,
+            super::super::media::FrameTimes::At(&[0]), 0).unwrap();
+        assert_eq!((frames[0].width, frames[0].height), (160, 90));
+    }
+
+    #[test]
     fn source_owns_stream_fd_and_sends_close_only_when_dropped() {
         use std::io::Read;
         use std::os::unix::net::UnixStream;
@@ -455,6 +519,7 @@ mod tests {
             video: false,
             first_frame_ms: Arc::new(AtomicU64::new(u64::MAX)),
             last: Some(pixels.clone()),
+            pinned_movie: None,
         };
         let first = recorder.candidate(|rgba, _, _| rgba[..4].fill(0)).unwrap();
         assert_eq!(&first.rgba[..4], &[0; 4]);
