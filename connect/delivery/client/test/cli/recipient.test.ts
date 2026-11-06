@@ -75,3 +75,20 @@ test("cancellation before and during credential loading prevents subsequent effe
   const after = await runRecipientCommand(command, deps({ cancelled: during.signal, loadCredential: async () => { during.abort(); return { server: "http://127.0.0.1:1", token: "synthetic", grantId: "reader" }; }, publish: async () => { calls++; throw Error(); } }));
   assert.deepEqual(after, { ok: false, error: { category: "cancelled", message: "cancelled" } }); assert.equal(calls, 0);
 });
+
+
+test("recipient command intent is pinned before waiting for credentials", async () => {
+  let requested = "";
+  const server = createServer((request, response) => { requested = request.url!; response.writeHead(404).end(); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert(address && typeof address !== "string");
+  const command = parseRecipientCommand(["fetch", id, "--out", "./original"]);
+  assert.equal(command.kind, "fetch"); if (command.kind !== "fetch") throw Error();
+  try {
+    await runRecipientCommand(command, deps({ loadCredential: async () => {
+      command.id = "b".repeat(32); command.out = "./changed";
+      return { server: `http://127.0.0.1:${address.port}`, token: "synthetic", grantId: "reader" };
+    } }));
+    assert.equal(requested, `/v1/captures/${id}`);
+  } finally { server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+});

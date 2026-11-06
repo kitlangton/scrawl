@@ -14,6 +14,8 @@ export type RecipientReadCredential = {
 export type RetrieveRecipientInput = {
   credential: RecipientReadCredential; captureId: string; evidenceOnly?: boolean;
   waitSeconds?: number; allowLegacyPlaintext?: boolean; signal?: AbortSignal;
+  /** Borrowed identity, loaded only after the service explicitly selects encryption. */
+  resolveIdentity?: () => Promise<{ age: string; signing: Uint8Array }>;
 };
 /** Data verified for a subsequent private publication, not a published bundle. */
 export type RetrievedRecipientCapture = {
@@ -151,6 +153,11 @@ export async function retrieveRecipientCapture(input: RetrieveRecipientInput): P
       for (const asset of recipientAssets(manifest.files)) append([{ ...asset, bytes: await download(transport, base + "/files/", asset) }]);
       validateRecipientReferences(files, { origin: transport.server, accountId: "", captureId, senderGrantId: "" });
     } else if (format === "apparent-encrypted-v1") {
+      if (!credential.identity && input.resolveIdentity) {
+        const identity = await input.resolveIdentity();
+        allowed(signal);
+        credential.identity = { age: identity.age, signing: new Uint8Array(identity.signing) };
+      }
       if (!credential.identity || !graphic(credential.grantId) || credential.identity.signing.length !== 32) fail("encryption_identity_unavailable");
       let ownKey: Key;
       try { ownKey = { version: 1, recipient: await identityToRecipient(credential.identity.age),

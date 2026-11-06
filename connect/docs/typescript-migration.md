@@ -34,7 +34,7 @@ the admitted native resource adapter for ACL checks and atomic no-replace
 publication. Linux and Mac consumer tests cover the full filesystem path and a
 synthetic encrypted CLI fetch; uncertain outcomes retain their data without retry
 or deletion. This is an injected library capability, not installed adoption:
-credential loading/renewal, provider assembly and the production CLI route still
+installed credential loading/renewal, provider assembly and the production CLI route still
 use the authoritative legacy path until their separate acceptance gates pass.
 
 Stored credential wire decoding, private-descriptor reading and queue-locked
@@ -44,6 +44,15 @@ login-incarnation fences preserve the legacy lock protocol; stored facts do not
 authorize transport or clear `authRequired`. Renewal journals, token expiry and
 service authorization policy, installed caller adoption and writer cutover remain
 parent integration work. Rust remains the sole credential and queue JSON writer.
+
+The state-backed recipient command now joins these read capabilities with the
+legacy `<login-id>.identity` format, authenticated retrieval and native private
+publication. It checks local credential lifetime, lazily reads keys only for
+encrypted manifests and rechecks the local snapshot before publication. Explicit
+legacy plaintext policy remains separate. Expired renewable access reports
+`renewal_required`; durable renewal/recovery and installed routing remain open.
+The package API has Linux/Mac native joined-consumer proof, not installed CLI
+adoption or writer-cutover proof.
 
 
 Read with [hosted-client.md](hosted-client.md), [hosted-api.md](hosted-api.md),

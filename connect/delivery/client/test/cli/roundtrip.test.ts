@@ -1,6 +1,11 @@
 import assert from "node:assert/strict";
 import { test } from "node:test";
 import { createServer } from "node:http";
+import { mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import path from "node:path";
+import { tmpdir } from "node:os";
+import { runRecipientCommandFromState } from "../../src/cli/recipient-state.ts";
+import type { StateRecipientOptions } from "../../src/cli/recipient-state.ts";
 import { once } from "node:events";
 import { createHash } from "node:crypto";
 import * as ed from "@noble/ed25519";
@@ -11,9 +16,10 @@ const bytes = (s: string) => new TextEncoder().encode(s);
 
 test("headless fetch and remote inspect retrieve authenticated groups before committed publication", async () => {
   const id = "a".repeat(32), routes = new Map<string, unknown>(), hits: string[] = [];
-  const http = createServer((req, res) => {
+  let beforeResponse: ((url: string) => Promise<void>) | undefined;
+  const http = createServer(async (req, res) => {
     assert.equal(req.headers.authorization, "Bearer synthetic"); assert.equal(req.headers.cookie, undefined);
-    hits.push(req.url!); const body = routes.get(req.url!);
+    hits.push(req.url!); await beforeResponse?.(req.url!); const body = routes.get(req.url!);
     if (body === undefined) { res.writeHead(404).end(); return; }
     res.end(body instanceof Uint8Array ? body : JSON.stringify(body));
   });
@@ -57,5 +63,28 @@ test("headless fetch and remote inspect retrieve authenticated groups before com
     assert(!hits.some(path => path.includes("/files/media/")));
     assert.deepEqual(await runRecipientCommand(parseRecipientCommand(["fetch", id, "--out", "./full", "--media"]), dependencies), { ok: true, path: "./full" });
     assert(hits.some(path => path.includes("/files/media/"))); assert.equal(publications, 2);
+    const root = await mkdtemp(path.join(await realpath(tmpdir()), "connect-state-command-")), state = path.join(root, "state");
+    try {
+      await mkdir(state, { mode: 0o700 });
+      const identityId = "c".repeat(32);
+      await writeFile(path.join(state, "read.credential"), JSON.stringify({ server: origin, scope: "read", token: "synthetic", generation: "b".repeat(32), grantId: "reader",
+        refreshToken: "refresh", expiresAt: 200, refreshExpiresAt: 400, encryption_identity: identityId }), { mode: 0o600 });
+      await writeFile(path.join(state, `${identityId}.identity`), JSON.stringify({ version: 1, age: reader.identity, signing: Buffer.from(ownSeed).toString("hex") }), { mode: 0o600 });
+      const resources: StateRecipientOptions["resources"] = {
+        checkAcl: async h => { await h.close(); return { state: "accepted" }; },
+        lock: async h => { await h.close(); let held = true; return { state: "acquired", lease: { signal: new AbortController().signal, assertHeld() { if (!held) throw Error(); }, async release() { held = false; } } }; },
+        publish: async (h, source, destination) => { try { await rename(path.join(root, source), path.join(root, destination)); return { state: "published" }; } finally { await h.close(); } },
+      };
+      const options = { directory: state, approvedServer: origin, resources, inspectLocal: async (source: string) => source, nowSeconds: () => 100 };
+      const destination = path.join(root, "state-backed.apparent");
+      assert.deepEqual(await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", destination]), options), { ok: true, path: destination });
+      assert.equal(await readFile(path.join(destination, "summary.md"), "utf8"), "synthetic evidence");
+      let peers = 0;
+      beforeResponse = async url => { if (url === "/v1/encryption/peers" && ++peers === 2) await writeFile(path.join(state, "cancellation"), JSON.stringify("new epoch"), { mode: 0o600 }); };
+      const refused = await runRecipientCommandFromState(parseRecipientCommand(["fetch", id, "--out", path.join(root, "cancelled.apparent")]), options);
+      assert.deepEqual(refused, { ok: false, error: { category: "stale_snapshot", message: "stale_snapshot" } });
+      await assert.rejects(readFile(path.join(root, "cancelled.apparent", "summary.md")));
+    } finally { beforeResponse = undefined; await rm(root, { recursive: true, force: true }); }
+
   } finally { http.close(); http.closeAllConnections(); await once(http, "close"); }
 });
