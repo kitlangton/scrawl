@@ -27,7 +27,7 @@ export function validateResourceArtifact(directory: string, target: ResourceTarg
     if (!stat.isFile() || stat.isSymbolicLink() || stat.nlink !== 1 || stat.mode & 0o022) throw new Error("invalid_resource_artifact");
   }
   const binary = resolve(directory, "apparent-resource-host"), stat = lstatSync(binary);
-  if ((stat.mode & 0o777) !== 0o755 || stat.size > 16 * 1024 * 1024) throw new Error("invalid_resource_artifact");
+  if ((stat.mode & 0o7777) !== 0o755 || stat.size > 16 * 1024 * 1024) throw new Error("invalid_resource_artifact");
   const manifestStat = lstatSync(resolve(directory, "manifest.json"));
   if (manifestStat.size > 4096) throw new Error("invalid_resource_artifact");
   const raw = readFileSync(resolve(directory, "manifest.json"), "utf8");

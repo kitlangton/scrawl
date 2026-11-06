@@ -46,13 +46,28 @@ export class NativeLockLease {
 
 export type LockResult = { state: "acquired"; lease: NativeLockLease } | { state: "busy" | "cancelled" | "failed" | "refused" };
 export type PublicationResult = { state: "published" | "destination_exists" | "refused" | "publication_uncertain" };
-const basename = (value: string) => typeof value === "string" && /^[A-Za-z0-9._-]{1,255}$/.test(value) && value !== "." && value !== "..";
+function basename(value: string): boolean {
+  if (typeof value !== "string" || !value.length || value.length > 4096 || value === "." || value === ".." || value.includes("/") || value.includes("\0") || Buffer.byteLength(value, "utf8") > 4096) return false;
+  for (const character of value) { const cp = character.codePointAt(0)!; if (cp >= 0xd800 && cp <= 0xdfff) return false; }
+  return true;
+}
 
 /** Privileged resource adapter. Provider bytes/provenance must be admitted by
  * assembly. Never expose this object or inherited descriptors to a renderer. */
 export class NativeResources {
   #provider: ResourceProvider;
   constructor(provider: ResourceProvider) { this.#provider = { ...provider }; }
+  /** Consumes a file/directory descriptor. This only checks native ACL facts;
+   * acceptance does not establish private modes, ancestor safety or authority.
+   * Older helpers refuse the unknown operation, so callers fail closed. */
+  async checkAcl(handle: FileHandle): Promise<{ state: "accepted" | "refused" }> {
+    const session = await launch(this.#provider, ["acl"], handle);
+    try {
+      const state = await session.next(10_000);
+      if (state !== "accepted" && state !== "refused") throw new NativeResourceError("protocol_error");
+      await session.exit(); return { state };
+    } catch (error) { session.fail("process_failed"); throw error; }
+  }
   /** Consumes handle on every outcome. The caller must not retain duplicate FDs
    * and must validate path-to-inode identity and its own lock ordering. */
   async lock(handle: FileHandle, options: { timeoutMs: number; signal?: AbortSignal }): Promise<LockResult> {
