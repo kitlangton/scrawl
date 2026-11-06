@@ -6,7 +6,7 @@ import { normalizeRecipientServer, RecipientTransportError } from "../recipient/
 import type { RecipientReadCredential } from "../recipient/retrieve.ts";
 import { admitTrustedDirectory, directoryIdentity } from "./directory.ts";
 import { consumePrivateFile, PrivateFileError } from "./private-file.ts";
-import { readCredentialSnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources, type CredentialSnapshot } from "./namespace.ts";
+import { readCredentialRecoverySnapshot, assertCredentialSnapshotCurrent, CredentialSnapshotError, type NamespaceResources } from "./namespace.ts";
 
 export type RecipientSessionFailure = "auth_required" | "renewal_required" | "encryption_identity_missing" | "encryption_identity_unavailable"
   | "state_unavailable" | "stale_snapshot" | "revocation_pending" | "invalid_server" | "cancelled";
@@ -28,6 +28,8 @@ export type RecipientReadSession = {
   readonly credential: RecipientReadCredential;
   resolveIdentity(): Promise<{ age: string; signing: Uint8Array }>;
   assertCurrent(): Promise<void>;
+  /** Reloads existing writer state only; never sends a refresh request. */
+  reloadAfterUnauthorized(): Promise<RecipientReadSession>;
   dispose(): void;
 };
 
@@ -37,10 +39,10 @@ export async function openRecipientReadSession(directory: string, approvedServer
   options: { signal?: AbortSignal; nowSeconds?: () => number } = {}): Promise<RecipientReadSession> {
   const signal = options.signal, clock = options.nowSeconds ?? (() => Math.floor(Date.now() / 1000));
   const cancelled = () => { if (signal?.aborted) fail("cancelled"); };
-  let snapshot: CredentialSnapshot;
-  try { cancelled(); snapshot = await readCredentialSnapshot(directory, { scope: "read", approvedServer: normalizeRecipientServer(approvedServer) }, resources, { signal }); }
+  let loaded: Awaited<ReturnType<typeof readCredentialRecoverySnapshot>>;
+  try { cancelled(); loaded = await readCredentialRecoverySnapshot(directory, { scope: "read", approvedServer: normalizeRecipientServer(approvedServer) }, resources, { signal }); }
   catch (error) { return stateFailure(error); }
-  const stored = snapshot.credential;
+  const snapshot = loaded.snapshot, stored = loaded.credential;
   const checkLifetime = () => {
     const now = clock();
     if (!Number.isSafeInteger(now) || now < 0) fail("state_unavailable");
@@ -51,12 +53,13 @@ export async function openRecipientReadSession(directory: string, approvedServer
   let disposed = false;
   let identity: { age: string; signing: Uint8Array } | undefined;
   let resolving: Promise<{ age: string; signing: Uint8Array }> | undefined;
-  const assertCurrent = async () => {
-    if (disposed) fail("cancelled"); cancelled(); checkLifetime();
+  const assertIncarnation = async () => {
+    if (disposed) fail("cancelled"); cancelled();
     try { await assertCredentialSnapshotCurrent(directory, snapshot, resources, { signal }); }
     catch (error) { return stateFailure(error); }
-    if (disposed) fail("cancelled"); cancelled(); checkLifetime();
+    if (disposed) fail("cancelled"); cancelled();
   };
+  const assertCurrent = async () => { checkLifetime(); await assertIncarnation(); checkLifetime(); };
   const loadIdentity = async () => {
     await assertCurrent();
     const id = stored.encryption_identity;
@@ -92,6 +95,16 @@ export async function openRecipientReadSession(directory: string, approvedServer
     credential: Object.freeze({ server: stored.server, token: stored.token, grantId: stored.grantId ?? "" }),
     async resolveIdentity() { if (disposed) fail("cancelled"); cancelled(); return resolving ??= loadIdentity(); },
     assertCurrent,
+    async reloadAfterUnauthorized() {
+      await assertIncarnation();
+      let next: RecipientReadSession | undefined;
+      try {
+        next = await openRecipientReadSession(directory, approvedServer, resources, { signal, nowSeconds: clock });
+        await assertIncarnation();
+        if (next.credential.token === stored.token) fail(stored.refreshToken === null ? "auth_required" : "renewal_required");
+        return next;
+      } catch (error) { next?.dispose(); return stateFailure(error); }
+    },
     dispose() { disposed = true; identity?.signing.fill(0); },
   });
 }
