@@ -21,7 +21,7 @@
     "./styles.css": "./dist/styles.css"
   },
   "scripts": {
-    "build": "rm -rf dist && tsc -p tsconfig.json && esbuild src/controller.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=dist/controller.js && cp src/styles.css dist/styles.css && mkdir -p dist/assets && cp src/assets/frog.png dist/assets/frog.png",
+    "build": "rm -rf dist && tsc -p tsconfig.json && esbuild src/controller.ts --bundle --format=esm --platform=neutral --target=es2022 --outfile=dist/controller.js && cp src/styles.css dist/styles.css && mkdir -p dist/assets && cp src/assets/frog.png src/assets/apparent-app-icon.svg dist/assets/",
     "typecheck": "tsc --noEmit -p tsconfig.json && tsc --noEmit -p tsconfig.test.json",
     "test": "npm run build && node --experimental-strip-types --test test/*.test.ts",
     "prepare": "npm run build",

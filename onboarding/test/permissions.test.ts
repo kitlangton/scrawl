@@ -7,6 +7,7 @@ import { createRecordFixture } from "@apparent/record/fixtures";
 import type { CapabilitySnapshot, NativeRequirement, RecordClient } from "@apparent/record/capabilities";
 import { PermissionRepairController, type RepairTimer } from "../dist/permissions/controller.js";
 import { PermissionRepairContribution } from "../dist/permissions/react.js";
+import { permissionName, permissionStatus } from "../dist/permissions/presentation.js";
 import { OnboardingController } from "../dist/controller.js";
 import { initialProgress, type ProgressStore, type OnboardingProgress, type SaveResult } from "../dist/model.js";
 
@@ -41,6 +42,18 @@ function publish(driver: ReturnType<typeof createRecordFixture>["driver"], requi
   assert.equal(driver.publish({ ...current, revision: current.revision + 1, connection, readiness: { requirements } }), true);
 }
 const requirement = (id: string, patch: Partial<NativeRequirement> = {}): NativeRequirement => ({ id, required: true, status: "not-determined", usableNow: false, relaunchNeeded: false, allowedRepairActions: ["request-permission"], ...patch });
+
+test("permission presentation names supported IDs, safely labels future IDs, and describes readiness facts", () => {
+  assert.equal(permissionName("screen-capture"), "Screen Recording");
+  assert.equal(permissionName("screen-recording"), "Screen Recording");
+  assert.equal(permissionName("speech-recognition"), "Speech Recognition");
+  assert.equal(permissionName("future-internal-id"), "Access");
+  for (const id of ["constructor", "__proto__", "toString", "hasOwnProperty"]) assert.equal(permissionName(id), "Access");
+  assert.equal(permissionStatus(undefined), "Unavailable");
+  assert.equal(permissionStatus(requirement("camera", { status: "granted", usableNow: false })), "Granted · not ready");
+  assert.equal(permissionStatus(requirement("camera", { status: "granted", usableNow: true })), "Ready");
+  assert.equal(permissionStatus(requirement("camera", { status: "granted", relaunchNeeded: true })), "Reopen Apparent to use this access");
+});
 
 test("explicit repair requests only its subset, including optional camera; permission acceptance is not a grant", async () => {
   const f = fixture();
@@ -121,7 +134,7 @@ test("mounted repair controls are owner activation seam; Later preserves tour pr
   const host = document.createElement("div"); document.body.append(host); const root = createRoot(host);
   let closed = 0;
   await act(async () => { root.render(createElement(PermissionRepairContribution, { controller: f.controller, requestedIds: ["camera"], Button, close: () => { closed++; } })); });
-  assert.match(host.textContent ?? "", /Camera/); assert.doesNotMatch(host.textContent ?? "", /Screen Recording/);
+  assert.match(host.textContent ?? "", /Camera/); assert.doesNotMatch(host.textContent ?? "", /Screen Recording/); assert.doesNotMatch(host.textContent ?? "", /camera/);
   const request = [...host.querySelectorAll("button")].find(button => button.textContent === "Request access"); assert.ok(request);
   await act(async () => { request!.dispatchEvent(new dom.window.MouseEvent("click", { bubbles: true })); await new Promise(resolve => setTimeout(resolve, 0)); });
   assert.deepEqual(f.driver.commands().map(command => command.type), ["request-permission"]);
