@@ -775,11 +775,11 @@ fn request_binding(v: &Value) -> Value {
     json!({"captureId":v["captureId"],"ownerToken":v["ownerToken"],"bundleId":v["bundleId"],"bundlePath":v["bundlePath"],"source":v["source"],"options":v["options"],"invocation":v["invocation"]})
 }
 fn active_status(shared: &Shared) -> Result<Value, &'static str> {
+    let prior = shared.journal.lock().map_err(|_| "internal")?.clone();
     let transaction = shared
         .runtime
         .capture_transaction()
         .map_err(|_| "internal")?;
-    let prior = shared.journal.lock().map_err(|_| "internal")?.clone();
     let durable = read_journal(&shared.directory, &prior.capture_id, &prior.owner_token)?;
     drop(transaction);
     let mut j = shared.journal.lock().map_err(|_| "internal")?;
