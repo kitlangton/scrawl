@@ -14,7 +14,7 @@ This inventory is based on the active parser and handlers in `composition/cli.rs
 | `export` | Engine media pipeline and platform encoders; H.264/HEVC, crop, zoom, timing, ink, clicks and audio policies. | Not implemented. Depends on published Engine export/media capabilities and affected-platform proof. |
 | `reprocess`, `retranscribe`, `recover` | Engine pipeline, transcription and bundle durability. | Not implemented. Depends on Engine processing and safe publication APIs. |
 | `clean`, `pin` | Engine bundle retention/durability. | Not implemented. Depends on an Engine-owned local storage/retention contract. |
-| `copy` | Desktop clipboard and handoff UI/native integration. | Not implemented. Depends on an Agent-safe handoff contract; no session posting is implied. |
+| `copy` | Agent local handoff policy through Record and the published native Host clipboard port. | **Partial: text handoff.** `copy [BUNDLE|latest]` regenerates Record semantic handoff text with the standalone inspection command, reads the existing `agentDemoVideo` preference (on by default), and requests one exact UTF-8 write against a fresh Host snapshot. Only matching Applied digest/byte length succeeds; unknown outcomes return exit 3 without retry. A compatible running GUI is required; no auto-launch, image copy, paste, session posting, viewer opening or Saved claim. Native Host package/source and affected-platform adoption gates remain separate. |
 | `preview` | Desktop GPUI review window. | Not implemented. UI-owned; preserve the installed desktop behavior. Agent CLI is not a review workspace. |
 | `app`, `launch`, `launch-handler install|status`, `shortcut record|paste`, `devices`, `mic list|set|watch` | Desktop lifecycle, OS registration, shortcuts and native device enumeration. | Not implemented. Desktop/native owner routed; requires published OS integration capabilities and per-platform checks. |
 | `update status|channel|check` | Desktop Linux AppImage updater. | Not implemented. Desktop/Linux updater owner routed. |
@@ -48,7 +48,7 @@ The legacy Rust command remains until every supported installed/package-manager 
 The standalone npm package includes `apparent-agent-install-local`, which
 accepts a local Agent tarball, its trusted expected SHA-256, a complete native
 media root, its trusted manifest SHA-256, and a fresh absolute prefix. It
-supports Linux x64 only and requires Node 22.13+ plus existing npm. It verifies
+supports Linux x64 only and requires Node 22.18+ plus existing npm. It verifies
 the Agent archive before invoking `npm --offline --ignore-scripts`, checks the
 installed Agent/SDK versions and media export, verifies every regular file,
 mode and hash in the native inventory before and after copying, then requires

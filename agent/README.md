@@ -34,7 +34,7 @@ Synthetic demo generation owns its fresh private output directory until the mani
 
 `latest` reads the configured `APPARENT_CAPTURES_DIR`, then the read-only `capturesDir` in `~/.config/apparent/config.json`, then the OS default. It skips malformed, incomplete, and unsupported bundles. Manifest and explicit stored-summary reads are strict UTF-8, capped at 64 MiB, and reject symlink files. Invalid relative config values are skipped; a valid explicitly selected but unavailable capture directory produces a read error instead of creating storage or silently selecting another recording. Linux defaults honor XDG_DATA_HOME. `--marks` retains ids, timestamps, frame references, stroke counts, labels, and numbering metadata. `--images` lists safe relative references, including uncropped frames when present; it does not inspect image contents. Raw JSON preserves the manifest bytes.
 
-Install the packed package locally with `npm install -g ./apparent-agent-0.1.0.tgz`; it provides `apparent-agent`, leaving the existing `apparent` command unchanged. Build requires Node 22.13+ and TypeScript dev dependencies. The package bundles the authenticated compiled `@apparent/record@0.1.0` and `@apparent/engine-sdk@0.3.2` tarballs. Agent install, build, typecheck, tests and packing compile only Agent source and work from an Agent-only checkout; the SDK's public `/testing` subpaths remain fixtures only. This proves TypeScript source/build isolation, not native recording or media availability, which still require their separately installed Engine provider. Each vendored tarball's receipt and provenance identity are recorded beside it under `vendor/`.
+Install the packed package locally with `npm install -g ./apparent-agent-0.1.0.tgz`; it provides `apparent-agent`, leaving the existing `apparent` command unchanged. Build requires Node 22.18+ and TypeScript dev dependencies. The package bundles the authenticated compiled `@apparent/record@0.1.0` and `@apparent/engine-sdk@0.3.2` tarballs. Agent install, build, typecheck, tests and packing compile only Agent source and work from an Agent-only checkout; the SDK's public `/testing` subpaths remain fixtures only. This proves TypeScript source/build isolation, not native recording or media availability, which still require their separately installed Engine provider. Each vendored tarball's receipt and provenance identity are recorded beside it under `vendor/`.
 
 Both record routes default an omitted `--duration` to 5 seconds; an explicit value must remain greater than 0 and at most 3600 seconds. Timing begins after the native recording readiness receipt, not at process startup. The original `record [--duration] --out` form retains its V1 provider route. Capture/2 is selected only with `record --protocol capture2`; it requires `APPARENT_ENGINE_CAPTURE_EXECUTABLE`, `APPARENT_ENGINE_RUNTIME`, an exact `--source` ID from current discovery, and a normalized absolute `--out`. Use `capture --protocol capture2 sources [--json]` for read-only public SDK discovery; it prints exact IDs/kind/geometry or validated descriptors and never creates Record authority or starts capture. It sends `{audio: "none", localOnly: true}` and never retries through V1. Record owns the durable request mapping, opaque bundle identity and exact destination reservation. Agent retains only versioned public request identity/path metadata under its private control root and prints the public request ID to stderr before start, so `apparent-agent capture --protocol capture2 inspect|stop|cancel <request-id>` can reconnect with the same identity. The requested duration begins after observed recording readiness; startup has a 30-second deadline. SIGINT/SIGTERM request cancellation before recording or stop the observed recording; they do not prove cleanup. The published Capture2Host phases end at `materials-ready`, `processing`, `cancelled`, `failed`, or `unknown`; it exposes no `Saved` phase. Agent therefore always returns a pending/unavailable outcome for materials-ready and processing, even if the receipt contains publication-shaped metadata. No output path or zero exit is inferred from that metadata. A standard Saved terminal outcome remains a producer requirement before Agent can report completion. A separately staged Linux x64 native provider is available for explicit X11 display capture; it is not installed or activated by default, advertises only X11 display sources and half-area selection, and supports silent local capture only. This qualifies the explicit Capture/2 consumer on Linux X11; it does not establish Wayland, macOS, context facts, strokes, transcript, Saved processing, publication, or default CLI routing. V1 recovery remains `apparent-agent capture inspect|stop|cancel <capture-id>` and keeps its existing token journal; capture/2 uses the same command family with explicit protocol selection and no Agent V1 authority journal.
 
@@ -61,7 +61,7 @@ entire native inventory against its manifest before and after copying, and
 requires the installed Agent 0.1.0 and a stable SDK 0.2.x or 0.3.x media export.
 It accepts plain patch releases in those lines; new minor lines and prereleases are refused.
 The media/1 handshake remains mandatory. SDK 0.3's
-capture/2 interface does not enable native recording in this installer. Node 22.13+ and
+capture/2 interface does not enable native recording in this installer. Node 22.18+ and
 an existing npm are required.
 
 ```sh
@@ -86,3 +86,19 @@ Connect is deferred. Standalone Node CLI inspection remains portable without
 the native tree. A failure retains a clearly named private partial prefix and
 never emits a success receipt. Paths are private to cooperating same-UID
 processes; this installer does not promise same-UID isolation.
+
+`apparent-agent copy [BUNDLE|latest]` copies local bundle handoff text through
+the published Host clipboard port. It requires Node 22.18+ and a compatible
+already-running Apparent GUI; it never starts the GUI. Record formats the semantic
+prompt, with `apparent-agent inspect` as the inspection command. Existing
+`experiments.agentDemoVideo` config is read without writing it: video-proof
+guidance is included by default and an explicit false opts out. Destination/session
+metadata is not permission to forward a capture and is omitted from this handoff.
+
+Success confirms only exact clipboard text, using the producer's Applied digest
+and UTF-8 byte length. Images are not copied. The 21800-byte limit is checked before
+Host access; text is never truncated, split or normalized to fit. Refusals fail;
+an unknown write returns exit 3 and must not be retried automatically. Wayland
+ownership can remain unknown even after a write. This does not prove paste,
+agent delivery, viewer opening or native Saved publication. It does not bypass
+native Host package, GUI artifact or platform acceptance gates.
