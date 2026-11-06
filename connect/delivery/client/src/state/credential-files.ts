@@ -1,4 +1,4 @@
-import { constants as C } from "node:fs";
+import { constants as C, type BigIntStats } from "node:fs";
 import { lstat, open, readdir, type FileHandle } from "node:fs/promises";
 import path from "node:path";
 import type { StoredCredential } from "../credentials/wire.ts";
@@ -6,7 +6,7 @@ import { readStoredCredentialHandle } from "../credentials/private-read.ts";
 import { consumePrivateFile } from "./private-file.ts";
 import { decodeStrictJson } from "../recipient/json.ts";
 import { directoryIdentity as identity } from "./directory.ts";
-import { CredentialSnapshotError, type SnapshotFailure, type NamespaceResources } from "./queue-transaction.ts";
+import { CredentialSnapshotError, type SnapshotFailure, type NamespaceResources, type StateDirectory } from "./queue-transaction.ts";
 const fail = (category: SnapshotFailure): never => { throw new CredentialSnapshotError(category); };
 
 export async function pendingIntent(directoryPath: string): Promise<boolean> {
@@ -61,4 +61,17 @@ export async function readCredential(directory: { path: string; identity: string
       if (["invalid_credential", "unsafe_file", "cancelled", "unavailable"].includes(category)) fail(category as SnapshotFailure);
     }
     return fail("unavailable"); }
+}
+
+export const stateFileStamp = (s: BigIntStats) => `${identity(s)}:${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.nlink}`;
+export async function readStateEvidence<T>(directory: StateDirectory, name: string, limit: number,
+  resources: NamespaceResources, signal: AbortSignal, decode: (bytes: Uint8Array) => T) {
+  const file = path.join(directory.path, name);
+  const before = await lstat(file, { bigint: true }).catch(error => { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; });
+  if (!before) return null;
+  const expectedStamp = stateFileStamp(before);
+  const value = await readOptionalStateFile(directory, name, limit, resources, signal, decode);
+  const after = await lstat(file, { bigint: true });
+  if (value === null || !after.isFile() || after.isSymbolicLink() || stateFileStamp(after) !== expectedStamp) fail("unsafe_file");
+  return { value: value!, file, expectedStamp };
 }

@@ -165,6 +165,15 @@ selected frames/images remain caller-attested, and it does not authenticate
 native provenance, supply capture/2 lifecycle, release materials, or prove
 production publication.
 
+`createRecordPublicationOutput` is the durable Saved-to-handoff composition for
+hosts that also need public request facts and exact local handoff resolution.
+It stores the immutable public request ID, video-proof preference, and
+assembler-authored processing value in the existing publication binding before
+dispatch. Only a native Saved receipt matching that binding produces a `saved`
+fact or resolves the same request/artifact pair after restart; delivery remains
+`unknown`. Older bindings without this output context stay unavailable. This
+does not add clipboard effects or infer native origin from local materials.
+
 Binary inputs are fingerprinted by digest and length. Supplied derivative receipts
 are forwarded to the existing stager and SDK validation without asserting provenance.
 Once a durable binding exists, a new composition refuses before staging; use
