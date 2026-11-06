@@ -531,3 +531,39 @@ test("Saved inspection preserves the first exact receipt and observation time", 
     assert.deepEqual(await store.get(captureId), first);
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("recovery descriptors enforce per-record and retained aggregate byte budgets atomically", async () => {
+  const root = await temp();
+  const store = new SqlitePublicationBindingStore(join(root, "private"));
+  const make = (index: number, padding: number) => {
+    const capture = index.toString(16).padStart(32, "0");
+    const publication = (index + 100).toString(16).padStart(32, "0");
+    const input = makeInput(join(root, `${index}.apparent`));
+    const descriptor = { schema: 1 as const, captureId: capture, publicationId: publication, leaseId: input.leaseId,
+      planFile: input.planFile, planBytesBase64: Buffer.alloc(padding, 32).toString("base64"), materials: input.materials };
+    return { captureId: capture, publicationId: publication, planSha256: input.planFile.planSha256,
+      materials: { ...materials.manifest.key, captureId: capture }, leaseId: input.leaseId,
+      bundleId: "take.apparent", bundlePath: join(root, `${index}.apparent`), manifestSha256: "1".repeat(64),
+      state: "reserved" as const, recoveryInput: descriptor };
+  };
+  try {
+    await assert.rejects(store.reserve(make(1, 2 * 1024 * 1024)), /storage is unavailable/);
+    assert.equal((await store.list()).length, 0, "oversized descriptor cannot reserve identity");
+    // These directly exercise store admission, not SDK/native publication validity.
+    const prototype = make(2, 768 * 1024);
+    const bytes = Buffer.byteLength(JSON.stringify(prototype.recoveryInput));
+    const capacity = Math.floor(16 * 1024 * 1024 / bytes);
+    for (let index = 2; index < capacity + 1; index++) await store.reserve(make(index, 768 * 1024));
+    const results = await Promise.allSettled([store.reserve(make(1000, 768 * 1024)),
+      new SqlitePublicationBindingStore(join(root, "private")).reserve(make(1001, 768 * 1024))]);
+    assert.equal(results.filter(item => item.status === "fulfilled").length, 1, "aggregate admission has one remaining slot");
+    const rows = await store.list();
+    assert.equal(rows.length, capacity);
+    assert.ok(rows.reduce((sum, row) => sum + Buffer.byteLength(JSON.stringify(row.recoveryInput)), 0) <= 16 * 1024 * 1024);
+    const original = make(2, 768 * 1024);
+    assert.deepEqual(await store.reserve(original), original, "exact replay succeeds at capacity");
+    await store.observe(original, "cancelled");
+    await assert.rejects(store.reserve(make(2000, 768 * 1024)), /storage is unavailable/);
+    assert.equal((await store.get(original.captureId))?.state, "cancelled", "terminal history remains retained, not evicted for admission");
+  } finally { await rm(root, { recursive: true, force: true }); }
+});

@@ -1,6 +1,6 @@
 import { lstat } from "node:fs/promises";
 import type { CaptureClient, CaptureStatus, PublicationExpectation, CapturePublishInput, CapturePublicationPreflight } from "@apparent/engine-sdk/capture";
-import { SqlitePublicationBindingStore, type PublicationBinding, type PublicationOutputMetadata, type PublicationRecoveryDescriptor } from "./store.js";
+import { maxRecoveryJsonBytes, SqlitePublicationBindingStore, type PublicationBinding, type PublicationOutputMetadata, type PublicationRecoveryDescriptor } from "./store.js";
 
 type PublishInput = CapturePublishInput;
 export type PublicationPreflight = (input: PublishInput, timeoutMs?: number) => CapturePublicationPreflight;
@@ -236,6 +236,15 @@ function sameBinding(left: PublicationBinding, right: PublicationBinding): boole
 }
 
 function recoveryDescriptor(input: PublishInput): PublicationRecoveryDescriptor {
+  // Reject oversized detached bytes before allocating their base64 copies.
+  const documents = [input.planBytes, ...(input.derivatives ?? []).map(item => item.bytes),
+    ...(input.derivatives2 ?? []).flatMap(item => item.layoutBytes ? [item.bytes, item.layoutBytes] : [item.bytes])];
+  let encodedBytes = 0;
+  for (const document of documents) {
+    encodedBytes += 4 * Math.ceil(document.byteLength / 3);
+    if (encodedBytes > maxRecoveryJsonBytes) throw new Error("Record publication recovery metadata exceeds its storage budget; no request was dispatched");
+  }
+
   return {
     schema: 1,
     captureId: input.captureId,

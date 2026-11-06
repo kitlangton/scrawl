@@ -9,10 +9,12 @@ import type { Derivative2DocumentInput } from "@apparent/engine-sdk/media2";
 
 // Frozen SDK 0.4.1 detached-document and publication receipt-count limits.
 const maxPublicationDocumentBytes = 8 * 1024 * 1024;
-const maxMaterialDocumentJsonBytes = 48 * 1024 * 1024;
+const maxMaterialDocumentJsonBytes = 2 * 1024 * 1024;
 const maxRecoveryReceiptCount = 32;
-// Covers 1 plan + 32 receipt docs + 32 detached layouts (base64) and escaped material metadata.
-const maxRecoveryJsonBytes = 768 * 1024 * 1024;
+// Record operational limits are intentionally smaller than SDK document maxima.
+// Retained terminal rows keep their descriptors; capacity exhaustion never deletes history.
+export const maxRecoveryJsonBytes = 2 * 1024 * 1024;
+const maxRetainedRecoveryJsonBytes = 16 * 1024 * 1024;
 
 export interface PublicationOutputMetadata { requestId: string; requestVideoProof: boolean; processing: ProcessingInput }
 export interface PublicationRecoveryDescriptor {
@@ -88,7 +90,7 @@ function valid(value: PublicationBinding): boolean {
 
 function validRecoveryDescriptor(value: PublicationRecoveryDescriptor, binding: PublicationBinding): boolean {
   try {
-    if (!value || value.schema !== 1 || value.captureId !== binding.captureId || value.publicationId !== binding.publicationId ||
+    if (!jsonWithinLimit(value, maxRecoveryJsonBytes) || !value || value.schema !== 1 || value.captureId !== binding.captureId || value.publicationId !== binding.publicationId ||
         value.leaseId !== binding.leaseId || !value.planFile || !value.materials ||
         Object.keys(value).sort().join(",") !== ["captureId", "leaseId", "materials", "planBytesBase64", "planFile", "publicationId", "schema", ...(value.derivatives === undefined ? [] : ["derivatives"]), ...(value.derivatives2 === undefined ? [] : ["derivatives2"])].sort().join(",") ||
         Object.hasOwn(value as object, "ownerToken")) return false;
@@ -108,10 +110,44 @@ function validRecoveryDescriptor(value: PublicationRecoveryDescriptor, binding: 
           (item.layoutBytesBase64 !== null && !decodedBytes(item.layoutBytesBase64, maxPublicationDocumentBytes, false)) ||
           !decodedBytes(item.bytesBase64, maxPublicationDocumentBytes, false)) return false;
     }
-    const json = JSON.stringify(value);
-    return Buffer.byteLength(json) <= maxRecoveryJsonBytes && !hasOwnerTokenKey(value) &&
-      Buffer.byteLength(JSON.stringify(value.materials)) <= maxMaterialDocumentJsonBytes;
+    return !hasOwnerTokenKey(value) && jsonWithinLimit(value.materials, maxMaterialDocumentJsonBytes);
   } catch { return false; }
+}
+
+/** Count serialized bytes without first allocating a potentially huge JSON string. */
+function jsonWithinLimit(value: unknown, maximum: number): boolean {
+  let remaining = maximum;
+  const ancestors = new Set<object>();
+  const spend = (bytes: number) => { remaining -= bytes; return remaining >= 0; };
+  const text = (value: string): boolean => value.length <= remaining && spend(Buffer.byteLength(JSON.stringify(value)));
+  const visit = (value: unknown, depth: number): boolean => {
+    if (depth > 64) return false;
+    if (value === null) return spend(4);
+    if (typeof value === "string") return text(value);
+    if (typeof value === "boolean") return spend(value ? 4 : 5);
+    if (typeof value === "number") return Number.isFinite(value) && spend(String(value).length);
+    if (!value || typeof value !== "object" || ancestors.has(value)) return false;
+    ancestors.add(value);
+    try {
+      if (!spend(2)) return false;
+      let count = 0;
+      if (Array.isArray(value)) {
+        if (value.length > remaining) return false;
+        for (const item of value) {
+          if ((count++ > 0 && !spend(1)) || !visit(item, depth + 1)) return false;
+        }
+      } else {
+        for (const key in value) {
+          if (!Object.hasOwn(value, key)) continue;
+          const item = (value as Record<string, unknown>)[key];
+          if (item === undefined) continue;
+          if ((count++ > 0 && !spend(1)) || !text(key) || !spend(1) || !visit(item, depth + 1)) return false;
+        }
+      }
+      return true;
+    } finally { ancestors.delete(value); }
+  };
+  return visit(value, 0);
 }
 
 function hasOwnerTokenKey(value: unknown): boolean {
@@ -121,7 +157,7 @@ function hasOwnerTokenKey(value: unknown): boolean {
 }
 
 function decodedBytes(value: unknown, maximum: number, allowEmpty: boolean): Buffer | undefined {
-  if (typeof value !== "string" || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) return undefined;
+  if (typeof value !== "string" || value.length > 4 * Math.ceil(maximum / 3) || !/^(?:[A-Za-z0-9+/]{4})*(?:[A-Za-z0-9+/]{2}==|[A-Za-z0-9+/]{3}=)?$/u.test(value)) return undefined;
   const bytes = Buffer.from(value, "base64");
   if ((!allowEmpty && bytes.byteLength === 0) || bytes.byteLength > maximum || bytes.toString("base64") !== value) return undefined;
   return bytes;
@@ -201,6 +237,14 @@ export class SqlitePublicationBindingStore {
         return existing;
       }
       if (binding.output && db.prepare("SELECT 1 AS found FROM publication_binding WHERE json_extract(binding_json, '$.output.requestId') = ? OR bundle_path = ?").get(binding.output.requestId, binding.bundlePath)) throw hostError();
+      if (binding.recoveryInput) {
+        // The write lock makes aggregate admission atomic across processes. Count bytes
+        // in SQLite, without loading all retained descriptors into JavaScript.
+        const row = db.prepare("SELECT COALESCE(SUM(length(CAST(json_extract(binding_json, '$.recoveryInput') AS BLOB))), 0) AS bytes FROM publication_binding").get();
+        const retained = Number(row?.bytes);
+        const added = Buffer.byteLength(JSON.stringify(binding.recoveryInput));
+        if (!Number.isSafeInteger(retained) || retained < 0 || retained + added > maxRetainedRecoveryJsonBytes) throw hostError();
+      }
       db.prepare("INSERT INTO publication_binding (capture_id, publication_id, bundle_path, binding_json) VALUES (?, ?, ?, ?)")
         .run(binding.captureId, binding.publicationId, binding.bundlePath, JSON.stringify(binding));
       db.exec("COMMIT");
