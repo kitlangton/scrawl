@@ -44,11 +44,17 @@ export type ArtifactOpenOutcome = {
   | { ok: true; evidence: "viewer-ack" | "os-observation" }
   | { ok: false; reason: "refused" | "failed" }
 );
+/** Exact supplied-text receipt from a native write/readback operation, scoped to one immutable artifact. */
+export type ClipboardCopyOutcome = {
+  kind: "copy"; at: string; ok: true; evidence: "native-write-readback";
+  artifactId: string; requestId: string; digest: string; byteLength: number;
+};
 export type CaptureOutcome =
   | { kind: GenericCaptureOutcomeKind; at: string; ok: boolean; detail?: string }
   | PickerOutcome
   | AcceptedStrokeOutcome
-  | ArtifactOpenOutcome;
+  | ArtifactOpenOutcome
+  | ClipboardCopyOutcome;
 export type DeliveryEnforcement = "local-only" | "host-default" | "unknown";
 export interface CaptureFact {
   captureId: string;
@@ -129,6 +135,8 @@ export type {
   RecordCapabilityProviderOptions,
   RecordCaptureFacts,
   RecordCaptureFactsPort,
+  RecordClipboardPort,
+  RecordClipboardResult,
   RecordNativeFacts,
   RecordNativePort,
   RecordPenConfigPort,

@@ -75,12 +75,19 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
   let revision = 0;
   let disposed = false;
   let view: PillView | null = null;
+  let copyFeedback: { captureId: string; artifactId: string; message: string } | undefined;
   const observers = new Set<(value: PillView) => void>();
   const publish = (next: CapabilitySnapshot) => {
     if (disposed || retiredEpochs.has(next.providerEpoch) || (snapshot && next.providerEpoch === snapshot.providerEpoch && next.revision < snapshot.revision)) return;
-    if (snapshot && next.providerEpoch !== snapshot.providerEpoch) retiredEpochs.add(snapshot.providerEpoch);
+    if (snapshot && next.providerEpoch !== snapshot.providerEpoch) { retiredEpochs.add(snapshot.providerEpoch); copyFeedback = undefined; }
     snapshot = structuredClone(next);
     view = presentClient(snapshot, ++revision, options);
+    const feedback = copyFeedback;
+    if (view.phase === "completed" && feedback && currentViewCaptureId(snapshot) === feedback.captureId &&
+        snapshot.captures.find(item => item.captureId === feedback.captureId)?.artifactId === feedback.artifactId) {
+      view.warning = feedback.message; view.notice = null;
+      view.pocket = { tone: "warning", title: "Local handoff", description: feedback.message, actionIds: [] };
+    }
     for (const observer of [...observers]) try { observer(structuredClone(view)); } catch { observers.delete(observer); }
   };
   const unsubscribe = client.observe(publish);
@@ -100,6 +107,24 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
       else if (owned && action === "finish" && owned.phase === "recording") command = { ...base, type: "stop-capture", captureId: owned.captureId };
       else if (owned && action === "cancel" && ["starting", "recording"].includes(owned.phase)) command = { ...base, type: "cancel-capture", captureId: owned.captureId };
       else if (owned && action === "inspect" && ["unknown", "failed"].includes(owned.phase)) command = { ...base, type: "inspect-capture", captureId: owned.captureId };
+      else if (action === "copy" && currentView.phase === "completed" && owned?.phase === "saved" && owned.artifactId) {
+        command = { ...base, type: "copy-local", captureId: owned.captureId };
+        try {
+          const result = await client.execute(command);
+          if (disposed || snapshot?.providerEpoch !== observed.providerEpoch || result.snapshot.providerEpoch !== observed.providerEpoch) return;
+          const latest = result.snapshot.revision >= snapshot.revision ? result.snapshot : snapshot;
+          const saved = latest.captures.find(item => item.captureId === owned.captureId && item.artifactId === owned.artifactId);
+          if (!saved) return;
+          copyFeedback = confirmedCopy(saved, command.requestId) ? undefined : { captureId: owned.captureId, artifactId: owned.artifactId,
+            message: result.status === "refused" ? result.reason === "too-large" ? "Handoff exceeds the clipboard limit" : "Copy unavailable" : "Copy outcome unknown" };
+          publish(latest);
+        } catch {
+          if (disposed || snapshot?.providerEpoch !== observed.providerEpoch) return;
+          copyFeedback = { captureId: owned.captureId, artifactId: owned.artifactId, message: "Copy outcome unknown" };
+          publish(snapshot);
+        }
+        return;
+      }
       if (command) await client.execute(command);
     },
   };
@@ -107,7 +132,7 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
   return host;
 
   function currentViewCaptureId(value: CapabilitySnapshot): string | undefined {
-    return activeCapture(value)?.captureId ?? value.captures.filter(item => item.phase === "saved").at(-1)?.captureId;
+    return activeCapture(value)?.captureId ?? value.captures.filter(item => item.phase === "saved" && item.artifactId).at(-1)?.captureId;
   }
 }
 
@@ -118,6 +143,10 @@ function activeCapture(value: CapabilitySnapshot): CaptureFact | undefined {
 function canStart(value: CapabilitySnapshot): boolean {
   return value.connection === "connected" && value.readiness.requirements.every(item => !item.required || (item.usableNow && !item.relaunchNeeded)) &&
     !value.captures.some(item => ["starting", "recording", "processing", "unknown"].includes(item.phase));
+}
+function confirmedCopy(capture: CaptureFact, requestId?: string): boolean {
+  return capture.outcomes.some(outcome => outcome.kind === "copy" && outcome.ok && "evidence" in outcome && outcome.evidence === "native-write-readback" &&
+    outcome.artifactId === capture.artifactId && (!requestId || outcome.requestId === requestId) && /^[0-9a-f]{64}$/u.test(outcome.digest) && Number.isSafeInteger(outcome.byteLength) && outcome.byteLength > 0);
 }
 function presentClient(value: CapabilitySnapshot, revision: number, options: RecordClientPillHostOptions): PillView {
   const active = activeCapture(value);
@@ -136,9 +165,15 @@ function presentClient(value: CapabilitySnapshot, revision: number, options: Rec
     result.warning = "Multiple captures are active or unresolved";
     result.actions = [{ id: "refresh", label: "Check capture", enabled: true, selected: false, primary: true }];
   }
-  if (saved) { result.phase = "completed"; result.label = "Recording saved"; result.actions = [{ id: "record", label: "Record again", enabled: canStart(value), selected: false, primary: true }]; }
+  if (saved) { result.phase = "completed"; result.label = "Recording saved"; result.actions = [
+    { id: "copy", label: "Copy handoff", enabled: true, selected: false, primary: true },
+    { id: "record", label: "Record again", enabled: canStart(value), selected: false, primary: false },
+  ]; }
   if (active?.phase === "unknown") result.actions = [{ id: "inspect", label: "Check status", enabled: true, selected: false, primary: true }];
-  if (saved) result.notice = saved.artifactId ?? null;
+  if (saved) {
+    result.notice = confirmedCopy(saved) ? "Handoff copied" : "Saved locally";
+    result.pocket = { tone: result.warning ? "warning" : "info", title: "Local handoff", description: result.warning ?? "", actionIds: [] };
+  }
   if (active?.delivery === "unknown" || active?.delivery === "local-only")
     result.warning = result.warning ? `${result.warning}; delivery status unavailable` : "Delivery status unavailable";
   return result;

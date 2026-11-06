@@ -267,7 +267,7 @@ fallback route remains authoritative.
 | Capture/2 retained payload and fact bytes | Reader implemented; admitted Linux X11 producer path exists, broader platform adoption pending | SDK 0.4.0 public validators and `@apparent/record/host/materials` provide the packed consumer. Engine #788/#794 source (`5ed32afd`) supplies capture/2 Linux X11 explicit-display/advertised-half-area start, control, retained materials and release production; the admitted native archive is separately identified by delivery evidence. This is producer availability, not installed Record routing or cross-platform proof. Mac, Wayland, audio, picker, drawing, shortcut admission, candidate selection, raw-material decode, and publication adoption remain unavailable or unproven. The published media/1 worker accepts completed bundles, not raw capture/2 materials. |
 | Capture material to Record bundle assembly and authenticated publication | Assembly/publication composition and derivative/2 offline consumer implemented; native authority and installed adoption unavailable | `createCompletedCapturePublisher` validates an observed materials-ready status against original SDK-validated materials and explicit admission, then composes `assembleCanonicalBundle`, `prepareRecordPublication`, and durable recovery. Optional `derivatives2` documents plus `derivative2Artifacts` mappings are validated with packed SDK 0.4.0 and retained as native receipt selectors in the plan. Offline checks do not authenticate origin. Reconnect uses the same durable plan expectation without reassembly/staging. Capture/2 host lifecycle and native materials mechanisms remain separate. Native media/2 lifecycle, visual selection, registry-backed publication authority, final filesystem acceptance, material release and installed adoption remain open. |
 | Keyframes, transcript, bundle contents, warnings and default output | Partially implemented; full adoption blocked | Record formats supplied semantic inputs, including target/session context, interaction labels/marks and processing warnings; default keyframe selection, native final bundle publication and installed handoff are still unadopted. Provider maps Engine v1 `saved` to Record `processing`; only authenticated Record output facts may publish `saved` or a successful save outcome. |
-| Clipboard copy, link and artifact open | Local prompt policy implemented; copy producer owned by Platform with direct return, other receipts blocked | `formatLocalHandoff` preserves semantic context, warnings and the timed request, with access instructions first and no clipboard/publication effect. Dispatch is not success. Platform native-host owns the narrow clipboard write/readback producer and explicitly committed to notify Record when its usable API, native Linux/Mac effect evidence and applicable artifact identity are available. Until that return, copy receipt remains blocked. Link still needs the existing link producer; artifact open needs exact-artifact viewer acknowledgement or supported OS observation. A dispatch is not proof the artifact opened. |
+| Clipboard copy, link and artifact open | Exact-text clipboard adapter, provider receipt mapping and pill action implemented; installed adoption and other receipts remain gated | Platform #833 supplies the privileged clipboard write/readback port. `createRecordLocalClipboardPort` from `@apparent/record/host/native` formats the full handoff resolved for the exact authenticated Saved capture/artifact tuple, preflights Unicode and the injected producer byte limit, reads fresh native admission and performs one write. Only an exact digest/UTF-8-length readback becomes a `copy` outcome with `evidence: "native-write-readback"`, artifact and command IDs; dispatch acceptance, refusal and unknown never become copy success. The public client pill offers Copy handoff for a saved artifact and presents unknown/refusal without retry. Native producer Linux X11/Mac seam evidence is separate from this injected consumer and installed host assembly. The resolver does not authenticate publication; full automatic native publication/output/handoff adoption remains Record-owned. Link needs its existing producer; artifact open still needs exact-artifact viewer acknowledgement or supported OS observation. |
 | Pill/runtime installed binding | Runtime and public pill client composition implemented; native installed routing pending | Runtime #803 (`6f62dcb6`) and public `RecordClientPillHost` #807 are merged. The public pill API can compose the client/runtime with the provider; this is package-level integration, not installed renderer/native permissions or proof of full output. The existing fallback-aware route remains authoritative pending platform composition and affected native proof. |
 | Independent packaging and builds | Record TypeScript package and public exports implemented; end-to-end installed adoption incomplete | `record/package.json` exposes the headless host, capture/2 runtime, native host adapter, processing, publication and UI package entrypoints. The Record package build and packed-consumer checks use TypeScript/Node and do not invoke Cargo; SDK 0.4.0 is a published optional peer and is explicitly installed by relevant packed consumers. These package contracts do not establish a production executable selection, installed route, release or complete Desktop/Engine delivery. |
 | Platform proof | Capture/2 Linux X11 native producer admitted; installed-route and other platform gates remain | Engine #788/#794 capture/2 source (`5ed32afd`) and admitted archive (`f1cbdf70…`) establish a bounded Linux X11 producer path for explicit display/advertised half-area start, control, materials and release. Record's public pill/runtime source and an API-level host-to-worker proof cover that bounded consumer path; they do not establish installed renderer/native permission behavior or whole-output acceptance. Mac, Wayland, audio, picker, drawing, shortcut-admission and raw-material decoding/publication proof remain unavailable. V1 remains separately unavailable; do not infer it from capture/2. |
@@ -285,6 +285,7 @@ const client = createRecordCapabilityProvider({
   native: platformRecordPort, // absent until Platform's committed binding lands
   captureFacts: authenticatedRecordOutputPort, // absent until Engine's assembly/publish channel lands
   penConfig: authoritativePenConfigPort, // existing top-level penColor writer/readback binding
+  clipboard: recordLocalClipboardPort, // privileged exact-text adapter over the published clipboard port
 });
 ```
 
@@ -302,3 +303,28 @@ inspect; it does not reconstruct omitted history or claim an artifact identity.
 The Engine SDK v1 `saved` receipt is only material completion: Record keeps that
 capture in `processing` until the authenticated output port confirms Record's
 assembled artifact. No v1 material receipt can publish Record `saved`.
+
+The local clipboard adapter is injected separately from permission/shortcut actions:
+
+```ts
+const clipboard = createRecordLocalClipboardPort({
+  clipboard: createNativeClipboardPort(), // privileged Platform facade
+  nativeHost: createNativeHostPort(),
+  maximumTextBytes: MAX_UTF8_TEXT_BYTES, // exported by the active producer
+  resolveHandoff: trustedSavedHandoffResolver,
+});
+const client = createRecordCapabilityProvider({ ...ports, clipboard });
+const pill = createRecordClientPillHost(client, { createRequestId });
+```
+
+Only trusted composition receives native ports and the Saved resolver; the renderer
+receives `RecordClient`. The resolver must return the exact capture/artifact pair
+and matching `LocalHandoffInput` from authenticated publication and semantic facts.
+The adapter checks that correlation and copies the existing complete formatter
+output without truncation, splitting, normalization or an inspect-only substitute.
+Invalid text and over-limit output refuse before any write. Native timeout, lost
+reply or mismatched digest/length remains unknown and is never retried or rolled
+back. Wayland's inability to confirm ownership remains unknown. The receipt
+contains a digest/length, never ambient clipboard contents or a private bundle
+path. A copy receipt does not establish paste, delivery or artifact-open success.
+Disposing the pill unsubscribes its view; native transports remain caller-owned.
