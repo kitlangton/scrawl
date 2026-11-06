@@ -70,6 +70,16 @@ test('Connect canonical and legacy OAuth destinations normalize, including libra
  }finally{await f.close();await p.close();}
 });
 
+test('mounted /connect OAuth callback completes the full signed provider flow',async()=>{
+ const p=await provider(),f=await fixture({...p.bindings,SITE_ORIGIN:'https://app.tryapparent.com',API_ORIGIN:'https://app.tryapparent.com/connect'});try{
+  const {response}=await login(f,p,'mounted-callback',{returnTo:'/connect'});
+  assert.equal(response.status,302);
+  assert.equal(response.headers.get('Location'),'https://app.tryapparent.com/connect');
+  assert.match(response.headers.get('Set-Cookie')||'',/__Secure-apparent\.session_token=/);
+  assert.equal((await(await f.call('/v1/session',{cookie:sessionCookie(response)})).json()).authenticated,true);
+ }finally{await f.close();await p.close();}
+});
+
 test('Connect CORS and CSRF share exact explicit origins; device scope remains immutable',async()=>{
  const canonical='https://app.tryapparent.com',legacy='https://hosted.tryapparent.com';
  const f=await fixture({SITE_ORIGIN:canonical,LEGACY_SITE_ORIGIN:legacy});try{
