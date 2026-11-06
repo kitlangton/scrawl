@@ -5,7 +5,7 @@ import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import * as ed25519 from "@noble/ed25519";
 import { encryptAge, generateAgeIdentity, signEnvelope, type Asset, type Context } from "../../src/recipient/crypto.ts";
-import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-transport.ts";
+import { uploadPreparedEncryptedCapture, type PreparedEncryptedCapture, type PreparedEncryptedGroup } from "../../src/sender/encrypted-transport.ts";
 import { RecipientTransportError } from "../../src/recipient/transport.ts";
 
 const id = "0123456789abcdef0123456789abcdef", seed = Uint8Array.from({ length: 32 }, (_, i) => i + 1), enc = new TextEncoder();
@@ -24,8 +24,8 @@ function capture(p: Promise<unknown>, category: string) { return assert.rejects(
 function options(f: Awaited<ReturnType<typeof fixture>>, server: string, overrides: Record<string, unknown> = {}) {
   const recipientGrantIds = ["reader"];
   const { group: _group, ...baseContext } = f.context;
-  return { server, captureId: id, profile: f.context.group ? "evidence-first-v1" as const : "root" as const, context: { ...baseContext, origin: server }, recipientGrantIds, envelope: f.files[0]!, chunks: [f.files[1]!], trustedSenderSigningKey: f.key,
-    ...(f.context.group ? { groups: [{ context: f.context, envelope: f.files[0]!, chunks: [f.files[1]!] }] } : {}),
+  return { server, captureId: id, profile: "root" as const, context: { ...baseContext, origin: server }, recipientGrantIds,
+    envelope: f.files[0]!, chunks: [f.files[1]!], trustedSenderSigningKey: f.key,
     active: () => true, readAsset: async (path: string) => new Uint8Array(f.assets.get(path)!), authorize: async (approvedServer: string, scope: "upload") => ({ approvedServer, scope, token: "synthetic", accountId: "acct", senderGrantId: "sender", recipientGrantIds }), ...overrides };
 }
 test("uploads signed encrypted root snapshot and validates unordered readback", async () => {
@@ -37,9 +37,11 @@ test("uploads signed encrypted root snapshot and validates unordered readback", 
   try { f = await fixture(s.origin); await uploadPreparedEncryptedCapture(options(f, s.origin)); } finally { await s.close(); }
 });
 test("uploads grouped evidence with pinned profile and recipient facts on every request", async () => {
-  let f!: Awaited<ReturnType<typeof fixture>>, media!: Awaited<ReturnType<typeof fixture>>, count = 0, files: Asset[] = [];
-  const s = await server(async (req, res) => { const b = await body(req); count++; if (req.method === "POST" && !req.url?.endsWith("complete")) { const v = JSON.parse(b.toString()); assert.equal(v.delivery, "evidence-first-v1"); files = v.files; res.end(JSON.stringify({ id, status: "pending", format: v.format, delivery: v.delivery })); } else if (req.method === "PUT") res.end("{}"); else if (req.url?.endsWith("/complete")) res.end(JSON.stringify({ id, status: "ready", format: "apparent-encrypted-v1" })); else res.end(JSON.stringify({ id, status: "ready", format: "apparent-encrypted-v1", delivery: "evidence-first-v1", files })); });
-  try { f = await fixture(s.origin, "evidence"); media = await fixture(s.origin, "media"); const opts = options(f, s.origin); opts.groups = [...opts.groups!, { context: media.context, envelope: media.files[0]!, chunks: [media.files[1]!] }]; opts.readAsset = async (path: string) => new Uint8Array(f.assets.get(path) ?? media.assets.get(path)!); await uploadPreparedEncryptedCapture(opts); assert.equal(count, 7); } finally { await s.close(); }
+  let f!: Awaited<ReturnType<typeof fixture>>, media!: Awaited<ReturnType<typeof fixture>>, count = 0, files: Asset[] = []; const puts: string[] = [];
+  const s = await server(async (req, res) => { const b = await body(req); count++; if (req.method === "POST" && !req.url?.endsWith("complete")) { const v = JSON.parse(b.toString()); assert.equal(v.delivery, "evidence-first-v1"); files = v.files; res.end(JSON.stringify({ id, status: "pending", format: v.format, delivery: v.delivery })); } else if (req.method === "PUT") { puts.push(req.url!); res.end("{}"); } else if (req.url?.endsWith("/complete")) res.end(JSON.stringify({ id, status: "ready", format: "apparent-encrypted-v1" })); else res.end(JSON.stringify({ id, status: "ready", format: "apparent-encrypted-v1", delivery: "evidence-first-v1", files })); });
+  try { f = await fixture(s.origin, "evidence"); media = await fixture(s.origin, "media"); const { envelope: _envelope, chunks: _chunks, profile: _profile, ...base } = options(f, s.origin); const opts: PreparedEncryptedCapture = { ...base, profile: "evidence-first-v1", groups: [
+    { context: media.context, envelope: media.files[0]!, chunks: [media.files[1]!] }, { context: f.context, envelope: f.files[0]!, chunks: [f.files[1]!] }],
+    readAsset: async path => new Uint8Array(f.assets.get(path) ?? media.assets.get(path)!) }; await uploadPreparedEncryptedCapture(opts); assert.equal(count, 7); assert.ok(puts[0]!.endsWith("/evidence/envelope.json")); assert.ok(puts[2]!.endsWith("/media/envelope.json")); } finally { await s.close(); }
 });
 test("rejects signature, context, profile and chunk-manifest mismatches before reservation", async () => {
   let f!: Awaited<ReturnType<typeof fixture>>; let calls = 0; const s = await server((_req, res) => { calls++; res.end("{}"); });
@@ -65,5 +67,48 @@ test("refuses profile downgrade and pre-cancellation before encrypted reservatio
     const controller = new AbortController(); controller.abort();
     await capture(uploadPreparedEncryptedCapture(options(f, s.origin, { signal: controller.signal })), "cancelled");
     assert.equal(calls, 1);
+  } finally { await s.close(); }
+});
+
+test("readback rejects duplicate asset rows even when the count and each individual hash match", async () => {
+  let f!: Awaited<ReturnType<typeof fixture>>;
+  const s = await server(async (req, res) => { await body(req); res.end(JSON.stringify({ id, status: "ready",
+    format: "apparent-encrypted-v1", ...(req.method === "GET" ? { files: [f.files[0], f.files[0]] } : {}) })); });
+  try { f = await fixture(s.origin); await capture(uploadPreparedEncryptedCapture(options(f, s.origin)), "invalid_response"); }
+  finally { await s.close(); }
+});
+
+test("root receipts allow legacy null delivery and chunk DTO property order does not affect comparison", async () => {
+  let f!: Awaited<ReturnType<typeof fixture>>;
+  const s = await server(async (req, res) => { await body(req); res.end(JSON.stringify({ id, status: "ready", format: "apparent-encrypted-v1",
+    delivery: null, ...(req.method === "GET" ? { files: f.files } : {}) })); });
+  try {
+    f = await fixture(s.origin);
+    await uploadPreparedEncryptedCapture(options(f, s.origin, { chunks: f.files.slice(1).map(({ path, size, sha256 }) => ({ sha256, size, path })) }));
+  } finally { await s.close(); }
+});
+
+test("ready grouped captures admit more than 17 transport files without allocating or reading their chunks", async () => {
+  let files: Asset[] = [];
+  const s = await server(async (req, res) => { await body(req); res.end(JSON.stringify({ id, status: "ready", format: "apparent-encrypted-v1",
+    delivery: "evidence-first-v1", ...(req.method === "GET" ? { files } : {}) })); });
+  try {
+    const groups: PreparedEncryptedGroup[] = [], envelopes = new Map<string, Uint8Array>();
+    for (const group of ["evidence", "media"] as const) {
+      const context: Context = { origin: s.origin, accountId: "acct", captureId: id, senderGrantId: "sender", group };
+      const chunks = Array.from({ length: 8 }, (_, index) => ({ path: `sealed/part-${String(index).padStart(6, "0")}.age`,
+        size: index < 7 ? 32 * 1024 * 1024 : 1, sha256: "a".repeat(64) }));
+      const signed = { version: 1, context, chunks };
+      const bytes = enc.encode(JSON.stringify({ signed, signature: await signEnvelope(seed, signed) }));
+      const envelope = { path: `${group}/envelope.json`, size: bytes.length, sha256: sha(bytes) };
+      envelopes.set(envelope.path, bytes);
+      groups.push({ context, envelope, chunks: chunks.map(chunk => ({ ...chunk, path: `${group}/${chunk.path}` })) });
+    }
+    files = groups.flatMap(group => [group.envelope, ...group.chunks]); assert.equal(files.length, 18);
+    await uploadPreparedEncryptedCapture({ server: s.origin, captureId: id, profile: "evidence-first-v1",
+      context: { origin: s.origin, accountId: "acct", captureId: id, senderGrantId: "sender" }, groups, recipientGrantIds: ["reader"],
+      trustedSenderSigningKey: await ed25519.getPublicKeyAsync(seed), active: () => true,
+      readAsset: async name => { assert.ok(envelopes.has(name), "ready uploads only read envelope proofs"); return envelopes.get(name)!; },
+      authorize: async (approvedServer, scope) => ({ approvedServer, scope, token: "synthetic", accountId: "acct", senderGrantId: "sender", recipientGrantIds: ["reader"] }) });
   } finally { await s.close(); }
 });

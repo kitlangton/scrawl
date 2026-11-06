@@ -1,7 +1,7 @@
 import { decodeStrictJson } from "../recipient/json.ts";
 import { normalizeRecipientServer, readBoundedTransportBody, RecipientTransportError } from "../recipient/transport.ts";
 
-export type Authorization = { approvedServer: string; scope: "upload"; token: string; accountId?: string; senderGrantId?: string; recipientGrantIds?: readonly string[] };
+export type Authorization = { approvedServer: string; scope: "upload"; token: string };
 export type RequestOptions = { server: string; signal?: AbortSignal; active(): boolean; authorize(server: string, scope: "upload", signal: AbortSignal): Promise<Authorization> };
 const JSON_LIMIT = 2_000_000, TOKEN_LIMIT = 8192;
 export const fail = (category: ConstructorParameters<typeof RecipientTransportError>[0]): never => { throw new RecipientTransportError(category); };

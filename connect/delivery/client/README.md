@@ -177,6 +177,21 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+`./sender-upload/encrypted` transfers an already sealed root or grouped
+evidence/media snapshot. Discriminated profile options prevent mixed layouts.
+Before reservation it verifies envelope hashes, signatures, exact signed context
+and ordered chunk metadata. Every request pins the current caller-supplied account,
+sender grant and selected recipient membership to the saved spool facts; these
+facts and the trusted public signing key must come from current service authority.
+A signature does not establish authorization or prove AGE recipient membership.
+Current facts describe the pinned selection, so unrelated new peers need not
+invalidate an existing spool. Readback requires the exact encrypted format,
+delivery profile and unique complete manifest. Both senders reuse the same private
+HTTP, cancellation and byte-lifetime mechanism. This API does not encrypt, create
+or regenerate spools, refresh credentials, write state, run a worker or switch
+installed routes. Spool admission, durable ownership and caller adoption remain
+with the parent migration; no plaintext fallback is added.
+
 The `./sender-upload` export uploads an already prepared, consented plaintext
 snapshot through reservation, bounded asset PUTs, completion and exact ready-state
 manifest readback. It reuses the recipient asset validator and bounded transport
