@@ -6,6 +6,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { test } from 'node:test';
 import { createNativeHostPort } from '../src/client.ts';
+import { createNativePenPort } from '../src/pen.ts';
 
 const facts = {
   api: 1, processEpoch: 'epoch-a', revision: 4, scope: 'running-desktop-process', freshness: 'cached-gui-observation',
@@ -160,5 +161,54 @@ test('bounds concurrent pending connections per injected facade', async () => {
     release();
     await Promise.all(pending);
     assert.equal(dispatches, 16);
+  });
+});
+
+test('typed pen facade sends raw exact RGB and distinguishes applied readback, conflict, and unknown', async () => {
+  const expectedPenColor = { present: true, value: 'purple' };
+  await withSocket(request => {
+    assert.equal(request.operation, 'applyStrokeColor');
+    assert.deepEqual(request.expected, expected);
+    assert.deepEqual(request.expectedPenColor, expectedPenColor);
+    assert.deepEqual(request.rgb, [122, 88, 199]);
+    return { status: 'applied', rgb: [122, 88, 199] };
+  }, async () => {
+    assert.deepEqual(await createNativePenPort().applyStrokeColor([122, 88, 199], expectedPenColor, expected),
+      { status: 'applied', rgb: [122, 88, 199] });
+  });
+  await withSocket(() => ({ status: 'conflict', current: { present: false, value: null } }), async () => {
+    assert.deepEqual(await createNativePenPort().applyStrokeColor(null, { present: false, value: null }, expected),
+      { status: 'conflict', current: { present: false, value: null } });
+  });
+  await withSocket(() => ({ status: 'refused', reason: 'busy' }), async () => {
+    assert.deepEqual(await createNativePenPort().applyStrokeColor([1, 2, 3], expectedPenColor, expected), { status: 'unavailable' });
+  });
+  await withSocket(() => DROP, async () => {
+    assert.deepEqual(await createNativePenPort().applyStrokeColor([0, 0, 0], expectedPenColor, expected), { status: 'outcome-unknown' });
+  });
+  const port = createNativePenPort();
+  for (const rgb of [[-1, 0, 0], [0, 1.5, 0], [0, 0, 256], [1, 2], [1, 2, 3, 4]]) {
+    await assert.rejects(port.applyStrokeColor(rgb as [number, number, number], expectedPenColor, expected), /Invalid pen request/);
+  }
+  await assert.rejects(port.applyStrokeColor([1, 2, 3], { present: false, value: 'must-be-null' }, expected), /Invalid pen request/);
+});
+
+test('pen facade admits one process-wide effect and reports excess work unavailable without dispatch', async () => {
+  let release!: () => void, dispatched!: () => void, dispatches = 0;
+  const gate = new Promise<void>(resolve => { release = resolve; });
+  const started = new Promise<void>(resolve => { dispatched = resolve; });
+  await withSocket(async () => {
+    dispatches++;
+    dispatched();
+    await gate;
+    return { status: 'applied', rgb: [1, 2, 3] };
+  }, async () => {
+    const first = createNativePenPort().applyStrokeColor([1, 2, 3], { present: false, value: null }, expected);
+    await started;
+    assert.deepEqual(await createNativePenPort().applyStrokeColor([4, 5, 6], { present: false, value: null }, expected),
+      { status: 'unavailable' });
+    release();
+    assert.deepEqual(await first, { status: 'applied', rgb: [1, 2, 3] });
+    assert.equal(dispatches, 1);
   });
 });

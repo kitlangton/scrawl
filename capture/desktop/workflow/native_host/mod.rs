@@ -19,6 +19,24 @@ pub(crate) struct Request {
     pub(crate) modifiers: Option<u32>,
     #[serde(default)]
     pub(crate) shortcut: Option<Shortcut>,
+    #[serde(default, deserialize_with = "present_value")]
+    pub(crate) rgb: Field<serde_json::Value>,
+    #[serde(default, rename = "expectedPenColor")]
+    pub(crate) expected_pen_color: Option<ExpectedPenColor>,
+}
+
+#[derive(Clone, Debug, Default)]
+pub(crate) enum Field<T> {
+    #[default]
+    Missing,
+    Present(T),
+}
+fn present_value<'de, D, T>(deserializer: D) -> Result<Field<T>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    T::deserialize(deserializer).map(Field::Present)
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -37,6 +55,13 @@ pub(crate) struct Shortcut {
     pub(crate) label: String,
 }
 
+#[derive(Clone, Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ExpectedPenColor {
+    pub(crate) present: bool,
+    pub(crate) value: serde_json::Value,
+}
+
 #[derive(Clone, Debug)]
 pub(crate) enum Operation {
     ReadSnapshot,
@@ -44,6 +69,7 @@ pub(crate) enum Operation {
     OpenSystemSettings(String),
     ValidateRecordShortcut(String, u32),
     SaveRecordShortcut(Shortcut),
+    ApplyStrokeColor(Option<[u8; 3]>, ExpectedPenColor),
 }
 
 #[derive(Clone, Debug)]
@@ -86,7 +112,9 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
                 && request.permission_id.is_none()
                 && request.key.is_none()
                 && request.modifiers.is_none()
-                && request.shortcut.is_none() =>
+                && request.shortcut.is_none()
+                && matches!(&request.rgb, Field::Missing)
+                && request.expected_pen_color.is_none() =>
         {
             Operation::ReadSnapshot
         }
@@ -98,7 +126,9 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
                     .is_some_and(valid_permission)
                 && request.key.is_none()
                 && request.modifiers.is_none()
-                && request.shortcut.is_none() =>
+                && request.shortcut.is_none()
+                && matches!(&request.rgb, Field::Missing)
+                && request.expected_pen_color.is_none() =>
         {
             Operation::RequestPermission(request.permission_id.clone()?)
         }
@@ -110,7 +140,9 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
                     .is_some_and(valid_permission)
                 && request.key.is_none()
                 && request.modifiers.is_none()
-                && request.shortcut.is_none() =>
+                && request.shortcut.is_none()
+                && matches!(&request.rgb, Field::Missing)
+                && request.expected_pen_color.is_none() =>
         {
             Operation::OpenSystemSettings(request.permission_id.clone()?)
         }
@@ -119,7 +151,9 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
                 && request.key.as_deref().is_some_and(valid_key)
                 && request.modifiers.is_some_and(|value| value <= 0xffff)
                 && request.permission_id.is_none()
-                && request.shortcut.is_none() =>
+                && request.shortcut.is_none()
+                && matches!(&request.rgb, Field::Missing)
+                && request.expected_pen_color.is_none() =>
         {
             Operation::ValidateRecordShortcut(request.key.clone()?, request.modifiers?)
         }
@@ -128,14 +162,38 @@ pub(crate) fn parse(line: &str, now: u64) -> Option<Admitted> {
                 && request.shortcut.as_ref().is_some_and(valid_shortcut)
                 && request.permission_id.is_none()
                 && request.key.is_none()
-                && request.modifiers.is_none() =>
+                && request.modifiers.is_none()
+                && matches!(&request.rgb, Field::Missing)
+                && request.expected_pen_color.is_none() =>
         {
             Operation::SaveRecordShortcut(request.shortcut.clone()?)
+        }
+        "applyStrokeColor"
+            if request.expected.is_some()
+                && request.permission_id.is_none()
+                && request.key.is_none()
+                && request.modifiers.is_none()
+                && request.shortcut.is_none()
+                && request
+                    .expected_pen_color
+                    .as_ref()
+                    .is_some_and(valid_legacy)
+                && matches!(&request.rgb, Field::Present(value) if valid_rgb(value)) =>
+        {
+            let Field::Present(value) = &request.rgb else {
+                return None;
+            };
+            Operation::ApplyStrokeColor(parse_rgb(value)?, request.expected_pen_color.clone()?)
         }
         _ => return None,
     };
     if request.expected.as_ref().is_some_and(|expected| {
-        expected.process_epoch.is_empty() || expected.process_epoch.len() > 64
+        expected.process_epoch.is_empty()
+            || expected.process_epoch.len() > 64
+            || !expected
+                .process_epoch
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
     }) {
         return None;
     }
@@ -159,6 +217,29 @@ fn valid_shortcut(value: &Shortcut) -> bool {
         && !value.label.is_empty()
         && value.label.len() <= 32
 }
+fn valid_legacy(value: &ExpectedPenColor) -> bool {
+    value.present || value.value.is_null()
+}
+fn valid_rgb(value: &serde_json::Value) -> bool {
+    value.is_null()
+        || value.as_array().is_some_and(|channels| {
+            channels.len() == 3
+                && channels
+                    .iter()
+                    .all(|channel| channel.as_u64().is_some_and(|v| v <= 255))
+        })
+}
+fn parse_rgb(value: &serde_json::Value) -> Option<Option<[u8; 3]>> {
+    if value.is_null() {
+        return Some(None);
+    }
+    let channels = value.as_array()?;
+    Some(Some([
+        channels[0].as_u64()? as u8,
+        channels[1].as_u64()? as u8,
+        channels[2].as_u64()? as u8,
+    ]))
+}
 
 #[cfg(test)]
 mod tests {
@@ -174,6 +255,22 @@ mod tests {
             parse(&req("readSnapshot", ""), 1000).unwrap().operation,
             Operation::ReadSnapshot
         ));
+        let pen = req(
+            "applyStrokeColor",
+            r#", "expected":{"processEpoch":"epoch-a","revision":4},"rgb":[0,0,0],"expectedPenColor":{"present":false,"value":null}"#,
+        );
+        assert!(matches!(
+            parse(&pen, 1000).unwrap().operation,
+            Operation::ApplyStrokeColor(Some([0, 0, 0]), _)
+        ));
+        let legacy = req(
+            "applyStrokeColor",
+            r#", "expected":{"processEpoch":"epoch-a","revision":4},"rgb":null,"expectedPenColor":{"present":true,"value":null}"#,
+        );
+        assert!(matches!(
+            parse(&legacy, 1000).unwrap().operation,
+            Operation::ApplyStrokeColor(None, _)
+        ));
         for line in [
             req("readSnapshot", r#","path":"/tmp""#),
             req("readSnapshot", r#","owner":"desktop""#),
@@ -185,6 +282,18 @@ mod tests {
             req(
                 "validateRecordShortcut",
                 r#","expected":{"processEpoch":"e","revision":1},"key":"a","modifiers":999999"#,
+            ),
+            req(
+                "applyStrokeColor",
+                r#", "expected":{"processEpoch":"e","revision":1},"expectedPenColor":{"present":false,"value":null}"#,
+            ),
+            req(
+                "applyStrokeColor",
+                r#", "expected":{"processEpoch":"e","revision":1},"rgb":[],"expectedPenColor":{"present":false,"value":null}"#,
+            ),
+            req(
+                "applyStrokeColor",
+                r#", "expected":{"processEpoch":"e","revision":1},"rgb":null,"expectedPenColor":{"present":false,"value":"bad"}"#,
             ),
         ] {
             assert!(parse(&line, 1000).is_none(), "{line}");

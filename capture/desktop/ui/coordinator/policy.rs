@@ -1,5 +1,7 @@
 use super::*;
 
+static NATIVE_PEN_EFFECT_BUSY: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
 #[cfg(any(target_os = "macos", target_os = "linux"))]
 struct NativeHostObservation {
     configured: crate::capture::desktop::settings::Shortcuts,
@@ -673,6 +675,47 @@ impl ApparentCoordinator {
                     Err(_) => refusal("invalid"),
                 }
             }
+            Operation::ApplyStrokeColor(rgb, expected_pen_color) => {
+                use std::sync::atomic::Ordering;
+                if NATIVE_PEN_EFFECT_BUSY.compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire).is_err() {
+                    return Some(refusal("busy"));
+                }
+                let telemetry = std::sync::Arc::clone(&self.telemetry);
+                let config_path = crate::shared::handoff::default_config_path();
+                let expected_pen_color = crate::shared::handoff::LegacyValue {
+                    present: expected_pen_color.present,
+                    value: expected_pen_color.value.clone(),
+                };
+                let rgb = *rgb;
+                let deadline = request.deadline;
+                let reply = reply.clone();
+                let result = std::thread::Builder::new().name("apparent-native-pen-effect".into()).spawn(move || {
+                    struct Release;
+                    impl Drop for Release { fn drop(&mut self) { NATIVE_PEN_EFFECT_BUSY.store(false, Ordering::Release); } }
+                    let _release = Release;
+                    let allowed = || crate::capture::desktop::workflow::agent_capture::storage_clock_ms() < deadline;
+                    let outcome = crate::shared::handoff::with_pen_color_current_allowed_in(
+                        &config_path, expected_pen_color, &allowed, || {
+                            anyhow::ensure!(allowed(), "pen effect deadline expired");
+                            telemetry.set_stroke_rgb(rgb);
+                            let actual = telemetry.stroke_rgb();
+                            anyhow::ensure!(actual == rgb, "pen telemetry readback mismatch");
+                            Ok(actual)
+                        },
+                    );
+                    let response = match outcome {
+                        Ok(crate::shared::handoff::PenColorEffectResult::Applied(actual)) => serde_json::json!({"status":"applied","rgb":actual}),
+                        Ok(crate::shared::handoff::PenColorEffectResult::Conflict(current)) => serde_json::json!({"status":"conflict","current":{"present":current.present,"value":current.value}}),
+                        Err(_) => serde_json::json!({"status":"outcome-unknown"}),
+                    };
+                    let _ = reply.send(response.to_string());
+                });
+                if result.is_err() {
+                    NATIVE_PEN_EFFECT_BUSY.store(false, Ordering::Release);
+                    return Some(refusal("unavailable"));
+                }
+                return None;
+            }
             Operation::SaveRecordShortcut(value) => self.native_host_save_shortcut(value, &observation, request.deadline),
         })
     }
@@ -690,10 +733,10 @@ impl ApparentCoordinator {
                 let actions = native_host_permission_actions(permission, self.onboarding.is_some());
                 (permission_id(permission), actions)
             }).collect::<Vec<_>>();
-        let fingerprint = format!("{}|{}|{}|{}|{}|{}|{:?}|{:?}",
+        let fingerprint = format!("{}|{}|{}|{}|{}|{}|{:?}|{:?}|{:?}",
             serde_json::to_string(&configured.record).unwrap_or_default(), serde_json::to_string(&configured.paste).unwrap_or_default(),
             serde_json::to_string(&record).unwrap_or_default(), serde_json::to_string(&paste).unwrap_or_default(),
-            registration, can_save, self.grants, permission_actions);
+            registration, can_save, self.grants, permission_actions, self.telemetry.stroke_rgb());
         NativeHostObservation { configured, record, paste, registration, can_save, permission_actions, fingerprint }
     }
 

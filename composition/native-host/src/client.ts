@@ -3,7 +3,7 @@ import { lstat } from 'node:fs/promises';
 import { connect } from 'node:net';
 import { homedir } from 'node:os';
 import { join, normalize } from 'node:path';
-import type { NativeHostPort, NativeHostSnapshot, NativeHostRefusal, NativeMutationResult } from '@apparent/app-contracts/host';
+import type { NativeHostPort, NativeHostSnapshot, NativeHostRefusal, NativeMutationResult, NativePenPort, NativePenResult, LegacyConfigValue } from '@apparent/app-contracts/host';
 
 const MAX_FRAME = 4096;
 const TIMEOUT_MS = 3000;
@@ -167,6 +167,57 @@ export function createNativeHostPort(): NativeHostPort {
       return mutate('saveRecordShortcut', {
         shortcut: { keyCode: shortcut.keyCode, modifiers: shortcut.modifiers, label: shortcut.label }, expected: expected(state),
       });
+    },
+  };
+}
+
+function jsonValue(value: unknown, depth = 0): boolean {
+  if (depth > 32) return false;
+  if (value === null || typeof value === 'string' || typeof value === 'boolean') return true;
+  if (typeof value === 'number') return Number.isFinite(value);
+  if (Array.isArray(value)) return value.length <= 2048 && value.every(item => jsonValue(item, depth + 1));
+  if (value && typeof value === 'object') return Object.keys(value).length <= 256
+    && Object.values(value).every(item => jsonValue(item, depth + 1));
+  return false;
+}
+function validLegacy(value: unknown): value is LegacyConfigValue {
+  if (!exact(value, ['present', 'value']) || typeof value.present !== 'boolean'
+    || (!value.present && value.value !== null) || !jsonValue(value.value)) return false;
+  try { return Buffer.byteLength(JSON.stringify(value.value)) <= 2048; }
+  catch { return false; }
+}
+let penEffectInFlight = false;
+function validRgb(value: unknown): value is [number, number, number] | null {
+  return value === null || (Array.isArray(value) && value.length === 3
+    && value.every(channel => Number.isInteger(channel) && channel >= 0 && channel <= 255));
+}
+
+/** Privileged typed pen facade. Renderer composition should pass this only to Record. */
+export function createNativePenPort(): NativePenPort {
+  const target = endpoint();
+  return {
+    async applyStrokeColor(rgb, expectedPenColor, state) {
+      if (!validRgb(rgb) || !validLegacy(expectedPenColor)) throw new TypeError('Invalid pen request');
+      if (typeof state?.processEpoch !== 'string' || !/^[a-zA-Z0-9-]{1,64}$/.test(state.processEpoch)
+        || !Number.isSafeInteger(state.revision) || state.revision < 0) throw new TypeError('Invalid native host revision');
+      if (penEffectInFlight) return { status: 'unavailable' };
+      penEffectInFlight = true;
+      try {
+        const value = await request(target, 'applyStrokeColor', { rgb, expectedPenColor, expected: {
+          processEpoch: state.processEpoch, revision: state.revision,
+        } });
+        if (exact(value, ['status', 'rgb']) && value.status === 'applied' && validRgb(value.rgb)) {
+          return { status: 'applied', rgb: value.rgb };
+        }
+        if (exact(value, ['status', 'current']) && value.status === 'conflict' && validLegacy(value.current)) {
+          return { status: 'conflict', current: value.current };
+        }
+        if (exact(value, ['status']) && (value.status === 'unavailable' || value.status === 'outcome-unknown')) return value as NativePenResult;
+        if (exact(value, ['status', 'reason']) && value.status === 'refused'
+          && ['busy', 'stale', 'unavailable'].includes(String(value.reason))) return { status: 'unavailable' };
+      } catch { /* A lost reply does not prove whether the effect ran. */ }
+      finally { penEffectInFlight = false; }
+      return { status: 'outcome-unknown' };
     },
   };
 }
