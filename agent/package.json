@@ -22,16 +22,20 @@
     "@apparent/engine-sdk": "file:vendor/apparent-engine-sdk-0.4.0.tgz",
     "@apparent/record": "file:vendor/apparent-record-0.1.0-09955db0.tgz",
     "@types/node": "22.19.0",
-    "pngjs": "^7.0.0"
+    "pngjs": "^7.0.0",
+    "@apparent/app-contracts": "file:vendor/apparent-app-contracts-0.1.0.tgz",
+    "@apparent/native-host": "file:vendor/apparent-native-host-0.1.0.tgz"
   },
   "bundledDependencies": [
     "@apparent/engine-sdk",
     "@apparent/record",
     "@types/node",
-    "pngjs"
+    "pngjs",
+    "@apparent/app-contracts",
+    "@apparent/native-host"
   ],
   "engines": {
-    "node": ">=22.13"
+    "node": ">=22.18"
   },
   "devDependencies": {
     "@types/pngjs": "^6.0.5",
@@ -48,6 +52,8 @@
     "@apparent/engine-sdk",
     "@apparent/record",
     "@types/node",
-    "pngjs"
+    "pngjs",
+    "@apparent/app-contracts",
+    "@apparent/native-host"
   ]
 }

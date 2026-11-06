@@ -75,3 +75,17 @@ test('App Shell candidates require their exact workflow, platform job and packag
     assert.equal(skipped.assess(), undefined)
   }
 })
+
+
+test('media candidates are qualified independently for Linux and Intel Mac', () => {
+  for (const target of ['linux-x64', 'macos-x64']) {
+    const f = fixture('engine-media-native', target)
+    assert.equal(f.assess()?.reuse, true)
+    f.artifact.name = f.artifact.name.replace('engine-media-native', 'engine-native')
+    assert.equal(f.assess(), undefined)
+    const wrongTarget = fixture('engine-media-native', target)
+    wrongTarget.jobs.jobs[1].name = 'verify-pr / pr-stream (engine-media-native, unavailable)'
+    assert.equal(wrongTarget.assess(), undefined)
+    assert.equal(admitPrCandidate(() => { throw Error('Unsupported target') }, landed, tree, digest, 'engine-media-native', 'macos-arm64'), undefined)
+  }
+})

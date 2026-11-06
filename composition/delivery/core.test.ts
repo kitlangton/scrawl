@@ -9,7 +9,7 @@ import { spawnSync } from 'node:child_process'
 import { stripTypeScriptTypes } from 'node:module'
 import { after, test } from 'node:test'
 import { assertBuildWorkflowIdentity } from './cli.ts'
-import { supportsPrCandidate, appShellBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
+import { mediaBuildIdentity, supportsPrCandidate, appShellBuildEnvironment, nativeBuildIdentity, assessPrior, catalog, inputDigest, makePlan, optionalVerificationPeers, reusePayload, sealPayload, verifyPublicExports, type Owner, workflowPathFor } from './core.ts'
 
 // Hooks export repository-local Git variables. Synthetic repositories must not
 // accidentally use the hook caller's index, object database or worktree.
@@ -428,4 +428,39 @@ test('App Shell promotion retains the exact packaged archive and original build 
     assert.equal(next.buildSourceSha, receipt.sourceSha); assert.equal(next.reusedFrom.runId, '887')
     assert.deepEqual(readFileSync(resolve(promoted, 'component.tar.gz')), readFileSync(resolve(sealed, 'component.tar.gz')))
   }
+})
+
+
+test('media identity invalidates on installed runtime, fixture tool, Swift and loader changes', () => {
+  const probe = (command: string, args: string[]) => command === 'dpkg-query' ? 'liba=1\nlibb=2' : command + ' ' + args.join(' ') + ' version 1'
+  for (const os of ['linux', 'darwin'] as const) {
+    const baseline = mediaBuildIdentity({}, os, probe)
+    const commands = os === 'linux' ? ['dpkg-query', 'ffmpeg', 'pkg-config', 'ldd'] : ['ffmpeg', 'xcrun', 'sw_vers']
+    for (const command of commands) assert.notDeepEqual(mediaBuildIdentity({}, os, (c, a) => probe(c, a) + (c === command ? ' changed' : '')), baseline, command)
+    for (const key of ['GST_PLUGIN_PATH', 'LD_LIBRARY_PATH', 'DYLD_LIBRARY_PATH', 'PKG_CONFIG_PATH', 'SWIFTFLAGS', 'TOOLCHAINS', 'GSTREAMER_1_0_NO_PKG_CONFIG', 'SYSTEM_DEPS_GSTREAMER_1_0_LIB']) {
+      assert.notDeepEqual(mediaBuildIdentity({ [key]: 'changed' }, os, probe), baseline, key)
+    }
+    assert.throws(() => mediaBuildIdentity({}, os, () => ''), /identity/)
+    assert.throws(() => mediaBuildIdentity({}, os, () => { throw Error('missing dependency') }), /missing dependency/)
+  }
+  assert.deepEqual(mediaBuildIdentity({}, 'linux', probe), mediaBuildIdentity({}, 'linux', (c, a) => c === 'dpkg-query' ? 'libb=2\nliba=1' : probe(c, a)), 'package ordering is not an input change')
+})
+
+
+test('media fingerprint includes the actual dependency probe results and media overrides', () => {
+  const root = resolve(temp, 'media-fingerprint'); newRepo(root)
+  const bin = resolve(temp, 'media-toolchain-bin'); mkdirSync(bin)
+  for (const tool of ['rustc', 'cargo', 'cc', 'ffmpeg', 'pkg-config', 'dpkg-query', 'ldd', 'xcrun', 'sw_vers']) { const path = resolve(bin, tool); writeFileSync(path, '#!/bin/sh\nprintf "media dependency version one\\n"\n'); chmodSync(path, 0o755) }
+  const media: Owner = { ...owner, id: 'engine-media-native', package: 'engine/delivery/media', inputs: ['engine/'], language: 'native' }
+  const saved = { PATH: process.env.PATH, RUSTC: process.env.RUSTC, CC: process.env.CC, GST_PLUGIN_PATH: process.env.GST_PLUGIN_PATH }
+  try {
+    process.env.PATH = bin + ':' + process.env.PATH; delete process.env.CC; delete process.env.RUSTC
+    const initial = inputDigest(root, media)
+    writeFileSync(resolve(bin, 'ffmpeg'), '#!/bin/sh\nprintf "media dependency version two\\n"\n')
+    assert.notEqual(inputDigest(root, media), initial)
+    const changed = inputDigest(root, media); process.env.GST_PLUGIN_PATH = '/synthetic/override'
+    assert.notEqual(inputDigest(root, media), changed)
+    writeFileSync(resolve(bin, 'ffmpeg'), '#!/bin/sh\nexit 1\n')
+    assert.throws(() => inputDigest(root, media))
+  } finally { for (const [key, value] of Object.entries(saved)) { if (value === undefined) delete process.env[key]; else process.env[key] = value } }
 })

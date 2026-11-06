@@ -1,3 +1,4 @@
+import './copy/copy.test.ts';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { mkdtemp, mkdir, writeFile, symlink, rm, stat, chmod, truncate } from 'node:fs/promises';
