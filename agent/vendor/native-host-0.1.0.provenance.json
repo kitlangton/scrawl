@@ -1,12 +1,13 @@
 {
-  "status": "development artifact; final adoption requires PR841 merge",
+  "status": "compiled headless source dependency adopted from merged PR841",
   "pr": "https://github.com/tryapparent/apparent/pull/841",
-  "sourceSha": "1d210b6314aaf159195468a2ccf802b25aafcd7e",
+  "sourceSha": "713f1591b7460ec752041424d11e76d0f99bc04a",
   "behaviorSha": "0258a398984a01656c626d108ee05b50f8e4c55c",
   "packages": {
     "app-contracts": "438b67476d9dfe96b46ef80b3ffb1b74c59511fd25516ff4d0d92789d6e9f54a",
     "native-host": "712e4cd8f4b95ca08364f32f72e9dc855ce6e12c862fd5efce9c296c88dab221"
   },
-  "limits": "Compiled public package integrity and headless closure only. No native GUI archive, activation, clipboard or installed routing proof.",
-  "validation": "normal paired-tar install with scripts enabled; public runtime imports and strict headless declarations; 18 installed socket tests; source/native behavior unchanged from PR833"
+  "limits": "Integrity-verified compiled package built from committed source; no registry publication, native GUI artifact admission, installed routing or Agent OS-effect claim.",
+  "validation": "normal paired-tar install with scripts enabled; public runtime imports and strict headless declarations; 18 installed socket tests; source/native behavior unchanged from PR833",
+  "nativeBehaviorSha": "33f95219899c407bed5a767c3ceb1433985b2e49"
 }
