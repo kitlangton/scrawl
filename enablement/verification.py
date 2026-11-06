@@ -122,6 +122,7 @@ def directory_width_contract_selected(paths):
 MACHINERY_TEST_INPUTS = {
     "test_pre_push_guard.py": {
         ".githooks/pre-push", "enablement/verification.py",
+        "enablement/verification/dependencies/preflight.test.ts",
     },
     "test_commit_push_checkpoint.py": {".githooks/post-commit"},
     "test_signing_push.py": {".githooks/reference-transaction"},
@@ -134,7 +135,9 @@ MACHINERY_TEST_INPUTS = {
         ".githooks/pre-commit",
     },
     "test_release_gate.py": {"enablement/release_gate.py"},
-    "test_temp_preflight.py": {"enablement/verification.py"},
+    "test_temp_preflight.py": {
+        "enablement/verification.py", "enablement/verification/dependencies/preflight.test.ts",
+    },
     "test_owner_lanes.py": {
         "enablement/owner_lanes.py", ".github/workflows/verification-platform.yml",
     },

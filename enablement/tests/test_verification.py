@@ -1185,7 +1185,9 @@ class SelectionTests(unittest.TestCase):
             "record/src/index.ts": [],
             ".githooks/pre-push": ["test_pre_push_guard.py"],
             "enablement/verification.py": list(verification.MACHINERY_TEST_INPUTS),
-            "enablement/verification/dependencies/preflight.test.ts": ["test_verification.py"],
+            "enablement/verification/dependencies/preflight.test.ts": [
+                "test_pre_push_guard.py", "test_verification.py", "test_temp_preflight.py",
+            ],
             "enablement/tests/test_pre_push_guard.py": ["test_pre_push_guard.py"],
             "enablement/tests/test_commit_push_checkpoint.py": ["test_commit_push_checkpoint.py"],
             "enablement/tests/test_signing_push.py": ["test_signing_push.py"],
