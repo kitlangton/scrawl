@@ -3,7 +3,7 @@ import { mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import test from 'node:test'
-import { installMediaDependencies, mediaPackages } from './media-dependencies.ts'
+import { installMediaDependencies, mediaPackages, installCaptureDependencies, capturePackages } from './media-dependencies.ts'
 
 const environment = { GITHUB_ACTIONS: 'true', RUNNER_OS: 'Linux', ImageOS: 'ubuntu24' }
 const osRelease = 'ID=ubuntu\nVERSION_CODENAME=noble\n'
@@ -61,4 +61,15 @@ test('rejects unsupported runners before issuing a privileged command', t => {
     assert.throws(() => installMediaDependencies({ directory, environment, osRelease, root: true, ...override,
       run() { assert.fail('unsupported runner must not execute apt') } }), /declared Ubuntu/)
   }
+})
+
+test('capture dependency profile includes X11 source and H264 encoding without changing media setup', t => {
+  const directory = mkdtempSync(join(tmpdir(), 'capture-apt-contract-'))
+  t.after(() => rmSync(directory, { recursive: true, force: true }))
+  const calls: string[][] = []
+  installCaptureDependencies({ directory, environment, osRelease, root: true, run(_command, args) { calls.push(args) } })
+  assert.equal(calls.length, 2)
+  assert.deepEqual(calls[1].slice(-capturePackages.length), [...capturePackages])
+  for (const name of ['gstreamer1.0-x', 'gstreamer1.0-plugins-bad', 'gstreamer1.0-plugins-ugly']) assert(capturePackages.includes(name as typeof capturePackages[number]))
+  assert(!mediaPackages.includes('gstreamer1.0-plugins-ugly' as typeof mediaPackages[number]))
 })
