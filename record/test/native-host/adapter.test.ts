@@ -172,3 +172,15 @@ test('native cleanup failure cannot prevent runtime detachment', async () => {
   const client=createRecordCapabilityProvider({runtime:host,native,providerEpoch:'cleanup'});
   assert.throws(()=>client.detach(),/cleanup failure/); assert.equal(detached,true);
 });
+
+
+test('native refusal remains a complete public RecordClient result', async () => {
+  const current=snap(); current.shortcuts.record.canValidate=false;
+  const native=createRecordNativePort(supportedPort(async()=>current),{requiredPermissionIds:[]});
+  const client=createRecordCapabilityProvider({runtime:runtime(),native,providerEpoch:'refusal-contract'});
+  await until(()=>client.current().shortcut.configured==='⌥⇧S');
+  const result=await command(client,'shortcut-begin-edit');
+  assert.equal(result.status,'refused');
+  if(result.status==='refused') assert.equal(typeof result.reason,'string');
+  assert.equal(client.current().shortcut.draft,null); client.detach();
+});

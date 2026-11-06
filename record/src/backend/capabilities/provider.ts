@@ -288,7 +288,9 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
     if (command.expected.providerEpoch !== current.providerEpoch || command.expected.revision !== current.revision)
       return refuse(command, "stale provider epoch or revision");
     if (!command.requestId.trim() || usedRequests.has(command.requestId)) return refuse(command, "request ID is empty or already used");
-    const response = (status: CommandResult["status"]): CommandResult => ({ status, requestId: command.requestId, snapshot: snapshot() }) as CommandResult;
+    const response = (status: CommandResult["status"]): CommandResult => status === "refused"
+      ? refuse(command, "action refused or unavailable")
+      : { status, requestId: command.requestId, snapshot: snapshot() } as CommandResult;
     if (command.type === "refresh") { await refresh(); await options.runtime.dispatch({ type: "refresh-readiness" }); publish(); return response("accepted"); }
     if (command.type === "select-pen") {
       if (!options.penConfig) return refuse(command, "authoritative config backend unavailable");
