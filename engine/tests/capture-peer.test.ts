@@ -26,7 +26,9 @@ async function readyXvfb(command = xvfbCommand, prefix: string[] = []) {
   let launchError: Error | undefined;
   let announcementEnded = false;
   let childClosed = false;
-  const server = spawn(command, [...prefix, "-displayfd", "3", "-screen", "0", "1366x768x24", "-nolisten", "tcp"], { stdio: ["ignore", "ignore", "pipe", "pipe"], detached: true });
+  // A real desktop keeps clients connected. Keep this synthetic scene across
+  // short probes instead of resetting the X server after each last disconnect.
+  const server = spawn(command, [...prefix, "-displayfd", "3", "-screen", "0", "1366x768x24", "-nolisten", "tcp", "-noreset"], { stdio: ["ignore", "ignore", "pipe", "pipe"], detached: true });
   server.on("error", (error) => { launchError = error; });
   server.once("close", () => { childClosed = true; });
   server.stdio[3]?.once("end", () => { announcementEnded = true; });
