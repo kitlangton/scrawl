@@ -559,8 +559,10 @@ try {
       }
       if (qualificationError || cleanupErrors.length) throw new AggregateError([...(qualificationError?[qualificationError]:[]),...cleanupErrors],'native qualification failed; inspect retained proof and cleanup results',{cause:qualificationError});
     `;
-    const qualificationPacket = await mkdtemp(path.join(tmpdir(),'record-capture2-script-'));
-    await chmod(qualificationPacket,0o700);
+    // The consumer scratch is removed in the outer finally; the native proof
+    // root retains its own script copy independently.
+    const qualificationPacket = path.join(scratch,'qualification-script');
+    await mkdir(qualificationPacket,{mode:0o700});
     const qualificationScript = path.join(qualificationPacket,'qualification.mjs');
     await writeFile(qualificationScript,nativeScript,{mode:0o600});
     await checkGeneratedNodeScript(nativeScript);
