@@ -1279,6 +1279,60 @@ for (const mode of ["pending", "failed"] as const) test(`coordinator startup ${m
   } finally { await coordinator.dispose(); await rm(root, { recursive: true, force: true }); }
 });
 
+test("coordinator disposal drains provider and direct output reads before private cleanup", { timeout: 5000 }, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "record-output-read-drain-")));
+  const originalList = SqlitePublicationBindingStore.prototype.list;
+  let release!: () => void;
+  const barrier = new Promise<void>(resolve => { release = resolve; });
+  let entered = 0;
+  const admittedReads: Promise<unknown>[] = [];
+  SqlitePublicationBindingStore.prototype.list = function () {
+    entered++;
+    const read = barrier.then(() => originalList.call(this));
+    admittedReads.push(read);
+    return read;
+  };
+  const reads: Promise<unknown>[] = [];
+  let coordinator: Awaited<ReturnType<typeof createRecordCaptureCoordinator>> | undefined;
+  let provider: ReturnType<NonNullable<typeof coordinator>["createProvider"]> | undefined;
+  try {
+    coordinator = await createRecordCaptureCoordinator({
+      captureClient: { async handshake() { return { implementation: "native", readiness: "unavailable", capabilities: {} }; } } as unknown as CaptureClient,
+      mediaClient: {} as Media2Client,
+      mappings: { async listRequestIds() { return []; }, async getByRequestId() { return undefined; }, async getByCaptureId() { return undefined; },
+        async putIfAbsent() { throw new Error("unused"); }, async putCapture2IfUnchanged() { throw new Error("unused"); } },
+      destinations: new AbsentDestinationAllocator(join(root, "control"), join(root, "bundles")), privateControlRoot: join(root, "control"),
+      createStartIntent() { throw new Error("unused"); }, trustedMaterialsRoot() { throw new Error("unused"); },
+      selectProcessing() { throw new Error("unused"); }, preflight: preflightCapturePublication,
+    });
+    provider = coordinator.createProvider({ providerEpoch: "pending-output-reader" });
+    reads.push(coordinator.captureFacts.readFacts(), coordinator.resolveHandoff({ captureId: "unavailable", artifactId: "unavailable" }));
+    assert.equal(entered, 3, "provider startup and both public read projections are admitted");
+    provider.detach();
+    let drained = false;
+    const disposal = coordinator.dispose().then(() => { drained = true; });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.equal(drained, false, "disposal cannot finish while its output database reads are pending");
+    release();
+    await disposal;
+    await Promise.all(reads);
+    assert.equal(drained, true);
+    await rm(root, { recursive: true, force: true });
+    await assert.rejects(coordinator.captureFacts.readFacts(), /disposed/);
+    await assert.rejects(coordinator.resolveHandoff({ captureId: "unavailable", artifactId: "unavailable" }), /disposed/);
+    assert.equal(entered, 3, "detached consumers cannot start another database read");
+    await assert.rejects(lstat(root), { code: "ENOENT" });
+  } finally {
+    release();
+    provider?.detach();
+    await Promise.allSettled(reads);
+    await Promise.allSettled(admittedReads);
+    await coordinator?.dispose();
+    SqlitePublicationBindingStore.prototype.list = originalList;
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
 test("refuses an unmarked populated private namespace without changing its contents", async () => {
   const source = await fixture();
   const root = await mkdtemp(join(tmpdir(), "record-stage-unmarked-"));
