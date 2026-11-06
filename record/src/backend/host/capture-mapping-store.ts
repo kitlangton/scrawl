@@ -73,7 +73,10 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
       try { db?.close(); } catch { /* the handle may already be closed */ }
       if (error instanceof Error && error.message === "capture2-intent-conflict") throw new Error("Record capture intent conflicts with its durable request binding");
       const reconciled = await this.#read("request_id", mapping.requestId).catch(() => undefined);
-      if (reconciled) return reconciled;
+      if (reconciled) {
+        if (reconciled.capture2Intent !== mapping.capture2Intent) throw new Error("Record capture intent conflicts with its durable request binding");
+        return reconciled;
+      }
       throw hostError();
     } finally {
       try { db?.close(); } catch { /* already closed */ }
@@ -101,6 +104,7 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
     try {
       db = new DatabaseSync(this.#databasePath);
       await initializePrivateSqlite(db);
+      db.exec("BEGIN IMMEDIATE");
       const version = Number(db.prepare("PRAGMA user_version").get()?.user_version ?? 0);
       if (version === 0) {
         db.exec("CREATE TABLE IF NOT EXISTS capture_mapping (request_id TEXT PRIMARY KEY, capture_id TEXT NOT NULL UNIQUE, owner_token TEXT NOT NULL, bundle_id TEXT NOT NULL UNIQUE, bundle_path TEXT NOT NULL UNIQUE, capture2_intent TEXT) STRICT; PRAGMA user_version = 2;");
@@ -110,8 +114,10 @@ export class SqliteCaptureMappingStore implements CaptureMappingStore {
         db.close();
         throw hostError();
       }
+      db.exec("COMMIT");
       return db;
     } catch {
+      try { db?.exec("ROLLBACK"); } catch { /* initialization may not have acquired its transaction */ }
       try { db?.close(); } catch { /* preserve a sanitized store error */ }
       throw hostError();
     }

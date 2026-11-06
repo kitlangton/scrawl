@@ -6,7 +6,7 @@ import type { CaptureMappingStore } from "../engine/sdk-adapter.js";
 import { AbsentDestinationAllocator } from "./absent-destination-allocator.js";
 
 export type Capture2Phase = "reserved" | "submitted-unknown" | "starting" | "recording" | "stopping" | "materials-ready" | "processing" | "cancelled" | "failed" | "unknown";
-export interface Capture2Receipt { requestId: string; phase: Capture2Phase; materials?: CaptureStatus["materials"]; publication?: CaptureStatus["publication"] }
+export interface Capture2Receipt { requestId: string; phase: Capture2Phase; lastKnownPhase?: Capture2Phase; materials?: CaptureStatus["materials"]; publication?: CaptureStatus["publication"] }
 export type Capture2Event = { type: "readiness-changed"; readiness: { ready: boolean; reason?: string } } | { type: "discovery-changed"; discovery: SourceDiscovery } | { type: "capture-changed"; receipt: Capture2Receipt };
 export interface Capture2StartIntent { requestId: string; source: SourceDescriptor; options: CaptureOptions; invocation: InvocationFact }
 export interface Capture2Host {
@@ -41,13 +41,15 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
   const active = new Set<string>();
   const inflight = new Map<string, { intent: string; promise: Promise<Capture2Receipt> }>();
   const listeners = new Set<(event: Capture2Event) => void>();
+  const observations = new Map<string, number>();
   const tails = new Map<string, Promise<unknown>>();
   let handshake: CaptureHandshake | undefined;
   let discovery: SourceDiscovery | undefined;
   let disposed = false;
   let freshAdmission = false;
 
-  const emit = (event: Capture2Event) => { for (const listener of listeners) try { listener(structuredClone(event)); } catch { listeners.delete(listener); } };
+  const ensureLive = () => { if (disposed) throw new Error("Record capture/2 host is disposed"); };
+  const emit = (event: Capture2Event) => { if (disposed) return; for (const listener of listeners) try { listener(structuredClone(event)); } catch { listeners.delete(listener); } };
   const serial = <T>(id: string, work: () => Promise<T>): Promise<T> => {
     const previous = tails.get(id) ?? Promise.resolve();
     const current = previous.catch(() => undefined).then(work);
@@ -59,6 +61,7 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
   const hello = async () => {
     if (disposed) throw new Error("Record capture/2 host is disposed");
     if (!handshake || handshake.readiness === "unavailable") try { handshake = await client.handshake(); } catch { handshake = undefined; }
+    ensureLive();
     const ready = handshake?.implementation === "native" && handshake.readiness === "ready" && (handshake.capabilities.displayCapture || handshake.capabilities.areaCapture) && handshake.capabilities.sourceDiscovery && handshake.capabilities.retainedMaterials;
     const result = ready ? { ready: true } : { ready: false, reason: "Native Record capture/2 is unavailable" };
     emit({ type: "readiness-changed", readiness: result });
@@ -73,33 +76,65 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
   };
   const observe = (mapping: CaptureMapping, status: CaptureStatus): Capture2Receipt => {
     if (status.captureId !== mapping.captureId) throw new Error("Capture SDK returned a mismatched identity");
+    ensureLive();
+    if (status.materials && status.materials.key.captureId !== mapping.captureId) throw new Error("Capture materials identity mismatch");
+    if (status.publication && (status.publication.captureId !== mapping.captureId || status.publication.bundleId !== mapping.bundleId || status.publication.bundlePath !== mapping.bundlePath)) throw new Error("Capture publication identity mismatch");
     const next = publicReceipt(mapping.requestId, status);
+    const previous = receipts.get(mapping.requestId);
+    if (previous?.materials && next.materials && !isDeepStrictEqual(previous.materials, next.materials)) throw new Error("Capture materials binding changed");
+    // This host never releases materials, so later observations cannot discard a retained lease.
+    if (!next.materials && previous?.materials) next.materials = structuredClone(previous.materials);
     const prior = phases.get(mapping.requestId);
     const ranks: Record<Capture2Phase, number> = { reserved: 0, "submitted-unknown": 1, unknown: 1, starting: 2, recording: 3, stopping: 4, "materials-ready": 5, processing: 6, cancelled: 7, failed: 7 };
-    if (prior && (ranks[next.phase] < ranks[prior] || (["cancelled", "failed"].includes(prior) && next.phase !== prior))) return receipts.get(mapping.requestId) ?? next;
+    if (prior && (ranks[next.phase] < ranks[prior] || (["cancelled", "failed"].includes(prior) && next.phase !== prior))) return structuredClone(receipts.get(mapping.requestId) ?? next);
     // Terminal native material states never mean that Record has accepted a bundle.
+    observations.set(mapping.requestId, (observations.get(mapping.requestId) ?? 0) + 1);
     phases.set(mapping.requestId, next.phase);
     receipts.set(mapping.requestId, next);
     if (["starting", "recording", "stopping"].includes(next.phase)) active.add(mapping.requestId); else active.delete(mapping.requestId);
     emit({ type: "capture-changed", receipt: structuredClone(next) });
-    return next;
+    return structuredClone(next);
   };
-  const call = (method: "inspect" | "stop" | "cancel", requestId: string) => serial(requestId, async () => {
-    if (disposed) throw new Error("Record capture/2 host is disposed");
-    const mapping = await mappingFor(requestId);
-    try { return observe(mapping, await client[method]({ captureId: mapping.captureId, ownerToken: mapping.ownerToken })); }
-    catch { phases.set(requestId, "unknown"); const prior = receipts.get(requestId); if (prior) return prior; throw new Error("Capture outcome is unknown; reconcile this Record request"); }
-  });
+  const unknown = (requestId: string): Capture2Receipt => {
+    ensureLive();
+    const prior = receipts.get(requestId);
+    const receipt: Capture2Receipt = { ...structuredClone(prior), requestId, phase: "unknown", ...(phases.has(requestId) ? { lastKnownPhase: phases.get(requestId)! } : {}) };
+    receipts.set(requestId, receipt);
+    active.add(requestId);
+    emit({ type: "capture-changed", receipt });
+    return structuredClone(receipt);
+  };
+  const call = (method: "inspect" | "stop" | "cancel", requestId: string): Promise<Capture2Receipt> => {
+    const work = async () => {
+      ensureLive();
+      const mapping = await mappingFor(requestId);
+      await hello(); // Establish SDK protocol identity on reconnect, without gating owned controls on readiness.
+      ensureLive();
+      const revision = observations.get(requestId) ?? 0;
+      try { return observe(mapping, await client[method]({ captureId: mapping.captureId, ownerToken: mapping.ownerToken })); }
+      catch {
+        ensureLive();
+        const latest = receipts.get(requestId);
+        const resolved = method === "inspect" || latest?.phase === "cancelled" || latest?.phase === "failed" || (method === "stop" && (latest?.phase === "materials-ready" || latest?.phase === "processing"));
+        if ((observations.get(requestId) ?? 0) !== revision && resolved) return structuredClone(latest!);
+        return unknown(requestId);
+      }
+    };
+    // Read-only reconciliation must not hold up Stop/Cancel. Mutating controls remain ordered.
+    return method === "inspect" ? work() : serial(`control:${requestId}`, work);
+  };
 
   return {
     readiness: hello,
     async discoverSources() {
       if (!(await hello()).ready) return { state: "unavailable", sources: [], reason: "Native Record capture/2 is unavailable" };
       try { discovery = await client.discoverSources(); } catch { discovery = { state: "unavailable", sources: [], reason: "Source discovery is unavailable" }; }
+      ensureLive();
       emit({ type: "discovery-changed", discovery: structuredClone(discovery) });
       return structuredClone(discovery);
     },
-    start(intent) {
+    start(request) {
+      const intent = structuredClone(request);
       const serializedIntent = intentOf(intent.source, intent.options, intent.invocation);
       const pending = inflight.get(intent.requestId);
       if (pending) return pending.intent === serializedIntent
@@ -114,12 +149,13 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
         if (!intent.requestId.trim() || intent.options.localOnly !== true || !["none", "microphone"].includes(intent.options.audio)) throw new Error("Explicit local capture intent is required");
         validateCaptureRequest({ channel: "capture", protocolVersion: 2, clientId: client.clientId, rpcId: randomUUID().replaceAll("-", ""), method: "start", ownerToken: "0".repeat(64), captureId: "0".repeat(32), bundleId: "record-preflight.apparent", bundlePath: "/record-preflight.apparent", source: intent.source, options: intent.options, invocation: intent.invocation });
         const old = await mappings.getByRequestId(intent.requestId);
+        ensureLive();
         if (old) {
           if (old.capture2Intent !== serializedIntent) throw new Error("Record capture intent conflicts with its durable request binding");
           cache.set(intent.requestId, Object.freeze({ ...old }));
-          phases.set(intent.requestId, "submitted-unknown");
+          if (!phases.has(intent.requestId)) phases.set(intent.requestId, "submitted-unknown");
           try { return observe(old, await client.inspect({ captureId: old.captureId, ownerToken: old.ownerToken })); }
-          catch { phases.set(intent.requestId, "unknown"); throw new Error("Capture start outcome is unknown; inspect the same Record request to reconcile"); }
+          catch { ensureLive(); unknown(intent.requestId); throw new Error("Capture start outcome is unknown; inspect the same Record request to reconcile"); }
         }
         // Recheck durable capture/2 ownership before reserving a new public ID.
         // Unknown inspection is busy: it cannot prove that another capture ended.
@@ -135,10 +171,18 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
             throw new Error("Another Record capture is unresolved; request ID was not reserved");
           }
         }
+        ensureLive();
         const destination = await destinations.allocate(intent.requestId);
+        ensureLive();
         const mapping: CaptureMapping = { requestId: intent.requestId, captureId: randomUUID().replaceAll("-", ""), ownerToken: randomBytes(32).toString("hex"), bundleId: destination.bundleId, bundlePath: destination.bundlePath, capture2Intent: serializedIntent };
         const winner = await mappings.putIfAbsent(mapping);
-        if (!isDeepStrictEqual(winner, mapping)) throw new Error("Record capture identity conflicts with its durable request binding");
+        ensureLive();
+        if (!isDeepStrictEqual(winner, mapping)) {
+          if (winner.capture2Intent !== serializedIntent) throw new Error("Record capture identity conflicts with its durable request binding");
+          cache.set(intent.requestId, Object.freeze({ ...winner }));
+          try { return observe(winner, await client.inspect({ captureId: winner.captureId, ownerToken: winner.ownerToken })); }
+          catch { ensureLive(); unknown(intent.requestId); throw new Error("Capture start outcome is unknown; inspect the same Record request to reconcile"); }
+        }
         cache.set(intent.requestId, Object.freeze({ ...winner }));
         const reserved: Capture2Receipt = { requestId: intent.requestId, phase: "reserved" };
         phases.set(intent.requestId, "reserved");
@@ -146,10 +190,17 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
         emit({ type: "capture-changed", receipt: structuredClone(reserved) });
         phases.set(intent.requestId, "submitted-unknown");
         active.add(intent.requestId);
+        const startRevision = observations.get(intent.requestId) ?? 0;
         try {
+          ensureLive();
           const status = await client.start({ captureId: winner.captureId, ownerToken: winner.ownerToken, bundleId: winner.bundleId, bundlePath: winner.bundlePath, source: structuredClone(intent.source), options: structuredClone(intent.options), invocation: structuredClone(intent.invocation) });
           return observe(winner, status);
-        } catch { phases.set(intent.requestId, "unknown"); throw new Error("Capture start outcome is unknown; inspect the same Record request to reconcile"); }
+        } catch {
+          ensureLive();
+          if ((observations.get(intent.requestId) ?? 0) !== startRevision) return structuredClone(receipts.get(intent.requestId)!);
+          unknown(intent.requestId);
+          throw new Error("Capture start outcome is unknown; inspect the same Record request to reconcile");
+        }
       });
       const flight = { intent: serializedIntent, promise: work };
       inflight.set(intent.requestId, flight);
@@ -160,13 +211,15 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
     stop: requestId => call("stop", requestId),
     cancel: requestId => call("cancel", requestId),
     async reconcile() {
+      ensureLive();
       const ids = await mappings.listRequestIds("capture2");
+      ensureLive();
       const results: Capture2Receipt[] = [];
       for (const id of ids) {
         const row = await mappings.getByRequestId(id);
         if (!row?.capture2Intent) continue;
         try { results.push(await call("inspect", id)); }
-        catch { const receipt = { requestId: id, phase: "unknown" as const }; phases.set(id, "unknown"); receipts.set(id, receipt); results.push(receipt); }
+        catch { ensureLive(); results.push(unknown(id)); }
       }
       return Object.freeze(results.map(value => Object.freeze(structuredClone(value))));
     },

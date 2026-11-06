@@ -20,6 +20,7 @@ class ScriptedTransport implements CaptureTransport {
   status = new Map<string, object>();
   loseStartReply = false;
   beforeStart?: (request: Extract<CaptureRequest, { method: "start" }>) => Promise<void>;
+  beforeInspect?: () => Promise<void>;
   beforeControl?: (method: "stop" | "cancel") => Promise<void>;
   setSyntheticSaved(captureId: string, bundleId: string, bundlePath: string) {
     const materials = { captureId, materialsId: "f".repeat(32), revision: "e".repeat(64) };
@@ -31,14 +32,15 @@ class ScriptedTransport implements CaptureTransport {
     if (request.method === "handshake") return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: { channel: "capture", protocolVersion: 2, implementation: "native", readiness: this.readiness, capabilities: { sourceDiscovery: true, displayCapture: true, areaCapture: false, audioCapture: false, contextFacts: false, interactionFacts: false, candidates: false, transcript: false, strokes: false, publication: false, retainedMaterials: true } } };
     if (request.method === "discoverSources") return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: { state: "available", sources: this.sources } };
     if (request.method === "start") {
-      await this.beforeStart?.(request);
       this.status.set(request.captureId, { captureId: request.captureId, state: "recording" });
+      await this.beforeStart?.(request);
       if (this.loseStartReply) { this.loseStartReply = false; throw new Error("synthetic lost reply"); }
       return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: this.status.get(request.captureId) };
     }
     if (request.method === "inspect" || request.method === "stop" || request.method === "cancel") {
       if (request.method === "stop" || request.method === "cancel") await this.beforeControl?.(request.method);
-      let status = this.status.get(request.captureId);
+      let status = structuredClone(this.status.get(request.captureId));
+      if (request.method === "inspect") await this.beforeInspect?.();
       if (request.method === "stop" && status) {
         const revision = "e".repeat(64);
         status = { captureId: request.captureId, state: "materials-ready", materials: { schema: "apparent.capture-materials/1", key: { captureId: request.captureId, materialsId: "f".repeat(32), revision }, root: "/tmp/synthetic-materials", leaseId: "1".repeat(32), payloadFile: { relativePath: "materials.json", identity: { device: "1", inode: "2", size: 1, modifiedNs: "3" }, sha256: revision } } };
@@ -177,4 +179,113 @@ test("deferred controls serialize on the original request key and terminal recei
   assert.equal((await cancelling).phase, "cancelled");
   assert.equal((await ctx.host.inspect("control-order")).phase, "cancelled");
   ctx.host.dispose();
+});
+
+function deferred() {
+  let resolve!: () => void;
+  const promise = new Promise<void>(done => { resolve = done; });
+  return { promise, resolve };
+}
+
+test("start snapshots intent before storage waits, and disposal prevents late dispatch", async t => {
+  for (const dispose of [false, true]) {
+    const ctx = await setup(t); await ctx.host.discoverSources();
+    const entered = deferred(), release = deferred();
+    const read = ctx.mappings.getByRequestId.bind(ctx.mappings);
+    ctx.mappings.getByRequestId = async id => { entered.resolve(); await release.promise; return read(id); };
+    const intent = { requestId: "immutable", source: structuredClone(source), options: { audio: "none" as "none" | "microphone", localOnly: true as const }, invocation: { ...invocation } };
+    const pending = ctx.host.start(intent);
+    await entered.promise;
+    intent.requestId = "changed"; intent.options.audio = "microphone"; intent.invocation.observedAtMs = 2000;
+    if (dispose) ctx.host.dispose();
+    release.resolve();
+    if (dispose) {
+      await assert.rejects(pending, /disposed/u);
+      assert.equal(ctx.transport.requests.some(r => r.method === "start"), false);
+      assert.equal(await read("immutable"), undefined);
+    } else {
+      assert.equal((await pending).requestId, "immutable");
+      const row = await read("immutable"); assert.ok(row);
+      const sent = ctx.transport.requests.find((r): r is Extract<CaptureRequest, { method: "start" }> => r.method === "start");
+      assert.equal(sent?.options.audio, "none");
+      assert.equal(sent?.invocation.observedAtMs, 1000);
+      assert.deepEqual(JSON.parse(row.capture2Intent!).options, sent?.options);
+    }
+    ctx.host.dispose(); assert.equal(ctx.transport.closed, false);
+  }
+});
+
+test("cold reconnect handshakes owned controls even when new capture readiness is unavailable", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  await ctx.host.start({ requestId: "restart", source, options: { audio: "none", localOnly: true }, invocation });
+  ctx.host.dispose(); ctx.transport.readiness = "unavailable";
+  const cold = createCapture2Host({ client: new CaptureClient(ctx.transport), mappings: ctx.mappings, destinations: ctx.destinations });
+  assert.equal((await cold.reconcile())[0]?.phase, "recording");
+  assert.equal((await cold.stop("restart")).phase, "materials-ready");
+  cold.dispose();
+});
+
+test("reconciliation cannot block Stop or overwrite its newer materials observation", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  await ctx.host.start({ requestId: "scan", source, options: { audio: "none", localOnly: true }, invocation });
+  const entered = deferred(), release = deferred();
+  ctx.transport.beforeInspect = async () => { entered.resolve(); await release.promise; throw new Error("late inspection failure"); };
+  const scanning = ctx.host.reconcile(); await entered.promise;
+  const stopped = await ctx.host.stop("scan");
+  assert.equal(stopped.phase, "materials-ready");
+  release.resolve();
+  assert.deepEqual((await scanning)[0], stopped);
+  ctx.host.dispose();
+});
+
+test("ambiguous controls report uncertainty while retaining material lease and last observed phase", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  await ctx.host.start({ requestId: "retained", source, options: { audio: "none", localOnly: true }, invocation });
+  const stopped = await ctx.host.stop("retained");
+  ctx.transport.beforeControl = async () => { throw new Error("lost cancellation reply"); };
+  const uncertain = await ctx.host.cancel("retained");
+  assert.equal(uncertain.phase, "unknown");
+  assert.equal(uncertain.lastKnownPhase, "materials-ready");
+  assert.deepEqual(uncertain.materials, stopped.materials);
+  ctx.transport.beforeControl = undefined;
+  const cancelled = await ctx.host.cancel("retained");
+  assert.equal(cancelled.phase, "cancelled");
+  assert.deepEqual(cancelled.materials, stopped.materials, "absence is not permission to discard a retained lease");
+  ctx.host.dispose();
+});
+
+test("restart refuses publication facts for a different durable destination", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  await ctx.host.start({ requestId: "bound", source, options: { audio: "none", localOnly: true }, invocation });
+  const row = await ctx.mappings.getByRequestId("bound"); assert.ok(row);
+  ctx.transport.setSyntheticSaved(row.captureId, "wrong.apparent", "/tmp/wrong.apparent");
+  ctx.host.dispose();
+  const cold = createCapture2Host({ client: new CaptureClient(ctx.transport), mappings: ctx.mappings, destinations: ctx.destinations });
+  const receipt = await cold.inspect("bound");
+  assert.equal(receipt.phase, "unknown"); assert.equal(receipt.publication, undefined);
+  cold.dispose();
+});
+
+
+test("owned capture can stop before its start reply, and a late lost reply cannot erase materials", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  const entered = deferred(), release = deferred();
+  ctx.transport.loseStartReply = true;
+  ctx.transport.beforeStart = async () => { entered.resolve(); await release.promise; };
+  const starting = ctx.host.start({ requestId: "early-stop", source, options: { audio: "none", localOnly: true }, invocation });
+  await entered.promise;
+  const stopped = await ctx.host.stop("early-stop");
+  assert.equal(stopped.phase, "materials-ready");
+  release.resolve();
+  assert.deepEqual(await starting, stopped);
+  ctx.host.dispose();
+});
+
+test("disposal from a reserved notification keeps the binding but prevents native dispatch", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  ctx.host.subscribe(event => { if (event.type === "capture-changed" && event.receipt.phase === "reserved") ctx.host.dispose(); });
+  await assert.rejects(ctx.host.start({ requestId: "dispose-reserved", source, options: { audio: "none", localOnly: true }, invocation }), /disposed/u);
+  assert.ok(await ctx.mappings.getByRequestId("dispose-reserved"));
+  assert.equal(ctx.transport.requests.some(r => r.method === "start"), false);
+  assert.equal(ctx.transport.closed, false);
 });
