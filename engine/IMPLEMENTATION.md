@@ -67,3 +67,13 @@ Connect delivery/retrieval and remote lifecycle remain Connect-owned and exclude
 from the current Agent rebuild. No new capture forwarding, installed activation,
 legacy deletion, access or spending follows from this inventory. Existing consent,
 named native-resource restrictions, budgets and publication gates still apply.
+
+The preserved capture/2 integration is being ported selectively onto these
+moved donors. Its separate GStreamer capture and validation pipelines have been
+removed: it uses `Recorder` with a pinned output-file adapter and the existing
+reader for full-file readback. The adapter is required because the SDK materials
+contract binds an exclusively created file identity rather than a writable path.
+Core storage extensions and durable protocol glue are preserved from the earlier
+reviewed checkpoint, not substituted for Record output policy. This candidate
+remains unmerged pending native control/reconnect conformance, packaged guest
+proof, independent review and delivery admission; no new readiness is claimed.

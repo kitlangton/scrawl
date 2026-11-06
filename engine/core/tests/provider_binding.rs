@@ -20,6 +20,8 @@ impl Drop for Fixture {
     }
 }
 const ID: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
+const ID2: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+const MATERIALS: &str = "dddddddddddddddddddddddddddddddd";
 const TOKEN: &str = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
 const BUNDLE: &str = "native-provider-bundle";
 fn binding(path: &str) -> Binding {
@@ -98,4 +100,66 @@ fn stop_is_a_durable_phase_before_finalization() {
         Status::Processing
     );
     assert_eq!(session.finish(Err(())).unwrap().status, Status::Failed);
+}
+
+#[test]
+fn live_capture_permit_is_shared_with_v1_without_changing_v1_receipts() {
+    let root = Fixture::new();
+    let runtime = Runtime::open(&root.0).unwrap();
+    let permit = runtime.acquire_live_capture().unwrap().unwrap();
+    permit.check().unwrap();
+    assert!(runtime.acquire_live_capture().unwrap().is_none());
+    assert!(matches!(
+        runtime
+            .admit_bound(ID, TOKEN, BUNDLE, binding("/tmp/a.apparent"))
+            .unwrap(),
+        Admission::Existing
+    ));
+    drop(permit);
+
+    let Admission::Acquired(session) = runtime
+        .admit_bound(ID2, TOKEN, BUNDLE, binding("/tmp/a.apparent"))
+        .unwrap()
+    else {
+        panic!("v1 admission expected after permit release")
+    };
+    assert!(runtime.acquire_live_capture().unwrap().is_none());
+    drop(session);
+    assert!(runtime.acquire_live_capture().unwrap().is_some());
+}
+
+#[test]
+fn retained_material_maintenance_excludes_other_runtime_readers() {
+    let root = Fixture::new();
+    let first = Runtime::open(&root.0).unwrap();
+    let second = Runtime::open(&root.0).unwrap();
+    let reader = first
+        .material_lease(MATERIALS, apparent_capture_engine::LeaseKind::Read)
+        .unwrap()
+        .unwrap();
+    assert!(reader.check().is_ok());
+    assert!(
+        second
+            .material_lease(MATERIALS, apparent_capture_engine::LeaseKind::Maintenance)
+            .unwrap()
+            .is_none()
+    );
+    drop(reader);
+    let maintenance = second
+        .material_lease(MATERIALS, apparent_capture_engine::LeaseKind::Maintenance)
+        .unwrap()
+        .unwrap();
+    assert!(
+        first
+            .material_lease(MATERIALS, apparent_capture_engine::LeaseKind::Read)
+            .unwrap()
+            .is_none()
+    );
+    drop(maintenance);
+    assert!(
+        first
+            .material_lease(MATERIALS, apparent_capture_engine::LeaseKind::Read)
+            .unwrap()
+            .is_some()
+    );
 }

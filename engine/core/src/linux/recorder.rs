@@ -487,6 +487,8 @@ mod tests {
         let frames = super::super::media::frames(&retained,
             super::super::media::FrameTimes::At(&[0]), 0).unwrap();
         assert_eq!((frames[0].width, frames[0].height), (160, 90));
+        let timing = super::super::media::validate_file(&File::open(&retained).unwrap()).unwrap();
+        assert!(timing.duration_ms > 0);
     }
 
     #[test]

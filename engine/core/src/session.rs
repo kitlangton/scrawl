@@ -10,6 +10,17 @@ pub struct Binding {
 pub struct Runtime {
     pub(crate) store: Arc<Store>,
 }
+/// Shared exclusion for native live capture across capture protocol versions.
+/// The lock anchor is the same one used by v1 admission.
+pub struct LiveCapturePermit {
+    store: Arc<Store>,
+    lock: Lock,
+}
+impl LiveCapturePermit {
+    pub fn check(&self) -> io::Result<()> {
+        self.lock.check(&self.store)
+    }
+}
 /// Keep alive from before any media side effect through finalizer completion.
 /// Dropping releases admission, but does not manufacture a successful receipt.
 pub struct Session {
@@ -114,6 +125,20 @@ impl Session {
     }
 }
 impl Runtime {
+    /// Acquire the process-independent live-capture slot without creating a v1 receipt.
+    /// Media decoding and other offline jobs must not call this method.
+    pub fn acquire_live_capture(&self) -> io::Result<Option<LiveCapturePermit>> {
+        let _tx = self.transaction()?;
+        let lock = Lock::open(&self.store, "recording.lock")?;
+        if !lock.attempt(&self.store, false)? {
+            return Ok(None);
+        }
+        Ok(Some(LiveCapturePermit {
+            store: self.store.clone(),
+            lock,
+        }))
+    }
+
     /// Authenticate a durable operation before recovery can mutate or disclose its receipt.
     pub fn inspect_authorized(&self, id: &str, token: &str) -> io::Result<Option<Receipt>> {
         identity::validate(id, 32)?;
