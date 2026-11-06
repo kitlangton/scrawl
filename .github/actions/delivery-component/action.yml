@@ -90,6 +90,10 @@ runs:
       shell: bash
       # The installer bounds update/install process groups to 60/180 seconds.
       run: node --experimental-strip-types composition/delivery/media-dependencies.ts
+    - name: Install Engine capture runtime dependencies
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-capture-native'
+      shell: bash
+      run: node --experimental-strip-types composition/delivery/media-dependencies.ts --capture
     - uses: oven-sh/setup-bun@v2
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && (inputs.packageManager == 'bun' || inputs.id == 'connect-browser')
       with:
