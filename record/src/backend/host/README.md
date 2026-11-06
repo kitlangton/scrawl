@@ -44,8 +44,12 @@ Request IDs must be nonempty, well-formed UTF-8 strings of at most 4096 bytes,
 without NUL. The control root identifies the persistent reservation registry;
 retain it across restarts rather than replacing it with a new registry.
 
-Allocation creates the two private roots as needed and writes only control
-metadata. The final bundle path must be absent for a first reservation and is
+The control root is private and is created as needed. An existing destination
+root may use ordinary owner-owned permissions such as `0755`; it must not be
+group/world writable or resolve through an alias, and allocation never changes
+its mode. A missing destination root is created with the existing private
+`0700` mode. Allocation writes only private control metadata. The final bundle
+path must be absent for a first reservation and is
 never created or opened by this allocator. The absence check does not reserve
 a filesystem entry; Engine must still enforce absent-only publication. Filesystem
 checks happen outside the short SQLite write transaction, whose final read
