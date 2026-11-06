@@ -1,5 +1,5 @@
-import { retrieveRecipientCapture, RecipientRetrievalError, RecipientTransportError } from "../index.ts";
-import type { RecipientReadCredential, RetrievedRecipientCapture } from "../index.ts";
+import { retrieveRecipientCapture, RecipientRetrievalError, type RecipientReadCredential, type RetrievedRecipientCapture } from "../recipient/retrieve.ts";
+import { RecipientTransportError } from "../recipient/transport.ts";
 
 const ID = /^[a-f0-9]{32}$/;
 export type RecipientCommand =
@@ -28,14 +28,14 @@ export function parseRecipientCommand(args: readonly string[]): RecipientCommand
   if (!args.length) invalid("expected fetch or inspect");
   const [verb, ...rest] = args;
   if (verb === "fetch") {
-    let id: string | undefined, out: string | undefined, waitSeconds = 0, media = false;
+    let id: string | undefined, out: string | undefined, waitSeconds = 0, media = false, seenWait = false;
     for (let i = 0; i < rest.length; i++) {
       const arg = rest[i]!;
       if (arg === "--media") { if (media) invalid("duplicate --media"); media = true; }
       else if (arg === "--out" || arg === "--wait") {
         const value = rest[++i]; if (value === undefined || value.startsWith("--")) invalid(`missing value for ${arg}`);
         if (arg === "--out") { if (out !== undefined) invalid("duplicate --out"); out = value; }
-        else { if (waitSeconds !== 0) invalid("duplicate --wait"); if (!/^(0|[1-9][0-9]*)$/.test(value)) invalid("invalid --wait"); waitSeconds = Number(value); }
+        else { if (seenWait) invalid("duplicate --wait"); seenWait = true; if (!/^(0|[1-9][0-9]*)$/.test(value)) invalid("invalid --wait"); waitSeconds = Number(value); }
       } else if (arg.startsWith("-") || id !== undefined) invalid("unexpected fetch argument");
       else id = arg;
     }
@@ -60,18 +60,21 @@ export function parseRecipientCommand(args: readonly string[]): RecipientCommand
 
 export async function runRecipientCommand(command: RecipientCommand, dependencies: RecipientCliDependencies): Promise<RecipientCliResult> {
   try { validateCommand(command); } catch (error) { return { ok: false, error: safeFailure(error) }; }
+  if (dependencies.cancelled?.aborted) return { ok: false, error: { category: "cancelled", message: "cancelled" } };
   if (command.kind === "inspect-local") {
     try { return { ok: true, path: await dependencies.inspectLocal(command.source) }; }
     catch (error) { return { ok: false, error: safeFailure(error) }; }
   }
   try {
     const credential = await dependencies.loadCredential();
+    if (dependencies.cancelled?.aborted) throw new RecipientRetrievalError("cancelled");
     const retrieved = await retrieveRecipientCapture({
       credential, captureId: command.id,
       evidenceOnly: command.kind === "inspect-remote",
       waitSeconds: command.waitSeconds,
       signal: dependencies.cancelled,
     });
+    if (dependencies.cancelled?.aborted) throw new RecipientRetrievalError("cancelled");
     return await publishVerified(retrieved, command.out, dependencies.publish);
   } catch (error) { return { ok: false, error: safeFailure(error) }; }
 }

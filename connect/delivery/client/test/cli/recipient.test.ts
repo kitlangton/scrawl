@@ -62,3 +62,16 @@ test("publication uncertainty and missing evidence receipt never project success
   assert.deepEqual(missingReceipt, { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } });
   assert.equal(calls, 1);
 });
+
+test("duplicate wait flags are rejected even when the first value is zero", () => {
+  assert.throws(() => parseRecipientCommand(["fetch", id, "--out", "x", "--wait", "0", "--wait", "1"]), { category: "invalid_arguments" });
+});
+test("cancellation before and during credential loading prevents subsequent effects", async () => {
+  const c = new AbortController(); c.abort(); let calls = 0;
+  const command = parseRecipientCommand(["fetch", id, "--out", "x"]);
+  const before = await runRecipientCommand(command, deps({ cancelled: c.signal, loadCredential: async () => { calls++; throw Error(); } }));
+  assert.equal(before.ok, false); assert.equal(calls, 0);
+  const during = new AbortController();
+  const after = await runRecipientCommand(command, deps({ cancelled: during.signal, loadCredential: async () => { during.abort(); return { server: "http://127.0.0.1:1", token: "synthetic", grantId: "reader" }; }, publish: async () => { calls++; throw Error(); } }));
+  assert.deepEqual(after, { ok: false, error: { category: "cancelled", message: "cancelled" } }); assert.equal(calls, 0);
+});
