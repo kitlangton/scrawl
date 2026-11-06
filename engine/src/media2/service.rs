@@ -101,6 +101,12 @@ fn dispatch_identity(request: &Request, authority: &Authority) -> Result<()> {
     }
     Ok(())
 }
+fn send(value: Value, recovery: bool) -> Result<()> {
+    match transport::send(value, protocol::MAX_LINE) {
+        Err(_) if recovery => Ok(()),
+        result => result,
+    }
+}
 fn handle(
     request: &Request,
     runtime: &Path,
@@ -150,7 +156,7 @@ fn handle(
     status(lookup(registry, authority)?)
 }
 
-pub fn run(runtime: &Path) -> Result<()> {
+pub fn run(runtime: &Path, role: Option<crate::recovery::Role<'_>>) -> Result<()> {
     let native_available = crate::job::decode_available();
     let store = Arc::new(SecureStore::open(runtime).map_err(|_| "source_mismatch")?);
     let registry = JobRegistry::open(store).map_err(native_error)?;
@@ -160,23 +166,64 @@ pub fn run(runtime: &Path) -> Result<()> {
         return Err("internal");
     }
     let inputs = transport::reader(protocol::MAX_LINE);
+    if let Some(role) = role {
+        crate::recovery::lifecycle(role, "ready");
+    }
     let mut client = None;
     let mut seen = HashSet::new();
     let mut order = VecDeque::new();
     let mut active: Option<Active> = None;
+    let mut input_closed = false;
     let outcome = (|| loop {
         if let Some(worker) = active.as_mut() {
             if worker.poll()? {
                 active = None;
             }
         }
+        if input_closed && active.is_none() {
+            break Ok(());
+        }
+        if input_closed {
+            std::thread::sleep(Duration::from_millis(5));
+            continue;
+        }
         let bytes = match inputs.recv_timeout(Duration::from_millis(5)) {
             Ok(transport::Input::Line(bytes)) => bytes,
-            Ok(transport::Input::Closed) | Err(RecvTimeoutError::Disconnected) => break Ok(()),
-            Ok(transport::Input::Invalid) => break Err("malformed_request"),
+            Ok(transport::Input::Closed) | Err(RecvTimeoutError::Disconnected) => {
+                if let Some(role) = role {
+                    crate::recovery::lifecycle(role, "input-closed");
+                    // A broken output sink is a connection failure, never a
+                    // reason to kill an admitted recovery job.
+                    let _ = crate::recovery::detach_outputs();
+                    input_closed = true;
+                } else {
+                    break Ok(());
+                }
+                continue;
+            }
+            Ok(transport::Input::Invalid) => {
+                if role.is_some() {
+                    // Framing failure closes this connection's admission, but
+                    // does not establish an observed EOF for a lifecycle ACK.
+                    let _ = crate::recovery::detach_outputs();
+                    input_closed = true;
+                    continue;
+                }
+                break Err("malformed_request");
+            }
             Err(RecvTimeoutError::Timeout) => continue,
         };
-        let value: Value = serde_json::from_slice(&bytes).map_err(|_| "malformed_request")?;
+        let value: Value = match serde_json::from_slice(&bytes) {
+            Ok(value) => value,
+            Err(_) => {
+                if role.is_some() {
+                    let _ = crate::recovery::detach_outputs();
+                    input_closed = true;
+                    continue;
+                }
+                break Err("malformed_request");
+            }
+        };
         let rpc = value
             .get("rpcId")
             .and_then(Value::as_str)
@@ -185,7 +232,7 @@ pub fn run(runtime: &Path) -> Result<()> {
         let request = match protocol::parse(value) {
             Ok(request) => request,
             Err(error) => {
-                transport::send(protocol::response(&rpc, Err(error)), protocol::MAX_LINE)?;
+                send(protocol::response(&rpc, Err(error)), role.is_some())?;
                 continue;
             }
         };
@@ -211,7 +258,7 @@ pub fn run(runtime: &Path) -> Result<()> {
                 handle(&request, runtime, &registry, &mut active, native_available)
             }
         };
-        transport::send(protocol::response(&request.rpc, result), protocol::MAX_LINE)?;
+        send(protocol::response(&request.rpc, result), role.is_some())?;
     })();
     if let Some(mut worker) = active {
         worker.stop(Checkpoint::OwnerLost)?;

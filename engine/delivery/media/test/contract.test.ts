@@ -4,7 +4,9 @@ import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
 import { createHash } from 'node:crypto'
+import { spawnSync } from 'node:child_process'
 import { BASELINE_LIBRARIES, REQUIRED_PLUGINS, validateArtifact, VISUAL_OBSERVATIONS } from '../src/contract.ts'
+import { recoveryLaunch, validateRecoveryAdvertisement } from '../src/recovery-contract.ts'
 
 function artifact() {
   const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-media-contract-'))
@@ -20,6 +22,43 @@ function artifact() {
   return root
 }
 import { readFileSync as requireBytes } from 'node:fs'
+
+test('recovery advertisement binds role/channel/argv without inferring release from old artifacts', () => {
+  validateRecoveryAdvertisement(undefined, 'media/2')
+  for (const channel of ['capture/2', 'media/2'] as const) {
+    const expected = recoveryLaunch(channel)
+    validateRecoveryAdvertisement(JSON.parse(JSON.stringify(expected)), channel)
+    for (const value of [{ ...expected, startsFreshCapture: true }, { ...expected, channel: channel === 'media/2' ? 'capture/2' : 'media/2' }, { ...expected, argv: expected.argv.slice(0, -2) }, { ...expected, onInputEof: 'cancel' }, { ...expected, unrecognized: true }]) assert.throws(() => validateRecoveryAdvertisement(value, channel), /recovery lifetime/)
+    assert.throws(() => validateRecoveryAdvertisement(expected, channel, false), /recovery lifetime/)
+  }
+})
+
+test('Linux entry forwards recovery only for media2 and refuses malformed nonce/version', () => {
+  const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-media-argv-'))
+  try {
+    mkdirSync(resolve(root, 'libexec')); mkdirSync(resolve(root, 'private runtime'), { mode: 0o700 })
+    const entry = resolve(root, 'apparent-engine-frames')
+    writeFileSync(entry, requireBytes(new URL('../src/launch.sh', import.meta.url)), { mode: 0o755 })
+    writeFileSync(resolve(root, 'libexec/apparent-engine-frames'), '#!/bin/sh\nprintf "%s\\n" "$@"\n', { mode: 0o755 })
+    const args = ['--media-runtime-directory', resolve(root, 'private runtime'), '--media-channel', 'media', '--media-protocol-version', '2']
+    const suffix = ['--recovery-peer-v1', 'a'.repeat(32)]
+    const result = spawnSync(entry, [...args, ...suffix], { encoding: 'utf8' })
+    assert.equal(result.status, 0, result.stderr)
+    assert.deepEqual(result.stdout.trimEnd().split('\n'), [...args, ...suffix])
+    assert.equal(spawnSync(entry, [...args.slice(0, -1), '1', ...suffix]).status, 2)
+    // Bash on Darwin uses locale collation for ranges; exercise that behavior on Linux too.
+    for (const locale of ['C', 'en_US.UTF-8']) {
+      const launch = (nonce: string) => spawnSync('/bin/bash', ['--posix', '-c', 'shopt -u globasciiranges 2>/dev/null || :; . "$0" "$@"', entry, ...args, '--recovery-peer-v1', nonce], { encoding: 'utf8', env: { ...process.env, LC_ALL: locale } })
+      assert.equal(launch('0123456789abcdef'.repeat(2)).status, 0)
+      for (const nonce of ['A', 'F', 'G', 'Z', 'é'].map(byte => byte.repeat(32))) {
+        const rejected = launch(nonce)
+        assert.equal(rejected.status, 2, JSON.stringify({ locale, nonce, stderr: rejected.stderr }))
+        assert.equal(rejected.stdout, '', 'invalid nonce must not reach the worker')
+      }
+    }
+    for (const invalid of [['--recovery-peer-v1'], ['--recovery-peer-v2', 'a'.repeat(32)], ['--recovery-peer-v1', 'A'.repeat(32)], ['--recovery-peer-v1', 'a'.repeat(31)]]) assert.equal(spawnSync(entry, [...args, ...invalid]).status, 2)
+  } finally { rmSync(root, { recursive: true, force: true }) }
+})
 
 test('strict runtime inventory accepts only listed regular in-root files and detects tampering', () => {
   const root = artifact()

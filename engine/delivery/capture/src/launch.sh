@@ -2,7 +2,13 @@
 set -eu
 case "$0" in /*) entry_dir=${0%/*} ;; *) echo 'capture entry must be invoked by absolute path' >&2; exit 126 ;; esac
 root=$(CDPATH= cd -- "$entry_dir" && pwd -P)
-if [ "$#" -ne 6 ] || [ "$1" != --runtime-directory ] || [ "$3" != --capture-channel ] || [ "$4" != capture ] || [ "$5" != --capture-protocol-version ] || [ "$6" != 2 ]; then
+if [ "$#" -eq 8 ]; then
+  recovery_nonce=$8
+  if [ "$7" != --recovery-peer-v1 ] || [ "${#recovery_nonce}" -ne 32 ]; then exit 2; fi
+  # Character ranges use locale collation on Darwin; nonce bytes are exact ASCII.
+  case "$recovery_nonce" in *[!0123456789abcdef]*) exit 2 ;; esac
+elif [ "$#" -ne 6 ]; then exit 2; fi
+if [ "$1" != --runtime-directory ] || [ "$3" != --capture-channel ] || [ "$4" != capture ] || [ "$5" != --capture-protocol-version ] || [ "$6" != 2 ]; then
   echo 'invalid capture launch arguments' >&2
   exit 2
 fi
