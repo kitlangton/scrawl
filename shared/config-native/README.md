@@ -12,9 +12,13 @@ The helper takes a fixed absolute config path and owner ID on its command line:
 Requests cannot change either binding. Line-delimited protocol 1 accepts
 `read`, `compareAndSwap`, `readForAdoption` and `adoptLegacy` with a correlation
 ID. Adoption reads the owner entry and only the top-level legacy key whose name
-is exactly the bound owner ID. Its presence envelope distinguishes missing from
-JSON null. `adoptLegacy` requires the owner entry to remain absent and the
-legacy presence/value to match the supplied snapshot under the same writer
+is exactly the bound owner ID. Record-only pen color operations address the
+fixed top-level `penColor` key and are rejected unless the helper was started
+with owner `record`. Their presence/value envelope distinguishes missing from
+JSON null; exact CAS uses the same writer lock, returns a fresh value on
+conflict, and limits values to 16 KiB of JSON. No operation accepts a
+request-selected key. `adoptLegacy` requires the owner entry to remain absent
+and legacy presence/value to match the supplied snapshot under the same writer
 lock; it writes owner revision 1 and never removes the legacy key. Conflicts
 return a fresh snapshot. Reads and conflicts do not rewrite the file. Never
 retry an uncertain write without reading persisted state.

@@ -148,6 +148,51 @@ fn adoption_refuses_owner_cas_winner_including_null_and_malformed_selected_owner
 }
 
 #[test]
+fn record_pen_color_presence_cas_is_locked_bounded_and_owner_denied() {
+    let dir = temp(); let path = dir.join("config.json");
+    fs::write(&path, br#"{"penColor":null,"secret":"synthetic","streamState":{"agent":{"opaque":1}}}"#).unwrap();
+    let read = req("r", "readPenColor", "");
+    assert_eq!(response(&host(&path, "record", &read).1), json!({"present":true,"value":null}));
+    assert_eq!(response(&host(&path, "onboarding", &read).1)["status"], "unknown");
+    let wrong = req("w", "compareAndSwapPenColor", ",\"expectedLegacy\":{\"present\":false,\"value\":null},\"next\":{\"present\":true,\"value\":\"red\"}");
+    assert_eq!(response(&host(&path, "record", &wrong).1), json!({"status":"conflict","current":{"present":true,"value":null}}));
+
+    let cas = |id: &'static str, value: &'static str| {
+        let path = path.clone();
+        std::thread::spawn(move || host(&path, "record", &req(id, "compareAndSwapPenColor", &format!(",\"expectedLegacy\":{{\"present\":true,\"value\":null}},\"next\":{{\"present\":true,\"value\":\"{value}\"}}"))).1)
+    };
+    let results = [cas("a", "blue"), cas("b", "green")].into_iter().map(|j| response(&j.join().unwrap())).collect::<Vec<_>>();
+    assert_eq!(results.iter().filter(|v| v["status"] == "saved").count(), 1);
+    let conflict = results.iter().find(|v| v["status"] == "conflict").unwrap();
+    assert!(matches!(conflict["current"]["value"].as_str(), Some("blue" | "green")));
+    let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["secret"], "synthetic");
+    assert_eq!(saved["streamState"]["agent"], json!({"opaque":1}));
+
+    let missing = dir.join("missing.json");
+    let absent = json!({"present":false,"value":null});
+    let set_null = req("n", "compareAndSwapPenColor", ",\"expectedLegacy\":{\"present\":false,\"value\":null},\"next\":{\"present\":true,\"value\":null}");
+    assert_eq!(response(&host(&missing, "record", &set_null).1), json!({"status":"saved"}));
+    assert_eq!(response(&host(&missing, "record", &read).1), json!({"present":true,"value":null}));
+    let delete = req("d", "compareAndSwapPenColor", ",\"expectedLegacy\":{\"present\":true,\"value\":null},\"next\":{\"present\":false,\"value\":null}");
+    assert_eq!(response(&host(&missing, "record", &delete).1), json!({"status":"saved"}));
+    assert_eq!(response(&host(&missing, "record", &read).1), absent);
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
+fn pen_color_protocol_rejects_bad_presence_and_oversized_values() {
+    let dir = temp(); let path = dir.join("config.json");
+    let malformed = req("m", "compareAndSwapPenColor", ",\"expectedLegacy\":{\"present\":false,\"value\":1},\"next\":{\"present\":true,\"value\":1}");
+    assert_eq!(response(&host(&path, "record", &malformed).1)["status"], "unknown");
+    let oversized = "x".repeat(16 * 1024 + 1);
+    let large = format!("{{\"protocol\":1,\"id\":\"l\",\"operation\":\"compareAndSwapPenColor\",\"expectedLegacy\":{{\"present\":false,\"value\":null}},\"next\":{{\"present\":true,\"value\":\"{oversized}\"}}}}\n");
+    assert_eq!(response(&host(&path, "record", &large).1)["status"], "unknown");
+    assert!(!path.exists(), "invalid requests must not create config");
+    fs::remove_dir_all(dir).unwrap();
+}
+
+#[test]
 fn malformed_and_unsafe_lock_inputs_are_rejected_without_rewriting_config() {
     let dir = temp(); let path = dir.join("config.json");
     let malformed = b"{broken"; fs::write(&path, malformed).unwrap();

@@ -4,7 +4,7 @@ import { chmod, lstat, mkdtemp, open, realpath, rm, writeFile } from 'node:fs/pr
 import { constants } from 'node:fs';
 import { isAbsolute, join, normalize } from 'node:path';
 import { tmpdir } from 'node:os';
-import type { ConfigAdoptionSnapshot, JsonValue, LegacyAdoptionBackend, LegacyConfigValue, Revision } from '@apparent/app-contracts/host';
+import type { ConfigAdoptionSnapshot, JsonValue, LegacyAdoptionBackend, LegacyConfigValue, RecordPenColorConfig, Revision } from '@apparent/app-contracts/host';
 
 const LIMIT = 64 * 1024;
 const unavailable = () => new Error('Configuration host unavailable');
@@ -58,7 +58,15 @@ export interface ConfigHostOptions {
   ownerId: string;
   timeoutMs?: number;
 }
-export interface ConfigBackend extends LegacyAdoptionBackend { close(): Promise<void> }
+export interface ConfigBackend extends LegacyAdoptionBackend {
+  close(): Promise<void>;
+  readPenColor(): Promise<LegacyConfigValue>;
+  compareAndSwapPenColor(expected: LegacyConfigValue, next: LegacyConfigValue): Promise<
+    | { status: 'saved' }
+    | { status: 'conflict'; current: LegacyConfigValue }
+    | { status: 'unknown'; message: string }
+  >;
+}
 
 /** Privileged composition only. Renderers receive a separately bound owner facade. */
 export async function createConfigBackend(options: ConfigHostOptions): Promise<ConfigBackend> {
@@ -148,6 +156,7 @@ export async function createConfigBackend(options: ConfigHostOptions): Promise<C
     try { return await run; } finally { queued--; }
   }
   function owner(id: string) { if (id !== options.ownerId) throw new TypeError('Config owner does not match binding'); }
+  function recordOnly() { if (options.ownerId !== 'record') throw new TypeError('penColor config access requires the compiled record owner'); }
   return {
     async read(id) {
       owner(id);
@@ -160,6 +169,24 @@ export async function createConfigBackend(options: ConfigHostOptions): Promise<C
       owner(id);
       try { return adoptionSnapshot(await request('readForAdoption')); }
       catch { fail(); throw unavailable(); }
+    },
+    async readPenColor() {
+      recordOnly();
+      try { return legacyValue(await request('readPenColor')); }
+      catch { fail(); throw unavailable(); }
+    },
+    async compareAndSwapPenColor(expected, next) {
+      recordOnly();
+      const before = legacyValue(expected);
+      const after = legacyValue(next);
+      try {
+        const result = await request('compareAndSwapPenColor', { expectedLegacy: before, next: after });
+        if (exact(result, ['status']) && result.status === 'saved') return { status: 'saved' as const };
+        if (exact(result, ['status', 'current']) && result.status === 'conflict') return { status: 'conflict' as const, current: legacyValue(result.current) };
+        if (exact(result, ['status', 'message']) && result.status === 'unknown' && typeof result.message === 'string') return { status: 'unknown' as const, message: result.message };
+        fail();
+        return unknown();
+      } catch { return unknown(); }
     },
     async adoptLegacy(id, expectedLegacy, value) {
       owner(id);
@@ -195,5 +222,15 @@ export async function createConfigBackend(options: ConfigHostOptions): Promise<C
       })();
       return closing;
     },
+  };
+}
+
+/** Owner-facing facade: owner and config key are compiled in; no path/key arguments exist. */
+export async function createRecordPenColorConfig(options: Omit<ConfigHostOptions, 'ownerId'>): Promise<RecordPenColorConfig & { close(): Promise<void> }> {
+  const backend = await createConfigBackend({ ...options, ownerId: 'record' });
+  return {
+    read: () => backend.readPenColor(),
+    compareAndSwap: (expected, next) => backend.compareAndSwapPenColor(expected, next),
+    close: () => backend.close(),
   };
 }
