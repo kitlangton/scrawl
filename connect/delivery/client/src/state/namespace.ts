@@ -4,6 +4,7 @@ import path from "node:path";
 import type { StoredCredential } from "../credentials/wire.ts";
 import { readStoredCredentialHandle, type CredentialReadResources } from "../credentials/private-read.ts";
 import { consumePrivateFile, PrivateFileError } from "./private-file.ts";
+import { decodeRenewalJournal, isCompletedRenewalFor, recoverCompletedRenewal, RenewalJournalError } from "../credentials/renewal-journal.ts";
 import { decodeStrictJson } from "../recipient/json.ts";
 import { admitTrustedDirectory, DirectoryAdmissionFailure, directoryIdentity } from "./directory.ts";
 
@@ -80,8 +81,9 @@ async function lockFile(directory: { handle: FileHandle; path: string; identity:
 async function release(lease: NamespaceLease) {
   try { await lease.release(); } catch { fail("unavailable"); }
 }
-async function readCancellation(directory: { path: string; identity: string }, resources: NamespaceResources, signal?: AbortSignal): Promise<string | null> {
-  const file = path.join(directory.path, "cancellation");
+async function readOptionalStateFile<T>(directory: { path: string; identity: string }, name: string, maximumBytes: number,
+  resources: NamespaceResources, signal: AbortSignal | undefined, decode: (bytes: Uint8Array) => T): Promise<T | null> {
+  const file = path.join(directory.path, name);
   let handle: FileHandle | undefined;
   try { handle = await open(file, C.O_RDONLY | C.O_NOFOLLOW | C.O_NONBLOCK); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; return fail("unsafe_file"); }
@@ -89,14 +91,17 @@ async function readCancellation(directory: { path: string; identity: string }, r
     const before = await handle.stat({ bigint: true }), named = await lstat(file, { bigint: true });
     if (!named.isFile() || identity(named) !== identity(before)) fail("unsafe_file");
     const transferred = handle; handle = undefined;
-    const value = await consumePrivateFile(transferred, { maximumBytes: 128, signal }, resources, bytes => {
-      const value = decodeStrictJson(bytes, 128);
-      if (typeof value !== "string") throw new Error("invalid_data");
-      return value;
-    });
+    const value = await consumePrivateFile(transferred, { maximumBytes, signal }, resources, decode);
     if (identity(await lstat(file, { bigint: true })) !== identity(before)) fail("unsafe_file");
     return value;
   } finally { await handle?.close().catch(() => {}); }
+}
+async function readCancellation(directory: { path: string; identity: string }, resources: NamespaceResources, signal?: AbortSignal): Promise<string | null> {
+  return readOptionalStateFile(directory, "cancellation", 128, resources, signal, bytes => {
+    const value = decodeStrictJson(bytes, 128);
+    if (typeof value !== "string") throw new Error("invalid_data");
+    return value;
+  });
 }
 async function readCredential(directory: { path: string; identity: string }, context: { scope: "read" | "upload"; approvedServer: string }, resources: NamespaceResources, signal?: AbortSignal): Promise<StoredCredential> {
   const file = path.join(directory.path, `${context.scope}.credential`);
@@ -186,4 +191,37 @@ export async function assertCredentialSnapshotCurrent(directoryPath: string, sna
       if (current.generation !== original.generation || current.server !== original.server || current.scope !== original.scope
         || current.grantId !== original.grantId || current.encryption_identity !== original.encryption_identity || current.authRequired) fail("stale_snapshot");
     }).catch(safeFailure);
+}
+
+export type CredentialRecoverySnapshot = Readonly<{
+  snapshot: CredentialSnapshot; credential: StoredCredential; recovery: "stored" | "completed_response";
+}>;
+/** Reads completed writer evidence under queue.lock without another refresh request,
+ * credential publication, marker repair or gate restoration. The original snapshot
+ * remains the local incarnation fence; recovered expiries use journal.issued. */
+export async function readCredentialRecoverySnapshot(directoryPath: string,
+  context: { scope: "read" | "upload"; approvedServer: string }, resources: NamespaceResources,
+  options: { signal?: AbortSignal; lockTimeoutMs?: number } = {}): Promise<CredentialRecoverySnapshot> {
+  const ctx = { scope: context?.scope, approvedServer: context?.approvedServer } as typeof context;
+  const opts = { signal: options.signal, lockTimeoutMs: options.lockTimeoutMs };
+  return withSnapshot(directoryPath, ctx, resources, opts, async (directory, lease) => {
+    checkSignal(opts.signal, lease.signal);
+    if (await pendingIntent(directory.path)) fail("revocation_pending");
+    const cancellation = await readCancellation(directory, resources, opts.signal);
+    const stored = await readCredential(directory, ctx, resources, opts.signal);
+    const snapshot = Object.freeze({ credential: stored, cancellation, directoryIdentity: directory.identity });
+    const journal = await readOptionalStateFile(directory, `${ctx.scope}.renewal`, 65_536, resources, opts.signal, bytes => {
+      try { return decodeRenewalJournal(bytes, ctx); }
+      catch (error) { if (error instanceof RenewalJournalError) return null; throw error; }
+    });
+    let credential = stored, recovery: "stored" | "completed_response" = "stored";
+    if (journal && isCompletedRenewalFor(stored, journal)) {
+      const recovered = await readOptionalStateFile(directory, `${ctx.scope}.response`, 2_000_000, resources, opts.signal,
+        bytes => recoverCompletedRenewal(stored, journal, bytes));
+      if (recovered === null) return fail("invalid_credential");
+      credential = recovered; recovery = "completed_response";
+    }
+    if (await pendingIntent(directory.path)) fail("revocation_pending");
+    return Object.freeze({ snapshot, credential, recovery });
+  }).catch(safeFailure);
 }

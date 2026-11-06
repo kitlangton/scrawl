@@ -262,7 +262,16 @@ state or resource. A changed local login/cancellation/revocation fence prevents
 publication, and the command disposes its signing seed and plaintext buffers.
 
 This is an actual command composition with injected admitted resources, not an
-installed command/router. Expired renewable access returns `renewal_required`;
-authoritative renewal journals, provider assembly and installed adoption remain
-separate gates. This path reads existing state and creates only the compatible
-empty lock file; Rust retains all credential/queue/config JSON mutation.
+installed command/router. A completed legacy renewal journal with an exact stored
+base may supply its saved response; expiries use the original issue time, and the
+original stored incarnation remains the cancellation/revocation fence. Incomplete,
+mismatched or malformed journals cannot authorize an orphan response. A matching
+completed journal with a missing or invalid response fails closed. Recovery never
+writes credentials, repairs markers or restores an upload gate.
+
+After a retrieval 401, the command may reload writer state and retry once, only
+with a different token in the same current login. It never sends a refresh request
+or repeats the rejected token. Otherwise expired renewable access reports
+`renewal_required`. Active renewal, provider assembly and installed adoption remain
+separate gates. This path creates only the compatible empty lock file; Rust retains
+all credential/queue/config JSON mutation.
