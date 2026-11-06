@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict'
-import { mkdirSync, mkdtempSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, statSync, symlinkSync, unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { resolve } from 'node:path'
 import { test } from 'node:test'
@@ -7,7 +7,7 @@ import { createHash } from 'node:crypto'
 import { BASELINE_LIBRARIES, REQUIRED_PLUGINS, validateArtifact } from '../src/contract.ts'
 
 function artifact() {
-  const root = mkdtempSync(resolve(tmpdir(), 'engine-media-contract-'))
+  const root = mkdtempSync(resolve(realpathSync(tmpdir()), 'engine-media-contract-'))
   mkdirSync(resolve(root, 'libexec')); mkdirSync(resolve(root, 'lib')); mkdirSync(resolve(root, 'plugins'))
   writeFileSync(resolve(root, 'apparent-engine-frames'), '#!/bin/sh\n', { mode: 0o755 })
   writeFileSync(resolve(root, 'libexec/apparent-engine-frames'), 'native-worker', { mode: 0o755 })

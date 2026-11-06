@@ -13,6 +13,17 @@ use std::os::unix::{fs::MetadataExt, net::UnixStream, process::CommandExt};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Instant;
+#[cfg(target_os = "linux")]
+use super::linux as decoder;
+#[cfg(target_os = "macos")]
+use super::macos as decoder;
+
+pub fn decode_available() -> bool {
+    #[cfg(target_os = "linux")]
+    { true }
+    #[cfg(target_os = "macos")]
+    { super::macos::available() }
+}
 
 #[derive(Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -102,6 +113,7 @@ impl Active {
                     cmd.env(key, value);
                 }
             }
+            #[cfg(target_os = "linux")]
             let parent_pid = std::process::id();
             unsafe {
                 cmd.pre_exec(move || {
@@ -122,8 +134,14 @@ impl Active {
                             return Err(std::io::Error::last_os_error());
                         }
                     }
+                    #[cfg(target_os = "linux")]
+                    {
+                        let memory = libc::rlimit { rlim_cur: 1536 * 1024 * 1024, rlim_max: 1536 * 1024 * 1024 };
+                        if libc::setrlimit(libc::RLIMIT_AS, &memory) != 0 { return Err(std::io::Error::last_os_error()) }
+                    }
+                    // Darwin rejects limits below its already-reserved virtual
+                    // mappings. Its decoder guards combined physical footprint.
                     for (resource, limit) in [
-                        (libc::RLIMIT_AS, 1536 * 1024 * 1024),
                         (libc::RLIMIT_CPU, 65),
                         (libc::RLIMIT_FSIZE, 256 * 1024 * 1024),
                         (libc::RLIMIT_NOFILE, 128),
@@ -329,8 +347,7 @@ fn decode_child(internal: &Internal, source: &File, dir: &Directory) -> Result<V
         .map(|t| t.saturating_sub(d.source.video_offset_ms))
         .collect();
     let mut frames = Vec::new();
-    #[cfg(target_os = "linux")]
-    super::linux::decode(
+    decoder::decode(
         source,
         &times,
         d.limits.max_edge,
@@ -399,10 +416,5 @@ fn decode_child(internal: &Internal, source: &File, dir: &Directory) -> Result<V
             Ok(())
         },
     )?;
-    #[cfg(not(target_os = "linux"))]
-    {
-        let _ = (source, times, dir);
-        return Err("decode_failed");
-    }
     Ok(frames)
 }

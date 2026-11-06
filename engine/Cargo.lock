@@ -24,8 +24,10 @@ dependencies = [
  "gstreamer-app",
  "gstreamer-video",
  "libc",
+ "png",
  "serde",
  "serde_json",
+ "sha2",
 ]
 
 [[package]]

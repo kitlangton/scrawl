@@ -1,14 +1,18 @@
 # Native media worker
 
 `apparent-engine-frames` implements the published [`media/1` SDK contract](sdk/README-media.md)
-for headless Linux GStreamer frame decoding. Build it with
+for headless Linux GStreamer or macOS AVFoundation frame decoding. Build the
+Linux worker with
 `cargo build --manifest-path engine/Cargo.toml --features media --bin apparent-engine-frames --offline`.
 The optional media feature currently requires Rust 1.96 through its GStreamer
 dependency closure, plus GStreamer development/runtime libraries. The existing
 capture producer does not enable this feature. Decoder plugins determine which
 movies can actually decode; a registered factory alone is not proof. There is no
-production FFmpeg fallback. macOS decoding is unimplemented and its handshake
-reports `decodeFrames: false`. Capture-v1 remains unavailable and unchanged.
+production FFmpeg fallback. The Mac worker reuses `engine/native/Media.swift`
+through a private pinned-descriptor bridge; without that adjacent executable,
+its handshake reports `decodeFrames: false`. The delivery catalog remains
+Linux-only until the native x64 producer and discovery are qualified. Capture-v1
+remains unavailable and unchanged.
 The decoder re-exec preserves launcher-supplied `LD_LIBRARY_PATH` and GStreamer
 plugin/system-plugin paths (including `_1_0` variants), so it uses the same native
 runtime closure. A future packaged producer must inventory and verify that
@@ -54,8 +58,12 @@ returned. Failure/cancel/EOF cleanup unlinks only reserved files whose identitie
 still match; it preserves the empty output directory and any foreign replacement.
 No recursive caller-path cleanup occurs.
 
-Native decoding runs in one owned subprocess with a 1.5 GiB address-space limit,
-65 CPU seconds, 256 MiB per-file limit and 128 descriptors. The caller's at-most
+Native decoding runs in an owned subprocess with 65 CPU seconds, a 256 MiB
+per-file limit and 128 descriptors. Linux enforces a 1.5 GiB address-space limit.
+Darwin cannot lower its reserved address-space map to that limit; it instead
+checks the job and private Swift helper's combined physical footprint every
+10 ms against 1536 MiB, failing closed if usage cannot be read. That is a sampled
+physical-memory budget, not an instantaneous virtual-address ceiling. The caller's at-most
 60-second deadline and cancellation kill and reap it before terminal state and
 read-lease release. Source frames are bounded to 16,384 per edge and 256 MiB RGBA;
 only one frame is copied/scaled/encoded at a time. Output dimensions, aggregate
@@ -102,3 +110,22 @@ The native delivery producer currently publishes only `apparent-engine`, not
 this companion. Packaging/discovery and real consumer adoption require a separate
 explicit artifact inventory change. There is no source/Cargo fallback in TS
 consumers, no installed activation and no claim of completed native delivery.
+
+
+## Mac native evidence and remaining delivery gate
+
+The frozen `b5fc23c34` candidate passed both eight-case public SDK peer suites
+against synthetic H.264/MP4 and MJPEG/MOV files on macOS 26.6.2 arm64 (Swift 6.4,
+SDK 27, Rust 1.99.1), plus the packaged-launcher H.264 check. The tests cover
+ordered/duplicate selection, offset mapping, final-sample pixels and actual
+edited-video timestamps, pinned source replacement, output admission,
+cancellation/deadlines and forced supervisor/helper death. End clamping maps
+container sample PTS through the track edit before requesting the final image;
+requested offset-mapped seek time remains separate from decoder readback.
+The combined native run also passed all 45 Core publication-feature tests and
+two footprint-guard tests. Earlier failed candidates remain separate evidence.
+
+This is native arm64 synthetic-file proof, not a native x64 producer result,
+macOS 15 runtime qualification, installed activation, capture permission proof,
+media/2 or capture publication availability. Production x64 packaging, admitted
+archives and Platform discovery remain separate gates.

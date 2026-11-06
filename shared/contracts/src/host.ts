@@ -13,6 +13,11 @@ export interface ProgressStore<T> {
   read(): Promise<{ revision: Revision; value: T }>;
   compareAndSwap(expected: Revision, value: T): Promise<SaveResult<T>>;
 }
+/** Renderer-safe, owner-scoped capability injected by trusted composition. */
+export interface OnboardingProgressPort {
+  read(): Promise<{ revision: Revision; value: unknown }>;
+  compareAndSwap(expected: Revision, value: unknown): Promise<SaveResult<unknown>>;
+}
 export interface ProgressCodec<T> {
   /** Owner handles its stored value here; legacy adoption uses the separate snapshot API. */
   decode(value: JsonValue | null): T;
