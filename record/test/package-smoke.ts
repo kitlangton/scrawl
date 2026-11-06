@@ -164,25 +164,39 @@ try {
   // synthetic Xvfb. It never installs or changes a host application route.
   if (process.env.APPARENT_CAPTURE2_QUALIFY === '1') {
     const payload = process.env.APPARENT_CAPTURE2_PAYLOAD;
-    assert.ok(payload && path.isAbsolute(payload), 'APPARENT_CAPTURE2_PAYLOAD must name the absolute verified payload directory');
+    const archive = process.env.APPARENT_CAPTURE2_ARCHIVE;
+    assert.ok(payload && path.isAbsolute(payload), 'APPARENT_CAPTURE2_PAYLOAD must name the extracted payload directory');
+    assert.ok(archive && path.isAbsolute(archive), 'APPARENT_CAPTURE2_ARCHIVE must name the admitted archive');
+    const admittedArchive = await readFile(archive);
+    assert.equal(admittedArchive.length, 10371005, 'admitted archive size');
+    assert.equal(createHash('sha256').update(admittedArchive).digest('hex'), 'f1cbdf70853e7d10bf9c9ac60c0c0bdef28aaff8d455b4fc8da0f7b28cf4907d', 'admitted archive identity');
+    const archiveRoot = path.join(scratch, 'admitted');
+    await mkdir(archiveRoot, { mode: 0o700 });
+    await run('tar', ['-xzf', archive, '-C', archiveRoot], { timeout: 15000, killSignal: 'SIGTERM' });
+    const admittedPayload = path.join(archiveRoot, 'stream-payload/payload');
+    assert.equal(createHash('sha256').update(await readFile(path.join(admittedPayload, 'manifest.json'))).digest('hex'), createHash('sha256').update(await readFile(path.join(payload, 'manifest.json'))).digest('hex'), 'external extracted payload matches archive manifest');
     const capture2 = path.join(scratch, 'capture2');
     await initConsumer(capture2);
     await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: capture2 });
-    const capture2Result = await run(process.execPath, ['--input-type=module', '-e', `
+    const capture2Result = await run(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
       import {spawn} from 'node:child_process';
       import {chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat} from 'node:fs/promises';
       import {tmpdir} from 'node:os';
       import path from 'node:path';
-      import {promisify} from 'node:util';
-      import {execFile} from 'node:child_process';
+      import {pathToFileURL} from 'node:url';
       import {CaptureClient, launchCaptureEngine} from '@apparent/engine-sdk/capture';
       import {createCapture2Host} from '@apparent/record/host/capture2';
       import {AbsentDestinationAllocator, SqliteCaptureMappingStore} from '@apparent/record/host';
       import {readCaptureMaterials} from '@apparent/record/host/materials';
+      const {reconcileAndCancel,runBounded,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
 
       const payload = path.resolve(process.env.APPARENT_CAPTURE2_PAYLOAD);
+      const archive = path.resolve(process.env.APPARENT_CAPTURE2_ARCHIVE);
+      const archiveBytes = await readFile(archive);
+      assert.equal(archiveBytes.length, 10371005, 'admitted archive size');
+      assert.equal(createHash('sha256').update(archiveBytes).digest('hex'), 'f1cbdf70853e7d10bf9c9ac60c0c0bdef28aaff8d455b4fc8da0f7b28cf4907d', 'admitted archive identity');
       const manifest = JSON.parse(await readFile(path.join(payload, 'manifest.json'), 'utf8'));
       assert.deepEqual(manifest.capabilities, ['capture/2','x11-display','x11-area','retained-materials']);
       assert.deepEqual(manifest.launch.argv, ['--runtime-directory','<private-runtime-dir>','--capture-channel','capture','--capture-protocol-version','2']);
@@ -208,8 +222,11 @@ try {
 
       const root = await realpath(await mkdtemp(path.join(tmpdir(), 'record-capture2-native-')));
       await chmod(root, 0o700);
-      const xvfb = spawn('Xvfb', ['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'], {stdio:['ignore','pipe','pipe']});
+      console.log('private native proof root: ' + root);
+      const xvfb = trackChild(spawn('Xvfb', ['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'], {stdio:['ignore','pipe','pipe']}));
       let display = '';
+      let scene, client;
+      let clientClosed = false;
       const previousDisplay = process.env.DISPLAY, previousWayland = process.env.WAYLAND_DISPLAY;
       try {
         display = await new Promise((resolve, reject) => {
@@ -220,15 +237,18 @@ try {
         });
         const env = {...process.env, DISPLAY:display}; delete env.WAYLAND_DISPLAY;
         process.env.DISPLAY=display; delete process.env.WAYLAND_DISPLAY;
-        const scene = spawn('xmessage', ['-geometry','+170+120','-timeout','240','Record capture2 synthetic Xvfb scene'], {env, stdio:'ignore'});
+        scene = trackChild(spawn('xmessage', ['-geometry','+170+120','-timeout','240','Record capture2 synthetic Xvfb scene'], {env, stdio:'ignore'}));
+        let sceneSpawnError;
+        scene.once('error', error => { sceneSpawnError = error; });
         const runtime = path.join(root, 'runtime'), control = path.join(root, 'control'), bundles = path.join(root, 'bundles');
         await Promise.all([runtime,control,bundles].map(dir => mkdir(dir,{mode:0o700})));
         const transport = launchCaptureEngine(path.join(payload, manifest.launch.entry), runtime, 40000);
-        const client = new CaptureClient(transport);
+        client = new CaptureClient(transport);
         const mappings = new SqliteCaptureMappingStore(control);
         const destinations = new AbsentDestinationAllocator(control,bundles);
         let host = createCapture2Host({client,mappings,destinations});
         try {
+          if (sceneSpawnError) throw sceneSpawnError;
           const deadline = Date.now()+150000;
           const waitFor = async (fn, label) => {
             while (Date.now()<deadline) { const value=await fn(); if (value) return value; await new Promise(r=>setTimeout(r,250)); }
@@ -268,13 +288,12 @@ try {
           assert.equal(loaded.materials.payload.confirmedSource.id,displaySource.id);
           assert.deepEqual(loaded.materials.payload.confirmedSource.rectangle,displaySource.bounds);
           const movie = path.join(cold.materials.root,loaded.materials.payload.video.file);
-          const run = promisify(execFile);
-          const probe = await run('ffprobe',['-v','error','-count_frames','-show_entries','stream=codec_name,width,height,nb_read_frames','-of','json',movie]);
+          const probe = await runBounded('ffprobe',['-v','error','-count_frames','-show_entries','stream=codec_name,width,height,nb_read_frames','-of','json',movie],15000);
           const stream = JSON.parse(probe.stdout).streams.find(x=>x.codec_type==='video') ?? JSON.parse(probe.stdout).streams[0];
           assert.ok(stream && Number(stream.nb_read_frames)>0,'saved capture must contain decoded video frames');
           assert.equal(stream.codec_name,'h264');
           assert.equal(stream.width,682,'683px Xvfb capture encodes the actual even-width 682px stream');
-          await run('ffmpeg',['-v','error','-i',movie,'-f','null','-']);
+          await runBounded('ffmpeg',['-v','error','-i',movie,'-f','null','-'],20000);
           console.log(JSON.stringify({display:displaySource.bounds,area:areaSource.bounds,frameWidth:stream.width,frameHeight:stream.height,frames:stream.nb_read_frames,clock:loaded.materials.payload.clock,collection:loaded.materials.payload.collection,requestId,leaseId:cold.materials.leaseId}));
 
           const cancelId='packed-native-cancel-'+Date.now();
@@ -294,23 +313,25 @@ try {
           assert.equal(await lstat(areaMapping.bundlePath).then(()=>true,()=>false),false,'cancel must not create final destination');
           console.log('packed Record capture/2 native Xvfb consumer passed');
         } finally {
-          for (const id of await mappings.listRequestIds('capture2').catch(()=>[])) {
-            const row=await mappings.getByRequestId(id).catch(()=>undefined); if (!row?.capture2Intent) continue;
-            const status=await client.inspect({captureId:row.captureId,ownerToken:row.ownerToken}).catch(()=>undefined);
-            if (status && ['starting','recording'].includes(status.state)) await client.cancel({captureId:row.captureId,ownerToken:row.ownerToken}).catch(()=>undefined);
-          }
+          await reconcileAndCancel(mappings,client,Date.now()+15000);
           host.dispose();
-          await client.close().catch(()=>undefined);
-          scene.kill('SIGTERM');
-          await new Promise(resolve=>{if(xvfb.exitCode!==null)resolve();else{xvfb.once('exit',resolve);xvfb.kill('SIGTERM');setTimeout(()=>{if(xvfb.exitCode===null)xvfb.kill('SIGKILL');},2000).unref();}});
-          await rm(root,{recursive:true,force:true});
+          await client.close();
+          clientClosed = true;
+          await waitForExit(scene,1000);
+          await waitForExit(xvfb,1000);
+          console.error('private native proof retained for inspection and recovery: '+root);
         }
       } finally {
-        if(previousDisplay===undefined)delete process.env.DISPLAY;else process.env.DISPLAY=previousDisplay;
-        if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;
-        if(xvfb.exitCode===null)xvfb.kill('SIGTERM');
+        try {
+          if (client && !clientClosed) await client.close();
+          if (scene) await waitForExit(scene,1000);
+          await waitForExit(xvfb,1000);
+        } finally {
+          if(previousDisplay===undefined)delete process.env.DISPLAY;else process.env.DISPLAY=previousDisplay;
+          if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;
+        }
       }
-    `], { cwd: capture2, env: process.env });
+    `], { cwd: capture2, timeout: 240000, killSignal: 'SIGTERM', env: { ...process.env, APPARENT_CAPTURE2_PAYLOAD: admittedPayload, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts') } });
     process.stdout.write(capture2Result.stdout);
   }
   const sdkDeclarations = path.join(publication, 'consumer.ts');
