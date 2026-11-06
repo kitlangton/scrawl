@@ -1,3 +1,4 @@
+use super::transport::Input;
 use super::{
     job::Active,
     protocol::{self, Decode, Result},
@@ -5,82 +6,17 @@ use super::{
 use apparent_capture_engine::Runtime;
 use serde_json::{Value, json};
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::io::{BufRead, Read, Write};
 use std::os::fd::AsRawFd;
 use std::path::Path;
-use std::sync::mpsc::{self, Receiver, RecvTimeoutError};
+use std::sync::mpsc::RecvTimeoutError;
 use std::time::{Duration, Instant};
 
 struct Job {
     input: Decode,
     status: Value,
 }
-enum Input {
-    Line(Vec<u8>),
-    Closed,
-    Invalid,
-}
-
-fn reader() -> Receiver<Input> {
-    let (tx, rx) = mpsc::sync_channel(32);
-    std::thread::spawn(move || {
-        let stdin = std::io::stdin();
-        let mut stdin = stdin.lock();
-        loop {
-            // take bounds allocation even for an unterminated hostile input line.
-            let mut bytes = Vec::new();
-            let n = (&mut stdin).take(65538).read_until(b'\n', &mut bytes);
-            match n {
-                Ok(0) => {
-                    let _ = tx.send(Input::Closed);
-                    break;
-                }
-                Ok(_) if bytes.ends_with(b"\n") => {
-                    bytes.pop();
-                    if bytes.ends_with(b"\r") {
-                        bytes.pop();
-                    }
-                    if bytes.len() > 65536
-                        || bytes.contains(&b'\r')
-                        || std::str::from_utf8(&bytes).is_err()
-                    {
-                        let _ = tx.send(Input::Invalid);
-                        break;
-                    }
-                    if tx.send(Input::Line(bytes)).is_err() {
-                        break;
-                    }
-                }
-                _ => {
-                    let _ = tx.send(Input::Invalid);
-                    break;
-                }
-            }
-        }
-    });
-    rx
-}
 fn send(value: Value) -> Result<()> {
-    let mut bytes = serde_json::to_vec(&value).map_err(|_| "internal")?;
-    if bytes.len() > 65536 {
-        return Err("internal");
-    }
-    bytes.push(b'\n');
-    let mut stdout = std::io::stdout().lock();
-    let until = Instant::now() + Duration::from_secs(1);
-    let mut sent = 0;
-    while sent < bytes.len() {
-        match stdout.write(&bytes[sent..]) {
-            Ok(0) => return Err("internal"),
-            Ok(n) => sent += n,
-            Err(e) if e.kind() == std::io::ErrorKind::Interrupted => (),
-            Err(e) if e.kind() == std::io::ErrorKind::WouldBlock && Instant::now() < until => {
-                std::thread::sleep(Duration::from_millis(2))
-            }
-            Err(_) => return Err("internal"),
-        }
-    }
-    stdout.flush().map_err(|_| "internal")
+    super::transport::send(value, 65536)
 }
 fn reply(rpc: &str, result: Result<Value>) -> Result<()> {
     send(protocol::response(rpc, result))
@@ -94,7 +30,7 @@ pub fn run(runtime_path: &Path) -> Result<()> {
     if flags < 0 || unsafe { libc::fcntl(fd, libc::F_SETFL, flags | libc::O_NONBLOCK) } < 0 {
         return Err("internal");
     }
-    let inputs = reader();
+    let inputs = super::transport::reader(65536);
     let mut client = None;
     let mut seen = HashSet::new();
     let mut order = VecDeque::new();

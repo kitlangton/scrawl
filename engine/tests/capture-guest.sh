@@ -9,6 +9,11 @@ tar -xf "$binary_dir/capture-sdk-test.tar" -C "$SCRAWL_GUI_OUTPUT/sdk"
 tar -xf "$binary_dir/capture-runtime.tar" -C "$SCRAWL_GUI_OUTPUT"
 tar -xf "$binary_dir/x11-test-tools.tar" -C "$SCRAWL_GUI_OUTPUT"
 export APPARENT_ENGINE_CAPTURE_BIN="$SCRAWL_GUI_OUTPUT/dist/apparent-engine-capture-launch"
+if [ -f "$binary_dir/media-runtime.tar" ]; then
+  mkdir -m 700 "$SCRAWL_GUI_OUTPUT/media-runtime"
+  tar -xf "$binary_dir/media-runtime.tar" -C "$SCRAWL_GUI_OUTPUT/media-runtime"
+  export APPARENT_ENGINE_MEDIA2_BIN="$SCRAWL_GUI_OUTPUT/media-runtime/dist/apparent-engine-frames"
+fi
 export APPARENT_XVFB="$SCRAWL_GUI_OUTPUT/x11-test-tools/Xvfb"
 export APPARENT_XSETROOT="$SCRAWL_GUI_OUTPUT/x11-test-tools/xsetroot"
 export APPARENT_FFPROBE="$SCRAWL_GUI_OUTPUT/x11-test-tools/ffprobe"

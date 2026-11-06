@@ -188,6 +188,11 @@ The `./recipient-command` export prepares headless fetch/remote-inspect behavior
 and invokes the verified retrieval API through injected credential/publication
 boundaries. Explicit local sources remain local. Successful results require a
 committed publisher receipt; evidence snapshots require its evidence-only receipt.
+That evidence-only requirement is pinned before invoking the publisher.
+The command owns retrieved plaintext. Publisher callbacks borrow those buffers
+until their promise settles; the command then wipes them on success, uncertainty,
+failure or cancellation. Publishers must copy bytes needed beyond that lifetime.
+This does not delete committed output or retained filesystem staging evidence.
 This is not an installed CLI route or a filesystem publisher. A boolean receipt
 from a fixture does not establish native publication. Actual credential loading,
 renewal, private staging/no-overwrite publication and installed composition must
@@ -303,3 +308,25 @@ installed locator or release. Without this explicit port, the previous read-only
 recovery/reload behavior remains. Installed provider/launch assembly and caller
 adoption are still pending. Remove this temporary legacy bridge when the
 coordinated TypeScript writer and all its consumers pass the migration gates.
+
+The internal `state/replacement` prerequisite stages a bounded private byte copy,
+uses the admitted `replaceFile` operation under a caller-held queue lease, and
+requires inode-pinned private readback before reporting commitment. It performs
+no JSON policy or credential/journal ordering and has no production caller or
+package export. It must not write the live namespace while Rust remains its
+writer. After dispatch, uncertain outcomes retain observed files without retry;
+proven no-effect results clean only the original stage inode under the original
+admitted directory. Lost fences retain staging rather than delete unproven data.
+Isolated Linux and Mac consumer tests cover replacement and stale-inode refusal
+under the real queue lease. They do not establish installed acceptance; the
+protected provider, coordinated sole-writer cutover and actual caller tests
+remain required.
+
+The internal `credentials/renewal-request` transport sends one bounded refresh
+POST to the already approved root or `/connect` API base, with no bearer header,
+cookies, redirects or retries. It returns raw reply bytes for durable response
+publication before the existing journal merge; successful HTTP does not establish
+valid renewed credentials. The caller owns journal preparation, locking, expiry,
+currentness, recovery and wiping returned bytes. A failed POST may follow a
+server-side rotation and never authorizes a blind retry. This has no production
+caller and does not change the Rust writer or installed routing.

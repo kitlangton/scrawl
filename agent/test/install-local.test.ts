@@ -234,6 +234,59 @@ test('manifest and tree inventory reject malformed, unknown, duplicate, unsafe, 
   await rejectRoot(/special file/);
 }));
 
+test('dual media manifest preserves the exact media/1 install path and rejects partial or altered media/2 declarations before writes', async () => withTemp(async (directory) => {
+  const base = await fixtureRoot(directory);
+  const dual = structuredClone(base.manifest) as any;
+  dual.capabilities = ['media/1', 'media/2'];
+  dual.media2Launch = {
+    argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'],
+    sharesCaptureRuntime: true,
+  };
+  assert.deepEqual(validateManifest(dual).capabilities, ['media/1', 'media/2']);
+
+  const dualBytes = Buffer.from(`${JSON.stringify(dual, null, 2)}\n`);
+  await writeFile(join(base.root, 'manifest.json'), dualBytes, { mode: 0o600 });
+  const archive = join(directory, 'agent.tgz');
+  await writeFile(archive, agentTar, { mode: 0o600 });
+  const prefix = join(directory, 'dual-prefix');
+  await installLocal({ agentPath: archive, agentSha256: sha256(agentTar), nativeRoot: base.root,
+    manifestSha256: sha256(dualBytes), prefix }, fixtureDependencies());
+  const launcher = await readFile(join(prefix, 'apparent-agent'), 'utf8');
+  assert.match(launcher, /apparent-engine-frames/);
+  assert.match(launcher, /runtime/);
+  assert.doesNotMatch(launcher, /media-protocol-version.*2|capture-runtime-dir/);
+  assert.deepEqual(JSON.parse(await readFile(join(prefix, 'native-media/manifest.json'), 'utf8')), dual);
+  const receipt = JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8'));
+  assert.equal(receipt.nativeEntry, join(prefix, 'native-media/apparent-engine-frames'));
+  assert.deepEqual(receipt.claims, [
+    'local Agent consumer installed',
+    'native media/1 handshake and confirmed close passed; no codec claim',
+    'does not imply current-main artifact admission or global routing',
+  ]);
+
+  const malformed = [
+    (value: any) => { value.capabilities = ['media/2', 'media/1']; },
+    (value: any) => { delete value.media2Launch; },
+    (value: any) => { value.media2Launch.argv = ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1']; },
+    (value: any) => { value.media2Launch.argv.push('--extra'); },
+    (value: any) => { value.media2Launch.sharesCaptureRuntime = false; },
+    (value: any) => { value.media2Launch.extra = true; },
+    (value: any) => { value.extra = true; },
+    (value: any) => { value.capabilities = ['media/1', 'media/2', 'media/3']; },
+    (value: any) => { value.capabilities = ['media/1']; value.media2Launch = dual.media2Launch; },
+  ];
+  for (const [index, change] of malformed.entries()) {
+    const value = structuredClone(dual);
+    change(value);
+    const badPrefix = join(directory, `malformed-${index}`);
+    const bytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+    await writeFile(join(base.root, 'manifest.json'), bytes, { mode: 0o600 });
+    await assert.rejects(installLocal({ agentPath: archive, agentSha256: sha256(agentTar), nativeRoot: base.root,
+      manifestSha256: sha256(bytes), prefix: badPrefix }, fixtureDependencies()));
+    await assert.rejects(lstat(badPrefix), { code: 'ENOENT' });
+  }
+}));
+
 test('native inventory aggregate, file-count, entry-count and per-file bounds fail before prefix creation', async () => withTemp(async (directory) => {
   const { input, native } = await fixtureInputs(directory);
   const noPrefix = async (limits: typeof DEFAULT_LIMITS, pattern: RegExp, suffix: string) => {

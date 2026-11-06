@@ -16,7 +16,14 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
   await mkdir(runtime, { mode: 0o700 }); await mkdir(bundle, { mode: 0o700 })
   const video = join(bundle, 'recording.mp4')
   if (process.env.APPARENT_MEDIA_FIXTURE) await copyFile(resolve(process.env.APPARENT_MEDIA_FIXTURE), video)
-  else execFileSync(process.env.APPARENT_FFMPEG ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=10:duration=2', '-an', '-c:v', 'libx264', '-threads', '1', '-pix_fmt', 'yuv420p', '-movflags', '+faststart', video], { timeout: 15000 })
+  else {
+    // Linux must exercise a real display-sized source under the unchanged
+    // supervised address-space cap, including libav decoder thread overhead.
+    const linux = process.platform === 'linux'
+    const source = linux ? '1366x768:rate=30' : '640x360:rate=10'
+    const encoder = linux ? ['-preset', 'veryfast', '-tune', 'zerolatency', '-g', '60', '-b:v', '6000k'] : []
+    execFileSync(process.env.APPARENT_FFMPEG ?? 'ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', `testsrc2=size=${source}:duration=2`, '-an', '-c:v', 'libx264', '-threads', '1', ...encoder, '-pix_fmt', 'yuv420p', '-movflags', '+faststart', video], { timeout: 15000 })
+  }
   await chmod(video, 0o600)
   await writeFile(join(bundle, 'apparent.json'), JSON.stringify({ version: 1, id: 'synthetic', durationMs: 2250, video: 'recording.mp4', videoOffsetMs: 250 }), { mode: 0o600 })
   const m = await stat(video, { bigint: true })

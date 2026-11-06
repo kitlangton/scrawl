@@ -29,11 +29,20 @@ const pluginInputs = plugins.map(name => {
 mkdirSync(stagePlugins, { recursive: true }); mkdirSync(libDir); mkdirSync(workerDir)
 for (const { name, from } of pluginInputs) copyFileSync(from, resolve(stagePlugins, name), 0)
 const cargoTarget = resolve(pkg, '.build', 'cargo-target')
-const common = ['--manifest-path', resolve(root, 'engine/Cargo.toml'), '--features', 'media', '--bin', 'apparent-engine-frames', '--release', '--locked', '--target-dir', cargoTarget]
+const common = ['--manifest-path', resolve(root, 'engine/Cargo.toml'), '--features', 'media', '--release', '--locked', '--target-dir', cargoTarget]
 if (process.env.APPARENT_CARGO_OFFLINE === '1') common.push('--offline')
 const admission = '/home/simon/.local/bin/t3-build'
 const needsAdmission = existsSync(admission) && !process.env.T3_BUILD_JOBS
-execFileSync(needsAdmission ? admission : 'cargo', needsAdmission ? ['--jobs', '3', '--min-jobs', '3', '--', 'cargo', 'build', ...common] : ['build', ...common], { cwd: root, stdio: 'inherit', env: { ...process.env, CARGO_BUILD_JOBS: process.env.T3_BUILD_JOBS ?? '2' } })
+function runCargo(args: string[], environment: NodeJS.ProcessEnv = process.env) {
+  execFileSync(needsAdmission ? admission : 'cargo', needsAdmission ? ['--jobs', '3', '--min-jobs', '3', '--', 'cargo', ...args] : args, { cwd: root, stdio: 'inherit', env: { ...environment, CARGO_BUILD_JOBS: process.env.T3_BUILD_JOBS ?? '2' } })
+}
+// Optional Linux Media2 tests belong to this producer, not the default v1 lane.
+runCargo(['test', ...common, '--test', 'materials_media', '--test', 'media2_worker', '--', '--test-threads=1'], {
+  ...process.env, GST_PLUGIN_PATH: stagePlugins, GST_PLUGIN_PATH_1_0: stagePlugins,
+  GST_PLUGIN_SYSTEM_PATH: '', GST_PLUGIN_SYSTEM_PATH_1_0: '',
+  GST_REGISTRY: '/dev/null', GST_REGISTRY_1_0: '/dev/null', GST_REGISTRY_FORK: 'no',
+})
+runCargo(['build', ...common, '--bin', 'apparent-engine-frames'])
 const worker = resolve(cargoTarget, 'release/apparent-engine-frames')
 copyFileSync(worker, resolve(workerDir, 'apparent-engine-frames'), 0); chmodSync(resolve(workerDir, 'apparent-engine-frames'), 0o755)
 const launch = resolve(pkg, 'src/launch.sh'); copyFileSync(launch, resolve(output, 'apparent-engine-frames'), 0); chmodSync(resolve(output, 'apparent-engine-frames'), 0o755)
@@ -60,7 +69,7 @@ const osRelease = readFileSync('/etc/os-release', 'utf8').split('\n').find(x => 
 const glibc = run('ldd', ['--version']).split('\n')[0]
 const rustc = run('rustc', ['--version']); const cargo = run('cargo', ['--version']); const gstreamer = run('pkg-config', ['--modversion', 'gstreamer-1.0'])
 const pluginSource = process.env.APPARENT_GST_PLUGIN_SOURCE ? `pkg-config:${gstDir};explicit-override:${process.env.APPARENT_GST_PLUGIN_SOURCE}` : `pkg-config:${gstDir}`
-const manifest: MediaManifest = { schema: 1, sourceSha, target: 'linux-x64', rustTriple: 'x86_64-unknown-linux-gnu', capabilities: ['media/1'], launch: { entry: 'apparent-engine-frames', argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'], worker: 'libexec/apparent-engine-frames', pathLookup: false, runtimeBuilds: false }, environment: { osRelease, kernel: run('uname', ['-r']), architecture: 'x86_64', rustc, cargo, gstreamer, glibc, pluginSource, plugins, baseline: [...baseline].sort() }, runtimeFiles: inventory(output) }
+const manifest: MediaManifest = { schema: 1, sourceSha, target: 'linux-x64', rustTriple: 'x86_64-unknown-linux-gnu', capabilities: ['media/1', 'media/2'], media2Launch: { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }, launch: { entry: 'apparent-engine-frames', argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'], worker: 'libexec/apparent-engine-frames', pathLookup: false, runtimeBuilds: false }, environment: { osRelease, kernel: run('uname', ['-r']), architecture: 'x86_64', rustc, cargo, gstreamer, glibc, pluginSource, plugins, baseline: [...baseline].sort() }, runtimeFiles: inventory(output) }
 writeFileSync(resolve(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx', mode: 0o644 })
 if (frozen() !== sourceSha) throw new Error('source changed during media build')
 validateArtifact(output)
