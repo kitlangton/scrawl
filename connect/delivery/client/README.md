@@ -406,3 +406,26 @@ config. Cancellation before recovery leaves completed evidence for a later call
 using its original issue time. These are isolated writer capabilities, with no
 public writer export or production caller. Rust remains the sole live writer;
 Mac coordinator proof, installed admission and coordinated adoption remain gates.
+
+`./recipient-host` composes one `fetch` or `inspect` invocation for a trusted Node
+host. Local inspection bypasses Connect state and resources. Remote operations
+require approved config, the externally admitted installed-resource tuple, and
+the existing sole Rust renewal owner bound to the same namespace/server. The
+host checks the returned provider audit identity, keeps it alive through Agent
+inspection, and retires it afterward. A failed retirement returns the retained
+retirement capability to composition; committed/uncertain publication facts are
+preserved and no command is replayed. The Agent adapter owns inspection output
+and evidence warnings, including `--json`, `--marks` and experiment semantics.
+
+This is a callable composition seam, not a binary, installed locator, writer
+admission or route switch. Registered installed resource targets remain x64-only;
+ARM fails closed without a direct-provider fallback. The resolver and factory
+are trusted composition dependencies, not evidence that a writer/helper was
+admitted. Production assembly still needs admitted writer launch/runtime and
+resource artifacts, applicable joined platform proof, and actual CLI routing.
+Fixture injection does not establish those capabilities or permit a TS writer
+alongside Rust.
+The joined Linux host fixture uses the public installed-resource factory and the
+hash-pinned existing Rust writer against synthetic state and loopback HTTP. It
+does not admit that writer for installation or supply the production Agent
+inspection adapter. Joined host proof on Mac and installed routing remain open.
