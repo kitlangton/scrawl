@@ -105,3 +105,9 @@ published `@apparent/engine-sdk/capture` `CaptureClient`; `source` must be the
 exact descriptor from current discovery, and `options` and `invocation` follow
 the SDK 0.3.1 public types. Start returns a lifecycle receipt, not a Saved
 claim.
+
+Native adapter conformance runs in `npm run test:contracts` against the declared
+`@apparent/app-contracts/host` package export. Its development-only tarball is
+pinned to the public package source at `a8194a4` (provenance in `vendor/`).
+Record runtime declarations and consumers use the structural injection seam and
+require no Shared package installation or repository source imports.

@@ -63,7 +63,7 @@ try {
     import { createRecordNativePort } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
-    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk']) assert.throws(() => require.resolve(name));
+    for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk', '@apparent/app-contracts']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
     assert.equal(typeof createRecordHostRuntime, 'function');
     const requested = process.cwd() + '/requested.apparent';
