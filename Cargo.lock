@@ -279,6 +279,7 @@ dependencies = [
  "gstreamer-video",
  "libc",
  "png 0.18.1",
+ "screencapturekit 11.0.0",
  "serde",
  "serde_json",
  "sha2 0.10.9",
