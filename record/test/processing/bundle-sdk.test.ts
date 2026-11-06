@@ -340,6 +340,14 @@ test("derivative/2 staging maps native frame and sheet seals to final paths and 
     await assertAbsent(destinationPath);
     const exactReplay = await prepareRecordPublication({ ...stagingInput(input, assembly, root, "1".repeat(32), destinationPath), derivatives2, derivative2Artifacts });
     assert.equal(exactReplay.input.planFile.planSha256, prepared.input.planFile.planSha256);
+    const reorderedBindings = {
+      "contact-sheet.png": { selector: { kind: "contact-sheet" as const }, receiptId: "8".repeat(32) },
+      "frames/frame-01.png": { selector: { kind: "frame" as const, requestIndex: 1 }, receiptId: "8".repeat(32) },
+    };
+    const reorderedDocument = structuredClone(derivatives2[0]!);
+    reorderedDocument.envelope = Object.fromEntries(Object.entries(reorderedDocument.envelope as Record<string, unknown>).reverse());
+    const reorderedReplay = await prepareRecordPublication({ ...stagingInput(input, assembly, root, "1".repeat(32), destinationPath), derivatives2: [reorderedDocument], derivative2Artifacts: reorderedBindings });
+    assert.equal(reorderedReplay.input.planFile.planSha256, prepared.input.planFile.planSha256);
     const changedDocument = structuredClone(derivatives2[0]!);
     changedDocument.bytes = new Uint8Array([...changedDocument.bytes, 0x20]);
     const changedEnvelope = changedDocument.envelope as { receiptFile: { sha256: string; identity: { size: number } } };

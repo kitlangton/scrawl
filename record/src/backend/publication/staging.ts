@@ -80,7 +80,7 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
     const selectorKey = `${binding.receiptId}:${binding.selector.kind === "frame" ? `frame:${binding.selector.requestIndex}` : "contact-sheet"}`;
     if (usedDerivative2Bindings.has(selectorKey)) throw new Error("Record derivative/2 selector cannot be bound to multiple final paths");
     usedDerivative2Bindings.add(selectorKey);
-    resolvedDerivative2.set(item.path, { receipt: receipt.envelope, selector: binding.selector });
+    resolvedDerivative2.set(item.path, canonicalDerivative2Keys({ receipt: receipt.envelope, selector: binding.selector }));
   }
   if (input.derivative2Artifacts) {
     const expected = new Set([...derivative2ByReceipt].flatMap(([receiptId, { envelope }]) => [
@@ -162,8 +162,16 @@ async function prepare(input: PreparePublicationInput): Promise<PreparedRecordPu
 }
 
 function derivative2Fingerprint(documents: readonly Derivative2DocumentInput[] | undefined, bindings: Derivative2ArtifactBinding | undefined): unknown {
-  return { documents: documents?.map(document => ({ envelope: document.envelope, bytesSha256: hash(document.bytes), request: document.request,
-    layoutBytesSha256: document.layoutBytes ? hash(document.layoutBytes) : null })) ?? null, bindings: bindings ?? null };
+  return canonicalDerivative2Keys({ documents: documents?.map(document => ({ envelope: document.envelope, bytesSha256: hash(document.bytes), request: document.request,
+    layoutBytesSha256: document.layoutBytes ? hash(document.layoutBytes) : null })) ?? null, bindings: bindings ?? null });
+}
+
+/** JSON object order is not part of receipt/selector identity; exact detached byte hashes remain bound. */
+function canonicalDerivative2Keys<T>(value: T): T {
+  if (Array.isArray(value)) return value.map(canonicalDerivative2Keys) as T;
+  if (value !== null && typeof value === "object") return Object.fromEntries(Object.entries(value)
+    .sort(([a], [b]) => a < b ? -1 : a > b ? 1 : 0).map(([key, item]) => [key, canonicalDerivative2Keys(item)])) as T;
+  return value;
 }
 
 async function ensurePrivateDirectory(path: string): Promise<void> {
