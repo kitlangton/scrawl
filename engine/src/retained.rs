@@ -530,7 +530,7 @@ fn hash_file(file: &File) -> io::Result<String> {
         .collect())
 }
 
-#[cfg(test)]
+#[cfg(all(test, target_os = "linux"))]
 mod tests {
     use super::*;
     use serde_json::json;

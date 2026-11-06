@@ -990,7 +990,12 @@ mod tests {
         std::fs::create_dir(&source_path).unwrap();
         std::fs::set_permissions(&source_path, std::fs::Permissions::from_mode(0o700)).unwrap();
         let movie_path = source_path.join("recording.mp4");
-        apparent_capture_engine::linux::encode_synthetic(&movie_path).unwrap();
+        // A decode-only producer must not require an encoder plugin at test time.
+        std::fs::copy(
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("core/tests/fixtures/tiny.mp4"),
+            &movie_path,
+        ).unwrap();
         let source = File::open(&movie_path).unwrap();
         let source_meta = source.metadata().unwrap();
         let source_bytes = std::fs::read(&movie_path).unwrap();
@@ -1049,10 +1054,10 @@ mod tests {
         let output_path = root_path.join("derived");
         let output = Arc::new(SecureStore::create(&output_path).unwrap());
         let output_path = output_path.canonicalize().unwrap().display().to_string();
-        let times = vec![0, 300, 300, 2_000];
+        let times = vec![0, 150, 150, 2_000];
         let limits = Limits {
             max_frames: 4,
-            max_edge: 80,
+            max_edge: 8,
             max_total_pixels: 64_000,
             deadline_ms: 10_000,
         };
@@ -1197,6 +1202,7 @@ mod tests {
             payload["frames"][1]["file"]["sha256"],
             payload["frames"][2]["file"]["sha256"]
         );
+        assert_eq!(payload["frames"][1]["clampedToEnd"], false);
         assert_eq!(payload["frames"][3]["clampedToEnd"], true);
         for frame in payload["frames"].as_array().unwrap() {
             let bytes = read_sealed_file(
@@ -1207,7 +1213,7 @@ mod tests {
             assert!(bytes.starts_with(b"\x89PNG\r\n\x1a\n"));
             let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
             let reader = decoder.read_info().unwrap();
-            assert_eq!((reader.info().width, reader.info().height), (80, 45));
+            assert_eq!((reader.info().width, reader.info().height), (8, 8));
             assert_eq!(frame["encoding"], "png");
         }
         let sheet = &payload["contactSheet"];
@@ -1245,7 +1251,7 @@ mod tests {
             requested_bundle_ms: vec![300, 300],
             limits: Limits {
                 max_frames: 2,
-                max_edge: 80,
+                max_edge: 8,
                 max_total_pixels: 64_000,
                 deadline_ms: 10_000,
             },
@@ -1260,7 +1266,7 @@ mod tests {
         cancel_binding.requested_bundle_ms = cancel_request.requested_bundle_ms.clone();
         cancel_binding.limits = registry::Limits {
             max_frames: 2,
-            max_edge: 80,
+            max_edge: 8,
             max_total_pixels: 64_000,
             deadline_ms: 10_000,
         };
@@ -1317,14 +1323,14 @@ mod tests {
         let mut budget_request = request.clone();
         budget_request.job_id = "7".repeat(32);
         budget_request.output_directory = budget_output_path.clone();
-        budget_request.limits.max_total_pixels = 20_000;
+        budget_request.limits.max_total_pixels = 7_800;
         let budget_request_bytes = serde_json::to_vec(&budget_request).unwrap();
         let budget_metadata = budget_output.directory_metadata().unwrap();
         let mut budget_binding = binding.clone();
         budget_binding.job_id = budget_request.job_id.clone();
         budget_binding.receipt_id = "6".repeat(32);
         budget_binding.request_sha256 = digest_hex(&Sha256::digest(&budget_request_bytes));
-        budget_binding.limits.max_total_pixels = 20_000;
+        budget_binding.limits.max_total_pixels = 7_800;
         budget_binding.output_root = budget_output_path;
         budget_binding.output_identity = OutputIdentity {
             device: budget_metadata.dev().to_string(),
