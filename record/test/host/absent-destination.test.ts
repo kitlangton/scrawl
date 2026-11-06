@@ -13,9 +13,11 @@ async function temporary(t: { after(fn: () => void | Promise<void>): void }): Pr
   return root;
 }
 
-function child(control: string, output: string, requestId: string, loseReply = false): Promise<{ stdout: string; code: number | null }> {
+function child(control: string, output: string, requestId: string, loseReply = false, exactPath?: string): Promise<{ stdout: string; code: number | null }> {
   return new Promise((resolve, reject) => {
-    const proc = spawn(process.execPath, ["--experimental-strip-types", new URL("./absent-destination-child.ts", import.meta.url).pathname, control, output, requestId], {
+    const args = ["--experimental-strip-types", new URL("./absent-destination-child.ts", import.meta.url).pathname, control, output, requestId];
+    if (exactPath) args.push(exactPath);
+    const proc = spawn(process.execPath, args, {
       stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...(loseReply ? { RECORD_ALLOCATOR_LOSE_REPLY: "1" } : {}) },
     });
     let stdout = "", stderr = "";
@@ -153,4 +155,65 @@ test("ill-formed UTF-16 request IDs are rejected before creating allocator metad
   await assert.rejects(allocator.allocate("invalid-\ud800-id"), /storage is unavailable/u);
   await assertAbsent(join(control, "capture2-destination-bindings.sqlite"));
   await assertAbsent(output);
+});
+
+test("exact reservation preserves parent permissions, binds exact path, and replays after publication", async t => {
+  const parent = await temporary(t), control = join(parent, "control"), userParent = join(parent, "ordinary-output");
+  await mkdir(userParent, { mode: 0o755 }); await chmod(userParent, 0o755);
+  const before = await lstat(userParent), path = join(userParent, "requested.apparent");
+  const allocator = new AbsentDestinationAllocator(control, join(parent, "bundles"));
+  const binding = await allocator.reserveExact("exact request", path);
+  assert.equal(binding.bundlePath, path);
+  assert.match(binding.bundleId, /^record-[0-9a-f]{64}\.apparent$/u);
+  assert.notEqual(binding.bundleId, "requested.apparent");
+  assert.equal((await lstat(userParent)).mode, before.mode);
+  await assertAbsent(path);
+  await assert.rejects(allocator.reserveExact("exact request", join(userParent, "changed.apparent")), /storage is unavailable/u);
+  await mkdir(path, { mode: 0o755 }); await writeFile(join(path, "native.bytes"), Buffer.from([0, 1, 2, 255]));
+  assert.deepEqual(await new AbsentDestinationAllocator(control, join(parent, "other-root")).reserveExact("exact request", path), binding);
+  assert.deepEqual(await readFile(join(path, "native.bytes")), Buffer.from([0, 1, 2, 255]));
+});
+
+test("exact reservations reject occupied, malformed, aliased, and control-namespace paths", async t => {
+  const parent = await temporary(t), control = join(parent, "control"), output = join(parent, "ordinary");
+  await mkdir(output, { mode: 0o755 });
+  const allocator = new AbsentDestinationAllocator(control, join(parent, "bundles"));
+  const occupied = join(output, "occupied.apparent"); await writeFile(occupied, "preserve");
+  await assert.rejects(allocator.reserveExact("occupied", occupied), /storage is unavailable/u);
+  assert.equal(await readFile(occupied, "utf8"), "preserve");
+  const occupiedDirectory = join(output, "occupied-directory.apparent"); await mkdir(occupiedDirectory);
+  await assert.rejects(allocator.reserveExact("occupied-directory", occupiedDirectory), /storage is unavailable/u);
+  const occupiedLink = join(output, "occupied-link.apparent"); await symlink(occupied, occupiedLink);
+  await assert.rejects(allocator.reserveExact("occupied-link", occupiedLink), /storage is unavailable/u);
+  assert.equal(await readFile(occupied, "utf8"), "preserve");
+  await assert.rejects(allocator.reserveExact("bad", `${output}/../normalized.apparent`), /storage is unavailable/u);
+  await assert.rejects(allocator.reserveExact("bad", join(control, "inside.apparent")), /storage is unavailable/u);
+  await assert.rejects(allocator.reserveExact("bad", join(parent, "missing", "file.apparent")), /storage is unavailable/u);
+  const alias = join(parent, "alias"); await symlink(output, alias);
+  await assert.rejects(allocator.reserveExact("bad", join(alias, "file.apparent")), /storage is unavailable/u);
+  await assert.rejects(allocator.reserveExact("bad", join(output, "nul\0path")), /storage is unavailable/u);
+  await assert.rejects(allocator.reserveExact("bad", join(output, "λ".repeat(2100))), /storage is unavailable/u);
+});
+
+test("subprocess reservations serialize same-request and same-path races durably", async t => {
+  const parent = await temporary(t), control = join(parent, "control"), output = join(parent, "ordinary");
+  await mkdir(output, { mode: 0o755 });
+  const sharedPath = join(output, "shared.apparent");
+  const sameRequest = await Promise.all([child(control, join(parent, "bundles"), "same", false, sharedPath), child(control, join(parent, "bundles"), "same", false, sharedPath)]);
+  assert.deepEqual(JSON.parse(sameRequest[0]!.stdout), JSON.parse(sameRequest[1]!.stdout));
+  const changedPath = await Promise.allSettled([
+    child(control, join(parent, "bundles"), "changed-request", false, join(output, "winner-a.apparent")),
+    child(control, join(parent, "bundles"), "changed-request", false, join(output, "winner-b.apparent")),
+  ]);
+  assert.equal(changedPath.filter(result => result.status === "fulfilled").length, 1);
+  const competing = await Promise.allSettled([
+    child(control, join(parent, "bundles"), "left", false, join(output, "left.apparent")),
+    child(control, join(parent, "bundles"), "right", false, join(output, "right.apparent")),
+  ]);
+  assert.equal(competing.filter(result => result.status === "fulfilled").length, 2);
+  const samePath = await Promise.allSettled([
+    child(control, join(parent, "bundles"), "path-a", false, join(output, "contended.apparent")),
+    child(control, join(parent, "bundles"), "path-b", false, join(output, "contended.apparent")),
+  ]);
+  assert.equal(samePath.filter(result => result.status === "fulfilled").length, 1);
 });
