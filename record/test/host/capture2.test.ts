@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { chmod, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, realpath, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { DatabaseSync } from "node:sqlite";
@@ -112,6 +112,35 @@ test("published SDK discovery, durable intent, request mapping, materials, resta
   const saved = await restarted.inspect("public arbitrary id");
   assert.equal(saved.phase, "processing", "native Saved is only a Record processing fact");
   assert.equal(saved.publication?.artifactProvenance, "native");
+  assert.equal(ctx.transport.requests.filter(request => request.method === "start").length, 1);
+  restarted.dispose();
+});
+
+test("exact destination is snapshotted into durable intent before SDK start and survives restart", async t => {
+  const ctx = await setup(t); await ctx.host.discoverSources();
+  const destinationPath = join(ctx.root, "requested.apparent");
+  const intent = { requestId: "exact-output", source, options: { audio: "none" as const, localOnly: true as const }, invocation, destinationPath };
+  ctx.transport.beforeStart = async request => {
+    const mapping = await ctx.mappings.getByRequestId("exact-output");
+    assert.equal(mapping?.bundlePath, destinationPath);
+    assert.ok(mapping?.capture2Intent);
+    assert.equal(request.bundlePath, destinationPath);
+    assert.equal(await lstat(destinationPath).then(() => true, () => false), false);
+  };
+  ctx.transport.loseStartReply = true;
+  const pending = ctx.host.start(intent);
+  await new Promise(resolve => setImmediate(resolve));
+  intent.destinationPath = join(ctx.root, "mutated.apparent");
+  await assert.rejects(pending, /same Record request/u);
+  const mapping = await ctx.mappings.getByRequestId("exact-output"); assert.ok(mapping);
+  assert.equal(mapping.bundlePath, destinationPath);
+  assert.equal((JSON.parse(mapping.capture2Intent!).destinationPath), destinationPath);
+  assert.equal(ctx.transport.requests.find((request): request is Extract<CaptureRequest, { method: "start" }> => request.method === "start")?.bundlePath, destinationPath);
+  ctx.transport.setSyntheticSaved(mapping.captureId, mapping.bundleId, destinationPath);
+  ctx.host.dispose();
+  const restarted = createCapture2Host({ client: new CaptureClient(ctx.transport), mappings: ctx.mappings, destinations: ctx.destinations });
+  assert.equal((await restarted.start({ requestId: "exact-output", source, options: { audio: "none", localOnly: true }, invocation, destinationPath })).phase, "processing");
+  await assert.rejects(restarted.start({ ...intent, destinationPath: join(ctx.root, "changed.apparent") }), /conflicts with its durable request binding/u);
   assert.equal(ctx.transport.requests.filter(request => request.method === "start").length, 1);
   restarted.dispose();
 });
