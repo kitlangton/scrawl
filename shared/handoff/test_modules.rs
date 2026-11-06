@@ -1352,3 +1352,34 @@ mod session_lookup {
         assert_eq!(result.0, "ses_00000");
     }
 }
+
+/// Run only on an owned disposable Mac: all pasteboard bytes are synthetic.
+#[cfg(target_os = "macos")]
+#[test]
+fn pasteboard_competing_process_during_readback_stays_unknown_without_retry() {
+    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
+    use std::io::Write as _;
+    use std::process::{Command, Stdio};
+    use std::rc::Rc;
+    use std::cell::Cell;
+    let calls = Rc::new(Cell::new(0));
+    let competitor_count = Rc::new(Cell::new(0_isize));
+    let observed_calls = calls.clone();
+    let observed_count = competitor_count.clone();
+    CLIPBOARD_BEFORE_READBACK.with(|slot| {
+        *slot.borrow_mut() = Some(Box::new(move || {
+            observed_calls.set(observed_calls.get() + 1);
+            let mut child = Command::new("/usr/bin/pbcopy").stdin(Stdio::piped()).spawn().expect("synthetic competing pasteboard process");
+            child.stdin.take().unwrap().write_all(b"synthetic-competing-owner").unwrap();
+            assert!(child.wait().unwrap().success());
+            observed_count.set(NSPasteboard::generalPasteboard().changeCount() as isize);
+        }));
+    });
+    let result = copy_string_to_clipboard_verified_local("synthetic-candidate-write");
+    assert_eq!(result, VerifiedClipboardTextWrite::OutcomeUnknown);
+    assert_eq!(calls.get(), 1);
+    let pasteboard = NSPasteboard::generalPasteboard();
+    assert_eq!(pasteboard.changeCount() as isize, competitor_count.get(), "no retry or restoration may overwrite the competitor");
+    let actual = unsafe { pasteboard.stringForType(NSPasteboardTypeString) }.unwrap();
+    assert!(actual.to_string() == "synthetic-competing-owner", "competing synthetic text must remain");
+}

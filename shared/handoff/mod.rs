@@ -394,6 +394,11 @@ fn stop_clipboard_helper(child: &mut std::process::Child) {
     let _ = child.wait();
 }
 
+#[cfg(all(test, target_os = "macos"))]
+thread_local! {
+    static CLIPBOARD_BEFORE_READBACK: std::cell::RefCell<Option<Box<dyn FnOnce()>>> = std::cell::RefCell::new(None);
+}
+
 #[cfg(target_os = "macos")]
 fn copy_string_to_clipboard_verified_local(content: &str) -> VerifiedClipboardTextWrite {
     use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
@@ -403,6 +408,11 @@ fn copy_string_to_clipboard_verified_local(content: &str) -> VerifiedClipboardTe
         return VerifiedClipboardTextWrite::OutcomeUnknown;
     }
     let after = pasteboard.changeCount();
+    #[cfg(test)]
+    CLIPBOARD_BEFORE_READBACK.with(|slot| {
+        let hook = slot.borrow_mut().take();
+        if let Some(hook) = hook { hook(); }
+    });
     let actual = unsafe { pasteboard.stringForType(NSPasteboardTypeString) };
     if pasteboard_write_confirmed(
         before as isize,
