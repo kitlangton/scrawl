@@ -83,3 +83,5 @@ Provider mode uses only the published media SDK for video decode and retains its
 ## Bundled standalone skill
 
 `apparent-agent skill` writes `skills/apparent/SKILL.md` byte-for-byte to stdout, adding a final newline only if the packaged guide has none. It reads only that package-relative text file; it does not load config, locate bundles, launch Engine or access the network. The standalone guide teaches visual-first reading and the installed `apparent-agent inspect` commands. Its documented recording adapter remains unavailable without a future Engine recorder/media capability. This does not replace or change the legacy Rust `apparent skill` guide or its command routing.
+
+Cold `capture --protocol capture2 inspect <request-id>` can report `saved` and its bundle path only when Record’s persisted Saved facts and handoff resolver match the retained Agent request, artifact and canonical destination, and transport close is confirmed. Missing or mismatched output remains pending without a path. This read does not dispatch publication, process retained materials, copy text, or activate an installed route.
