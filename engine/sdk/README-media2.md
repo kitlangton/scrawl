@@ -106,6 +106,9 @@ metadata line and no fallback to media/1. Launch has the same six arguments,
 ending `--media-protocol-version`, `2`. Native artifacts must independently
 advertise and qualify this channel before consumers dispatch; old media/1
 artifacts do not implement it.
+For retained materials, use the same private Engine runtime root that owns the
+capture/2 journal. Media/2 must not search other runtimes or infer authority from
+caller file paths. Sharing that root does not acquire the live-capture slot.
 
 `preflightMedia2Dispatch({ownerToken,request,materials}, timeoutMs)` validates
 local input before reserving dispatch. The client shares that exact preflight;
