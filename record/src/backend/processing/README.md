@@ -98,3 +98,20 @@ or validated derivative, even when the reported state name is unchanged.
 retaining a private SQLite tombstone. Use a new journal path for a new job;
 stale handles cannot reuse the cleared namespace. Cleanup never releases native
 materials or cancels work. Media/1 keeps its existing journal implementation.
+
+## Retained derivative files
+
+`readRetainedDerivativeArtifacts` is exported from
+`@apparent/record/processing/retained-artifacts`. It accepts the original
+`Derivative2DocumentInput`, its validated materials, a host-trusted immutable
+derivative root, explicit `{ bundlePath, selector }` mappings, and finite
+per-file/aggregate byte limits. The trusted root must equal both the original
+request output directory and the SDK-validated receipt root.
+
+The reader returns `SealedArtifact[]` compatible with canonical bundle assembly
+and the exact receipt ID/selector bindings consumed by publication staging. A
+final bundle path may differ from the native relative path; the original sealed
+identity, hash, length, and selector remain bound. The caller still chooses
+frame selection, layout, canonical reasons, final paths, and admission before
+assembly. Local byte consistency does not authenticate native origin or create
+Saved state, publish, copy, or release retained materials.
