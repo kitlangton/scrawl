@@ -176,10 +176,10 @@ The following exhaustive baseline ledger documents an earlier campaign proposal 
 | `docs/release.md` | `capture/desktop/docs/release.md` | MOVE | desktop |
 | `docs/routing.md` | `shared/docs/routing.md` | MOVE | shared-infrastructure |
 | `docs/windows.md` | `capture/desktop/docs/legacy/windows.md` | MOVE | desktop (legacy unsupported code; retained, out of scope) |
-| `helper/Export.swift` | `engine/native/Export.swift` | MOVE | engine |
+| `helper/Export.swift` | `capture/engine/native/Export.swift` | MOVE | capture |
 | `helper/Info.plist` | `shared/native/Info.plist` | MOVE | shared-infrastructure |
-| `helper/LiveTranscribe.swift` | `engine/native/LiveTranscribe.swift` | MOVE | engine |
-| `helper/Media.swift` | `engine/native/Media.swift` | MOVE | engine |
+| `helper/LiveTranscribe.swift` | `capture/engine/native/LiveTranscribe.swift` | MOVE | capture |
+| `helper/Media.swift` | `capture/engine/native/Media.swift` | MOVE | capture |
 | `helper/Mirror.swift` | `capture/engine/native/Mirror.swift` | MOVE | capture |
 | `helper/Onboarding.swift` | `capture/desktop/native/Onboarding.swift` | MOVE | desktop |
 | `helper/OnboardingDemo.swift` | `capture/desktop/native/OnboardingDemo.swift` | MOVE | desktop |
