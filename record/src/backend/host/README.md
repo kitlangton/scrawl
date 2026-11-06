@@ -1,5 +1,39 @@
 # Record host allocators
 
+## Privileged native host adapter
+
+Trusted composition injects the public `NativeHostPort` from `@apparent/native-host`
+into Record's adapter, then supplies that adapter to the existing capability provider:
+
+```ts
+import { createNativeHostPort } from '@apparent/native-host';
+import { createRecordNativePort } from '@apparent/record/host/native';
+import { createRecordCapabilityProvider } from '@apparent/record/capabilities';
+
+const native = createRecordNativePort(createNativeHostPort(), {
+  requiredPermissionIds: ['screen-recording', 'microphone'],
+});
+const client = createRecordCapabilityProvider({ runtime, native, providerEpoch, penConfig });
+```
+
+The adapter has a local structural seam, so normal headless Record installation has
+no `@apparent/app-contracts` dependency. Composition can pass the producer port
+directly; `test/native-host/adapter.types.ts` checks strict assignability against
+the public producer contract.
+
+Supply required permission IDs from trusted Record composition. The adapter preserves
+permission status, usability, relaunch requirement and supported actions independently;
+missing required facts are unavailable. Snapshot scope is the running Desktop process's
+cached GUI observation, not a fresh TCC probe or Engine readiness. Shortcut configured
+and effective labels remain separate. Edit text accepts `Ctrl+Shift+R` style tokens;
+native validation returns the only keycode candidate eligible for save. Cancel drops the
+draft without writing. Save/unknown results require a later `readSnapshot` for readback.
+Paste is never changed. Safe relaunch, reset/defaults, desktop config opening, pen apply,
+picker/stroke, copy/open, local-only admission, and installed routing remain unavailable
+through this binding. It does not install the producer into Preview or an existing GUI.
+Provider detach disposes only this adapter's draft and observers; it does not close
+the injected host port or cancel an already admitted mutation.
+
 `AbsentDestinationAllocator` is an explicit capture/2 host primitive. Construct
 it with distinct absolute private control and destination roots, then call
 `allocate(recordRequestId)`. The returned `AbsentDestinationBinding` contains a
