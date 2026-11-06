@@ -174,3 +174,21 @@ verified.
 Client settings and recipient contexts accept a legacy root API URL or the exact `/connect` API base. API routes are appended to that base; HTTP Origin/CSRF allowlists remain origin-only. The signed envelope context stays pinned to the exact normalized transport base, account, capture, sender grant and group. The migration-only production crypto lane exercises both root and mounted contexts through actual Rust pack/unpack and TypeScript encryption/signatures. Ordinary TypeScript package commands do not invoke Rust.
 
 The active native caller remains authoritative migration debt. This source change does not update installed apps: publication/adoption of a client containing the mounted-base fix is required before the canonical setup command is available to those installations. Keep the existing root API compatibility profile until those consumers migrate.
+
+## Queue and command adoption boundaries
+
+The `./queue` export decodes legacy private queue records and proposes guarded
+transitions. Callers must supply fresh facts under the authoritative writer lock,
+including the captured cancellation epoch before applying upload results. These
+functions do not read private files, renew credentials, commit proposals or start
+a worker. Renewal-journal recovery and production state adoption remain with the
+parent migration; Rust remains the sole active writer.
+
+The `./recipient-command` export prepares headless fetch/remote-inspect behavior
+and invokes the verified retrieval API through injected credential/publication
+boundaries. Explicit local sources remain local. Successful results require a
+committed publisher receipt; evidence snapshots require its evidence-only receipt.
+This is not an installed CLI route or a filesystem publisher. A boolean receipt
+from a fixture does not establish native publication. Actual credential loading,
+renewal, private staging/no-overwrite publication and installed composition must
+be adopted and verified before removing the Rust donor or enabling this path.
