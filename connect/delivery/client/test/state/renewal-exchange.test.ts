@@ -3,8 +3,8 @@ import assert from "node:assert/strict";
 import { chmod, lstat, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { persistRenewalExchange } from "../../src/state/renewal-exchange.ts";
-import { commitCompletedRenewal } from "../../src/state/renewal-commit.ts";
+import { persistRenewalExchange, renewStateCredential } from "../../src/state/renewal-exchange.ts";
+import { commitCompletedRenewal, markCredentialAuthRequired } from "../../src/state/renewal-commit.ts";
 import { readCredentialSnapshot, type NamespaceResources } from "../../src/state/namespace.ts";
 import type { StateReplacementResources } from "../../src/state/replacement.ts";
 import { RenewalRequestError } from "../../src/credentials/renewal-request.ts";
@@ -24,7 +24,7 @@ async function createFixture() {
   await put("read.credential", wire); await put("upload.credential", { retained: "upload" }); await put("config", { retained: true });
   const held = new Set<string>(), events: string[] = [];
   const state = { requests: 0, dispatches: 0, failDispatch: 0, refusedDispatch: 0, failRelease: "",
-    hook: undefined as undefined | ((destination: string) => Promise<void>), beforeAcl: undefined as undefined | ((handle: FileHandle) => Promise<void>) };
+    hook: undefined as undefined | ((destination: string) => Promise<void>), beforeAcl: undefined as undefined | ((handle: FileHandle) => Promise<void>), afterScopeRelease: undefined as undefined | (() => Promise<void>) };
   const resources: NamespaceResources & StateReplacementResources = {
     async checkAcl(handle) { try { await state.beforeAcl?.(handle); return { state: "accepted" }; } finally { await handle.close(); } },
     async lock(handle) {
@@ -33,11 +33,11 @@ async function createFixture() {
       finally { await handle.close(); }
       assert.ok(name); assert.equal(held.has(name), false); held.add(name); events.push(`acquire:${name}`);
       return { state: "acquired", lease: { signal: new AbortController().signal, assertHeld() { assert.ok(held.has(name)); },
-        async release() { held.delete(name); events.push(`release:${name}`); if (state.failRelease === name) throw new Error("private diagnostic"); } } };
+        async release() { held.delete(name); events.push(`release:${name}`); if (name === "read.renewal.lock" && state.afterScopeRelease) { const hook = state.afterScopeRelease; state.afterScopeRelease = undefined; await hook(); } if (state.failRelease === name) throw new Error("private diagnostic"); } } };
     },
     async replaceFile(parent, source, destination) {
       try {
-        state.dispatches++; assert.ok(held.has("read.renewal.lock") && held.has("queue.lock"));
+        state.dispatches++; assert.ok(held.has("queue.lock")); if (destination !== "read.credential") assert.ok(held.has("read.renewal.lock"));
         events.push(`replace:${destination}`);
         if (state.refusedDispatch === state.dispatches) return { state: "refused" };
         await rename(file(source), file(destination)); await state.hook?.(destination);
@@ -198,3 +198,108 @@ test("caller cancellation is fenced before effects and after an owned reply is r
     assert.equal(f.state.dispatches, 1); assert.ok(response?.every(byte => byte === 0));
   });
 });
+
+test("coordinator joins the single POST to durable recovery without touching other scopes or config", () => fixture(async f => {
+  const result = await renewStateCredential(f.root, context, f.snapshot, f.resources, { now: () => 2000, request: f.request });
+  assert.equal(result.state, "credential"); if (result.state !== "credential") return;
+  assert.equal(result.source, "renewed"); assert.equal(result.credential.expiresAt, 2060); assert.equal(Object.isFrozen(result.credential), true);
+  assert.equal(f.state.requests, 1); assert.equal(f.state.dispatches, 4);
+  assert.deepEqual(await f.json("upload.credential"), { retained: "upload" }); assert.deepEqual(await f.json("config"), { retained: true });
+  await assert.rejects(lstat(f.file("read.response")), { code: "ENOENT" }); await assert.rejects(lstat(f.file("read.renewal")), { code: "ENOENT" });
+}));
+
+test("coordinator marks only the exact terminally rejected record and preserves recovery evidence", async () => {
+  for (const request of [async () => { throw new RenewalRequestError("auth_required"); }, async () => Buffer.from("malformed reply"),
+    async () => Buffer.from(JSON.stringify({ ...reply, grantId: "wrong-grant" }))]) await fixture(async f => {
+    assert.deepEqual(await renewStateCredential(f.root, context, f.snapshot, f.resources, { now: () => 2000, request }), { state: "auth_required" });
+    const stored = await f.json("read.credential"); assert.equal(stored.authRequired, true); assert.equal(stored.token, wire.token);
+    assert.equal(stored.refreshToken, wire.refreshToken); assert.equal(stored.generation, wire.generation);
+    assert.deepEqual(await f.json("upload.credential"), { retained: "upload" }); assert.deepEqual(await f.json("config"), { retained: true });
+    assert.equal((await lstat(f.file("read.credential"))).mode & 0o777, 0o600);
+    assert.ok((await readdir(f.root)).includes("read.renewal"));
+  });
+});
+
+test("coordinator reloads a cooperating winner between exchange and recovery without another POST", () => fixture(async f => {
+  f.state.afterScopeRelease = async () => assert.equal((await commitCompletedRenewal(f.root, context, f.snapshot, f.resources)).state, "committed");
+  const result = await renewStateCredential(f.root, context, f.snapshot, f.resources, { now: () => 2000, request: f.request });
+  assert.equal(result.state, "credential"); if (result.state === "credential") { assert.equal(result.source, "other_writer"); assert.equal(result.credential.token, reply.accessToken); }
+  assert.equal(f.state.requests, 1); assert.equal(f.state.dispatches, 4);
+}));
+
+test("a rejected old token cannot mark a changed credential or a new login", async () => {
+  for (const newLogin of [false, true]) await fixture(async f => {
+    const next = { ...wire, token: "another-writer-token", ...(newLogin ? { generation: "b".repeat(32) } : {}) };
+    const result = await renewStateCredential(f.root, context, f.snapshot, f.resources, { now: () => 2000, request: async () => {
+      await f.put("read.credential", next); throw new RenewalRequestError("auth_required");
+    } });
+    assert.equal(result.state, newLogin ? "stopped" : "credential");
+    if (result.state === "credential") { assert.equal(result.source, "other_writer"); assert.equal(result.credential.token, next.token); }
+    assert.deepEqual(await f.json("read.credential"), next); assert.equal(f.state.dispatches, 1);
+  });
+});
+
+test("coordinator never retries nonterminal HTTP or uncertain credential publication", async () => {
+  await fixture(async f => {
+    let requests = 0;
+    assert.deepEqual(await renewStateCredential(f.root, context, f.snapshot, f.resources, { now: () => 2000, request: async () => {
+      requests++; throw new RenewalRequestError("retry_later");
+    } }), { state: "request_failed", reason: "retry_later" });
+    assert.equal(requests, 1); assert.deepEqual(await f.json("read.credential"), wire);
+  });
+  await fixture(async f => {
+    f.state.failDispatch = 4;
+    assert.deepEqual(await renewStateCredential(f.root, context, f.snapshot, f.resources, { now: () => 2000, request: f.request }), { state: "publication_uncertain" });
+    assert.equal(f.state.requests, 1); assert.equal(f.state.dispatches, 4);
+    assert.ok((await readdir(f.root)).includes("read.response")); assert.ok((await readdir(f.root)).includes("read.renewal"));
+  });
+});
+
+test("cancellation between phases retains completed rotation for a later recovery without POST", () => fixture(async f => {
+  const controller = new AbortController(); f.state.afterScopeRelease = async () => controller.abort();
+  assert.deepEqual(await renewStateCredential(f.root, context, f.snapshot, f.resources, { signal: controller.signal, now: () => 2000, request: f.request }),
+    { state: "stopped", reason: "cancelled" });
+  assert.equal((await f.json("read.renewal")).completed, true); assert.deepEqual(await f.json("read.credential"), wire);
+  const recovered = await renewStateCredential(f.root, context, f.snapshot, f.resources, { now: () => 4000, request: f.request });
+  assert.equal(recovered.state, "credential"); if (recovered.state === "credential") assert.equal(recovered.credential.expiresAt, 2060);
+  assert.equal(f.state.requests, 1);
+}));
+
+test("terminal marking fences cancellation, intents, input mutation and uncertain acknowledgment", async () => {
+  for (const mutation of [async (f: Awaited<ReturnType<typeof createFixture>>) => f.put("cancellation", "changed"),
+    async (f: Awaited<ReturnType<typeof createFixture>>) => f.put("revocation-synthetic.intent", true)]) await fixture(async f => {
+    await mutation(f); assert.equal((await markCredentialAuthRequired(f.root, context, f.snapshot, f.resources)).state, "unchanged");
+    assert.equal(f.state.dispatches, 0); assert.deepEqual(await f.json("read.credential"), wire);
+  });
+  await fixture(async f => {
+    f.state.failDispatch = 1;
+    assert.deepEqual(await markCredentialAuthRequired(f.root, context, f.snapshot, f.resources), { state: "publication_uncertain" });
+    assert.equal((await f.json("read.credential")).authRequired, true); assert.equal(f.state.dispatches, 1);
+  });
+  await fixture(async f => {
+    const input = { ...f.snapshot, credential: { ...f.snapshot.credential } };
+    assert.deepEqual(await renewStateCredential(f.root, context, input, f.resources, { now: () => 2000, request: async credential => {
+      assert.equal(credential.token, wire.token); input.credential.token = "changed-caller-value";
+      input.credential.generation = "b".repeat(32); throw new RenewalRequestError("auth_required");
+    } }), { state: "auth_required" });
+    assert.equal((await f.json("read.credential")).token, wire.token); assert.equal((await f.json("read.credential")).generation, wire.generation);
+  });
+});
+
+test("the operation deadline remains active while terminal rejection waits for queue ownership", { timeout: 4500 }, () => fixture(async f => {
+  let locks = 0;
+  const waiting: NamespaceResources & StateReplacementResources = { ...f.resources, async lock(handle, options) {
+    if (++locks !== 3) return f.resources.lock(handle, options);
+    try {
+      await new Promise<void>(resolve => {
+        const done = () => { clearTimeout(fallback); options.signal?.removeEventListener("abort", done); resolve(); };
+        const fallback = setTimeout(done, 2500);
+        if (options.signal?.aborted) done(); else options.signal?.addEventListener("abort", done, { once: true });
+      });
+      return options.signal?.aborted ? { state: "cancelled" } : { state: "failed" };
+    } finally { await handle.close(); }
+  } };
+  assert.deepEqual(await renewStateCredential(f.root, context, f.snapshot, waiting, { timeoutMs: 1000, now: () => 2000,
+    request: async () => { throw new RenewalRequestError("auth_required"); } }), { state: "stopped", reason: "cancelled" });
+  assert.equal(locks, 3); assert.deepEqual(await f.json("read.credential"), wire);
+}));
