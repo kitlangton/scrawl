@@ -143,6 +143,10 @@ test("bundled hosting worker keeps both canonical and exact legacy API/auth prof
     const google = new URL(signIn.headers.get("location")!)
     assert.equal(google.origin, "https://accounts.google.com")
     assert.equal(google.searchParams.get("redirect_uri"), "https://app.tryapparent.com/connect/auth/google/callback")
+    const oldRecording = await f.mf.dispatchFetch("https://hosted.tryapparent.com/s/" + "b".repeat(64) + "?source=legacy", { redirect: "manual" })
+    assert.equal(oldRecording.status, 302, "compiled legacy document route must be canonical")
+    assert.equal(oldRecording.headers.get("location"), "https://app.tryapparent.com/connect/s/" + "b".repeat(64) + "?source=legacy")
+    assert.equal(oldRecording.headers.has("set-cookie"), false)
     const oldSession = await f.mf.dispatchFetch("https://hosted.tryapparent.com/v1/session")
     assert.equal(oldSession.status, 200)
     assert.deepEqual(await oldSession.json(), { authenticated: false, csrfToken: null, account: null, slots: { used: 0, limit: 20, remaining: 20 } })
@@ -200,4 +204,30 @@ test("bundled hosting worker keeps both canonical and exact legacy API/auth prof
     assert.match(font.headers.get("content-type") ?? "", /font\/ttf/)
     assert.equal((await f.call("/private/secret")).status, 404)
   } finally { await f.close() }
+})
+
+
+test("legacy recording documents redirect canonically without redirecting metadata or downloads", async () => {
+  const token = "a".repeat(64)
+  const env = { API_ORIGIN: "https://app.tryapparent.com/connect", SITE_ORIGIN: "https://app.tryapparent.com",
+    ASSETS: { fetch: async () => { throw new Error("must not read static assets") } } } as never
+  for (const method of ["GET", "HEAD"]) {
+    const result = await worker.fetch(new Request(`https://hosted.tryapparent.com/s/${token}?source=old%2flink&x=a+b`, {
+      method, headers: { Cookie: "private", Authorization: "Bearer private", Host: "attacker.invalid" },
+    }), env)
+    assert.equal(result.status, 302)
+    assert.equal(result.headers.get("location"), `https://app.tryapparent.com/connect/s/${token}?source=old%2flink&x=a+b`)
+    assert.equal(result.headers.get("cache-control"), "no-store")
+    assert.equal(result.headers.get("referrer-policy"), "no-referrer")
+    assert.match(result.headers.get("x-robots-tag") ?? "", /noindex/)
+    assert.equal(result.headers.has("set-cookie"), false)
+    assert.equal(await result.text(), "")
+  }
+  for (const suffix of ["/manifest.json", "/files/summary.md"]) {
+    const result = await worker.fetch(new Request(`https://hosted.tryapparent.com/s/${token}${suffix}`), env)
+    assert.equal(result.headers.has("location"), false, "old API requests must not redirect")
+  }
+  const badConfig = await worker.fetch(new Request(`https://hosted.tryapparent.com/s/${token}`), { ...env as object, API_ORIGIN: "https://attacker.invalid/connect" } as never)
+  assert.equal(badConfig.status, 404)
+  assert.equal(badConfig.headers.has("location"), false)
 })

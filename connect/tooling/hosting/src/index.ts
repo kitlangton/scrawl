@@ -54,6 +54,18 @@ export default {
   async fetch(request: Request, env: Env, context?: ExecutionContext): Promise<Response> {
     const url = new URL(request.url)
     const path = url.pathname
+    // Legacy recording documents have one canonical web address. Metadata and
+    // file endpoints retain their original transport contract for old clients.
+    if (url.origin === "https://hosted.tryapparent.com"
+      && /^\/s\/[a-f0-9]{64}$/.test(path)
+      && (request.method === "GET" || request.method === "HEAD")) {
+      if (env.API_ORIGIN !== "https://app.tryapparent.com/connect") {
+        return new Response(null, { status: 404, headers: notFoundHeaders })
+      }
+      return new Response(null, { status: 302, headers: {
+        ...notFoundHeaders, Location: env.API_ORIGIN + path + url.search,
+      } })
+    }
     // Keep the old API contract on its exact historical host. The original
     // Request (including method, body, cookies, Origin and auth headers) goes
     // directly to the existing service handler under its legacy origin profile.
