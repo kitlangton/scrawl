@@ -89,11 +89,15 @@ fn update_config_checked_in(
     let writer = ConfigWriter::acquire(path, allowed)?;
     let mut config = read_snapshot(&writer, path)?;
     let previous_onboarding_marker = config.get(ONBOARDING_WRITER_OWNER_KEY).cloned();
+    let previous_onboarding = config.get("onboarding").cloned();
     #[cfg(any(test, feature = "test-support"))]
     config_write_hook("snapshot", path);
     ensure!(allowed.is_none_or(|check| check()), "cancelled");
     if !edit(&mut config)? { return Ok(()); }
     ensure!(authority == ConfigMutationAuthority::OnboardingOwnership || config.get(ONBOARDING_WRITER_OWNER_KEY).cloned() == previous_onboarding_marker, "onboarding writer ownership is host-managed");
+    if authority == ConfigMutationAuthority::Ordinary && previous_onboarding_marker.is_some() {
+        ensure!(config.get("onboarding").cloned() == previous_onboarding, "legacy onboarding progress writer has been retired");
+    }
     let tmp = std::ffi::CString::new(format!(".config-{}.tmp", random_id()?))?;
     let mut body = serde_json::to_vec_pretty(&config)?;
     body.push(b'\n');

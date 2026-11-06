@@ -157,6 +157,11 @@ fn onboarding_adoption_atomically_retires_real_legacy_progress_writer_and_preser
     assert!(apparent_config_native::set_config_value_in(&path, "onboarding", json!({"resume":"welcome"})).is_err());
     assert!(apparent_config_native::set_config_value_in(&path, "onboardingLegacyWriter", Value::Null).is_err());
     assert!(apparent_config_native::update_config_in(&path, |config| { config.as_object_mut().unwrap().remove("onboardingLegacyWriter"); Ok(()) }).is_err());
+    let before = fs::read(&path).unwrap();
+    assert!(apparent_config_native::update_config_in(&path, |config| { config["onboarding"] = json!({"resume":"welcome"}); Ok(()) }).is_err());
+    assert!(apparent_config_native::update_config_allowed_in(&path, &|| true, |config| { config.as_object_mut().unwrap().remove("onboarding"); Ok(()) }).is_err());
+    assert_eq!(fs::read(&path).unwrap(), before, "rejected generic edits must not publish any bytes");
+    apparent_config_native::update_config_in(&path, |config| { config["anotherSetting"] = json!(true); Ok(()) }).unwrap();
     apparent_config_native::set_config_value_in(&path, "unrelated", json!(false)).unwrap();
     let saved: Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["onboarding"], json!({"resume":"permissions"}));
