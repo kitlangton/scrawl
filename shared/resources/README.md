@@ -135,6 +135,13 @@ finish their existing work and release leases themselves. It never cancels a
 lease, retries publication or writes Connect state. After retirement every method
 refuses before spawning, while still consuming the supplied descriptor.
 
+The separately owned additive `replaceFile` SDK method remains unavailable
+through this provider until its qualified implementation, lifetime wrapper and
+pending/closed tests are adopted. The installed provider shadows that method
+with local `provider_unavailable` refusal, consuming its transferred descriptor
+without dispatch, including after retirement. ACL, lock and publication remain
+supported when that SDK addition lands; Connect writer adoption is separate.
+
 This assembly contract is not an installed locator or adoption switch. A host
 must provide admitted bytes and protect the returned lifetime. Native producer
 and joined-consumer evidence remain separate from protocol-peer tests; macOS

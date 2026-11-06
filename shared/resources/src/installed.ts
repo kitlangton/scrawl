@@ -175,6 +175,15 @@ function ownedResourcesClass(Base: typeof NativeResources) {
       return this.#run(handle, () => super.checkAcl(handle));
     }
 
+    /** The separately owned replacement API is not admitted here yet. Shadow
+     * its future inherited method so it cannot bypass the installed lifetime.
+     * Adopt it with #run and pending/closed tests after producer qualification. */
+    async replaceFile(parent: FileHandle, ..._unsupported: unknown[]): Promise<never> {
+      try { await parent.close(); }
+      catch { throw new NativeResourceError("ownership_transfer_failed"); }
+      throw unavailable();
+    }
+
     override lock(handle: FileHandle, options: { timeoutMs: number; signal?: AbortSignal }): Promise<LockResult> {
       return this.#run(handle, async () => {
         const result = await super.lock(handle, options);

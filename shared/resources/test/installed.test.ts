@@ -202,3 +202,28 @@ test('uses a canonical private stage even when the system temp directory is alia
     await resources?.close(); await artifact.source.close(); await rm(tempRoot, { recursive: true, force: true });
   }
 });
+
+test('an additive replacement method cannot bypass installed retirement or affect existing readers', { skip: !supportedHost }, async () => {
+  const artifact = await admittedArtifact();
+  let resources: Awaited<ReturnType<typeof createInstalledNativeResources>> | undefined;
+  let effects = 0;
+  assert.equal(Object.hasOwn(NativeResources.prototype, 'replaceFile'), false);
+  // Model the actual additive SDK method without importing its unqualified
+  // implementation. An inherited dispatch here would bypass installed #run.
+  Object.defineProperty(NativeResources.prototype, 'replaceFile', { configurable: true, value() { effects++; return Promise.resolve({ state: 'replaced' }); } });
+  try {
+    resources = await createInstalledNativeResources(artifact.options);
+    assert.deepEqual(await resources.checkAcl(await artifact.source.handle()), { state: 'accepted' });
+    const replacement = resources as typeof resources & { replaceFile(parent: Awaited<ReturnType<typeof artifact.source.handle>>, ...args: unknown[]): Promise<unknown> };
+    const live = await artifact.source.handle();
+    await assert.rejects(replacement.replaceFile(live, 'source', 'destination', {}), /provider_unavailable/);
+    assert.equal(live.fd, -1);
+    await resources.close();
+    const closed = await artifact.source.handle();
+    await assert.rejects(replacement.replaceFile(closed, 'source', 'destination', {}), /provider_unavailable/);
+    assert.equal(closed.fd, -1); assert.equal(effects, 0, 'No inherited native dispatch or automatic retry');
+  } finally {
+    Reflect.deleteProperty(NativeResources.prototype, 'replaceFile');
+    await resources?.close(); await artifact.source.close();
+  }
+});
