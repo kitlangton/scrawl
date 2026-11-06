@@ -92,3 +92,10 @@ marker is an explicit ownership record, never inferred from config presence.
 This API does not switch an installed route or silently migrate at read time.
 Legacy bytes remain for an explicit rollback/migration window; removal is a
 separate owner-approved step.
+
+The fence is enforced by writers built with this native config implementation.
+An older running GUI binary does not understand the marker. Production assembly
+must establish that the legacy journey writer has been upgraded to this fence
+(or stopped) before relying on retirement; a successful helper call alone does
+not qualify an old GUI. This prerequisite does not upgrade or stop installed
+applications. Host activation must retain that writer-version/identity gate.

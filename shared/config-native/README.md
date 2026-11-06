@@ -82,3 +82,7 @@ inode beneath a holder. Tests inject ENOENT at the combined create/open boundary
 observing an existing lock, and run 32 independent competing first-writer pairs.
 The injected fault does not establish a Darwin kernel cause; the affected macOS
 producer must run the real repeated-contention regression before readiness.
+
+Older binaries do not enforce the onboarding retirement marker. Adoption hosts
+must admit only a legacy GUI built with this fence, or stop that older writer;
+config-helper success is not proof of the running GUI's implementation identity.
