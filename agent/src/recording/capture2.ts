@@ -5,9 +5,11 @@ import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { CaptureClient, launchCaptureEngine, preflightCapturePublication, type CaptureTransport } from '@apparent/engine-sdk/capture';
+import { Media2Client, launchMedia2Worker } from '@apparent/engine-sdk/media2';
 import { DEFAULT_RECORD_DURATION_SECONDS } from '../recording.js';
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 import type { RecordPublicationOutput } from '@apparent/record/publication';
+import type { RecordCaptureCoordinator } from '@apparent/record/host/capture2-coordinator';
 
 export type Capture2Clock = { now(): number; sleep(ms: number): Promise<void> };
 const systemClock: Capture2Clock = { now: () => performance.now(), sleep: ms => new Promise(resolveSleep => setTimeout(resolveSleep, ms)) };
@@ -18,6 +20,124 @@ export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot
   close(): Promise<string>;
   publicationOutput?: Capture2PublicOutput;
 }>;
+
+export type RecoveryCoordinatorFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; captureExecutable: string; mediaExecutable: string }) => Promise<{
+  coordinator: RecordCaptureCoordinator;
+  close(): Promise<unknown>;
+}>;
+
+async function defaultRecoveryCoordinatorFactory(paths: Parameters<RecoveryCoordinatorFactory>[0]) {
+  const storeRoot = await ensurePrivateStoreRoot(paths.controlRoot);
+  await verifyCaptureRuntime(paths.runtime);
+  await verifyCaptureExecutable(paths.captureExecutable);
+  await verifyCaptureExecutable(paths.mediaExecutable);
+  const [{ createRecordCaptureCoordinator }, { SqliteCaptureMappingStore, AbsentDestinationAllocator }] = await Promise.all([
+    import('@apparent/record/host/capture2-coordinator'), import('@apparent/record/host'),
+  ]);
+  const captureClient = new CaptureClient(launchCaptureEngine(paths.captureExecutable, paths.runtime, 5_000));
+  const mediaClient = new Media2Client(launchMedia2Worker(paths.mediaExecutable, paths.runtime, 5_000));
+  try {
+    const coordinator = await createRecordCaptureCoordinator({
+      captureClient, mediaClient, privateControlRoot: storeRoot,
+      mappings: new SqliteCaptureMappingStore(storeRoot),
+      destinations: new AbsentDestinationAllocator(storeRoot, paths.destinationRoot),
+      createStartIntent() { throw new Error('Recovery cannot start a fresh capture'); },
+      trustedMaterialsRoot() { throw new Error('Recovery cannot admit a new retained-materials root'); },
+      selectProcessing() { throw new Error('Recovery cannot make a new processing selection'); },
+      preflight: preflightCapturePublication,
+    });
+    return { coordinator, async close() { return Promise.allSettled([captureClient.close(), mediaClient.close()]); } };
+  } catch (error) {
+    await Promise.allSettled([captureClient.close(), mediaClient.close()]);
+    throw error;
+  }
+}
+
+/** Reconcile only durable Record-owned capture/processing/publication identities. */
+export async function recoverRecordCaptures(args: string[], config: {
+  captureExecutable?: string; mediaExecutable?: string; runtime?: string; controlRoot?: string;
+  destinationRoot?: string; factory?: RecoveryCoordinatorFactory;
+} = {}): Promise<number> {
+  if (args.length) throw new Error('recover takes no operands or options');
+  const captureExecutable = config.captureExecutable ?? process.env.APPARENT_ENGINE_CAPTURE_EXECUTABLE;
+  const mediaExecutable = config.mediaExecutable ?? process.env.APPARENT_ENGINE_MEDIA2_BIN;
+  const runtime = config.runtime ?? process.env.APPARENT_ENGINE_RUNTIME;
+  const controlRoot = config.controlRoot ?? process.env.APPARENT_AGENT_CONTROL_ROOT ?? resolve(homedir(), '.local/share/apparent/agent');
+  const destinationRoot: string = config.destinationRoot ?? await import('../bundle.js').then(({ resolveCaptures }) => resolveCaptures());
+  if (!captureExecutable || !mediaExecutable || !runtime || !isAbsolute(captureExecutable) || resolve(captureExecutable) !== captureExecutable ||
+      !isAbsolute(mediaExecutable) || resolve(mediaExecutable) !== mediaExecutable || !isAbsolute(runtime) || resolve(runtime) !== runtime ||
+      !isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || !isAbsolute(destinationRoot) || resolve(destinationRoot) !== destinationRoot)
+    throw new Error('recover requires normalized absolute Capture/2, media/2, runtime, control, and capture-storage paths');
+  if (controlRoot === destinationRoot || controlRoot.startsWith(`${destinationRoot}/`) || destinationRoot.startsWith(`${controlRoot}/`))
+    throw new Error('Recovery control and capture storage must be separate');
+  await mkdir(controlRoot, { recursive: true, mode: 0o700 });
+  const rootInfo = await lstat(controlRoot);
+  if (!rootInfo.isDirectory() || rootInfo.isSymbolicLink() || rootInfo.uid !== process.getuid?.() || (rootInfo.mode & 0o077) !== 0 || await realpath(controlRoot).catch(() => '') !== controlRoot)
+    throw new Error('Agent capture/2 control root must be private and owned by the current user');
+  const composed = await (config.factory ?? defaultRecoveryCoordinatorFactory)({ controlRoot, destinationRoot, runtime, captureExecutable, mediaExecutable });
+  let reconciliationFailed = false;
+  let closeVerified = false;
+  let results: unknown[] = [];
+  let issues: readonly unknown[] = [];
+  let shutdownReport: Awaited<ReturnType<RecordCaptureCoordinator['shutdown']>> | undefined;
+  try {
+    try { await composed.coordinator.reconcile(); }
+    catch { reconciliationFailed = true; }
+    const [facts, observedIssues] = await Promise.all([
+      composed.coordinator.captureFacts.readFacts().catch(() => undefined),
+      Promise.resolve(composed.coordinator.processingIssues()),
+    ]);
+    issues = observedIssues;
+    if (!facts) reconciliationFailed = true;
+    if (facts) {
+      for (const fact of facts.captures) {
+        let savedBundlePath: string | undefined;
+        if (fact.phase === 'saved' && fact.artifactId) {
+          try {
+            const resolved = await composed.coordinator.resolveHandoff({ captureId: fact.captureId, artifactId: fact.artifactId });
+            const bundle = resolved?.handoff?.savedBundle;
+            if (resolved?.captureId === fact.captureId && resolved.artifactId === fact.artifactId && bundle?.status === 'saved' &&
+                typeof bundle.bundlePath === 'string' && await realpath(bundle.bundlePath).catch(() => '') === bundle.bundlePath) savedBundlePath = bundle.bundlePath;
+          } catch { /* a public Saved fact without exact handoff resolution stays pathless */ }
+        }
+        results.push({ captureId: fact.captureId, state: savedBundlePath ? 'saved' : fact.phase === 'saved' ? 'unknown' : fact.phase,
+          ...(savedBundlePath ? { bundlePath: savedBundlePath } : {}) });
+      }
+    }
+    const reportedIds = new Set(results.map((result: any) => result.captureId));
+    const ownership = composed.coordinator.runtime.unresolvedOwnership();
+    if (ownership.storageUnavailable || ownership.reconciliation !== 'complete') reconciliationFailed = true;
+    for (const capture of composed.coordinator.runtime.captures?.() ?? []) {
+      if (!('captureId' in capture) || reportedIds.has(capture.captureId)) continue;
+      results.push({ captureId: capture.captureId, state: capture.phase === 'ready' ? 'unknown' : capture.phase });
+      reportedIds.add(capture.captureId);
+    }
+    for (const unresolved of ownership.requestIds) {
+      if (reportedIds.has(unresolved)) continue;
+      results.push({ captureId: unresolved, state: 'unknown' });
+      reportedIds.add(unresolved);
+    }
+  } finally {
+    try { shutdownReport = await composed.coordinator.shutdown(); }
+    catch { reconciliationFailed = true; }
+    await composed.coordinator.dispose().catch(() => { reconciliationFailed = true; });
+    if (!shutdownReport || shutdownReport.scope !== 'record-coordinator' || shutdownReport.admission !== 'closed' || shutdownReport.localDrain !== 'complete' ||
+        shutdownReport.runtimeClearance !== 'clear' || shutdownReport.work.length !== 0 || shutdownReport.nextShortcutAdmission.state !== 'unsupported') {
+      reconciliationFailed = true;
+    } else {
+      const closed = await composed.close().catch(() => undefined);
+      closeVerified = Array.isArray(closed) && closed.length === 2 && closed.every(item => item.status === 'fulfilled' && ['already-exited', 'eof-exited', 'exit-observed'].includes(String(item.value)));
+    }
+  }
+  if (!closeVerified) process.stderr.write(shutdownReport?.runtimeClearance === 'clear'
+    ? 'Recovery SDK transport close is uncertain; no completion is claimed.\n'
+    : 'Record shutdown retained unresolved or unknown SDK ownership; transports remain open and recovery is incomplete.\n');
+  process.stdout.write(`${JSON.stringify({ captures: results, processingIssues: issues, reconciliation: reconciliationFailed ? 'unknown' : 'complete',
+    shutdown: shutdownReport ? { runtimeClearance: shutdownReport.runtimeClearance, work: shutdownReport.work } : 'unknown',
+    transportClose: closeVerified ? 'confirmed' : shutdownReport?.runtimeClearance === 'clear' ? 'uncertain' : 'retained-open' })}\n`);
+  if (reconciliationFailed || !closeVerified || issues.length || results.some((result: any) => ['checking', 'starting', 'recording', 'stopping', 'cancelling', 'stop-failed', 'uncertain', 'processing', 'unknown'].includes(result.state))) return 3;
+  return results.some((result: any) => ['failed', 'cancelled'].includes(result.state)) ? 1 : 0;
+}
 
 async function ensurePrivateStoreRoot(controlRoot: string): Promise<string> {
   if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || controlRoot === parse(controlRoot).root) throw new Error('Agent capture/2 control root is invalid');
