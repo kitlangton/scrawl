@@ -201,6 +201,19 @@ the prepared uploader and its trusted authorization caller retain those checks.
 An incomplete job/spool publication fails rather than triggering a second writer.
 No installed command or worker uses this API yet; Rust remains the sole writer.
 
+The internal `sender/spool-publication` preparation path uses the same private
+directory publisher as recipient output. It validates detached ciphertext and
+signed metadata, stages outside the queue lease, and rechecks the pending job,
+credential incarnation, cancellation, revocation intent and caller-supplied fresh
+consent under the existing lease before one native no-replace publication. A
+verified receipt is returned for a later authoritative job commit; this path
+never writes job, credential or config JSON. Uncertain effects retain the spool
+without retry. It has no public writer export or production caller. The synthetic
+native fixture performs the later job commit explicitly to test the existing
+committed-spool reader and uploader; that is not a live writer transition.
+Namespace cleanup assumes cooperating same-UID writers; identity checks do not
+make pathname unlink atomic against a process bypassing that protocol.
+
 `./sender-seal` seals an already admitted, stable and consented in-memory snapshot
 for a fresh capture. It reuses the legacy archive, AGE encryption and signed
 envelope format, selecting current read grants plus the sender's own upload grant.
