@@ -30,6 +30,10 @@ test("installed provider verifies admitted bytes and runs from its owned private
   const resources = await createInstalledNativeResources(artifact.options);
   try {
     assert(resources instanceof NativeResources, "The installed instance remains NativeResources-compatible");
+    for (const operation of Reflect.ownKeys(NativeResources.prototype).filter(name => name !== 'constructor')) {
+      assert(Object.hasOwn(Object.getPrototypeOf(resources), operation),
+        `Public SDK operation ${String(operation)} requires an explicit installed lifetime wrapper`);
+    }
     assert.notEqual(resources.executable, artifact.source.executable);
     assert.equal(resources.sha256, hash(await readFile(resources.executable)));
     assert.equal(resources.manifestSha256, artifact.options.trustedManifestSha256);

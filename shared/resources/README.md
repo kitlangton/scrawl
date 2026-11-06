@@ -142,6 +142,8 @@ dispatch. Results and uncertainty are preserved without retry. Use an admitted
 helper supporting replacement; this wrapper does not qualify arbitrary older
 artifacts or implement Connect's cooperative lock/writer policy. Connect writer
 adoption remains separate.
+SDK surface coverage requires every public operation to have an explicit
+installed override, so an additive method cannot silently bypass this boundary.
 
 This assembly contract is not an installed locator or adoption switch. A host
 must provide admitted bytes and protect the returned lifetime. Native producer
