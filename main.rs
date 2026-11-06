@@ -7,6 +7,15 @@ mod connect;
 mod shared;
 
 fn main() -> anyhow::Result<()> {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        let mut args = std::env::args_os();
+        let _program = args.next();
+        if args.next().as_deref() == Some(std::ffi::OsStr::new("--internal-native-clipboard-text-owner")) {
+            anyhow::ensure!(args.next().is_none(), "Unexpected clipboard owner argument");
+            return crate::shared::handoff::run_native_clipboard_text_owner();
+        }
+    }
     #[cfg(target_os = "linux")]
     {
         let mut args = std::env::args_os();

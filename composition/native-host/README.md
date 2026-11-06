@@ -44,7 +44,7 @@ Current operation limits:
   this request before restoring it, preserving a concurrent external edit.
 
 This client does not implement safe relaunch, capture readiness, pen selection UI,
-pickers, strokes, clipboard, or capture admission. It is not injected into an
+pickers, strokes, clipboard reads, or capture admission. It is not injected into an
 installed route or Preview. Onboarding adoption must use
 `adoptOnboardingProgress` from #731; host-held legacy journey-writer quiescence
 is still a required, separately proven bootstrap lifecycle gate. Owner-envelope
@@ -68,3 +68,23 @@ must not be retried automatically. `null` preserves the historical red/default
 appearance; `[0,0,0]` is an explicit black. This capability does not add a config
 writer or enable a product route. Point-only whiteboard UI and capture-to-stroke
 availability remain unsupported.
+
+Record's text-only clipboard producer is separately exported as
+`@apparent/native-host/clipboard`. `writeText(text, observed)` accepts the exact
+UTF-8 text and the `processEpoch`/`revision` from a fresh `readSnapshot()`.
+`MAX_UTF8_TEXT_BYTES` is 21,800 and `MAX_SERIALIZED_FRAME_BYTES` is 131,072
+including the terminating LF. The text bound reserves 270 bytes for the largest
+supported UUID/epoch/revision/deadline envelope and budgets six serialized bytes
+per UTF-8 input byte for JSON-escaped control characters. Existing host operations
+keep their 4,096-byte frame cap. These limits do not cover every valid Record
+handoff: Record must preflight and show a typed oversize refusal without
+truncating, splitting, normalizing, or substituting other content.
+
+An applied receipt contains only the lowercase SHA-256 digest and exact UTF-8
+byte length of the supplied string. X11 can confirm its live owner and exact text.
+Wayland performs the write/readback but reports `outcome-unknown`: matching bytes
+cannot establish compositor selection ownership. macOS requires the pasteboard
+change count to advance and remain stable across exact string readback. Unsupported backends
+refuse before writing. A mismatch, timeout after possible effect, or lost reply is
+`outcome-unknown`; this port has no read operation and never restores or returns
+ambient clipboard contents. The bounded native worker admits one write at a time.

@@ -220,3 +220,18 @@ packed public `@apparent/native-resources` SDK installed) and
 `APPARENT_RESOURCE_SOURCE_SHA` pinned to the reviewed producer. Admission must
 verify producer provenance separately. This suite compiles no Rust, uses only
 synthetic private fixtures, and needs real Linux and Mac execution before adoption.
+
+
+`./credentials` also exposes `readStoredCredentialHandle`, a consuming private
+file-descriptor reader. It bounds reads to 32,768 bytes, checks current-UID private
+regular-file metadata and stability, requires native ACL acceptance, decodes the
+strict stored wire format, wipes its byte buffer and returns redacted error
+categories. Data hardlinks retain the donor reader's compatibility; lock files
+still require their separate single-link rule.
+
+The caller must admit the directory tree, open with NOFOLLOW, pin path/inode
+identity, approve the server, and enforce fresh cancellation, revocation,
+generation and expiry facts. A returned credential remains private stored facts;
+reading it does not authorize use or clear `authRequired`. This reader performs
+no credential/queue/config writes or renewal and does not switch installed CLI
+routing. The legacy writer remains authoritative.
