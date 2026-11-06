@@ -93,6 +93,9 @@ try {
     import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
+    import {createCapture2RecordRuntime, type Capture2RecordRuntimeOptions} from '@apparent/record/host/capture2-runtime';
+    declare const capture2RuntimeOptions: Capture2RecordRuntimeOptions;
+    void createCapture2RecordRuntime(capture2RuntimeOptions);
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
     const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
@@ -145,11 +148,13 @@ try {
     import {ReferenceCapturePeer} from '@apparent/engine-sdk/capture/testing';
     import {createRecordPublicationRecovery, createCompletedCapturePublisher, prepareRecordPublication} from '@apparent/record/publication';
     import {createCapture2Host} from '@apparent/record/host/capture2';
+    import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
     const client = new CaptureClient(new ReferenceCapturePeer(), {allowTestDouble:true});
     assert.equal((await client.handshake()).readiness, 'unavailable');
     const recovery = createRecordPublicationRecovery(client, process.cwd() + '/unused-private-root', preflightCapturePublication);
     assert.equal(typeof recovery.publish, 'function');
     assert.equal(typeof createCapture2Host, 'function');
+    assert.equal(typeof createCapture2RecordRuntime, 'function');
     assert.equal(typeof prepareRecordPublication, 'function');
     assert.equal(typeof createCompletedCapturePublisher, 'function');
     assert.equal(typeof createCompletedCapturePublisher(client, process.cwd() + '/unused-private-root', preflightCapturePublication).publishCompletedCapture, 'function');
