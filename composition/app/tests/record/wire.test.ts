@@ -43,3 +43,21 @@ test('rejects selector fields, exotic objects, accessors, cycles, sparse and ove
   assert.equal(cloneJsonDto({ value: 'x'.repeat(64 * 1024) }), undefined);
   assert.equal(cloneJsonDto({ ['__proto__']: { polluted: true } }), undefined);
 });
+
+test('preserves authenticated native copy receipts from the public Record contract without accepting malformed evidence', () => {
+  const current = createRecordFixture('unsubscribe-during-recording').driver.current();
+  const receipt = { kind: 'copy', at: '2026-11-06T13:00:00Z', ok: true,
+    evidence: 'native-write-readback', artifactId: 'artifact-synthetic', requestId: 'copy-synthetic',
+    digest: 'a'.repeat(64), byteLength: 78 };
+  const withReceipt = (outcome: unknown) => ({ ...current, captures: current.captures.map(capture => ({
+    ...capture, phase: 'saved', artifactId: receipt.artifactId, outcomes: [outcome],
+  })) });
+  const snapshot = withReceipt(receipt);
+  assert.deepEqual(cloneCapabilitySnapshot(snapshot), snapshot);
+  for (const invalid of [
+    { ...receipt, evidence: 'dispatch' }, { ...receipt, ok: false },
+    { ...receipt, digest: 'A'.repeat(64) }, { ...receipt, byteLength: 0 },
+    { ...receipt, byteLength: Number.MAX_SAFE_INTEGER + 1 }, { ...receipt, requestId: '' },
+    { ...receipt, artifactId: '' }, { ...receipt, ambientClipboard: 'forbidden' },
+  ]) assert.equal(cloneCapabilitySnapshot(withReceipt(invalid)), undefined);
+});

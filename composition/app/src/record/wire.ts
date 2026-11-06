@@ -160,6 +160,13 @@ function validOutcome(value: unknown): boolean {
       && text(value.at, 128, true) && text(value.artifactId, 256, true)
       && oneOf(value.reason, ['refused', 'failed'] as const);
   }
+  if (value.kind === 'copy' && 'evidence' in value) {
+    return exact(value, ['kind', 'at', 'ok', 'evidence', 'artifactId', 'requestId', 'digest', 'byteLength'])
+      && value.ok === true && value.evidence === 'native-write-readback' && text(value.at, 128, true)
+      && text(value.artifactId, 256, true) && isRequestId(value.requestId)
+      && typeof value.digest === 'string' && /^[0-9a-f]{64}$/.test(value.digest)
+      && revision(value.byteLength) && value.byteLength > 0;
+  }
   return exact(value, ['kind', 'at', 'ok'], ['detail'])
     && oneOf(value.kind, ['shortcut', 'first-frame-start', 'whiteboard', 'processing', 'save', 'copy', 'open-dispatch'] as const)
     && text(value.at, 128, true) && bool(value.ok)
