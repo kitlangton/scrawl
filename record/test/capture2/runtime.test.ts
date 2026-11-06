@@ -17,11 +17,12 @@ class Transport implements CaptureTransport {
   requests: CaptureRequest[] = [];
   status = new Map<string, object>();
   beforeDiscovery?: () => Promise<void>;
+  loseStartReply = false;
   async request(request: CaptureRequest): Promise<CaptureResponse> {
     this.requests.push(structuredClone(request));
     if (request.method === "handshake") return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: { channel: "capture", protocolVersion: 2, implementation: "native", readiness: "ready", capabilities: { sourceDiscovery: true, displayCapture: true, areaCapture: false, audioCapture: false, contextFacts: false, interactionFacts: false, candidates: false, transcript: false, strokes: false, publication: false, retainedMaterials: true } } };
     if (request.method === "discoverSources") { await this.beforeDiscovery?.(); return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: { state: "available", sources: [source] } }; }
-    if (request.method === "start") { const status = { captureId: request.captureId, state: "recording" }; this.status.set(request.captureId, status); return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: status }; }
+    if (request.method === "start") { const status = { captureId: request.captureId, state: "recording" }; this.status.set(request.captureId, status); if (this.loseStartReply) { this.loseStartReply = false; throw new Error("lost start reply"); } return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: status }; }
     if (request.method === "stop") { const status = { captureId: request.captureId, state: "materials-ready", materials: { schema: "apparent.capture-materials/1", key: { captureId: request.captureId, materialsId: "f".repeat(32), revision: "e".repeat(64) }, root: "/synthetic/materials", leaseId: "1".repeat(32), payloadFile: { relativePath: "materials.json", identity: { device: "1", inode: "2", size: 1, modifiedNs: "3" }, sha256: "e".repeat(64) } } }; this.status.set(request.captureId, status); return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: status }; }
     if (request.method === "inspect" || request.method === "cancel") { const status = this.status.get(request.captureId); if (!status) return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, error: { code: "not_found", message: "unknown" } }; return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, result: status }; }
     return { channel: "capture", protocolVersion: 2, rpcId: request.rpcId, error: { code: "unavailable", message: "unsupported" } };
@@ -38,9 +39,11 @@ async function setup(t: { after(fn: () => void | Promise<void>): void }) {
   const destinations = new AbsentDestinationAllocator(join(root, "control"), join(root, "bundles"));
   const host = createCapture2Host({ client: sdk, mappings, destinations });
   const runtime = await createCapture2RecordRuntime({ host, createStartIntent: (requestId, discovery) => ({ source: discovery.sources[0]!, options: { audio: "none", localOnly: true }, invocation, destinationPath: join(root, `${requestId.replace(/[^a-z0-9-]/giu, "-")}.apparent`) }), pollIntervalMs: 100 });
-  const client = createRecordCapabilityProvider({ runtime, capture2Start: runtime, providerEpoch: "provider-capture2", native: { readFacts: async () => ({ version: 1, providerEpoch: "native", revision: 1, readiness: [], shortcut: { effective: null, label: null, registration: "unavailable", externallyManaged: false, draft: null } }) } });
+  let outputRevision = 1;
+  let outputCaptures: { captureId: string; delivery: "unknown"; artifactId: string; phase: "saved"; outcomes: { kind: "save"; at: string; ok: true }[] }[] = [];
+  const client = createRecordCapabilityProvider({ runtime, capture2Start: runtime, providerEpoch: "provider-capture2", native: { readFacts: async () => ({ version: 1, providerEpoch: "native", revision: 1, readiness: [], shortcut: { effective: null, label: null, registration: "unavailable", externallyManaged: false, draft: null } }) }, captureFacts: { readFacts: async () => ({ version: 1, providerEpoch: "capture-output", revision: outputRevision, captures: outputCaptures, nextShortcutAdmission: { state: "idle" } }) } });
   await new Promise(resolve => setImmediate(resolve));
-  return { root, transport, sdk, mappings, destinations, host, runtime, client };
+  return { root, transport, sdk, mappings, destinations, host, runtime, client, setOutput(captures: typeof outputCaptures) { outputCaptures = captures; outputRevision++; } };
 }
 const expected = (client: ReturnType<typeof createRecordCapabilityProvider>) => ({ providerEpoch: client.current().providerEpoch, revision: client.current().revision });
 
@@ -63,10 +66,15 @@ test("provider composes capture2 start, stop and materials without changing publ
   assert.equal(stopped.status, "accepted");
   assert.equal(stopped.snapshot.captures[0]?.phase, "processing");
   assert.equal(stopped.snapshot.captures[0]?.outcomes.some(outcome => outcome.kind === "save" && outcome.ok), false);
+  ctx.setOutput([{ captureId: "public/capture id", delivery: "unknown", artifactId: "assembled-artifact", phase: "saved", outcomes: [{ kind: "save", at: "2026-11-06T00:00:00Z", ok: true }] }]);
+  const refreshed = await ctx.client.execute({ type: "refresh", requestId: "refresh-output", expected: expected(ctx.client) });
+  assert.equal(refreshed.snapshot.captures.find(capture => capture.captureId === "public/capture id")?.phase, "saved", "authenticated output completes the stopped materials-ready capture");
   assert.equal((await ctx.host.inspect("public/capture id")).materials?.leaseId, "1".repeat(32));
+  ctx.setOutput([{ captureId: "capture-two", delivery: "unknown", artifactId: "cached-artifact", phase: "saved", outcomes: [{ kind: "save", at: "2026-11-06T00:00:00Z", ok: true }] }]);
+  await ctx.client.execute({ type: "refresh", requestId: "refresh-cached", expected: expected(ctx.client) });
   const second = await ctx.client.execute({ type: "start-capture", delivery: "host-default", requestId: "capture-two", expected: expected(ctx.client) });
   assert.equal(second.status, "accepted");
-  assert.deepEqual(second.snapshot.captures.map(capture => [capture.captureId, capture.phase]), [["public/capture id", "processing"], ["capture-two", "recording"]]);
+  assert.deepEqual(second.snapshot.captures.map(capture => [capture.captureId, capture.phase]).sort(([left], [right]) => String(left).localeCompare(String(right))), [["capture-two", "recording"], ["public/capture id", "saved"]]);
   await ctx.host.cancel("capture-two");
   ctx.client.detach(); ctx.runtime.dispose();
   assert.equal(await ctx.host.inspect("public/capture id").then(value => value.requestId), "public/capture id", "runtime detach leaves caller-owned host available");
@@ -107,5 +115,22 @@ test("overlapping starts are refused while the first explicit source selection i
   assert.equal((await first).outcome, "accepted");
   assert.equal(ctx.transport.requests.filter(request => request.method === "start").length, 1);
   await ctx.host.cancel("race-one");
+  ctx.client.detach(); ctx.runtime.dispose(); ctx.host.dispose();
+});
+
+test("lost start reply reserves public ownership, blocks admission and recovers through SDK inspection", async t => {
+  const ctx = await setup(t);
+  ctx.transport.loseStartReply = true;
+  const started = await ctx.client.execute({ type: "start-capture", delivery: "host-default", requestId: "lost-reply", expected: expected(ctx.client) });
+  assert.equal(started.status, "outcome-unknown");
+  assert.equal(ctx.runtime.canStartCapture(), false);
+  assert.deepEqual(ctx.runtime.unresolvedOwnership().requestIds, ["lost-reply"]);
+  assert.equal(ctx.runtime.startup.state, "blocked");
+  assert.equal((await ctx.runtime.startCapture("another-id")).outcome, "refused");
+  await new Promise(resolve => setTimeout(resolve, 140));
+  assert.equal(ctx.runtime.state.phase, "recording");
+  assert.equal(ctx.runtime.state.captureId, "lost-reply");
+  assert.equal(ctx.runtime.canStartCapture(), false);
+  await ctx.host.cancel("lost-reply");
   ctx.client.detach(); ctx.runtime.dispose(); ctx.host.dispose();
 });

@@ -13,6 +13,7 @@ function runtimeFixture() {
   let state: RecordHostRuntime["state"] = { phase: "idle", readiness: { ready: false, reason: "not queried" } };
   const listeners = new Set<(value: typeof state) => void>();
   let disposed = false;
+  const completionEligible = new Set<string>();
   const runtime = {
     get state() { return state; },
     startup: { state: "ready", knownRequestIds: [] } as const,
@@ -20,11 +21,12 @@ function runtimeFixture() {
     async dispatch(command: { type: string; requestId?: string }) {
       if (command.type === "refresh-readiness") state = { phase: "idle", readiness: { ready: true } };
       if (command.type === "start" && command.requestId) state = { phase: "recording", captureId: command.requestId, readiness: { ready: true } };
-      if (command.type === "stop" && "captureId" in state) state = { phase: "ready", captureId: state.captureId, readiness: state.readiness, bundlePath: "/private/fixture.apparent" };
+      if (command.type === "stop" && "captureId" in state) { completionEligible.add(state.captureId); state = { phase: "ready", captureId: state.captureId, readiness: state.readiness, bundlePath: "/private/fixture.apparent" }; }
       for (const listener of [...listeners]) listener(state);
       return state;
     },
     reconcileStartup: async () => ({ state: "ready", knownRequestIds: [] }),
+    completionEligibleCaptureIds: () => [...completionEligible],
     unresolvedOwnership: () => ({ requestIds: [], storageUnavailable: false, reconciliation: "complete" as const }),
     dispose() { disposed = true; listeners.clear(); return { requestIds: [], storageUnavailable: false, reconciliation: "complete" as const }; },
   } as unknown as RecordHostRuntime;

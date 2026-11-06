@@ -40,6 +40,7 @@ export interface RecordHostRuntimePort extends Pick<RecordHostRuntime,
   "startup" | "state" | "subscribe" | "dispatch" | "reconcileStartup" | "unresolvedOwnership" | "dispose"> {
   /** Optional adapter facts for runtimes that can retain multiple public requests. */
   captures?(): readonly RecordState[];
+  completionEligibleCaptureIds?(): readonly string[];
   canStartCapture?(): boolean;
 }
 export type RecordStartOutcome = "accepted" | "refused" | "outcome-unknown";

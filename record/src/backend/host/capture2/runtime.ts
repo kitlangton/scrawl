@@ -36,6 +36,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
   let timer: ReturnType<typeof setTimeout> | undefined;
   let polling = false;
   let startInFlight = false;
+  let operationRevision = 0;
   const listeners = new Set<(value: RecordState) => void>();
   const known = new Map<string, Capture2Receipt>();
   const publish = (next: RecordState) => {
@@ -63,16 +64,18 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
   };
   const onEvent = (event: Capture2Event) => {
     if (event.type === "readiness-changed") {
+      ++operationRevision;
       readiness = event.readiness.ready ? { ready: true } : { ready: false, reason: event.readiness.reason ?? "Native Record capture/2 unavailable" };
       if (!("captureId" in state)) publish({ phase: "idle", readiness });
-    } else if (event.type === "capture-changed") accept(event.receipt);
+    } else if (event.type === "capture-changed") { ++operationRevision; accept(event.receipt); }
   };
-  const unsubscribe = options.host.subscribe(onEvent);
   const schedulePoll = () => {
     if (disposed || timer || polling || ![...known.values()].some(receipt => active.has(receipt.phase))) return;
     timer = setTimeout(() => { timer = undefined; void poll(); }, interval);
     timer.unref?.();
   };
+  // A host may synchronously deliver its snapshot during subscribe().
+  const unsubscribe = options.host.subscribe(onEvent);
   const poll = async () => {
     if (disposed || polling) return;
     polling = true;
@@ -88,37 +91,57 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
   if (!disposed) readiness = readinessResult.ready ? { ready: true } : { ready: false, reason: readinessResult.reason ?? "Native Record capture/2 unavailable" };
   const reconcileStartup = async (): Promise<HostStartupState> => {
     if (disposed) return startup;
+    const scanRevision = operationRevision;
     reconciliation = "pending";
     let receipts: readonly Capture2Receipt[];
     try { receipts = await options.host.reconcile(); }
     catch { reconciliation = "failed"; startup = { state: "blocked", knownRequestIds: [...known.keys()], unresolved: [...known.keys()].map(requestId => ({ requestId, state: "unknown" })) }; return startup; }
     if (disposed) return startup;
     for (const receipt of receipts) accept(receipt);
-    const unresolved: StartupIssue[] = receipts.filter(receipt => active.has(receipt.phase)).map(receipt => ({ requestId: receipt.requestId, state: receipt.phase === "unknown" || receipt.phase === "submitted-unknown" ? "unknown" : "active", phase: receipt.phase }));
-    startup = unresolved.length ? { state: "blocked", knownRequestIds: [...new Set([...known.keys(), ...receipts.map(receipt => receipt.requestId)])].sort(), unresolved }
+    const unresolved: StartupIssue[] = [...receipts, ...known.values()].filter(receipt => active.has(receipt.phase)).map(receipt => ({ requestId: receipt.requestId, state: receipt.phase === "unknown" || receipt.phase === "submitted-unknown" ? "unknown" : "active", phase: receipt.phase }));
+    if (operationRevision === scanRevision) startup = unresolved.length ? { state: "blocked", knownRequestIds: [...new Set([...known.keys(), ...receipts.map(receipt => receipt.requestId)])].sort(), unresolved }
       : { state: "ready", knownRequestIds: [...new Set([...known.keys(), ...receipts.map(receipt => receipt.requestId)])].sort() };
+    else {
+      const latest = [...known.values()].filter(receipt => active.has(receipt.phase)).map(receipt => ({ requestId: receipt.requestId, state: receipt.phase === "unknown" || receipt.phase === "submitted-unknown" ? "unknown" as const : "active" as const, phase: receipt.phase }));
+      startup = latest.length ? { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, ...known.keys()])].sort(), unresolved: latest }
+        : { state: "ready", knownRequestIds: [...new Set([...startup.knownRequestIds, ...known.keys()])].sort() };
+    }
     reconciliation = "complete";
     return startup;
+  };
+  const releaseReservation = (requestId: string, reservation: Capture2Receipt) => {
+    if (known.get(requestId) !== reservation) return;
+    known.delete(requestId);
+    const unresolved: StartupIssue[] = [...known.values()].filter(receipt => active.has(receipt.phase)).map(receipt => ({ requestId: receipt.requestId, state: receipt.phase === "unknown" || receipt.phase === "submitted-unknown" ? "unknown" : "active", phase: receipt.phase }));
+    startup = unresolved.length
+      ? { state: "blocked", knownRequestIds: startup.knownRequestIds.filter(id => id !== requestId), unresolved }
+      : { state: "ready", knownRequestIds: startup.knownRequestIds.filter(id => id !== requestId) };
   };
   await reconcileStartup();
   const performStartCapture = async (requestId: string): Promise<{ state: RecordState; outcome: RecordStartOutcome }> => {
     if (disposed || startup.state !== "ready" || !readiness.ready || [...known.values()].some(receipt => active.has(receipt.phase))) return { state, outcome: "refused" };
+    ++operationRevision;
+    const attemptRevision = operationRevision;
+    const reservation: Capture2Receipt = { requestId, phase: "submitted-unknown" };
+    known.set(requestId, reservation);
+    startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "unknown", phase: "submitted-unknown" }] };
     let selected: Omit<Capture2StartIntent, "requestId" | "destinationPath"> & { destinationPath: string };
     try {
       const discovery = await options.host.discoverSources();
-      if (disposed || discovery.state !== "available") return { state, outcome: "refused" };
+      if (disposed || discovery.state !== "available") { releaseReservation(requestId, reservation); return { state, outcome: "refused" }; }
       selected = structuredClone(options.createStartIntent(requestId, structuredClone(discovery)));
-      if (!selected || !discovery.sources.some(source => isDeepStrictEqual(source, selected.source))) return { state, outcome: "refused" };
-    } catch { return { state, outcome: "refused" }; }
+      if (!selected || !discovery.sources.some(source => isDeepStrictEqual(source, selected.source))) { releaseReservation(requestId, reservation); return { state, outcome: "refused" }; }
+    } catch { releaseReservation(requestId, reservation); return { state, outcome: "refused" }; }
     if (disposed) return { state, outcome: "refused" };
     publish({ phase: "checking", captureId: requestId, readiness });
     try {
       const receipt = await options.host.start({ ...selected, requestId });
-      if (!disposed) { accept(receipt); if (startup.state === "ready" && active.has(receipt.phase)) startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "active", phase: receipt.phase }] }; }
+      if (!disposed) accept(receipt);
       return { state, outcome: receipt.phase === "unknown" || receipt.phase === "submitted-unknown" ? "outcome-unknown" : "accepted" };
     } catch (error) {
       const definitelyNotDispatched = !!error && typeof error === "object" && (error as { dispatched?: unknown }).dispatched === false;
-      if (!definitelyNotDispatched && !disposed) publish({ phase: "uncertain", captureId: requestId, readiness, message: error instanceof Error ? error.message : String(error) });
+      if (!disposed && definitelyNotDispatched && operationRevision === attemptRevision) releaseReservation(requestId, reservation);
+      if (!definitelyNotDispatched && !disposed && operationRevision === attemptRevision && known.get(requestId) === reservation) { known.set(requestId, { requestId, phase: "unknown" }); startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "unknown", phase: "unknown" }] }; publish({ phase: "uncertain", captureId: requestId, readiness, message: error instanceof Error ? error.message : String(error) }); }
       return { state, outcome: definitelyNotDispatched ? "refused" : "outcome-unknown" };
     }
   };
@@ -142,13 +165,17 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
     if (command.type === "stop" || command.type === "retry-stop" || command.type === "cancel" || command.type === "reconcile") {
       const captureId = "captureId" in state ? state.captureId : undefined;
       if (!captureId) return state;
+      const commandRevision = operationRevision;
       try {
         const receipt = command.type === "cancel" ? await options.host.cancel(captureId)
           : command.type === "reconcile" ? await options.host.inspect(captureId)
             : await options.host.stop(captureId);
         accept(receipt);
         await reconcileStartup();
-      } catch { if (!disposed) publish({ phase: "uncertain", captureId, readiness, message: "Capture control outcome is unknown" }); }
+      } catch {
+        const stillOwnsOperation = !disposed && operationRevision === commandRevision && "captureId" in state && state.captureId === captureId && !["cancelled", "failed", "processing"].includes(state.phase);
+        if (stillOwnsOperation) publish({ phase: "uncertain", captureId, readiness, message: "Capture control outcome is unknown" });
+      }
       return state;
     }
     return state;
@@ -162,6 +189,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
     reconcileStartup,
     unresolvedOwnership() { return { requestIds: [...(startup.state === "blocked" ? startup.unresolved.map(item => item.requestId) : [])], storageUnavailable: false, reconciliation }; },
     captures() { return [...known.values()].map(receipt => publicState(receipt, readiness)); },
+    completionEligibleCaptureIds() { return [...known.values()].filter(receipt => receipt.phase === "materials-ready" || receipt.phase === "processing").map(receipt => receipt.requestId); },
     canStartCapture() { return !disposed && startup.state === "ready" && ![...known.values()].some(receipt => active.has(receipt.phase)); },
     dispose() {
       if (!disposed) { disposed = true; if (timer) clearTimeout(timer); timer = undefined; unsubscribe(); listeners.clear(); reconciliation = reconciliation === "pending" ? "interrupted" : reconciliation; }

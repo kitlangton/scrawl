@@ -233,18 +233,23 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
   const snapshot = (): CapabilitySnapshot => {
     const live = captureFromRuntime(options.runtime.state, runtimeObservedAt);
     const merged = new Map<string, CaptureFact>();
+    const completionEligible = new Set(options.runtime.completionEligibleCaptureIds?.() ?? []);
     for (const item of outputFacts.captures) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     for (const item of captures.values()) merged.set(item.captureId, mergeCapture(merged.get(item.captureId), item));
     for (const runtimeCapture of options.runtime.captures?.() ?? []) {
       const fact = captureFromRuntime(runtimeCapture, runtimeObservedAt);
-      if (fact) merged.set(fact.captureId, mergeCapture(merged.get(fact.captureId), fact));
+      if (fact) {
+        const output = merged.get(fact.captureId);
+        const mayComplete = completionEligible.has(fact.captureId) && output?.phase === "saved";
+        merged.set(fact.captureId, mayComplete ? mergeCapture(fact, output!) : mergeCapture(output, fact));
+      }
     }
     if (live) {
       const output = merged.get(live.captureId);
       const combined = output ? mergeCapture(live, output) : live;
       // Only stopped native materials can be completed by assembled output.
       // Retained output must never hide live or unresolved runtime ownership.
-      if (options.runtime.state.phase !== "ready") combined.phase = live.phase;
+      if (!completionEligible.has(live.captureId) || output?.phase !== "saved") combined.phase = live.phase;
       merged.set(live.captureId, combined);
     }
     const ready = engineReady();
