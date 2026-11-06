@@ -41,7 +41,23 @@ struct ExportPlan: Decodable {
     var ripples: [Ripple]
     var trails: [Trail]
   }
+  /// Exact encoded bytes; an absent field preserves the unnamed legacy renderer default.
+  struct RGB: Decodable {
+    let r: Double, g: Double, b: Double
+    init(from decoder: Decoder) throws {
+      var values = try decoder.unkeyedContainer()
+      r = Double(try values.decode(UInt8.self)) / 255
+      g = Double(try values.decode(UInt8.self)) / 255
+      b = Double(try values.decode(UInt8.self)) / 255
+      guard values.isAtEnd else {
+        throw DecodingError.dataCorruptedError(in: values, debugDescription: "RGB requires exactly three bytes")
+      }
+    }
+    func color(alpha: Double) -> CGColor { CGColor(red: r, green: g, blue: b, alpha: alpha) }
+  }
   struct Stroke: Decodable {
+    var rgb: RGB?
+
     var snaps: [Snap]
     var fadeAt: Double
     var fadeMs: Double
@@ -51,13 +67,14 @@ struct ExportPlan: Decodable {
     var poly: [Double]
   }
   struct Pin: Decodable {
+    var rgb: RGB?
     var x: Double, y: Double
     var n: Int
     var t: Double
     var fadeAt: Double
     var fadeMs: Double
   }
-  struct Laser: Decodable { var frames: [LaserFrame] }
+  struct Laser: Decodable { var rgb: RGB?; var frames: [LaserFrame] }
   struct LaserFrame: Decodable {
     var t: Double
     var pts: [Double]
@@ -128,7 +145,7 @@ enum ExportInk {
         i += 2
       }
       ctx.closePath()
-      ctx.setFillColor(CGColor(red: red.r, green: red.g, blue: red.b, alpha: alpha))
+      ctx.setFillColor(stroke.rgb?.color(alpha: alpha) ?? CGColor(red: red.r, green: red.g, blue: red.b, alpha: alpha))
       ctx.fillPath()
     }
 
@@ -145,7 +162,7 @@ enum ExportInk {
         ctx.fillEllipse(in: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r))
       }
       disc(radius + 2.5 * scale, CGColor(red: 1, green: 1, blue: 1, alpha: alpha * grow))
-      disc(radius, CGColor(red: red.r, green: red.g, blue: red.b, alpha: alpha * grow))
+      disc(radius, pin.rgb?.color(alpha: alpha * grow) ?? CGColor(red: red.r, green: red.g, blue: red.b, alpha: alpha * grow))
       let label = String(pin.n) as NSString
       var size = 16 * scale
       let attrs: (Double) -> [NSAttributedString.Key: Any] = {
@@ -174,7 +191,7 @@ enum ExportInk {
         points.append((view.point(pts[i], pts[i + 1]), pts[i + 2]))
         i += 3
       }
-      drawLaser(ctx, points: points, unit: k * s)
+      drawLaser(ctx, points: points, unit: k * s, recordedRGB: laser.rgb)
     }
 
     // Clicks pulse once, small and thin, and are gone in 350 ms; nothing click-related lingers
@@ -256,10 +273,12 @@ enum ExportInk {
   }
 
   /// The laser trail with the keyframe renderer's four layers (`render::draw_laser`).
-  static func drawLaser(_ ctx: CGContext, points: [(CGPoint, Double)], unit: Double) {
+  static func drawLaser(_ ctx: CGContext, points: [(CGPoint, Double)], unit: Double, recordedRGB: ExportPlan.RGB? = nil) {
     guard !points.isEmpty else { return }
     func rgb(_ r: Double, _ g: Double, _ b: Double, _ a: Double) -> CGColor {
-      CGColor(red: r / 255, green: g / 255, blue: b / 255, alpha: a)
+      (r == 255 && g == 245 && b == 245) || (r == 255 && g == 255 && b == 255)
+        ? CGColor(red: r / 255, green: g / 255, blue: b / 255, alpha: a)
+        : (recordedRGB?.color(alpha: a) ?? CGColor(red: r / 255, green: g / 255, blue: b / 255, alpha: a))
     }
     let layers: [(Double, Double, Double, (Double, Double, Double))] = [
       (7.5, 0.08, 1.1, (255, 22, 38)),

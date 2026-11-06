@@ -1080,6 +1080,7 @@ mod tests {
             on: None,
             pin: Some(1),
             laser: false,
+            rgb: None,
             pts: vec![3000, 4000, 0],
         }];
         let (_, bundle, summary) = build_bundle_from_parts(

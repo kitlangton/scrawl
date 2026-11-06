@@ -67,3 +67,17 @@ Connect delivery/retrieval and remote lifecycle remain Connect-owned and exclude
 from the current Agent rebuild. No new capture forwarding, installed activation,
 legacy deletion, access or spending follows from this inventory. Existing consent,
 named native-resource restrictions, budgets and publication gates still apply.
+
+## Recorded stroke color prerequisite
+
+The bounded color addition reuses the existing `shared/model.rs::Stroke`, clip/
+rebase, `capture/engine/export/ink.rs` plans and software/native export renderers.
+`rgb?: [u8;3]` records exact bytes per stroke; absent preserves the unnamed legacy
+renderer defaults and serialized legacy stroke/plan bytes. The legacy telemetry
+setter/getter select one atomic native value and snapshot it at stroke begin (pins
+at acceptance); no Engine palette mapping or config writer is introduced. Platform
+owns process-scoped application/readback and overlays; Record owns canonical
+assembly of optional RGB and settings. Whiteboard UI adaptation is not inferred
+from this screen-stroke boundary. These native donors still need physical moves
+under `engine/`; this compatible prerequisite does not introduce a parallel renderer
+or claim a standalone drawing/export operation or installed adoption.
