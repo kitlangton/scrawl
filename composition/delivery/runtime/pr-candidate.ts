@@ -1,11 +1,13 @@
-/** Conservative SDK-only promotion. GitHub metadata authenticates source identity;
+/** Conservative owner/target promotion. GitHub metadata authenticates source identity;
  * candidate ZIP receipts still undergo the normal byte/digest/attempt validation. */
 import type { AdmissionResult } from '../core.ts'
 
 const repository = 'tryapparent/apparent'
 const workflow = '.github/workflows/stream-engine.yml'
 type Api = <T>(endpoint: string) => T
-export function admitPrCandidate(api: Api, currentSha: string, currentTree: string, digest: string): AdmissionResult | undefined {
+export function admitPrCandidate(api: Api, currentSha: string, currentTree: string, digest: string, ownerId = 'engine', target = 'linux-x64'): AdmissionResult | undefined {
+  // Only the ordered first expansion is enabled. Keep workflow identity fixed.
+  if (!(['engine', 'engine-native'].includes(ownerId)) || !(['linux-x64', 'macos-x64'].includes(target)) || (ownerId === 'engine' && target !== 'linux-x64')) return
   const pulls = api<Array<{ number: number; merged_at: string | null; merge_commit_sha: string; head: { sha: string; repo: { full_name: string } | null } }>>(`repos/${repository}/commits/${currentSha}/pulls?per_page=100`)
   const landed = api<{ sha: string; parents: Array<{ sha: string }> }>(`repos/${repository}/git/commits/${currentSha}`)
   if (landed.sha !== currentSha || !landed.parents.length) return
@@ -16,12 +18,12 @@ export function admitPrCandidate(api: Api, currentSha: string, currentTree: stri
       if (run.event !== 'pull_request' || run.path !== workflow || run.conclusion !== 'success' || run.head_sha !== pull.head.sha || run.head_repository?.full_name !== repository || !Number.isSafeInteger(run.id) || run.id <= 0 || !Number.isSafeInteger(run.run_attempt) || run.run_attempt <= 0) continue
       const { jobs, total_count: jobCount } = api<{ total_count: number; jobs: Array<{ name: string; status: string; conclusion: string }> }>(`repos/${repository}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs?per_page=100`)
       if (jobCount !== jobs.length) continue
-      const required = ['deliver / Delivery contracts', 'verify-pr / pr-stream (engine, linux-x64)', 'deliver / Workflow runtime budget']
+      const required = ['deliver / Delivery contracts', `verify-pr / pr-stream (${ownerId}, ${target})`, 'deliver / Workflow runtime budget']
       if (!required.every(name => jobs.filter(j => j.name === name && j.status === 'completed' && j.conclusion === 'success').length === 1)) continue
       const { artifacts, total_count: artifactCount } = api<{ total_count: number; artifacts: Array<{ id: number; name: string; expired: boolean }> }>(`repos/${repository}/actions/runs/${run.id}/artifacts?per_page=100`)
       if (artifactCount !== artifacts.length) continue
       for (const artifact of artifacts) {
-        const match = /^pr-engine-linux-x64-([a-f0-9]{40})-([a-f0-9]{64})$/.exec(artifact.name)
+        const match = new RegExp(`^pr-${ownerId}-${target}-([a-f0-9]{40})-([a-f0-9]{64})$`).exec(artifact.name)
         if (!match || match[2] !== digest || artifact.expired || !Number.isSafeInteger(artifact.id) || artifact.id <= 0) continue
         const tested = api<{ sha: string; tree: { sha: string }; parents: Array<{ sha: string }> }>(`repos/${repository}/git/commits/${match[1]}`)
         // Never confuse the run's PR head SHA with the synthetic merge it tested.
