@@ -23,6 +23,7 @@ const roots = [
   { id: 'engine-capture-native', source: 'engine/delivery/capture', registration: 'engine/delivery/capture/delivery.json' },
   { id: 'engine-media-native', source: 'engine/delivery/media', registration: 'engine/delivery/media/delivery.json' },
   { id: 'platform-config', source: 'composition/config/native', registration: 'composition/config/native/delivery.json' },
+  { id: 'platform-resources', source: 'shared/resources', registration: 'shared/resources/delivery/delivery.json' },
   { id: 'onboarding', source: 'onboarding', registration: 'onboarding/delivery.json' },
   { id: 'agent', source: 'agent', registration: 'agent/delivery.json' },
   { id: 'public', source: 'public/site', registration: 'public/delivery.json' },
@@ -51,6 +52,7 @@ function readOwner(path: string): Owner {
   const pkg = safeRepoPath(raw.package)
   const language = raw.language ?? 'typescript'
   if (language !== 'typescript' && language !== 'native') throw new Error(`Invalid language in ${path}`)
+  if (raw.id === 'platform-resources' && (!inputs.includes('shared/resources/') || !inputs.includes('.cargo/'))) throw new Error(`platform-resources must fingerprint shared/resources/ and .cargo/: ${path}`)
   const artifactPath = raw.kind === 'directory' ? safeRepoPath(raw.artifactPath) : undefined
   if (raw.kind !== 'directory' && raw.artifactPath !== undefined) throw new Error(`artifactPath is only valid for directory registrations: ${path}`)
   if ((targets.includes('web') || raw.stage === 'website') && (raw.kind !== 'directory' || raw.stage !== 'website' || targets.length !== 1 || targets[0] !== 'web' || language !== 'typescript')) throw new Error(`Web delivery requires a TypeScript website directory: ${path}`)
@@ -126,7 +128,7 @@ export function environmentDigest(owner: Owner, env = process.env): string { ret
 export function inputDigest(root: string, owner: Owner, target: Target = owner.targets[0]): string { return fingerprint(root, owner, target) }
 export function makePlan(root: string) {
   const { owners, pending, blocked } = catalog(root)
-  const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', 'engine-capture-native': 'engine', 'engine-media-native': 'engine', 'platform-config': 'composition', record: 'record', 'connect-client': 'connect', 'connect-browser': 'connect', agent: 'agent', onboarding: 'onboarding' }
+  const guardOwners: Record<string, string> = { 'app-shell': 'composition', engine: 'engine', 'engine-native': 'engine', 'engine-capture-native': 'engine', 'engine-media-native': 'engine', 'platform-config': 'composition', 'platform-resources': 'shared', record: 'record', 'connect-client': 'connect', 'connect-browser': 'connect', agent: 'agent', onboarding: 'onboarding' }
   const include = owners.flatMap(owner => owner.targets.map(target => ({ id: owner.id, target, runner: target === 'linux-x64' || target === 'web' ? 'ubuntu-24.04' : 'macos-26-intel', kind: owner.kind, stage: owner.stage, package: owner.package, verify: owner.verify, build: owner.build, language: owner.language, packageManager: owner.packageManager ?? 'npm', architecture_owner: guardOwners[owner.id] ?? '' })))
   return { matrix: { include }, has_ready: include.length > 0, pending, blocked }
 }

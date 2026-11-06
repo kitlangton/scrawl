@@ -307,6 +307,31 @@ class SelectionTests(unittest.TestCase):
         self.assertFalse(verification.delivery_tests_selected(["composition/app/src/main.tsx"]))
         self.assertTrue(verification.delivery_tests_selected([]))
 
+    def test_platform_resources_source_selects_owner_lane_without_root_rust_and_connect_stays_conservative(self):
+        selected = verification.select(["shared/resources/native/src/main.rs", "shared/resources/src/index.ts"])
+        self.assertTrue(selected["platform_resources"])
+        self.assertFalse(selected["root"])
+        self.assertFalse(selected["engine"])
+        unknown = verification.select(["shared/resources/src/new-unreviewed.ts"])
+        self.assertTrue(unknown["root"])
+        self.assertFalse(unknown["platform_resources"])
+        connect = verification.select(["connect/delivery/client/src/index.ts"])
+        self.assertFalse(connect["platform_resources"])
+        self.assertTrue(connect["root"])
+
+    def test_platform_resources_owner_feedback_uses_only_declared_npm_test(self):
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "shared/resources"
+            compiler = package / "node_modules/typescript/bin/tsc"
+            compiler.parent.mkdir(parents=True)
+            compiler.touch()
+            for name in ("package.json", "package-lock.json", "tsconfig.json"):
+                (package / name).touch()
+            (package / "package.json").write_text('{"scripts":{"test":"node --test test/client.test.ts"}}')
+            with patch.object(verification, "ROOT", Path(directory)), patch.object(verification.subprocess, "run") as run:
+                verification.run_platform_resources_tests()
+            run.assert_called_once_with(["npm", "test"], cwd=package, check=True)
+
     def test_delivery_feature_check_runs_node_tests_without_installing(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
