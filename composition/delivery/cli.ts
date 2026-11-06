@@ -1,3 +1,4 @@
+import { admitPrCandidate } from './runtime/pr-candidate.ts'
 import { appendFileSync } from 'node:fs'
 import { execFileSync } from 'node:child_process'
 import { basename } from 'node:path'
@@ -69,8 +70,12 @@ async function main(args: string[]) {
       result = assessPrior(root, owner, target, execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), repo, runs,
         run => ghPages<{ name: string; status: string; conclusion: string | null }>(repo, `repos/${repo}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`),
         run => ghPages<{ id: number; name: string; expired: boolean }>(repo, `repos/${repo}/actions/runs/${run.id}/artifacts`))
+      if (!result.reuse && owner.id === 'engine' && target === 'linux-x64') {
+        result = admitPrCandidate(endpoint => gh(repo, endpoint), execFileSync('git', ['rev-parse', 'HEAD'], { encoding: 'utf8' }).trim(), execFileSync('git', ['rev-parse', 'HEAD^{tree}'], { encoding: 'utf8' }).trim(), result.input_digest) ?? result
+      }
     } catch { result = { reuse: false, reason: 'GitHub identity or artifact history could not be established; rebuilding', input_digest: inputDigest(root, owner, target), prior_artifact_id: null, prior_source_sha: null, prior_run_id: null, prior_run_attempt: null } }
     output({ reuse: result.reuse, input_digest: result.input_digest, prior_artifact_id: result.prior_artifact_id ?? '', prior_source_sha: result.prior_source_sha ?? '', prior_run_id: result.prior_run_id ?? '', prior_run_attempt: result.prior_run_attempt ?? '' })
+    if (env.GITHUB_STEP_SUMMARY) appendFileSync(env.GITHUB_STEP_SUMMARY, `Artifact admission: ${result.reason}.\n`)
     console.log(JSON.stringify(result))
     return
   }
@@ -78,6 +83,14 @@ async function main(args: string[]) {
     const owner = ownerFor(args[1]); const target = targetArg(args[2])
     assertBuildWorkflowIdentity(env, owner.id)
     buildOwner(root, owner, target, args[3])
+    return
+  }
+  if (args.length === 5 && args[0] === 'candidate') {
+    const owner = ownerFor(args[1]); const target = targetArg(args[2])
+    assertBuildWorkflowIdentity(env, owner.id)
+    const digest = inputDigest(root, owner, target)
+    const receipt = sealPayload(root, owner, target, args[3], args[4], digest, env, true)
+    output({ candidate_name: `pr-${owner.id}-${target}-${receipt.sourceSha}-${digest}` })
     return
   }
   if (args.length === 6 && args[0] === 'seal') {

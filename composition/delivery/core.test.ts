@@ -1,3 +1,4 @@
+import './runtime/pr-candidate.test.ts'
 import assert from 'node:assert/strict'
 import { createHash } from 'node:crypto'
 import { execFileSync } from 'node:child_process'
@@ -261,6 +262,8 @@ test('fingerprints refuse reuse when hosted runner image identity is absent', ()
 test('admit invokes gh api with canonical GH_REPO and no unsupported flags', () => {
   const bin = resolve(temp, 'fake-bin'); mkdirSync(bin)
   const checkout = resolve(temp, 'cli-repo'); newRepo(checkout)
+  mkdirSync(resolve(checkout, 'composition/delivery/runtime'))
+  writeFileSync(resolve(checkout, 'composition/delivery/runtime/pr-candidate.ts'), readFileSync(resolve(repo, 'composition/delivery/runtime/pr-candidate.ts')))
   for (const file of ['core.ts', 'cli.ts']) writeFileSync(resolve(checkout, 'composition/delivery', file), readFileSync(resolve(repo, 'composition/delivery', file)))
   writeFileSync(resolve(checkout, 'record/delivery.json'), JSON.stringify(owner))
   git(checkout, 'add', '-A'); git(checkout, 'commit', '-qm', 'delivery implementation')
@@ -323,4 +326,22 @@ test('Engine components require the consolidated canonical PR workflow identity'
       APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-engine-native.yml',
     }, id), /canonical owner workflow/)
   }
+})
+
+
+test('PR SDK candidates use separate names and canonical PR identity, then reissue exact-main bytes', () => {
+  const sdk = { ...owner, id: 'engine', package: 'engine/sdk', inputs: ['engine/'] }
+  const input = resolve(temp, 'sdk-candidate-input'); mkdirSync(input); writeFileSync(resolve(input, 'sdk.tgz'), 'checked SDK')
+  const candidateDir = resolve(temp, 'sdk-candidate')
+  const prEnv = { GITHUB_EVENT_NAME: 'pull_request', GITHUB_REF: 'refs/pull/9/merge', GITHUB_REPOSITORY: 'tryapparent/apparent', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/pull/9/merge', GITHUB_RUN_ID: '555', GITHUB_RUN_ATTEMPT: '2' }
+  const receipt = sealPayload(repo, sdk, 'linux-x64', input, candidateDir, 'b'.repeat(64), prEnv, true)
+  const zip = resolve(temp, 'sdk-candidate.zip'); execFileSync('zip', ['-q', zip, 'component.tar.gz', 'receipt.json'], { cwd: candidateDir })
+  const mainEnv = { ...prEnv, GITHUB_REF: 'refs/heads/main', GITHUB_WORKFLOW_REF: 'tryapparent/apparent/.github/workflows/stream-engine.yml@refs/heads/main', GITHUB_RUN_ID: '556', GITHUB_RUN_ATTEMPT: '1' }
+  const reissued = reusePayload(repo, sdk, 'linux-x64', zip, resolve(temp, 'sdk-promoted'), receipt.inputDigest, receipt.sourceSha, '88', '555', '2', mainEnv)
+  assert.equal(reissued.runId, '556'); assert.equal(reissued.reusedFrom.runId, '555')
+  assert.equal(reissued.sha256, receipt.sha256)
+  assert.throws(() => reusePayload(repo, sdk, 'linux-x64', zip, resolve(temp, 'sdk-wrong-attempt'), receipt.inputDigest, receipt.sourceSha, '88', '555', '1', mainEnv), /run does not match/)
+  assert.throws(() => sealPayload(repo, sdk, 'linux-x64', input, resolve(temp, 'not-pr'), receipt.inputDigest, { ...prEnv, GITHUB_EVENT_NAME: 'workflow_dispatch' }, true), /canonical/)
+  assert.throws(() => sealPayload(repo, owner, 'linux-x64', input, resolve(temp, 'not-sdk'), receipt.inputDigest, prEnv, true), /canonical/)
+  assert.throws(() => sealPayload(repo, sdk, 'linux-x64', input, resolve(temp, 'not-main'), receipt.inputDigest, prEnv), /canonical/)
 })
