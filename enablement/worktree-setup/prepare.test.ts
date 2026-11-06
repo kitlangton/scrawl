@@ -3,7 +3,7 @@ import { cpSync, existsSync, mkdtempSync, mkdirSync, readFileSync, rmSync, statS
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import test from 'node:test';
-import { parseArgs, prepare } from './prepare.ts';
+import { parseArgs, prepare, versionAtLeast } from './prepare.ts';
 
 test('defaults to the shared baseline and deduplicates explicit owners', () => {
   assert.deepEqual(parseArgs([]), { owners: [], help: false });
@@ -18,6 +18,12 @@ test('rejects unknown and incomplete owner arguments', () => {
 
 test('help does not enable broad install selection', () => {
   assert.deepEqual(parseArgs(['--help']), { owners: [], help: true });
+});
+
+test('toolchain comparison handles minimums and rejects older versions', () => {
+  assert.equal(versionAtLeast('v22.23.4', '22.18.0'), true);
+  assert.equal(versionAtLeast('22.6.0', '22.18.0'), false);
+  assert.equal(versionAtLeast('3.9.0', '3.9'), true);
 });
 
 test('cold isolated checkout prepares locked baseline and a warm rerun is idempotent', () => {

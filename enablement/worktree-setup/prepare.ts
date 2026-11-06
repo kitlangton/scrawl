@@ -7,6 +7,21 @@ import { fileURLToPath } from 'node:url';
 const owners = ['agent', 'app-shell', 'record', 'onboarding', 'resources', 'connect-client', 'public-site', 'browser'] as const;
 type Owner = typeof owners[number];
 
+function versionTuple(value: string): number[] {
+  const match = value.match(/\d+(?:\.\d+){1,2}/);
+  if (!match) throw new Error(`Could not parse tool version '${value}'.`);
+  return match[0].split('.').map(Number);
+}
+
+export function versionAtLeast(actual: string, minimum: string): boolean {
+  const a = versionTuple(actual);
+  const b = versionTuple(minimum);
+  for (let i = 0; i < Math.max(a.length, b.length); i++) {
+    if ((a[i] ?? 0) !== (b[i] ?? 0)) return (a[i] ?? 0) > (b[i] ?? 0);
+  }
+  return true;
+}
+
 export function parseArgs(args: string[]): { owners: Owner[]; help: boolean } {
   const selected: Owner[] = [];
   let help = false;
@@ -47,6 +62,27 @@ function run(command: string, args: string[], cwd: string, env: NodeJS.ProcessEn
   const result = spawnSync(command, args, { cwd, env, stdio: 'inherit' });
   if (result.error) throw new Error(`${command} is unavailable: ${result.error.message}`);
   if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed with ${result.status ?? result.signal}. Check the diagnostic above, then rerun this command after fixing the tool/network/lock issue.`);
+}
+
+function toolVersion(command: string, args: string[], cwd: string): string {
+  const result = spawnSync(command, args, { cwd, encoding: 'utf8' });
+  if (result.error) throw new Error(`${command} is required but unavailable: ${result.error.message}`);
+  if (result.status !== 0) throw new Error(`${command} ${args.join(' ')} failed with ${result.status ?? result.signal}: ${result.stderr.trim()}`);
+  return result.stdout.trim();
+}
+
+function checkToolchain(root: string, owner: Owner | 'baseline'): void {
+  if (!versionAtLeast(process.versions.node, '22.18.0')) throw new Error(`Node ${process.versions.node} is too old; this repository setup requires Node >=22.18.0.`);
+  const python = toolVersion('python3', ['--version'], root);
+  if (!versionAtLeast(python, '3.9.0')) throw new Error(`${python} is too old; dependency preflight requires Python >=3.9.0.`);
+  const usesBun = packages[owner].some((relative) => relative === 'public/site' || relative === 'connect/web');
+  if (usesBun) {
+    const actual = toolVersion('bun', ['--version'], root);
+    if (actual !== '1.3.10') throw new Error(`Bun ${actual} found; selected locked browser packages require Bun 1.3.10.`);
+  } else {
+    const npm = toolVersion('npm', ['--version'], root);
+    if (!versionAtLeast(npm, '9.0.0')) throw new Error(`npm ${npm} is too old for the committed lockfiles; require npm >=9.0.0.`);
+  }
 }
 
 function preflight(root: string, owner: Owner | 'baseline'): boolean {
@@ -98,6 +134,7 @@ function verifyImports(root: string, owner: Owner | 'baseline'): void {
 export function prepare(root: string, selected: Owner[]): void {
   for (const owner of ['baseline', ...selected] as const) {
     console.log(`\n[prepare] ${owner}: checking locked install and existing freshness guards`);
+    checkToolchain(root, owner);
     if (preflight(root, owner)) {
       console.log(`[prepare] ${owner}: already prepared; no installation needed`);
       verifyImports(root, owner);
