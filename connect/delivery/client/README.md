@@ -365,6 +365,8 @@ It preserves
 the original issue time and leaves other scopes and config untouched. Possible
 effects, failed acknowledgements, cancellation or cleanup/lease failures report
 uncertainty without retry or restoration. It has no production caller or package
-export and must not write live state alongside Rust. Active request preparation,
-response persistence, full writer ownership, Mac consumer proof and installed
-adoption remain separate gates.
+export and must not write live state alongside Rust. Isolated Linux protected-
+wrapper and Mac direct-adapter cases cover both scopes, scope contention and
+evidence substitution under the cooperative protocol. They do not establish
+installed Mac or ARM admission. Active request preparation, response persistence,
+full writer ownership and production caller adoption remain separate gates.
