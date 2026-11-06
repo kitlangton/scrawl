@@ -127,7 +127,7 @@ The source is opened relative to that descriptor with no-follow/nonblocking flag
 and must be an owned, private 0600, single-link regular file no larger than
 2,000,000 bytes. Its identity must match `expected.source`; it is synced and its
 name is rechecked before rename. An expected destination must still identify an
-owned private 0600 regular file with the supplied identity (data hard links are
+owned private 0600-or-stricter regular file with the supplied identity (data hard links are
 allowed). A null expected destination means it must be absent. A mismatch returns
 `destination_changed` without moving the source.
 Private source and parent metadata are rechecked after source sync. Unexpected

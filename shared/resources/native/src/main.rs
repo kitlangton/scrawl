@@ -287,7 +287,8 @@ where F: FnMut(RawFd) -> i32, R: FnMut(RawFd, *const libc::c_char, *const libc::
     if raw < 0 { return "refused"; }
     let source_fd = unsafe { OwnedFd::from_raw_fd(raw) };
     let sst = match fstat(raw) { Ok(s) => s, Err(_) => return "refused" };
-    if !private_regular(&sst) || !same(&sst, sd, si) || !no_allow_acl_fd(raw) { return "refused"; }
+    if !private_regular(&sst) || !no_allow_acl_fd(raw) { return "refused"; }
+    if !same(&sst, sd, si) { return "destination_changed"; }
     if sync(raw) != 0 { return "refused"; }
     let mut current = std::mem::MaybeUninit::<libc::stat>::uninit();
     if unsafe { libc::fstatat(pfd, src.as_ptr(), current.as_mut_ptr(), libc::AT_SYMLINK_NOFOLLOW) } != 0 { return "destination_changed"; }

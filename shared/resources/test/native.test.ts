@@ -134,7 +134,7 @@ test("real file replacement checks expected identities, preserves bytes and hand
 test("stale source or destination identities leave both entries unchanged", async () => {
   const f = await fixture(); try {
     const src = await fileStage(f.directory, "stage", "source"); const dst = await fileStage(f.directory, "final", "destination");
-    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: { device: String(src.dev), inode: String(src.ino + 1) }, destination: identity(dst) }), { state: "refused" });
+    assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: { device: String(src.dev), inode: String(src.ino + 1) }, destination: identity(dst) }), { state: "destination_changed" });
     assert.deepEqual(await resources.replaceFile(await f.parent(), "stage", "final", { source: identity(src), destination: { device: String(dst.dev), inode: String(dst.ino + 1) } }), { state: "destination_changed" });
     assert.equal(await readFile(join(f.directory, "stage"), "utf8"), "source"); assert.equal(await readFile(join(f.directory, "final"), "utf8"), "destination");
   } finally { await f.close(); }
