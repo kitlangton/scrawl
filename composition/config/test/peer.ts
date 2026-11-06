@@ -12,6 +12,12 @@ for await (const line of createInterface({ input: process.stdin })) {
     ? { status: 'unknown', message: 'Native publication unconfirmed' }
     : request.operation === 'readForAdoption'
     ? { owner: { present: false, revision: 0, value: null }, legacy: { present: true, value: { seen: true } } }
+    : request.operation === 'readPenColor'
+    ? { present: true, value: null }
+    : request.operation === 'compareAndSwapPenColor' && config.endsWith('conflict.json')
+    ? { status: 'conflict', current: { present: true, value: null } }
+    : request.operation === 'compareAndSwapPenColor'
+    ? { status: 'saved' }
     : request.operation === 'adoptLegacy' && config.endsWith('conflict.json')
     ? { status: 'conflict', snapshot: { owner: { present: true, revision: 2, value: null }, legacy: { present: false, value: null } } }
     : request.operation === 'adoptLegacy' && config.endsWith('invalid-adoption.json')

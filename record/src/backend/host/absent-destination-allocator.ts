@@ -1,5 +1,5 @@
 import { createHash } from "node:crypto";
-import { lstat } from "node:fs/promises";
+import { lstat, realpath } from "node:fs/promises";
 import { DatabaseSync } from "node:sqlite";
 import { isAbsolute, join, resolve, sep } from "node:path";
 import { ensurePrivateFile, ensurePrivateRoot, hostError, validatePrivateFile } from "./private-path.js";
@@ -62,6 +62,43 @@ export class AbsentDestinationAllocator {
     } finally { try { db.close(); } catch { /* preserve allocation result */ } }
   }
 
+  /** Persist an exact caller-selected destination without touching the final path. */
+  async reserveExact(requestId: string, absoluteBundlePath: string): Promise<AbsentDestinationBinding> {
+    if (!validRequestId(requestId) || !validBundlePath(absoluteBundlePath) ||
+        !isAbsolute(this.#controlRoot) || resolve(this.#controlRoot) !== this.#controlRoot ||
+        rootsOverlap(this.#controlRoot, absoluteBundlePath)) throw hostError();
+    const parent = resolve(absoluteBundlePath, "..");
+    if (await realpath(parent).catch(() => "") !== parent) throw hostError();
+    const parentInfo = await lstat(parent).catch(() => undefined);
+    if (!parentInfo?.isDirectory() || parentInfo.isSymbolicLink()) throw hostError();
+    await ensurePrivateRoot(this.#controlRoot);
+    const db = await this.#open();
+    try {
+      const digest = createHash("sha256").update(requestId, "utf8").digest("hex");
+      const bundleId = `record-${digest}.apparent`;
+      const binding = { bundleId, bundlePath: absoluteBundlePath };
+      const query = db.prepare("SELECT request_id, control_root, destination_root, bundle_id, bundle_path FROM destination_binding WHERE request_digest = ?");
+      const validate = (row: Record<string, unknown>): AbsentDestinationBinding => {
+        if (row.request_id !== requestId || row.control_root !== this.#controlRoot || row.destination_root !== "@exact" ||
+            row.bundle_id !== bundleId || row.bundle_path !== absoluteBundlePath) throw hostError();
+        return binding;
+      };
+      const existing = query.get(digest);
+      if (existing) return validate(existing);
+      await assertAbsent(absoluteBundlePath);
+      db.exec("BEGIN IMMEDIATE");
+      const winner = query.get(digest);
+      if (winner) { const result = validate(winner); db.exec("COMMIT"); return result; }
+      db.prepare("INSERT INTO destination_binding (request_digest, request_id, control_root, destination_root, bundle_id, bundle_path) VALUES (?, ?, ?, ?, ?, ?)")
+        .run(digest, requestId, this.#controlRoot, "@exact", bundleId, absoluteBundlePath);
+      db.exec("COMMIT");
+      return binding;
+    } catch {
+      try { db.exec("ROLLBACK"); } catch { /* commit may already have completed */ }
+      throw hostError();
+    } finally { try { db.close(); } catch { /* preserve reservation result */ } }
+  }
+
   async #open(): Promise<DatabaseSync> {
     await ensurePrivateFile(this.#databasePath);
     for (const suffix of ["-wal", "-shm", "-journal"]) await validatePrivateFile(this.#databasePath + suffix, true);
@@ -75,6 +112,12 @@ export class AbsentDestinationAllocator {
       return db;
     } catch { try { db?.close(); } catch { /* sanitized */ } throw hostError(); }
   }
+}
+
+function validBundlePath(path: string): boolean {
+  return typeof path === "string" && path.length > 0 && Buffer.byteLength(path, "utf8") <= 4096 &&
+    !path.includes("\0") && Buffer.from(path, "utf8").toString("utf8") === path &&
+    isAbsolute(path) && resolve(path) === path && path !== resolve(path, "..");
 }
 
 async function assertAbsent(path: string): Promise<void> {

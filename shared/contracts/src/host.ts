@@ -144,3 +144,13 @@ export interface NativeHostPort {
   validateRecordShortcut(key: string, modifiers: number, expected: { processEpoch: string; revision: number }): Promise<NativeMutationResult & { shortcut?: { keyCode: number; modifiers: number; label: string } }>;
   saveRecordShortcut(shortcut: { keyCode: number; modifiers: number; label: string }, expected: { processEpoch: string; revision: number }): Promise<NativeMutationResult>;
 }
+
+/** Record's narrow compatibility access to its compiled `penColor` config key. */
+export interface RecordPenColorConfig {
+  read(): Promise<LegacyConfigValue>;
+  compareAndSwap(expected: LegacyConfigValue, next: LegacyConfigValue): Promise<
+    | { status: 'saved' }
+    | { status: 'conflict'; current: LegacyConfigValue }
+    | { status: 'unknown'; message: string }
+  >;
+}

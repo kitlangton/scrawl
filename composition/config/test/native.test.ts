@@ -4,7 +4,7 @@ import { createHash } from 'node:crypto';
 import { mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { createConfigBackend, type ConfigBackend } from '../src/client.ts';
+import { createConfigBackend, createRecordPenColorConfig, type ConfigBackend } from '../src/client.ts';
 
 // This suite is mandatory in the native producer; the normal TS loop never builds Rust.
 const executable = process.env.APPARENT_CONFIG_HOST_BIN;
@@ -96,5 +96,36 @@ test('real helper adopts owner-interpreted legacy progress once without losing o
     const resumed = await f.peer();
     assert.deepEqual(await resumed.readForAdoption('onboarding'), conflict.snapshot);
     assert.equal((await resumed.adoptLegacy('onboarding', snapshot.legacy, null)).status, 'conflict');
+  } finally { await f.close(); }
+});
+
+test('staged native helper performs Record-only penColor presence CAS with fresh concurrent conflicts', async () => {
+  const f = await fixture();
+  try {
+    await writeFile(f.configPath, JSON.stringify({ secret: 'synthetic-only', streamState: { agent: { revision: 8, value: { keep: true } } } }), { mode: 0o600 });
+    const options = { executable: executable!, executableSha256, configPath: f.configPath };
+    const left = await createRecordPenColorConfig(options);
+    const right = await createRecordPenColorConfig(options);
+    try {
+      const absent = { present: false, value: null } as const;
+      assert.deepEqual(await left.read(), absent);
+      const results = await Promise.all([
+        left.compareAndSwap(absent, { present: true, value: '#123456' }),
+        right.compareAndSwap(absent, { present: true, value: '#abcdef' }),
+      ]);
+      assert.equal(results.filter(result => result.status === 'saved').length, 1);
+      const conflict = results.find(result => result.status === 'conflict');
+      assert(conflict?.status === 'conflict');
+      assert.deepEqual(conflict.current, await left.read());
+      const current = await left.read();
+      assert.deepEqual(await left.compareAndSwap(current, { present: true, value: null }), { status: 'saved' });
+      assert.deepEqual(await left.read(), { present: true, value: null });
+      assert.deepEqual(await left.compareAndSwap({ present: true, value: null }, absent), { status: 'saved' });
+      assert.deepEqual(await left.read(), absent);
+    } finally { await Promise.all([left.close(), right.close()]); }
+    const raw = JSON.parse(await readFile(f.configPath, 'utf8'));
+    assert.equal(Object.hasOwn(raw, 'penColor'), false);
+    assert.equal(raw.secret, 'synthetic-only');
+    assert.deepEqual(raw.streamState.agent, { revision: 8, value: { keep: true } });
   } finally { await f.close(); }
 });

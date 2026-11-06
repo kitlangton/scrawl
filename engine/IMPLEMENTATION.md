@@ -28,13 +28,19 @@ reuse percentage is claimed. Published SDK and Record output ownership remain.
 | Donor | Move/reuse destination and unavoidable boundary | Verification / removal condition |
 | --- | --- | --- |
 | `capture/engine/{src,tests,Cargo.toml,Cargo.lock}` | Existing crate moves to `engine/core`; no new execution or storage behavior in this slice. | All build/test/package references point to the moved crate; source/tests preserved and old crate files removed. |
-| `capture/desktop/linux/capture/media.rs` | Moved existing GStreamer `Source`, encoder selection, recorder pipeline, crop, RGBA extraction, first-video-frame timing and EOS finish into `engine/core/src/linux/recorder.rs` (`linux-media` feature). | Desktop retains selection, portal negotiation, sampler scheduling, window-mask policy, logs/warnings and reader/export/audio behavior. Engine owns the moved `Stream` guard inside `Source`, preserving the donor's FD/session ownership through finish/drop. Recorder inputs include dimensions/path/clock origin; it returns candidate bytes/timing/result and applies current masks to a copy of unmasked cached pixels on every sampling call. Focused feature build/tests, root caller coverage and isolated Linux guest capture are required; no legacy recorder implementation remains to remove. This does not provide standalone capture-v1. |
+| `capture/desktop/linux/capture/media.rs` recorder section | Moved existing GStreamer `Source`, encoder selection, recorder pipeline, crop, RGBA extraction, first-video-frame timing and EOS finish into `engine/core/src/linux/recorder.rs` (`linux-media` feature). | Desktop retains selection, portal negotiation, sampler scheduling, window-mask policy and logs/warnings. Engine owns the moved `Stream` guard inside `Source`, preserving the donor's FD/session ownership through finish/drop. Recorder inputs include dimensions/path/clock origin; it returns candidate bytes/timing/result and applies current masks to a copy of unmasked cached pixels on every sampling call. Focused feature build/tests, root caller coverage and isolated Linux guest capture are required; no legacy recorder implementation remains to remove. This does not provide standalone capture-v1. |
+| `capture/desktop/linux/capture/media.rs` reader/probe/audio section | Reuses `VideoReader`, seeks, RGBA stride handling, `shrink_to_edge`, probe facts and first-track 16 kHz PCM extraction in `engine/core/src/linux/media.rs` (`linux-media`). Engine exposes neutral frame/probe values; Desktop converts to `RgbaFrame`/helper `Probe` and retains the WAV encoder/writer. | Focused native fixture proof must show decoded frame order/dimensions/timestamps and PCM leading-silence alignment; existing helper/media/probe consumer tests and root build cover the adapters. Desktop retains window masking, warnings, sampler, iPhone shrink behavior and output policy. No SDK media/1 or capture/2 adoption is implied. |
 | `capture/desktop/linux/capture/portal.rs` | Move stream mechanics into Engine with explicit selection/consent inputs; retain product policy with its owner. | Actual selected-output identity and portal consent proof; convert callers before deleting donor code. |
 | `capture/engine/native/{Media,Export,LiveTranscribe}.swift` | Adapt/package existing native execution under `engine/`; new code limited to demonstrated SDK/ownership gaps. | Preserve active reservations; affected macOS compilation/native proof and converted build/package inputs before donor removal. |
 
 New durable protocol identity/reconnect adapters may be necessary; new capture,
 media or filesystem execution requires a concrete gap in the existing donor.
 This extraction does not close publication, macOS, export, inference or retention.
+
+This reader slice reuses the existing decode/seek/scale/probe/PCM mechanisms; its
+new code is limited to the feature module/API types and Desktop conversions. Remaining
+donors include Desktop's warning/sampler/window-mask policy, WAV file encoding, iPhone
+re-encoding and portal/source negotiation. No Rust reuse percentage is asserted.
 
 ## Contracts and return routes
 
