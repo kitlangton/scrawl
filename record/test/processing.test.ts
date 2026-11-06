@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
 import { assembleProcessingOutput, decodeSelectedFrames, type DecodeSelection, type PublishedMediaClient } from "../src/backend/processing/index.ts";
+import type { SemanticFrameText } from "../src/index.ts";
 
 test("assembles semantic text while keeping images and transcript separate", () => {
   const bundlePath = fileURLToPath(new URL("./fixtures/take.apparent", import.meta.url));
@@ -173,4 +174,129 @@ test("untimed speech survives selected frames without complete annotations", () 
     transcript: { text: "Unsegmented words", segments: [] },
     frames: [{ index: 1, timeMs: 1_000, absolutePath: "/captures/speech.apparent/frame.png" }] });
   assert.match(output.summaryMarkdown, /Unsegmented words/);
+});
+
+test("rich semantic chunks render once in frame order and retain Record-owned paths and privacy", () => {
+  const bundlePath = "/synthetic/semantic.apparent";
+  const richChunks: SemanticFrameText[] = [
+    { frameIndex: 1, head: "“Open the menu,”", lines: [
+      "✎① 0:02 pin 1",
+      "· 0:02 clicked button “Menu”",
+      "✎② 0:02 circled button “Save” (2 strokes)",
+      "· 0:02 pressed ⌘S ×2 “then choose”",
+    ] },
+    { frameIndex: 2, head: "“Save.”", lines: [
+      "· 0:04 Typed note · pin 1 · frames/one.png:\n    Keep this\n    for review",
+      "· 0:05 scrubbed “Save slider” · 0:05 Editor window closed · 0:05 Browser window opened · 0:05 tab → Preview · 0:06 console error: synthetic · 0:07 switched to Browser · 0:09 tab cleared",
+    ] },
+  ];
+  const input: Parameters<typeof assembleProcessingOutput>[0] = {
+    durationMs: 12_000,
+    bundlePath,
+    target: { app: "Editor", windowTitle: "PRIVATE WINDOW TITLE" },
+    screenAtStart: "Screen One",
+    context: { repository: "/work/synthetic" },
+    note: "Use the saved state.",
+    warnings: [{ kind: "noMicrophoneAudio" }],
+    transcript: { text: "Open the menu, then choose Save.", segments: [
+      { startMs: 2_000, text: "Open the menu, then choose" }, { startMs: 8_000, text: "Save." },
+    ] },
+    frames: [
+      { index: 1, timeMs: 2_000, absolutePath: `${bundlePath}/frames/one.png`, screenName: "Screen One", markId: "flag" },
+      { index: 2, timeMs: 8_000, absolutePath: `${bundlePath}/frames/two.png`, screenName: "Screen Two" },
+    ],
+    marks: [{ id: "flag", shape: "flag", framePath: `${bundlePath}/frames/one.png` }],
+    events: [
+      { kind: "click", timeMs: 2_000 },
+      { kind: "note", timeMs: 4_000, pin: 1, text: "Keep this\nfor review" },
+      { kind: "appEvent", timeMs: 6_000, label: "console error: synthetic" },
+      { kind: "appEvent", timeMs: 7_000, label: "switched to Browser" },
+    ],
+    notes: [{ timeMs: 4_000, pin: 1, text: "Keep this\nfor review" }],
+    contextChanges: [
+      { timeMs: 5_000, key: "tab", value: "Preview" },
+      { timeMs: 9_000, key: "tab" },
+    ],
+    autocrop: { label: "Editor", fullFramesDirectory: `${bundlePath}/frames-full` },
+    videoPath: `${bundlePath}/capture.mp4`,
+    contactSheetPath: `${bundlePath}/contact-sheet.png`,
+    semanticFrameText: { mode: "rich-context", frames: richChunks },
+  };
+  const output = assembleProcessingOutput(input).summaryMarkdown;
+  assert.equal(output, [
+    `[apparent 0:12 · Editor · ${bundlePath}]`,
+    "Open contact-sheet.png and frames/ in that folder before changing anything: the marks and words only make sense on the images, which can show more than the text does.",
+    "Screen: Screen One · repository: /work/synthetic",
+    "Note: Use the saved state.",
+    "No microphone audio was saved. Check the microphone and try again.",
+    `Cropped to: Editor (full frames in ${bundlePath}/frames-full/)`,
+    "- #1 (0:02) ⚑ “Open the menu,”",
+    "  ✎① 0:02 pin 1",
+    "  · 0:02 clicked button “Menu”",
+    "  ✎② 0:02 circled button “Save” (2 strokes)",
+    "  · 0:02 pressed ⌘S ×2 “then choose”",
+    `  ${bundlePath}/frames/one.png`,
+    "- #2 (0:08) ⟨Screen Two⟩ “Save.”",
+    "  · 0:04 Typed note · pin 1 · frames/one.png:\n    Keep this\n    for review",
+    "  · 0:05 scrubbed “Save slider” · 0:05 Editor window closed · 0:05 Browser window opened · 0:05 tab → Preview · 0:06 console error: synthetic · 0:07 switched to Browser · 0:09 tab cleared",
+    `  ${bundlePath}/frames/two.png`,
+    `Video: ${bundlePath}/capture.mp4`,
+    `Contact sheet: ${bundlePath}/contact-sheet.png`,
+    `Bundle: ${bundlePath}`,
+    "",
+  ].join("\n"));
+  assert.doesNotMatch(output, /PRIVATE WINDOW TITLE/);
+  assert.equal(output.split("Keep this").length - 1, 1);
+  assert.equal(output.split("Open the menu,").length - 1, 1);
+  assert.equal(output.split("Save.").length - 1, 1);
+});
+
+test("rich semantic frame identities reject incomplete, duplicate, reordered, or non-text chunks", () => {
+  const base: Parameters<typeof assembleProcessingOutput>[0] = {
+    durationMs: 2_000, bundlePath: "/synthetic/rich.apparent",
+    transcript: { text: "speech", segments: [] },
+    frames: [
+      { index: 1, timeMs: 500, absolutePath: "/synthetic/rich.apparent/frames/1.png" },
+      { index: 2, timeMs: 1_500, absolutePath: "/synthetic/rich.apparent/frames/2.png" },
+    ],
+  };
+  const chunk = (frameIndex: number): SemanticFrameText => ({ frameIndex, head: "", lines: [] });
+  const invalid = [
+    { mode: "rich-context", frames: [chunk(1)] },
+    { mode: "rich-context", frames: [chunk(1), chunk(1)] },
+    { mode: "rich-context", frames: [chunk(2), chunk(1)] },
+    { mode: "rich-context", frames: [chunk(1), chunk(3)] },
+    { mode: "rich-context", frames: [chunk(1), { frameIndex: 2, head: 1, lines: [] }] },
+    { mode: "rich-context", frames: [chunk(1), { frameIndex: 2, head: "", lines: [undefined] }] },
+    { mode: "legacy", frames: [chunk(1), chunk(2)] },
+  ];
+  for (const semanticFrameText of invalid) {
+    assert.throws(() => assembleProcessingOutput({ ...base, semanticFrameText } as never), /semanticFrameText/);
+  }
+});
+
+test("rich semantic rendering accepts an empty head and preserves multiline chunk text", () => {
+  const output = assembleProcessingOutput({
+    durationMs: 1_000, bundlePath: "/synthetic/empty-head.apparent",
+    transcript: { text: "", segments: [] },
+    frames: [{ index: 1, timeMs: 250, absolutePath: "/synthetic/empty-head.apparent/frames/1.png" }],
+    semanticFrameText: { mode: "rich-context", frames: [{
+      frameIndex: 1, head: "", lines: ["mark line\n    embedded note line", ""],
+    }] },
+  }).summaryMarkdown;
+  assert.match(output, /- #1 \(0:00\)\n  mark line\n    embedded note line\n  \n/);
+});
+
+test("empty rich chunks with no selected frames preserve the legacy speech fallback", () => {
+  const input: Parameters<typeof assembleProcessingOutput>[0] = {
+    durationMs: 2_000, bundlePath: "/synthetic/no-frames.apparent",
+    transcript: { text: "speech without frames", segments: [] }, frames: [],
+    events: [{ kind: "appEvent", timeMs: 1_000, label: "synthetic event" }],
+    semanticFrameText: { mode: "rich-context", frames: [] },
+  };
+  assert.equal(
+    assembleProcessingOutput(input).summaryMarkdown,
+    assembleProcessingOutput({ ...input, semanticFrameText: undefined }).summaryMarkdown,
+  );
+  assert.match(assembleProcessingOutput(input).summaryMarkdown, /speech without frames/);
 });
