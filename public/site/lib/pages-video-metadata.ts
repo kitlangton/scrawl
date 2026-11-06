@@ -11,5 +11,5 @@ export const movie = {
     { size: 5833324, sha256: "8d145493d824be9dc4b454b6f3f64b5ed1efb3ee930c3e1c24823d1a30dc479a" },
   ],
 }
-export const chunkPath = (chunk) => `/assets/apparent-video-${chunk.sha256}.bin`
+export const chunkPath = (chunk: { sha256: string }) => `/assets/apparent-video-${chunk.sha256}.bin`
 export const movieETag = `"sha256-${movie.sha256}"`

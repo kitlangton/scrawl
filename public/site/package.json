@@ -9,7 +9,6 @@
     "preview": "vite preview",
     "test:video": "node --test scripts/browser-proof/test-video-demo.ts",
     "test:try-button": "node scripts/pages/test-try-button-browser.ts",
-    "test:hosted": "node scripts/browser-proof/test-hosted-browser.ts",
     "generate:og-video": "node scripts/og-video/capture.ts",
     "package:public": "npm run build && node scripts/site-build/package-apparent.ts",
     "build:pages-worker": "esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js",

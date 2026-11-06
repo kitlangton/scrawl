@@ -4,20 +4,27 @@ import assert from 'node:assert/strict'
 import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, rmSync, symlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { CanonicalPropagationPending, differenceMetadata, inventory, main, publicationNeeded, ReadbackTransferIncomplete, seal, SupersededMain, verify, verifyArtifact, verifyReady, type PublisherDeps } from './publish-pages.ts'
+import { CanonicalPropagationPending, differenceMetadata, inventory, main, publicationNeeded, ReadbackTransferIncomplete, seal, verify, verifyArtifact, verifyReady, type PublisherDeps } from './publish-pages.ts'
+import { movie } from '../../lib/pages-video-metadata.ts'
+import { preparePagesVideo } from '../pages/prepare-pages-video.ts'
 
 const sha = 'a'.repeat(40)
+const approvedMovie = readFileSync(new URL('../../public/assets/media/Apparent-ghost-demo-v4-lilac.mp4', import.meta.url))
 function fixture(root: string) {
   const files: Record<string, string> = {
     'public/site/dist-apparent/index.html': 'source homepage', 'public/site/dist-apparent/404.html': 'not found',
-    'public/site/dist-apparent/_routes.json': '{}', 'public/site/dist-apparent/_worker.js': 'compiled worker',
-    'public/site/dist-apparent/assets/index-test.js': 'compiled source', 'public/site/dist-apparent/connect/index.html': 'connect',
-    'public/site/dist-apparent/connect/device/index.html': 'device', 'public/site/dist-apparent/connect/shares/index.html': 'shares',
-    'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4': 'checked movie',
+    'public/site/dist-apparent/_routes.json': JSON.stringify({ version: 1, include: [movie.path], exclude: [] }) + '\n', 'public/site/dist-apparent/_worker.js': 'compiled worker',
+    'public/site/dist-apparent/assets/index-test.js': 'compiled source',
+    'public/site/dist-apparent/_headers': '/*\n  Cache-Control: no-cache, no-transform\n  X-Apparent-Publisher: cloudflare-pages\n',
+    'public/site/dist-apparent/_redirects': '',
+    'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4': 'source must not reach publisher',
     'public/site/functions/movie.js': 'source must not reach publisher', 'public/site/wrangler.pages.jsonc': '{"name":"apparent-capture"}',
     'public/site/wrangler.jsonc': 'unrelated Worker', '.env': 'private sentinel',
   }
   for (const [name, data] of Object.entries(files)) { const path = join(root, name); mkdirSync(join(path, '..'), { recursive: true }); writeFileSync(path, data) }
+  const output = join(root, 'public/site/dist-apparent')
+  writeFileSync(join(output, movie.path.slice(1)), approvedMovie)
+  preparePagesVideo(output)
   seal(sha, root)
   return join(root, '.build/website')
 }
@@ -91,8 +98,26 @@ test('sealed artifact rejects revision changes, content edits, extra inputs, sym
   const file = join(artifact, 'dist-apparent/index.html'), original = readFileSync(file)
   writeFileSync(file, 'tampered'); assert.throws(() => verifyArtifact(sha, artifact), /checksum/); writeFileSync(file, original)
   const extra = join(artifact, 'dist-apparent/extra.js'); writeFileSync(extra, 'unexpected'); assert.throws(() => verifyArtifact(sha, artifact), /checksum/); rmSync(extra)
+  const manifestPath = join(artifact, 'manifest.json'), originalManifest = readFileSync(manifestPath)
+  for (const path of ['connect/index.html', 'hosted/index.html', 'hosted/app.js', 'assets/connect-private.js']) {
+    const file = join(artifact, 'dist-apparent', path); mkdirSync(join(file, '..'), { recursive: true }); writeFileSync(file, 'forbidden')
+    const manifest = JSON.parse(readFileSync(manifestPath, 'utf8'))
+    manifest.files['dist-apparent/' + path] = inventory(artifact)['dist-apparent/' + path]
+    writeFileSync(manifestPath, JSON.stringify(manifest))
+    assert.throws(() => verifyArtifact(sha, artifact), /Unexpected artifact input/, `forged manifest must not admit ${path}`)
+    rmSync(file); writeFileSync(manifestPath, originalManifest)
+  }
   symlinkSync(root, extra, 'dir'); assert.throws(() => inventory(artifact), /symlink/); rmSync(extra)
   assert.throws(() => seal(sha, root), /EEXIST/)
+}))
+
+test('sealing rejects Connect and hosted outputs from the Public build directory', () => temp(root => {
+  fixture(root)
+  rmSync(join(root, '.build/website'), { recursive: true, force: true })
+  const website = join(root, 'public/site/dist-apparent')
+  mkdirSync(join(website, 'connect'), { recursive: true }); writeFileSync(join(website, 'connect/index.html'), 'Connect')
+  mkdirSync(join(website, 'hosted'), { recursive: true }); writeFileSync(join(website, 'hosted/index.html'), 'hosted app')
+  assert.throws(() => seal(sha, root), /Unexpected artifact input/)
 }))
 
 test('readback binds revision before any public HTTP request', async () => {
@@ -101,13 +126,14 @@ test('readback binds revision before any public HTTP request', async () => {
   assert.equal(requested, false)
 })
 
-test('readback verifies HTML, JS, movie, privacy headers and both origins', () => temp(async root => {
+test('readback verifies Public HTML, JS, movie and both origins without requesting Connect', () => temp(async root => {
   const artifact = fixture(root), packagePath = join(artifact, 'dist-apparent')
-  const bodies: Record<string, string> = { '/': 'index.html', '/connect/': 'connect/index.html', '/connect/device/': 'connect/device/index.html', '/connect/shares/': 'connect/shares/index.html', '/assets/index-test.js': 'assets/index-test.js' }
+  const bodies: Record<string, string> = { '/': 'index.html', '/assets/index-test.js': 'assets/index-test.js' }
   const visited = new Set<string>()
   let badPath: string | null = null, badOrigin: string | null = null, shortMovie = 0, corruptMovie = false
   const fetcher: typeof fetch = async input => {
     const url = new URL(String(input)); visited.add(url.host)
+    assert(!url.pathname.startsWith('/connect') && !url.pathname.startsWith('/hosted'), `Public publisher must not request ${url.pathname}`)
     const headers = new Headers({ 'X-Apparent-Publisher': 'cloudflare-pages', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Content-Type': 'video/mp4', 'Set-Cookie': 'private-cookie-sentinel' })
     if (url.pathname === badPath && (badOrigin === null || url.host === badOrigin)) return new Response('unexpected response body sentinel', { headers })
     if (url.pathname.endsWith('.mp4')) {
@@ -116,8 +142,8 @@ test('readback verifies HTML, JS, movie, privacy headers and both origins', () =
         const broken = new ReadableStream<Uint8Array>({ start(controller) { controller.enqueue(Buffer.from('checked mo')); controller.error(new TypeError('premature socket close')) } })
         return new Response(broken, { headers: new Headers({ ...Object.fromEntries(headers), 'Content-Length': '13' }) })
       }
-      const movie = corruptMovie ? 'xxxxxxxxxxxxx' : 'checked movie'
-      headers.set('Content-Length', String('checked movie'.length)); return new Response(movie, { headers })
+      const movieBytes = corruptMovie ? Buffer.alloc(13, 'x') : approvedMovie
+      headers.set('Content-Length', String(movieBytes.length)); return new Response(movieBytes, { headers })
     }
     return new Response(readFileSync(join(packagePath, bodies[url.pathname])), { headers })
   }
@@ -144,15 +170,13 @@ test('readback verifies HTML, JS, movie, privacy headers and both origins', () =
   badPath = '/'; badOrigin = 'app.tryapparent.com'
   await assert.rejects(verify(sha, packagePath, deps), CanonicalPropagationPending)
   badPath = null; badOrigin = null
-  for (const missing of ['X-Apparent-Publisher', 'Cache-Control', 'X-Robots-Tag']) {
-    const headers = new Headers({ 'X-Apparent-Publisher': 'cloudflare-pages', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Content-Type': 'video/mp4' }); headers.delete(missing)
-    await assert.rejects(verify(sha, packagePath, { ...deps, fetch: async () => new Response('connect', { headers }) }))
-  }
+  const missingPublisherHeader: typeof fetch = async () => new Response('public html', { headers: { 'Content-Type': 'text/html' } })
+  await assert.rejects(verify(sha, packagePath, { ...deps, fetch: missingPublisherHeader }), /Missing Pages publisher header/)
 }))
 
 test('publisher stages exact bytes, writes success receipt, skips superseded candidates, and fails closed', () => temp(async root => {
   const artifact = fixture(root)
-  const movieBytes = readFileSync(join(root, 'public/site/public/assets/media/Apparent-ghost-demo-v4-lilac.mp4'))
+  const movieBytes = approvedMovie
   rmSync(join(root, 'public/site'), { recursive: true })
   const oldEnv = { sha: process.env.GITHUB_SHA, ref: process.env.GITHUB_REF, token: process.env.WEBSITE_PAGES_API_TOKEN, repo: process.env.GITHUB_REPOSITORY, workflow: process.env.GITHUB_WORKFLOW_REF, job: process.env.GITHUB_JOB }
   process.env.GITHUB_SHA = sha; process.env.GITHUB_REF = 'refs/heads/main'; process.env.WEBSITE_PAGES_API_TOKEN = 'synthetic'; process.env.GITHUB_REPOSITORY = 'tryapparent/apparent'; process.env.GITHUB_WORKFLOW_REF = 'tryapparent/apparent/.github/workflows/stream-public.yml@refs/heads/main'; process.env.GITHUB_JOB = 'deploy'
@@ -171,7 +195,7 @@ test('publisher stages exact bytes, writes success receipt, skips superseded can
       fetch: async input => {
         const url = new URL(String(input)), headers = new Headers({ 'X-Apparent-Publisher': 'cloudflare-pages', 'Cache-Control': 'no-store', 'X-Robots-Tag': 'noindex, nofollow', 'Content-Type': 'video/mp4' })
         if (url.pathname.endsWith('.mp4')) return new Response(movieBytes, { headers })
-        const paths: Record<string, string> = { '/': 'index.html', '/connect/': 'connect/index.html', '/connect/device/': 'connect/device/index.html', '/connect/shares/': 'connect/shares/index.html', '/assets/index-test.js': 'assets/index-test.js' }
+        const paths: Record<string, string> = { '/': 'index.html', '/assets/index-test.js': 'assets/index-test.js' }
         return new Response(readFileSync(join(packagePath, paths[url.pathname])), { headers })
       },
     }
@@ -235,6 +259,9 @@ test('publisher CLI seals from a source path containing spaces', () => temp(root
   const script = join(root, 'public/site/scripts/cd/publish-pages.ts')
   mkdirSync(join(script, '..'), { recursive: true })
   writeFileSync(script, readFileSync(new URL('./publish-pages.ts', import.meta.url)))
+  const metadata = join(root, 'public/site/lib/pages-video-metadata.ts')
+  mkdirSync(join(metadata, '..'), { recursive: true })
+  writeFileSync(metadata, readFileSync(new URL('../../lib/pages-video-metadata.ts', import.meta.url)))
   const result = spawnSync(process.execPath, [script, 'seal', sha], { encoding: 'utf8' })
   assert.equal(result.status, 0, result.stderr)
   assert.equal(verifyArtifact(sha, join(root, '.build/website')).revision, sha)

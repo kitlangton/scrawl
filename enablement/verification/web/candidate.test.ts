@@ -32,20 +32,6 @@ test('forks, feature branches, wrong workflows, and malformed identities cannot 
   }), /not an ancestor/)
 })
 
-test('only canonical successful Connect completion may wake Public delivery', async () => {
-  const { mkdtempSync, writeFileSync, rmSync } = await import('node:fs')
-  const { tmpdir } = await import('node:os'); const { join } = await import('node:path')
-  const root = mkdtempSync(join(tmpdir(), 'public-event-')), path = join(root, 'event.json')
-  const run = { name: 'Connect producer', path: '.github/workflows/connect-delivery.yml', status: 'completed', conclusion: 'success', head_branch: 'main', head_repository: { full_name: 'tryapparent/apparent' }, event: 'push' }
-  const env = { ...valid, GITHUB_EVENT_NAME: 'workflow_run', GITHUB_EVENT_PATH: path }
-  const git = (...args: string[]) => args[0] === 'rev-parse' ? sha : ''
-  try {
-    writeFileSync(path, JSON.stringify({ workflow_run: run })); assert.equal(candidate(env, git), sha)
-    for (const change of [{ conclusion: 'failure' }, { conclusion: 'skipped' }, { status: 'in_progress' },
-      { head_branch: 'feature' }, { head_repository: { full_name: 'fork/apparent' } },
-      { path: '.github/workflows/other.yml' }, { name: 'Value-stream delivery' },
-      { event: 'pull_request' }, { event: 'workflow_run' }]) {
-      writeFileSync(path, JSON.stringify({ workflow_run: { ...run, ...change } })); assert.throws(() => candidate(env, git))
-    }
-  } finally { rmSync(root, { recursive: true }) }
+test('other stream completion events cannot trigger Public delivery', () => {
+  assert.throws(() => candidate({ ...valid, GITHUB_EVENT_NAME: 'workflow_run' }, () => sha), /canonical main workflow/)
 })
