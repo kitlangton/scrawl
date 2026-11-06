@@ -14,7 +14,7 @@ This inventory is based on the active parser and handlers in `composition/cli.rs
 | `export` | Engine media pipeline and platform encoders; H.264/HEVC, crop, zoom, timing, ink, clicks and audio policies. | Not implemented. Depends on published Engine export/media capabilities and affected-platform proof. |
 | `reprocess`, `retranscribe`, `recover` | Engine pipeline, transcription and bundle durability. | Not implemented. Depends on Engine processing and safe publication APIs. |
 | `clean`, `pin` | Engine bundle retention/durability. | Not implemented. Depends on an Engine-owned local storage/retention contract. |
-| `copy` | Agent local handoff policy through Record and the published native Host clipboard port. | **Partial: text handoff.** `copy [BUNDLE|latest]` regenerates Record semantic handoff text with the standalone inspection command, reads the existing `agentDemoVideo` preference (on by default), and requests one exact UTF-8 write against a fresh Host snapshot. Only matching Applied digest/byte length succeeds; unknown outcomes return exit 3 without retry. A compatible running GUI is required; no auto-launch, image copy, paste, session posting, viewer opening or Saved claim. The compatible GUI supplies the native effect; its artifact admission and installed routing remain separate. |
+| `copy` | Agent local handoff policy through Record and the published native Host clipboard port. | **Partial: text handoff.** `copy [BUNDLE|latest]` regenerates Record semantic handoff text with the standalone inspection command, reads `agentDemoVideo` (on by default) and `agentContext` (off by default) from config, and uses the existing Agent keyframe text generator when rich context is enabled. It requests one exact UTF-8 write against a fresh Host snapshot. Only matching Applied digest/byte length succeeds; unknown outcomes return exit 3 without retry. A compatible running GUI is required; no auto-launch, image copy, paste, session posting, viewer opening or Saved claim. The compatible GUI supplies the native effect; its artifact admission and installed routing remain separate. |
 | `preview` | Desktop GPUI review window. | Not implemented. UI-owned; preserve the installed desktop behavior. Agent CLI is not a review workspace. |
 | `app`, `launch`, `launch-handler install|status`, `shortcut record|paste`, `devices`, `mic list|set|watch` | Desktop lifecycle, OS registration, shortcuts and native device enumeration. | Not implemented. Desktop/native owner routed; requires published OS integration capabilities and per-platform checks. |
 | `update status|channel|check` | Desktop Linux AppImage updater. | Not implemented. Desktop/Linux updater owner routed. |
@@ -54,11 +54,13 @@ installed Agent/SDK versions and media export, verifies every regular file,
 mode and hash in the native inventory before and after copying, then requires
 a media/1 handshake and confirmed worker close before writing a success
 receipt. The full root (entry, worker, libraries, plugins and manifest) is
-retained. The generated launcher sets the explicit media executable and a
-private runtime path; it does not configure capture-v1 recording or global
-`apparent` routing. Input archives and roots are never modified. Existing or
-symlinked prefix paths are refused; failed installs leave a private partial
-prefix without a success receipt. Same-UID processes share the trust boundary.
+retained, including the exact additive `media/1` + `media/2` manifest form.
+The installer still launches and handshakes through the existing media/1 entry
+and private runtime. It does not activate media/2 or configure capture-v1
+recording or global `apparent` routing. Input archives and roots are never
+modified. Existing or symlinked prefix paths are refused; failed installs leave
+a private partial prefix without a success receipt. Same-UID processes share
+the trust boundary.
 Manifest integrity is not provenance: callers must obtain both digests from a
 trusted upstream admission/receipt. The documented 463 artifact pair is an
 example and does not override current-tree admission/reuse requirements.

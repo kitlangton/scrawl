@@ -5,7 +5,7 @@ import { isAbsolute, relative, resolve, sep } from 'node:path'
 export type InventoryEntry = { path: string; mode: number; sha256: string }
 export type MediaManifest = {
   schema: 1; sourceSha: string; target: 'linux-x64'; rustTriple: 'x86_64-unknown-linux-gnu'
-  capabilities: ['media/1']; launch: { entry: 'apparent-engine-frames'; argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1']; worker: 'libexec/apparent-engine-frames'; pathLookup: false; runtimeBuilds: false }
+  capabilities: ['media/1'] | ['media/1', 'media/2']; media2Launch?: { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2']; sharesCaptureRuntime: true }; launch: { entry: 'apparent-engine-frames'; argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1']; worker: 'libexec/apparent-engine-frames'; pathLookup: false; runtimeBuilds: false }
   environment: { osRelease: string; kernel: string; architecture: 'x86_64'; rustc: string; cargo: string; gstreamer: string; glibc: string; pluginSource: string; plugins: string[]; baseline: string[] }
   runtimeFiles: InventoryEntry[]
 }
@@ -26,7 +26,10 @@ export function validateArtifact(directory: string): MediaManifest {
   if (!statSync(absolute).isDirectory()) throw new Error('artifact is not a directory')
   const root = realpathSync(absolute)
   const manifestPath = resolve(root, 'manifest.json'); const manifest = JSON.parse(readFileSync(manifestPath, 'utf8')) as MediaManifest
-  if (manifest.schema !== 1 || !/^[0-9a-f]{40}$/.test(manifest.sourceSha) || manifest.target !== 'linux-x64' || manifest.rustTriple !== 'x86_64-unknown-linux-gnu' || JSON.stringify(manifest.capabilities) !== '["media/1"]') throw new Error('unsupported media artifact identity')
+  if (manifest.schema !== 1 || !/^[0-9a-f]{40}$/.test(manifest.sourceSha) || manifest.target !== 'linux-x64' || manifest.rustTriple !== 'x86_64-unknown-linux-gnu' || !['["media/1"]', '["media/1","media/2"]'].includes(JSON.stringify(manifest.capabilities))) throw new Error('unsupported media artifact identity')
+  const media2 = manifest.capabilities.length === 2
+  const media2Identity = { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true }
+  if (media2 ? JSON.stringify(manifest.media2Launch) !== JSON.stringify(media2Identity) : manifest.media2Launch !== undefined) throw new Error('unsupported retained media launch identity')
   if (manifest.launch.entry !== 'apparent-engine-frames' || JSON.stringify(manifest.launch.argv) !== JSON.stringify(['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1']) || manifest.launch.worker !== 'libexec/apparent-engine-frames' || manifest.launch.pathLookup !== false || manifest.launch.runtimeBuilds !== false) throw new Error('unsupported media launch identity')
   if (manifest.environment.architecture !== 'x86_64' || !manifest.environment.osRelease || !manifest.environment.kernel || !manifest.environment.rustc || !manifest.environment.cargo || !manifest.environment.gstreamer || !manifest.environment.glibc || !manifest.environment.pluginSource || JSON.stringify(manifest.environment.plugins) !== JSON.stringify(REQUIRED_PLUGINS) || JSON.stringify(manifest.environment.baseline) !== JSON.stringify(BASELINE_LIBRARIES)) throw new Error('invalid media runtime identity')
   const actual = inventory(root).filter(x => x.path !== 'manifest.json')

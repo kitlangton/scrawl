@@ -14,8 +14,20 @@ function safeRelativeFilePath(value: unknown): value is string {
 }
 
 export function validateManifest(value: unknown): NativeManifest {
-  if (!isRecord(value) || !exactKeys(value, ['schema', 'sourceSha', 'target', 'rustTriple', 'capabilities', 'launch', 'environment', 'runtimeFiles'])) {
+  if (!isRecord(value) || !Array.isArray(value.capabilities)) {
     fail('native media manifest has an invalid schema');
+  }
+  const media2 = JSON.stringify(value.capabilities) === JSON.stringify(['media/1', 'media/2']);
+  const media1 = JSON.stringify(value.capabilities) === JSON.stringify(['media/1']);
+  const expectedKeys = ['schema', 'sourceSha', 'target', 'rustTriple', 'capabilities', 'launch', 'environment', 'runtimeFiles', ...(media2 ? ['media2Launch'] : [])];
+  if ((!media1 && !media2) || !exactKeys(value, expectedKeys)) fail('native media manifest has an invalid schema');
+  if (media2) {
+    const media2Launch = value.media2Launch;
+    const expectedMedia2Argv = ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'];
+    if (!isRecord(media2Launch) || !exactKeys(media2Launch, ['argv', 'sharesCaptureRuntime']) ||
+        JSON.stringify(media2Launch.argv) !== JSON.stringify(expectedMedia2Argv) || media2Launch.sharesCaptureRuntime !== true) {
+      fail('native media/2 launch contract rejected');
+    }
   }
   const launch = value.launch;
   if (!isRecord(launch) || !exactKeys(launch, ['entry', 'argv', 'worker', 'pathLookup', 'runtimeBuilds'])) {
@@ -24,7 +36,6 @@ export function validateManifest(value: unknown): NativeManifest {
   const expectedArgv = ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'];
   if (value.schema !== 1 || typeof value.sourceSha !== 'string' || !/^[a-f0-9]{40}$/.test(value.sourceSha) ||
       value.target !== 'linux-x64' || value.rustTriple !== 'x86_64-unknown-linux-gnu' ||
-      JSON.stringify(value.capabilities) !== JSON.stringify(['media/1']) ||
       launch.entry !== 'apparent-engine-frames' || launch.worker !== 'libexec/apparent-engine-frames' ||
       launch.pathLookup !== false || launch.runtimeBuilds !== false || JSON.stringify(launch.argv) !== JSON.stringify(expectedArgv) ||
       !isRecord(value.environment) || !Array.isArray(value.runtimeFiles) || value.runtimeFiles.length > DEFAULT_LIMITS.maxFiles) {

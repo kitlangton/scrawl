@@ -19,6 +19,8 @@ function frozen(): string {
   return execFileSync("git", ["rev-parse", "HEAD"], { cwd: repository, encoding: "utf8" }).trim();
 }
 const source = frozen(), output = resolve(root, "dist"), cargoTarget = resolve(root, ".build/cargo");
+// The installed consumer imports the shipped JavaScript, never a warm local dist.
+execFileSync("npm", ["--prefix", resolve(root, ".."), "run", "build"], { cwd: repository, stdio: "inherit" });
 if (existsSync(output)) {
   const stat = lstatSync(output);
   if (!stat.isDirectory() || stat.isSymbolicLink()) throw new Error("Unsafe resource output directory");
@@ -38,7 +40,10 @@ writeFileSync(executable, bytes, { flag: "wx", mode: 0o755 }); chmodSync(executa
 writeFileSync(resolve(output, "manifest.json"), JSON.stringify(resourceManifest(source, target, bytes), null, 2) + "\n", { flag: "wx", mode: 0o644 });
 validateResourceArtifact(output, target);
 // Exercise the public TypeScript adapter against these exact staged bytes.
-execFileSync(process.execPath, ["--experimental-strip-types", "--test", "shared/resources/test/native.test.ts"], {
+const nativeTests = ["shared/resources/test/native.test.ts"];
+// ARM is an owner-local producer option, not a registered installed-provider target.
+if (target !== "macos-arm64") nativeTests.push("shared/resources/test/installed-native.test.ts");
+execFileSync(process.execPath, ["--experimental-strip-types", "--test", ...nativeTests], {
   cwd: repository, stdio: "inherit", env: { ...process.env, APPARENT_RESOURCE_HOST_BIN: executable },
 });
 if (frozen() !== source) throw new Error("Source changed during resource producer verification");

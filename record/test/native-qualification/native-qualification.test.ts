@@ -2,7 +2,36 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { execPath } from 'node:process';
 import { test } from 'node:test';
-import { reconcileAndCancel, runBounded, trackChild, waitForExit } from './native-qualification.ts';
+import { checkGeneratedNodeScript, reconcileAndCancel, runBounded, runCleanupSteps, trackChild, waitForExit } from './native-qualification.ts';
+
+test('generated module syntax is checked before any supervisor or descendant code can run', async () => {
+  const { mkdtemp, readFile, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = await mkdtemp(join(tmpdir(), 'record-script-preflight-'));
+  const supervisorMarker = join(root, 'supervisor-ran');
+  const descendantMarker = join(root, 'descendant-ran');
+  try {
+    const descendant = `require('node:fs').writeFileSync(${JSON.stringify(descendantMarker)}, 'ran')`;
+    const source = `import {writeFileSync} from 'node:fs'; import {spawn} from 'node:child_process'; writeFileSync(${JSON.stringify(supervisorMarker)}, 'ran'); spawn(process.execPath, ['-e', ${JSON.stringify(descendant)}]); const = ;`;
+    await assert.rejects(checkGeneratedNodeScript(source), /SyntaxError/);
+    await assert.rejects(readFile(supervisorMarker), { code: 'ENOENT' });
+    await assert.rejects(readFile(descendantMarker), { code: 'ENOENT' });
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test('cleanup continues after ambiguous capture reconciliation and preserves the cleanup error', async () => {
+  const attempted: string[] = [];
+  const errors = await runCleanupSteps([
+    { label: 'capture reconciliation', run: () => { attempted.push('reconcile'); throw new Error('inspection unknown'); } },
+    { label: 'media client close', run: () => { attempted.push('media-close'); } },
+    { label: 'Xvfb wait', run: () => { attempted.push('xvfb-wait'); } },
+  ]);
+  assert.deepEqual(attempted, ['reconcile','media-close','xvfb-wait']);
+  assert.equal(errors.length, 1);
+  assert.match(errors[0].message, /capture reconciliation: inspection unknown/);
+  assert.equal((errors[0].cause as Error).message, 'inspection unknown');
+});
 
 test('hung child receives TERM then KILL and exit is awaited', async () => {
   const child = trackChild(spawn(execPath, ['-e', 'process.on("SIGTERM",()=>{});setInterval(()=>{},1000)'], { stdio: 'ignore' }));

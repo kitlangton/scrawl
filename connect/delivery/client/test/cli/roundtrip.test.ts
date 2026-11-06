@@ -66,6 +66,26 @@ test("headless fetch and remote inspect retrieve authenticated groups before com
     assert(!hits.some(path => path.includes("/files/media/")));
     assert.deepEqual(await runRecipientCommand(parseRecipientCommand(["fetch", id, "--out", "./full", "--media"]), dependencies), { ok: true, path: "./full" });
     assert(hits.some(path => path.includes("/files/media/"))); assert.equal(publications, 2);
+    for (const outcome of ["committed", "uncertain", "failed"] as const) {
+      let borrowed: Uint8Array[] = [];
+      const destination = `./cleanup-${outcome}`;
+      const result = await runRecipientCommand(parseRecipientCommand(["fetch", id, "--out", destination]), {
+        ...dependencies,
+        async publish(capture) {
+          borrowed = capture.files.map(file => file.bytes);
+          assert.equal(new TextDecoder().decode(capture.files.find(file => file.path === "summary.md")!.bytes), "synthetic evidence");
+          await Promise.resolve();
+          assert(borrowed.every(buffer => buffer.some(byte => byte !== 0)), "publisher can use borrowed bytes until its promise settles");
+          if (outcome === "failed") { capture.files.length = 0; throw new Error("synthetic private publisher diagnostic"); }
+          return outcome === "committed" ? { state: "committed", path: destination } : { state: "publication-uncertain" };
+        },
+      });
+      assert.equal(result.ok, outcome === "committed");
+      if (!result.ok) assert.equal(result.error.category, outcome === "failed" ? "operation_failed" : "publication_uncertain");
+      assert.equal(borrowed.length, 4);
+      assert(borrowed.every(buffer => buffer.every(byte => byte === 0)), `owned plaintext remains after ${outcome}`);
+      assert.deepEqual(ownSeed, new Uint8Array(32).fill(12), "borrowed caller identity remains unchanged");
+    }
     const root = await mkdtemp(path.join(await realpath(tmpdir()), "connect-state-command-")), state = path.join(root, "state");
     try {
       await mkdir(state, { mode: 0o700 });

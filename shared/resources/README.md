@@ -1,6 +1,6 @@
 # Privileged native resource primitives
 
-`@apparent/native-resources` supplies TypeScript adapters for two narrow OS
+`@apparent/native-resources` supplies TypeScript adapters for narrow OS
 capabilities. Product policy, schemas, credentials, consent, retries and recovery
 remain with the caller. The helper does not open caller-selected paths, create
 lock files, delete state or interpret bundle contents. This is a privileged main
@@ -115,3 +115,74 @@ and cannot satisfy callers requiring it. No credential or queue writer is added.
 
 Lock descriptors and publication parent/source descriptors also refuse Darwin ACL
 grants immediately before native effects. Ancestor validation remains caller-owned.
+
+## Installed provider lifetime
+
+Privileged composition imports `createInstalledNativeResources` from
+`@apparent/native-resources/installed`. Supply an absolute canonical admitted
+artifact directory, `trustedManifestSha256`, `expectedSourceSha`, and registered
+`target` (`linux-x64` or `macos-x64`). These identities must come from protected
+producer admission, not a manifest selected by untrusted input. The constructor
+verifies the exact manifest and executable, then stages a private immutable copy.
+It does not download, build, sign, notarize or activate an installed caller.
+
+The result is a `NativeResources` instance and can be passed directly to the
+public Connect consumer. Its read-only `executable`, `sha256`, `target`,
+`protocol`, `sourceSha`, and `manifestSha256` describe the actual staged provider.
+Keep the instance alive throughout the consumer operation and explicitly call
+`close()` afterward. Close refuses pending calls or live leases; callers must
+finish their existing work and release leases themselves. It never cancels a
+lease, retries publication or writes Connect state. After retirement every method
+refuses before spawning, while still consuming the supplied descriptor.
+
+`replaceFile` delegates the qualified public SDK operation under the same
+admission and pending-operation guard. Close refuses while replacement is in
+flight; calls after retirement consume the descriptor and refuse locally without
+dispatch. Results and uncertainty are preserved without retry. Use an admitted
+helper supporting replacement; this wrapper does not qualify arbitrary older
+artifacts or implement Connect's cooperative lock/writer policy. Connect writer
+adoption remains separate.
+SDK surface coverage requires every public operation to have an explicit
+installed override, so an additive method cannot silently bypass this boundary.
+
+This assembly contract is not an installed locator or adoption switch. A host
+must provide admitted bytes and protect the returned lifetime. Native producer
+and joined-consumer evidence remain separate from protocol-peer tests; macOS
+signing/publication requirements still apply.
+
+The owner-local `macos-arm64` producer retains its existing native-adapter tests;
+it does not support this installed-provider API or run its installed lifetime test.
+Registered Linux x64 and Intel Mac producers build the public JavaScript package
+before testing the compiled installed provider against their exact staged helper.
+
+## Locked file replacement prerequisite
+
+`replaceFile(parent, sourceBasename, destinationBasename, expected, options)`
+consumes the opened parent directory on every outcome. Both names are distinct
+single UTF-8 basenames (maximum 4,096 bytes); identity fields are canonical
+decimal unsigned 64-bit device and inode strings. The opened parent must be owned
+by the effective UID, mode 0700 or stricter, and have no Darwin allow ACL grants.
+The source is opened relative to that descriptor with no-follow/nonblocking flags
+and must be an owned, private 0600, single-link regular file no larger than
+2,000,000 bytes. Its identity must match `expected.source`; it is synced and its
+name is rechecked before rename. An expected destination must still identify an
+owned private 0600-or-stricter regular file with the supplied identity (data hard links are
+allowed). A null expected destination means it must be absent. A mismatch returns
+`destination_changed` without moving the source.
+Private source and parent metadata are rechecked after source sync. Unexpected
+rename failures report uncertainty; they never authorize cleanup or a retry.
+
+With a present destination, replacement uses `renameat` under the caller's
+existing cooperative lock. With an absent destination, the existing exclusive
+rename primitive prevents creation over an entry. The helper syncs the parent
+and verifies destination identity and source absence. Results are `replaced`,
+`destination_changed`, `refused`, or `publication_uncertain`; uncertainty retains
+both observed facts and must never trigger retry or cleanup. This is atomic
+replacement under a trusted cooperative lock, not compare-and-swap against an
+uncooperative same-UID writer and not a sandbox.
+
+Callers must admit and pin the parent pathname before invocation, preserve a
+single lock order across writers, stage and sync the complete file before calling,
+then read back/verify the published bytes through the admitted parent after a
+`replaced` result. Keep staging and final names in a private namespace. This
+operation adds no state writer or product policy.
