@@ -462,6 +462,30 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fdsink_borrows_its_fd_through_eos_and_finalization() {
+        use std::os::unix::fs::OpenOptionsExt;
+        init_gstreamer().unwrap();
+        let path = std::env::temp_dir().join(format!("apparent-fdsink-{}", crate::new_id().unwrap()));
+        let file = std::fs::OpenOptions::new().read(true).write(true).create_new(true).mode(0o600).open(&path).unwrap();
+        // Keep the test inode anonymous so a failed assertion cannot leave a fixture behind.
+        std::fs::remove_file(&path).unwrap();
+        let pipeline = gst::parse::launch(&format!("appsrc name=source ! fdsink fd={} sync=false", file.as_raw_fd()))
+            .unwrap().downcast::<gst::Pipeline>().unwrap();
+        let source = pipeline.by_name("source").unwrap().downcast::<gst_app::AppSrc>().unwrap();
+        pipeline.set_state(gst::State::Playing).unwrap();
+        source.push_buffer(gst::Buffer::from_slice(vec![1u8, 2, 3, 4])).unwrap();
+        source.end_of_stream().unwrap();
+        let result = pipeline.bus().unwrap().timed_pop_filtered(gst::ClockTime::from_seconds(5), &[gst::MessageType::Eos, gst::MessageType::Error]);
+        pipeline.set_state(gst::State::Null).unwrap();
+        drop(source);
+        drop(pipeline);
+        assert!(matches!(result.as_ref().map(|m| m.view()), Some(gst::MessageView::Eos(_))), "sink must reach EOS: {result:?}");
+        // GStreamer fdsink has no closefd property: it borrows fd. Rust alone owns closure.
+        assert_eq!(file.metadata().unwrap().len(), 4, "sink finalization must leave the owning File valid");
+        file.sync_all().unwrap();
+    }
+
+    #[test]
     fn pinned_movie_keeps_its_inode_when_the_original_path_is_replaced() {
         use std::os::unix::fs::{DirBuilderExt, OpenOptionsExt};
         let dir = std::env::temp_dir().join(format!("apparent-pinned-{}", crate::new_id().unwrap()));
