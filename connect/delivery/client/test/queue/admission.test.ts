@@ -58,11 +58,20 @@ test("prune precedes capacity; full preserves earlier explicit cancellations and
   const result = run(base({ intent: "explicit-private", jobs: expired }));
   assert.equal(result.kind, "admit"); // pruning frees capacity
   assert.equal(result.proposals.filter(p => p.kind === "prune").length, ADMISSION_MAX_JOBS);
-  const live = expired.map((j, n) => ({ ...j, bundle: n === 0 ? "/synthetic/capture.apparent" : `/synthetic/other-${n}.apparent`, created: 1_000_000 }));
+  const live = expired.map((j, n) => ({ ...j, shared: n === 0, bundle: n === 0 ? "/synthetic/capture.apparent" : `/synthetic/other-${n}.apparent`, created: 1_000_000 }));
   const full = run(base({ intent: "explicit-private", jobs: live }));
   assert.equal(full.kind, "full");
   assert.equal(full.proposals.filter(p => p.kind === "cancel").length, 1);
   assert.deepEqual(full.proposals.slice(1).map(p => p.kind), []);
+});
+
+test("explicit cancellation frees a nonshared slot before capacity is checked", () => {
+  const jobs = Array.from({ length: ADMISSION_MAX_JOBS }, (_, n) => job({ id: n.toString(16).padStart(32, "0"),
+    bundle: n === 0 ? "/synthetic/capture.apparent" : `/synthetic/other-${n}.apparent`, created: 1_000_000 }));
+  const result = run(base({ intent: "explicit-private", jobs }));
+  assert.equal(result.kind, "admit");
+  assert.deepEqual(result.proposals.map(p => p.kind), ["cancel", "prune"]);
+  assert.equal(jobs[0]!.status, "pending");
 });
 
 test("new record fields match donor private and public defaults with no encryption fallback", () => {
@@ -86,7 +95,22 @@ test("outputs are detached and inputs remain unchanged", () => {
   assert.equal(original.status, "pending");
   assert.equal(result.kind, "admit");
   if (result.kind === "admit") {
-    result.job.futureLegacy = null;
+    assert.equal(Object.isFrozen(result), true);
+    assert.equal(Object.isFrozen(result.job.files), true);
+    assert.equal(Reflect.set(result.job, "futureLegacy", null), false);
     assert.deepEqual(original.futureLegacy, { nested: [1] });
+  }
+  const cancellation = result.proposals.find(p => p.kind === "cancel");
+  assert.ok(cancellation && Object.isFrozen(cancellation.job));
+  assert.equal(Object.isFrozen(cancellation.job.futureLegacy), true);
+  assert.equal(Object.isFrozen(original), false);
+});
+
+test("server and bundle syntax retain root/connect loopback compatibility without granting authority", () => {
+  assert.equal(run(base({ server: "http://127.0.0.1:4567/connect" })).kind, "admit");
+  for (const input of [base({ bundle: "/synthetic/../capture.apparent" }), base({ bundle: "/synthetic/.apparent" }),
+    base({ server: "https://user:secret@api.example.test" }), base({ server: "https://api.example.test/connect-extra" }),
+    base({ jobs: [job(), job()] }), base({ candidateId: id("a"), jobs: [job({ status: "expired" })] })]) {
+    assert.throws(() => run(input), { message: "invalid_queue_admission" });
   }
 });
