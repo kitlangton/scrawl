@@ -183,9 +183,15 @@ stored in the existing private publication SQLite database before media dispatch
 After restart it inspects the original media job and publication binding, then
 exposes the same authenticated Saved facts and exact handoff resolver. It does
 not choose default frames/layout, close caller-owned clients, release materials,
-copy to the clipboard, or infer local-only delivery. Synthetic method-port
-coverage proves the offline composition only; native capture/media/publication
-and installed-provider adoption remain separate evidence gates.
+copy to the clipboard, or infer local-only delivery. Synthetic method-port and
+packed SDK transport coverage prove the offline composition only; native capture/media/publication
+and installed-provider adoption remain separate evidence gates. Automatic failures
+are observable through `processingIssues()` and `observeProcessingIssues`, and
+appear as sanitized processing outcomes in `captureFacts`. Failed and unknown
+jobs retain their original journals and are never redispatched by inspection.
+Issue observations are reconstructed during startup; Saved facts still have only
+the publication store as authority. Await `dispose()` before deleting owned private
+control data; it drains coordinator work without cancelling or closing SDK clients.
 
 Binary inputs are fingerprinted by digest and length. Supplied derivative receipts
 are forwarded to the existing stager and SDK validation without asserting provenance.

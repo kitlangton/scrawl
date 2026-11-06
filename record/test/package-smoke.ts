@@ -103,6 +103,10 @@ try {
     void createCapture2RecordRuntime(capture2RuntimeOptions);
     declare const coordinator: RecordCaptureCoordinator;
     const factsPort = coordinator.captureFacts;
+    const processingIssues = coordinator.processingIssues();
+    const detachProcessingIssues: () => void = coordinator.observeProcessingIssues(() => undefined);
+    const coordinatorDisposal: Promise<void> = coordinator.dispose();
+    void [processingIssues, detachProcessingIssues, coordinatorDisposal];
     const handoffResolver: RecordCaptureCoordinator['resolveHandoff'] = coordinator.resolveHandoff;
     declare const processingSelection: RecordCaptureProcessingSelection;
     const createMedia2Job = (client: Media2Client, input: Media2JobInput) => RecordMedia2Job.create(client, '/tmp/record-media2-job.json', input);

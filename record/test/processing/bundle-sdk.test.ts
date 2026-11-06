@@ -1041,7 +1041,8 @@ test("publication database atomically admits immutable processing policy beside 
 });
 
 // All ports and receipts below are synthetic offline consistency fixtures; this is not native authority or platform proof.
-test("capture coordinator advances one retained request through synthetic media, staging, Saved, and restart handoff", async () => {
+type CoordinatorCase = "complete" | "media-failed" | "media-unknown" | "publication-unknown" | "selection-failed";
+async function coordinatorCase(mode: CoordinatorCase) {
   const input = await fixture();
   const root = await realpath(await mkdtemp(join(tmpdir(), "record-capture-coordinator-")));
   const controlRoot = join(root, "control"), outputRoot = join(root, "output");
@@ -1109,9 +1110,11 @@ test("capture coordinator advances one retained request through synthetic media,
       async publish(request: Parameters<CaptureClient["publish"]>[0]) {
         publishes++;
         const prepared = preflightCapturePublication(request);
+        if (mode === "publication-unknown") throw new Error("lost reply " + ownerToken);
         return { captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 };
       },
       async inspectPublication(request: Parameters<CaptureClient["inspectPublication"]>[0]) {
+        if (mode === "publication-unknown") throw new Error("lost inspection " + ownerToken);
         return { captureId, state: "saved", publicationId: request.publicationId, planSha256: request.planSha256, materials: materialsManifest,
           publication: { captureId, materials: request.expected.materials, publicationId: request.publicationId, planSha256: request.planSha256,
             bundleId: request.expected.bundleId, bundlePath: request.expected.bundlePath, artifactVersion: 1 as const, artifactProvenance: "native" as const,
@@ -1129,6 +1132,7 @@ test("capture coordinator advances one retained request through synthetic media,
           } };
         }
         assert.equal(mediaNegotiated, true, "fresh public Media2Client requires handshake before derive");
+        if (rpc.method === "inspect" && mode === "media-unknown") throw new Error("lost inspect " + ownerToken);
         assert.equal(rpc.method, "derive", "synthetic single-dispatch case has no implicit cancel or repeat");
         if (rpc.method !== "derive") throw new Error("unexpected synthetic media operation");
         const admitted = await new SqlitePublicationBindingStore(controlRoot).getProcessing(captureId);
@@ -1136,6 +1140,9 @@ test("capture coordinator advances one retained request through synthetic media,
         assert.deepEqual((admitted.plan as { requestVideoProof: boolean }).requestVideoProof, true);
         assert.equal(JSON.stringify(admitted).includes(ownerToken), false);
         derives++;
+        if (mode === "media-unknown") throw new Error("lost derive " + ownerToken);
+        if (mode === "media-failed") return { channel: "media", protocolVersion: 2, rpcId: rpc.rpcId,
+          result: { jobId: rpc.jobId, requestSha256: rpc.requestSha256, state: "failed", error: { code: "decode_failed" } } };
         const request = JSON.parse(rpc.requestJson);
         const document = derivative2For(input, [...request.requestedBundleMs], { outputDirectory: derivativeRoot, frameFiles: [frameSeal], sheetFile: sheetSeal, jobId: request.jobId });
         return { channel: "media", protocolVersion: 2, rpcId: rpc.rpcId, result: {
@@ -1151,7 +1158,7 @@ test("capture coordinator advances one retained request through synthetic media,
       captureClient, mediaClient, mappings: mappings as never, destinations, privateControlRoot: controlRoot,
       createStartIntent: () => { throw new Error("preexisting synthetic capture must not be restarted"); },
       trustedMaterialsRoot: () => materialRoot,
-      selectProcessing: ({ materials }: { mapping: Readonly<{ requestId: string }>; materials: MaterialsDocument }) => { selections++; return ({
+      selectProcessing: ({ materials }: { mapping: Readonly<{ requestId: string }>; materials: MaterialsDocument }) => { selections++; if (mode === "selection-failed") throw new Error("invalid selection " + ownerToken); return ({
         request: { outputDirectory: derivativeRoot, requestedBundleMs: [1000], limits: { maxFrames: 2, maxEdge: 4096, maxTotalPixels: 64_000_000, deadlineMs: 10_000 },
           contactSheet: { schema: "apparent.contact-sheet-layout/1", width: 400, height: 300, backgroundRgb: [0, 0, 0], fit: "stretch", sampling: "legacy-bilinear", clipping: "reject",
             tiles: [{ requestIndex: 1, x: 0, y: 0, width: 400, height: 300 }] } },
@@ -1163,6 +1170,49 @@ test("capture coordinator advances one retained request through synthetic media,
     };
     const coordinator = await createRecordCaptureCoordinator(options as never);
     try {
+      if (mode !== "complete") {
+        let notices = 0;
+        const detach = coordinator.observeProcessingIssues(() => { notices++; });
+        coordinator.observeProcessingIssues(() => { throw new Error("isolated observer"); });
+        await coordinator.reconcile().catch(() => undefined);
+        const expectedCode = { "media-failed": "media-failed", "media-unknown": "media-outcome-unknown",
+          "publication-unknown": "publication-outcome-unknown", "selection-failed": "processing-failed" }[mode];
+        const issues = coordinator.processingIssues();
+        assert.ok(issues.some(issue => issue.requestId === requestId && issue.code === expectedCode));
+        assert.ok(notices > 0, "automatic outcomes notify the host without requiring an explicit error-returning call");
+        assert.equal(JSON.stringify(issues).includes(ownerToken), false, "public errors never expose private exception data");
+        const facts = await coordinator.captureFacts.readFacts();
+        assert.equal(facts.captures[0]?.phase, mode.endsWith("unknown") ? "unknown" : "failed");
+        assert.equal(facts.captures[0]?.outcomes.some(outcome => outcome.kind === "processing" && !outcome.ok && outcome.detail === expectedCode), true);
+        const provider = coordinator.createProvider({ providerEpoch: "coordinator-failure-consumer" });
+        try {
+          await new Promise<void>((resolve, reject) => {
+            const deadline = setTimeout(() => { detach(); reject(new Error("processing issue was not observable through the public provider")); }, 5000);
+            const detach = provider.observe(snapshot => {
+              if (snapshot.captures.some(capture => capture.captureId === requestId && capture.phase === facts.captures[0]?.phase)) {
+                clearTimeout(deadline); detach(); resolve();
+              }
+            });
+          });
+          const current = provider.current();
+          const result = await provider.execute({ type: "inspect-capture", captureId: requestId, requestId: "explicit-processing-inspection",
+            expected: { providerEpoch: current.providerEpoch, revision: current.revision } });
+          assert.equal(result.status, "accepted", "stopped output failures permit inspection of the same original processing identity");
+        } finally { provider.detach(); }
+        assert.equal(await coordinator.resolveHandoff({ captureId: requestId, artifactId: bundleId }), null);
+        issues[0]!.code = "startup-recovery-failed";
+        assert.equal(coordinator.processingIssues().some(issue => issue.code === expectedCode), true, "issue reads are isolated");
+        detach();
+        await coordinator.dispose();
+        const reopened = await createRecordCaptureCoordinator(options as never);
+        try {
+          await reopened.reconcile().catch(() => undefined);
+          assert.equal(reopened.processingIssues().some(issue => issue.code === expectedCode), true, "restart reconstructs failure from original durable job or policy");
+          assert.equal(derives, mode === "selection-failed" ? 0 : 1, "unknown and failed jobs never redispatch on restart");
+          assert.equal(publishes, mode === "publication-unknown" ? 1 : 0, "unknown publication only inspects its original binding");
+        } finally { await reopened.dispose(); }
+        return;
+      }
       assert.deepEqual((await coordinator.captureFacts.readFacts()).captures, [], "materials-ready and publishing are not exposed as Saved");
       assert.equal(await coordinator.resolveHandoff({ captureId: requestId, artifactId: bundleId }), null, "pending publication has no handoff");
       await coordinator.reconcile();
@@ -1188,6 +1238,45 @@ test("capture coordinator advances one retained request through synthetic media,
       } finally { await reopened.dispose(); }
     } finally { await coordinator.dispose(); }
   } finally { await rm(root, { recursive: true, force: true }); }
+}
+
+for (const mode of ["complete", "media-failed", "media-unknown", "publication-unknown", "selection-failed"] as const)
+  test(`capture coordinator retains the original identity and exposes ${mode}`, () => coordinatorCase(mode));
+
+for (const mode of ["pending", "failed"] as const) test(`coordinator startup ${mode} is observable and drains before cleanup`, async () => {
+  const root = await realpath(await mkdtemp(join(tmpdir(), "record-coordinator-startup-")));
+  let scans = 0, release!: (ids: string[]) => void;
+  const mappings = {
+    async listRequestIds() {
+      if (++scans === 1) return [];
+      if (mode === "failed") throw new Error("injected private storage failure");
+      return new Promise<string[]>(resolve => { release = resolve; });
+    },
+    async getByRequestId() { return undefined; }, async getByCaptureId() { return undefined; },
+    async putIfAbsent() { throw new Error("unused"); }, async putCapture2IfUnchanged() { throw new Error("unused"); },
+  };
+  const coordinator = await createRecordCaptureCoordinator({
+    captureClient: { async handshake() { return { implementation: "native", readiness: "unavailable", capabilities: {} }; } } as unknown as CaptureClient,
+    mediaClient: {} as Media2Client, mappings, destinations: new AbsentDestinationAllocator(join(root, "control"), join(root, "bundles")),
+    privateControlRoot: join(root, "control"), createStartIntent() { throw new Error("unused"); },
+    trustedMaterialsRoot() { throw new Error("unused"); }, selectProcessing() { throw new Error("unused"); }, preflight: preflightCapturePublication,
+  });
+  try {
+    if (mode === "failed") {
+      await coordinator.reconcile().catch(() => undefined);
+      assert.ok(coordinator.processingIssues().some(issue => issue.code === "startup-recovery-failed" && issue.requestId === undefined));
+    } else {
+      let settled = false;
+      const draining = coordinator.dispose().then(() => { settled = true; });
+      await new Promise(resolve => setImmediate(resolve));
+      assert.equal(settled, false, "dispose must await its own already-running startup work");
+      assert.equal(typeof release, "function");
+      release([]);
+      await draining;
+      assert.equal(settled, true);
+      assert.equal(scans, 2, "detached startup cannot start another control-store scan");
+    }
+  } finally { await coordinator.dispose(); await rm(root, { recursive: true, force: true }); }
 });
 
 test("refuses an unmarked populated private namespace without changing its contents", async () => {

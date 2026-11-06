@@ -7,6 +7,7 @@ import type { Media2Client, Media2JobRequest } from "@apparent/engine-sdk/media2
 import { preflightMedia2Dispatch } from "@apparent/engine-sdk/media2";
 import { createRecordCapabilityProvider } from "../../capabilities/provider.js";
 import type { RecordCapabilityProvider, RecordCapabilityProviderOptions, RecordCaptureFactsPort } from "../../capabilities/provider.js";
+import type { CaptureFact } from "../../../capabilities/index.js";
 import type { RecordLocalClipboardIdentity } from "../../handoff/clipboard.js";
 import { createCapture2Host } from "./../capture2.js";
 import type { Capture2MappingStore, Capture2StartIntent } from "../capture2.js";
@@ -72,6 +73,14 @@ export interface RecordCaptureCoordinatorOptions {
   operationTimeoutMs?: number;
 }
 
+export interface RecordCaptureProcessingIssue {
+  requestId?: string;
+  state: "failed" | "outcome-unknown" | "unavailable";
+  code: "processing-failed" | "media-failed" | "media-cancelled" | "media-unavailable" | "media-outcome-unknown" |
+    "publication-failed" | "publication-cancelled" | "publication-outcome-unknown" | "startup-recovery-failed";
+  at: string;
+}
+
 export interface RecordCaptureCoordinator {
   runtime: RecordHostRuntimePort & RecordCapture2StartPort;
   capture2Start: RecordCapture2StartPort;
@@ -79,6 +88,9 @@ export interface RecordCaptureCoordinator {
   resolveHandoff: RecordPublicationOutput["resolveHandoff"];
   /** Composes the provider directly with this coordinator's stable capture/fact ports. */
   createProvider(options: Omit<RecordCapabilityProviderOptions, "runtime" | "capture2Start" | "captureFacts">): RecordCapabilityProvider;
+  /** Sanitized automatic outcomes; native job/publication journals remain authoritative. */
+  processingIssues(): readonly RecordCaptureProcessingIssue[];
+  observeProcessingIssues(listener: () => void): () => void;
   /** Explicitly reconciles capture, media and publication using only stored identities. */
   reconcile(): Promise<void>;
   /** Detaches observers/timers; never cancels or closes caller-owned SDK operations. */
@@ -128,6 +140,44 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
   let timer: ReturnType<typeof setTimeout> | undefined;
   let disposed = false;
   let disposal: Promise<void> | undefined;
+  const issues = new Map<string, RecordCaptureProcessingIssue>();
+  const listeners = new Set<() => void>();
+  const notify = () => {
+    if (disposed) return;
+    for (const listener of [...listeners]) if (listeners.has(listener)) {
+      try { listener(); } catch { listeners.delete(listener); }
+    }
+  };
+  const report = (requestId: string | undefined, state: RecordCaptureProcessingIssue["state"], code: RecordCaptureProcessingIssue["code"]) => {
+    if (disposed) return;
+    const key = requestId ?? "";
+    const previous = issues.get(key);
+    if (previous?.state === state && previous.code === code) return;
+    issues.set(key, { ...(requestId ? { requestId } : {}), state, code, at: new Date().toISOString() });
+    notify();
+  };
+  const clearIssue = (requestId: string) => { if (issues.delete(requestId)) notify(); };
+  const detachOutput = output.captureFacts.observe?.(notify) ?? (() => undefined);
+  let factsRevision = 0;
+  let factsFingerprint: string | undefined;
+  const captureFacts: RecordCaptureFactsPort = {
+    observe(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    async readFacts() {
+      const facts = await output.captureFacts.readFacts();
+      const captures = new Map(facts.captures.map(fact => [fact.captureId, fact]));
+      for (const issue of issues.values()) if (issue.requestId && captures.get(issue.requestId)?.phase !== "saved") {
+        const fact: CaptureFact = { captureId: issue.requestId, delivery: "unknown", phase: issue.state === "outcome-unknown" ? "unknown" : "failed",
+          outcomes: [{ kind: "processing", ok: false, detail: issue.code, at: issue.at }] };
+        captures.set(issue.requestId, fact);
+      }
+      const snapshot = { ...facts, captures: [...captures.values()] };
+      const fingerprint = JSON.stringify(snapshot.captures);
+      if (factsFingerprint !== undefined && factsFingerprint !== fingerprint) factsRevision++;
+      factsFingerprint = fingerprint;
+      return structuredClone({ ...snapshot, revision: factsRevision });
+    },
+  };
+
 
   const schedule = () => {
     if (disposed || timer || !pending.size) return;
@@ -148,7 +198,10 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
     if (disposed || !requestId) return Promise.resolve();
     const existing = flights.get(requestId);
     if (existing) return existing;
-    const work = run(requestId).finally(() => {
+    const work = run(requestId).catch(error => {
+      if (!issues.has(requestId)) report(requestId, "failed", "processing-failed");
+      throw error;
+    }).finally(() => {
       flights.delete(requestId);
       schedule();
     });
@@ -170,14 +223,18 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
         throw new Error("Publication bundle identity conflicts with its capture mapping");
       if (binding.output && binding.output.requestId !== requestId) throw new Error("Saved output public request identity conflicts with its capture mapping");
       const saved = binding.state === "saved" && await output.resolveHandoff({ captureId: binding.output?.requestId ?? "", artifactId: binding.bundleId });
-      if (saved) return;
+      if (saved) { clearIssue(requestId); return; }
       if (!/^[0-9a-f]{64}$/u.test(mapping.ownerToken)) return;
       try {
         await output.reconcile({ captureId: mapping.captureId, ownerToken: mapping.ownerToken, publicationId: binding.publicationId,
           materials: binding.materials, leaseId: binding.leaseId, bundleId: binding.bundleId, bundlePath: binding.bundlePath });
-      } catch { /* unresolved publication keeps the original binding and is inspected again */ }
+      } catch { report(requestId, "outcome-unknown", "publication-outcome-unknown"); }
       const after = await store.get(mapping.captureId);
-      if (!after || after.state === "saved" || ["failed", "cancelled"].includes(after.state)) return;
+      if (after?.state === "saved") { clearIssue(requestId); return; }
+      if (after?.state === "failed" || after?.state === "cancelled") {
+        report(requestId, "failed", after.state === "failed" ? "publication-failed" : "publication-cancelled"); return;
+      }
+      if (!after) return;
       pending.add(requestId);
       return;
     }
@@ -243,23 +300,27 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       const hello = await options.mediaClient.handshake(operationTimeoutMs);
       if (hello.implementation !== "native" || !hello.capabilities.retainedFrames || !hello.capabilities.nativeJobAuthority ||
           (plan.request.contactSheet && !hello.capabilities.contactSheet))
-        throw new Error("Native retained-media capabilities are unavailable; no media operation was dispatched");
+        { report(requestId, "unavailable", "media-unavailable"); throw new Error("Native retained-media capabilities are unavailable; no media operation was dispatched"); }
       if (disposed) return;
     }
     if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) {
-      try { await job.inspect(mapping.ownerToken, operationTimeoutMs); } catch { /* same original job remains durable and unknown */ }
+      try { await job.inspect(mapping.ownerToken, operationTimeoutMs); } catch { report(requestId, "outcome-unknown", "media-outcome-unknown"); }
       if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) { pending.add(requestId); return; }
     } else if (job.state === "ready") {
-      try { await job.derive(mapping.ownerToken, operationTimeoutMs); } catch { /* preflight stays undispatched; ambiguous outcomes stay inspect-only */ }
+      try { await job.derive(mapping.ownerToken, operationTimeoutMs); } catch { report(requestId, job.state === "ready" || job.state === "unavailable" ? "unavailable" : "outcome-unknown",
+        job.state === "ready" || job.state === "unavailable" ? "media-unavailable" : "media-outcome-unknown"); }
       if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) {
-        try { await job.inspect(mapping.ownerToken, operationTimeoutMs); } catch { /* same original job remains unresolved */ }
+        try { await job.inspect(mapping.ownerToken, operationTimeoutMs); } catch { report(requestId, "outcome-unknown", "media-outcome-unknown"); }
       }
       if (mediaJobState(job) !== "complete") {
-        if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) pending.add(requestId);
-        return;
+        if (["submitted", "running", "cancelling", "unknown"].includes(job.state)) { pending.add(requestId); return; }
       }
     }
-    if (job.state !== "complete" || !job.derivative) return;
+    if (job.state !== "complete" || !job.derivative) {
+      if (job.state === "failed" || job.state === "cancelled") report(requestId, "failed", job.state === "failed" ? "media-failed" : "media-cancelled");
+      return;
+    }
+    clearIssue(requestId);
 
     sdkStatus = await options.captureClient.inspect({ captureId: mapping.captureId, ownerToken: mapping.ownerToken });
     if (sdkStatus.state !== "materials-ready" || !sdkStatus.materials || !isDeepStrictEqual(sdkStatus.materials, plan.materialsManifest))
@@ -294,10 +355,14 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       const result = await output.publish({ status: sdkStatus, assembly: assemblyInput, ownerToken: mapping.ownerToken, publicationId: plan.publicationId,
         stagingRoot: plan.stagingRoot, destinationPath: mapping.bundlePath, derivatives2: [job.derivative], derivative2Artifacts: retained.derivative2Artifacts,
         requestId, requestVideoProof: plan.requestVideoProof });
-      if (result.state !== "saved") pending.add(requestId);
+      if (result.state === "saved") clearIssue(requestId);
+      else if (result.state === "failed" || result.state === "cancelled") report(requestId, "failed", result.state === "failed" ? "publication-failed" : "publication-cancelled");
+      else pending.add(requestId);
     } catch (error) {
       const durable = await store.get(mapping.captureId);
-      if (durable && !["saved", "failed", "cancelled"].includes(durable.state)) pending.add(requestId);
+      if (durable && !["saved", "failed", "cancelled"].includes(durable.state)) {
+        report(requestId, "outcome-unknown", "publication-outcome-unknown"); pending.add(requestId);
+      }
       else throw error;
     }
   };
@@ -312,14 +377,16 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
 
   // Startup recovery runs detached so callers can still issue Stop/Cancel while
   // retained media or publication RPCs are in flight. Explicit reconcile awaits it.
-  const startupRecovery = reconcile().catch(() => undefined);
+  const startupRecovery = reconcile().catch(() => { if (!issues.size) report(undefined, "failed", "startup-recovery-failed"); });
 
   return {
     runtime,
     capture2Start: runtime,
-    captureFacts: output.captureFacts,
+    captureFacts,
+    processingIssues: () => structuredClone([...issues.values()]),
+    observeProcessingIssues(listener) { listeners.add(listener); return () => { listeners.delete(listener); }; },
     resolveHandoff: output.resolveHandoff,
-    createProvider(providerOptions) { return createRecordCapabilityProvider({ ...providerOptions, runtime, capture2Start: runtime, captureFacts: output.captureFacts }); },
+    createProvider(providerOptions) { return createRecordCapabilityProvider({ ...providerOptions, runtime, capture2Start: runtime, captureFacts }); },
     async reconcile() { await reconcile(); },
     dispose() {
       if (disposal) return disposal;
@@ -328,6 +395,8 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
       timer = undefined;
       pending.clear();
       subscriber();
+      detachOutput();
+      listeners.clear();
       runtime.dispose();
       host.dispose();
       disposal = Promise.allSettled([startupRecovery, ...flights.values()]).then(() => undefined);
