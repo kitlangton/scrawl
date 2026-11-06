@@ -1,0 +1,64 @@
+import { test } from "node:test";
+import assert from "node:assert/strict";
+import { createServer } from "node:http";
+import { parseRecipientCommand, publishVerified, runRecipientCommand } from "../../src/cli/recipient.ts";
+import type { RecipientCliDependencies } from "../../src/cli/recipient.ts";
+
+const id = "0123456789abcdef0123456789abcdef";
+const deps = (patch: Partial<RecipientCliDependencies> = {}): RecipientCliDependencies => ({
+  loadCredential: async () => ({ server: "http://127.0.0.1:1", token: "safe-test-token", grantId: "grant" }),
+  publish: async (_capture, path) => ({ state: "committed", path }),
+  inspectLocal: async source => source,
+  ...patch,
+});
+
+test("parses fetch contracts and rejects malformed input", () => {
+  assert.deepEqual(parseRecipientCommand(["fetch", id, "--media", "--out", "./full", "--wait", "3"]),
+    { kind: "fetch", id, out: "./full", waitSeconds: 3, media: true });
+  for (const args of [["fetch", "UPPER", "--out", "x"], ["fetch", id, "--out", "x", "--wait", "901"], ["fetch", id, "--out"], ["fetch", id]]) {
+    assert.throws(() => parseRecipientCommand(args), { category: "invalid_arguments" });
+  }
+});
+
+test("only a bare lowercase ID selects remote inspect with evidence defaults", () => {
+  assert.deepEqual(parseRecipientCommand(["inspect", id]), { kind: "inspect-remote", id, out: `./${id}.evidence.apparent`, waitSeconds: 120 });
+  for (const source of [`./${id}`, `/${id}`, `${id}.apparent`, id.toUpperCase(), "latest"]) {
+    assert.deepEqual(parseRecipientCommand(["inspect", source]), { kind: "inspect-local", source });
+  }
+});
+
+test("local inspect performs no credential, publication, or network work", async () => {
+  let touched = false;
+  const result = await runRecipientCommand(parseRecipientCommand(["inspect", "./bundle.apparent"]), deps({
+    loadCredential: async () => { touched = true; throw Error(); },
+    publish: async () => { touched = true; throw Error(); },
+    inspectLocal: async source => source,
+  }));
+  assert.deepEqual(result, { ok: true, path: "./bundle.apparent" });
+  assert.equal(touched, false);
+});
+
+test("retrieval uses injected credential and category-only failures never project success", async () => {
+  const server = createServer((_request, response) => { response.writeHead(404, { "content-type": "application/json" }); response.end("{}"); });
+  await new Promise<void>(resolve => server.listen(0, "127.0.0.1", resolve));
+  const address = server.address(); assert(address && typeof address !== "string");
+  let published = false;
+  try {
+    const result = await runRecipientCommand({ kind: "fetch", id, out: "./out", waitSeconds: 0, media: true }, deps({
+      loadCredential: async () => ({ server: `http://127.0.0.1:${address.port}`, token: "safe-test-token", grantId: "read-grant" }),
+      publish: async () => { published = true; return { state: "committed", path: "./out" }; },
+    }));
+    assert.deepEqual(result, { ok: false, error: { category: "not_found", message: "not_found" } });
+    assert.equal(published, false);
+  } finally { await new Promise<void>((resolve, reject) => server.close(error => error ? reject(error) : resolve())); }
+});
+
+test("publication uncertainty and missing evidence receipt never project success", async () => {
+  const capture = { captureId: id, server: "https://connect.example", evidenceOnly: true, files: [] };
+  let calls = 0;
+  const uncertain = await publishVerified(capture, "./out", async () => { calls++; return { state: "publication-uncertain" }; });
+  assert.deepEqual(uncertain, { ok: false, error: { category: "publication_uncertain", message: "publication outcome is uncertain; inspect the destination before taking further action" } });
+  const missingReceipt = await publishVerified(capture, "./out", async () => ({ state: "committed", path: "./out" }));
+  assert.deepEqual(missingReceipt, { ok: false, error: { category: "publication_unverified", message: "evidence-only publication lacks its required receipt" } });
+  assert.equal(calls, 1);
+});
