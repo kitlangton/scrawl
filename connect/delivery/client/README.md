@@ -330,3 +330,11 @@ valid renewed credentials. The caller owns journal preparation, locking, expiry,
 currentness, recovery and wiping returned bytes. A failed POST may follow a
 server-side rotation and never authorizes a blind retry. This has no production
 caller and does not change the Rust writer or installed routing.
+
+The internal `credentials/renewal-plan` module proposes renewal actions from
+already decoded, fresh caller facts under the scope lease. It preserves the
+legacy 30-second threshold, changed-token reuse and exact-base completed-response
+precedence using the original issue time. It freezes detached credential/journal
+snapshots and wipes its bounded response copy without changing caller buffers.
+These are in-memory proposals; the caller still owns service approval, fresh
+cancellation/revocation facts, durable journal ordering and sole-writer authority.
