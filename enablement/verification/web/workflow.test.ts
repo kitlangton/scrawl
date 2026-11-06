@@ -206,3 +206,11 @@ test('headless native host packaging is checked through its consuming shell lane
   const registration = JSON.parse(readFileSync(new URL('../../../composition/app/delivery.json', import.meta.url), 'utf8'));
   assert(registration.inputs.includes('composition/native-host/'));
 });
+
+
+test('App Shell PR retention follows packaged Electron verification and main can authenticate merged PRs', () => {
+  assert(component.indexOf('name: Test the exact bundled application') < component.indexOf('cli.ts candidate "'))
+  assert.match(component, /cli\.ts candidate-support/)
+  assert.match(component, /steps\.candidate-support\.outputs\.supported == 'true'/)
+  assert.match(section(entry('app-shell'), 'stream'), /pull-requests: read/)
+})
