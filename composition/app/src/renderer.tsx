@@ -2,17 +2,27 @@ import * as React from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button } from '@apparent/ui/button';
 import { parseStreamManifest, type StreamModule, type StreamManifest } from '@apparent/app-contracts';
-import type { OnboardingProgressPort, StreamHostDependencies } from '@apparent/app-contracts/host';
+import type { OnboardingProgressPort } from '@apparent/app-contracts/host';
 
 declare global { interface Window { apparent: { onboardingProgress: OnboardingProgressPort } } }
 
 type Loaded = { manifest: StreamManifest; module: StreamModule };
+// Composition owns this optional injection adapter; the shared stream ABI stays
+// a no-props module and other streams never receive Onboarding capabilities.
+type OnboardingProps = { hostDependencies?: { onboarding: { progress: OnboardingProgressPort } } };
+function bindOnboarding(module: StreamModule, progress: OnboardingProgressPort): StreamModule {
+  const Screen = module.Screen as React.ComponentType<OnboardingProps>;
+  const Settings = module.Settings as React.ComponentType<OnboardingProps>;
+  const hostDependencies = { onboarding: { progress } };
+  return { id: module.id, Screen: () => <Screen hostDependencies={hostDependencies} />,
+    Settings: () => <Settings hostDependencies={hostDependencies} /> };
+}
 class Boundary extends React.Component<React.PropsWithChildren, { failed: boolean }> {
   state = { failed: false };
   static getDerivedStateFromError() { return { failed: true }; }
   render() { return this.state.failed ? <p role="alert">This section could not open.</p> : this.props.children; }
 }
-function Shell({ streams, hostDependencies }: { streams: Loaded[]; hostDependencies: StreamHostDependencies }) {
+function Shell({ streams }: { streams: Loaded[] }) {
   const [selected, select] = React.useState(streams[0]?.manifest.id);
   const [settings, showSettings] = React.useState(false);
   const active = streams.find(stream => stream.manifest.id === selected);
@@ -25,8 +35,8 @@ function Shell({ streams, hostDependencies }: { streams: Loaded[]; hostDependenc
     </nav>
     <main>{settings ? <><h2>Settings</h2>{streams.map(({ manifest, module }) =>
         <section key={manifest.id} aria-label={`${manifest.label} settings`}>
-        <h3>{manifest.label}</h3><Boundary><module.Settings hostDependencies={manifest.id === 'onboarding' ? hostDependencies : undefined} /></Boundary>
-      </section>)}</> : active ? <Boundary key={active.manifest.id}><active.module.Screen hostDependencies={active.manifest.id === 'onboarding' ? hostDependencies : undefined} /></Boundary> : <p>No streams installed.</p>}</main>
+        <h3>{manifest.label}</h3><Boundary><module.Settings /></Boundary>
+      </section>)}</> : active ? <Boundary key={active.manifest.id}><active.module.Screen /></Boundary> : <p>No streams installed.</p>}</main>
   </>;
 }
 async function start() {
@@ -39,10 +49,9 @@ async function start() {
     if (!module || module.id !== manifest.id || typeof module.Screen !== 'function' || typeof module.Settings !== 'function') {
       throw new Error('Invalid stream exports');
     }
-    return { manifest, module };
+    return { manifest, module: manifest.id === 'onboarding' ? bindOnboarding(module, window.apparent.onboardingProgress) : module };
   }));
-  const hostDependencies: StreamHostDependencies = { onboarding: { progress: window.apparent.onboardingProgress } };
-  createRoot(document.getElementById('root')!).render(<Shell streams={streams} hostDependencies={hostDependencies} />);
+  createRoot(document.getElementById('root')!).render(<Shell streams={streams} />);
 }
 start().catch(error => {
   console.error('Foundation startup failed', error);

@@ -23,6 +23,7 @@ function json(value: unknown): unknown {
       if (Object.getPrototypeOf(item) !== (array ? Array.prototype : Object.prototype) || Object.getOwnPropertySymbols(item).length) throw new TypeError('Invalid progress value');
       const keys = Reflect.ownKeys(item);
       if (array && (item.length > MAX_NODES || keys.length !== item.length + 1 || !keys.includes('length'))) throw new TypeError('Invalid progress value');
+      if (array && keys.filter(key => key !== 'length').some((key, index) => key !== String(index))) throw new TypeError('Progress arrays must be dense');
       ancestors.add(item);
       for (const key of keys) {
         if (key === 'length' && array) continue;

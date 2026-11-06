@@ -18,7 +18,6 @@ export interface OnboardingProgressPort {
   read(): Promise<{ revision: Revision; value: unknown }>;
   compareAndSwap(expected: Revision, value: unknown): Promise<SaveResult<unknown>>;
 }
-export interface StreamHostDependencies { onboarding?: { progress: OnboardingProgressPort } }
 export interface ProgressCodec<T> {
   /** Owner handles its stored value here; legacy adoption uses the separate snapshot API. */
   decode(value: JsonValue | null): T;

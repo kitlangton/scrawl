@@ -8,6 +8,9 @@ const MAX_DEPTH = 32;
 const MAX_NODES = 10_000;
 const MAX_ACTIVE = 8;
 const MAX_WAITING = 16;
+// These fixed channels have one registration owner. Only this module may
+// register them; disposal releases ownership before a successor can register.
+const registrations = new WeakMap<object, symbol>();
 
 function exact(value: unknown, keys: string[]): value is Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
@@ -39,6 +42,7 @@ function boundedJson(value: unknown): unknown {
       || Object.getOwnPropertySymbols(item).length) throw new TypeError('Invalid progress JSON');
     const keys = Reflect.ownKeys(item);
     if (array && (item.length > MAX_NODES || keys.length !== item.length + 1 || !keys.includes('length'))) throw new TypeError('Invalid progress JSON');
+    if (array && keys.filter(key => key !== 'length').some((key, index) => key !== String(index))) throw new TypeError('Progress arrays must be dense');
     for (const key of keys) {
       if (key === 'length' && array) continue;
       if (typeof key !== 'string' || ['__proto__', 'constructor', 'prototype', 'toJSON'].includes(key)) throw new TypeError('Invalid progress JSON key');
@@ -61,6 +65,9 @@ export function registerOnboardingProgressBridge<T>(options: {
   entryUrl: string;
   store: ProgressStore<T>;
 }): () => void {
+  if (registrations.has(ipcMain)) throw new Error('Onboarding progress bridge already registered');
+  const token = Symbol('onboarding-progress');
+  const contents = options.window.webContents;
   let active = true;
   let revokePromise: Promise<void>;
   let revokeNow!: () => void;
@@ -86,14 +93,17 @@ export function registerOnboardingProgressBridge<T>(options: {
     if (!activeCount && !active) scheduleHandlerRemoval();
   };
   const allowed = (event: IpcMainInvokeEvent) => {
-    const frame = event.senderFrame;
-    return active && !options.window.isDestroyed() && event.sender === options.window.webContents
-      && !!frame && frame === options.window.webContents.mainFrame && frame.url === options.entryUrl;
+    try {
+      if (!active || options.window.isDestroyed() || contents.isDestroyed()) return false;
+      const frame = event.senderFrame;
+      return event.sender === contents && !!frame && frame === contents.mainFrame && frame.url === options.entryUrl;
+    } catch { return false; } // Frame/window destruction can invalidate native getters.
   };
   const read = async (event: IpcMainInvokeEvent, ...args: unknown[]) => {
     if (args.length || !allowed(event)) throw new Error('Onboarding progress request refused');
     await acquire();
     try {
+      if (!allowed(event)) throw new Error('Onboarding progress request revoked');
       const result = await Promise.race([
         options.store.read(),
         revokePromise.then(() => { throw new Error('Onboarding progress request revoked'); }),
@@ -115,7 +125,10 @@ export function registerOnboardingProgressBridge<T>(options: {
       acquired = true;
       let result: SaveResult<T>;
       const revoked = '__revoked__' as const;
-      const write = Promise.resolve().then(() => options.store.compareAndSwap(expectedRevision, value));
+      const write = Promise.resolve().then(() => {
+        if (!allowed(event)) throw new Error('Onboarding progress request revoked before dispatch');
+        return options.store.compareAndSwap(expectedRevision, value);
+      });
       write.catch(() => {}); // The provider may finish after revocation; its result is intentionally ignored.
       let raced: SaveResult<T> | typeof revoked;
       try { raced = await Promise.race([write, revokePromise.then(() => revoked)]); }
@@ -143,19 +156,16 @@ export function registerOnboardingProgressBridge<T>(options: {
   ipcMain.handle(READ, read);
   try { ipcMain.handle(CAS, compareAndSwap); }
   catch (error) { ipcMain.removeHandler(READ); active = false; throw error; }
-  const removeIfOwned = (channel: string, handler: (...args: any[]) => unknown) => {
-    // Electron has no public conditional removeHandler API. Inspect its invoke
-    // registry so disposal cannot remove a handler installed after ours.
-    const registry = (ipcMain as unknown as { _invokeHandlers?: Map<string, (...args: any[]) => unknown> })._invokeHandlers;
-    if (registry?.get(channel) === handler) ipcMain.removeHandler(channel);
-  };
+  registrations.set(ipcMain, token);
   let handlersRemoved = false;
   let handlerRemovalScheduled = false;
   const removeOwnedHandlers = () => {
     if (handlersRemoved || activeCount) return;
     handlersRemoved = true;
-    removeIfOwned(READ, read);
-    removeIfOwned(CAS, compareAndSwap);
+    if (registrations.get(ipcMain) !== token) return;
+    registrations.delete(ipcMain);
+    ipcMain.removeHandler(READ);
+    ipcMain.removeHandler(CAS);
   };
   const scheduleHandlerRemoval = () => {
     if (handlerRemovalScheduled || handlersRemoved) return;
@@ -172,12 +182,18 @@ export function registerOnboardingProgressBridge<T>(options: {
   const dispose = () => {
     revoke();
     options.window.removeListener('closed', dispose);
-    options.window.webContents.removeListener('will-navigate', dispose);
-    // Do not remove a handler another registration installed after ours.
-    removeIfOwned(READ, read);
-    removeIfOwned(CAS, compareAndSwap);
+    contents.removeListener('will-navigate', dispose);
+    contents.removeListener('destroyed', dispose);
+    // Retire our registration immediately. Deferred completion/removal from
+    // this generation cannot remove a successor's handlers.
+    if (registrations.get(ipcMain) === token) {
+      registrations.delete(ipcMain);
+      ipcMain.removeHandler(READ);
+      ipcMain.removeHandler(CAS);
+    }
   };
   options.window.once('closed', dispose);
-  options.window.webContents.on('will-navigate', dispose);
+  contents.on('will-navigate', dispose);
+  contents.once('destroyed', dispose);
   return dispose;
 }

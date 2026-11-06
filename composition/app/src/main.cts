@@ -2,6 +2,7 @@ import { app, BrowserWindow, session } from 'electron';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import { registerOnboardingProgressBridge } from './onboarding-progress-bridge.cts';
+let hostShutdown: Promise<void> = Promise.resolve();
 
 // Separate development identity; never touch the installed Apparent profile.
 app.setName('Apparent Foundation');
@@ -37,7 +38,14 @@ app.whenReady().then(async () => {
   window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   window.webContents.on('will-navigate', (event, url) => { if (url !== entry) event.preventDefault(); });
   const disposeProgress = host ? registerOnboardingProgressBridge({ window, entryUrl: entry, store: host.store }) : undefined;
-  window.once('closed', () => { disposeProgress?.(); if (host) void host.close(); });
+  window.once('closed', () => {
+    disposeProgress?.();
+    const closing = host;
+    hostShutdown = closing ? Promise.resolve().then(() => closing.close()) : Promise.resolve();
+    hostShutdown.catch(error => console.error('Onboarding progress shutdown failed', error));
+  });
   void window.loadURL(entry);
 });
-app.on('window-all-closed', () => app.quit());
+app.on('window-all-closed', () => {
+  void hostShutdown.catch(() => {}).finally(() => app.quit());
+});

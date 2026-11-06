@@ -39,11 +39,12 @@ read-modify-write fallback. `composition/app/scripts/build.ts` accepts one trust
 compiled main binding, its published Onboarding assets, and the exact staged config
 helper plus digest. It copies and hashes those inputs into the shell inventory;
 runtime code derives the config file from Electron's user data directory and fixes
-the helper path inside the application. No renderer input or environment variable
-selects an owner, executable, config path or key. A build without these inputs
+the helper path inside the application. No renderer input selects an owner, executable, config path or key.
+The existing foundation profile override remains a trusted launcher input. A build without these inputs
 keeps the empty shell usable and registers no progress handler.
 
-A composition assembly module can bind the published public package exports:
+After explicit owner bootstrap and the legacy-writer compatibility gate succeed,
+a composition assembly module can bind the published public package exports:
 
 ```ts
 import { createConfigBackend } from '@apparent/config-host';
@@ -65,7 +66,8 @@ make cutover explicit. The native integration test uses a separate synthetic
 config, retires its unused legacy writer, adopts through
 `adoptOnboardingProgress`, and verifies that unrelated keys and legacy bytes
 remain. This seam does not switch the installed route or finish Record injection,
-coaching or full factory activation.
+coaching or full factory activation. Optional renderer injection is adapted inside
+composition; the shared no-props `StreamModule` ABI remains unchanged.
 
 The assembly caller supplies the published package resolution root and matching
 assets at build time:
@@ -176,3 +178,11 @@ the current installed route until replacement acceptance; remove each old route
 only after its remaining consumers and packaging inputs are verified. Until then,
 rollback is to close this separate development application; existing Apparent
 continues to run normally.
+
+The bridge unit tests cover deterministic promotion/revocation, registration
+rollback/successors and destroyed-window cleanup. The explicit native Electron
+lane is `APPARENT_ONBOARDING_CONFIG_HOST=<verified-helper> npm run test:electron:onboarding`
+(use Xvfb and the existing sandbox helper on Linux). It consumes the pinned Linux
+or macOS helper artifact, exercises real packaged main/preload/renderer calls,
+and requires privileged host cleanup to finish before application exit. No Rust
+compilation is added to the normal TypeScript check loop.

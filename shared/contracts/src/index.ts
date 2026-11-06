@@ -1,5 +1,4 @@
 import type { ComponentType } from 'react';
-import type { StreamHostDependencies } from './host.js';
 
 export const APP_SHELL_API = 1 as const;
 export const REACT_VERSION = '19.2.0' as const;
@@ -17,8 +16,8 @@ export interface StreamManifest {
 
 export interface StreamModule {
   id: string;
-  Screen: ComponentType<{ hostDependencies?: StreamHostDependencies }>;
-  Settings: ComponentType<{ hostDependencies?: StreamHostDependencies }>;
+  Screen: ComponentType;
+  Settings: ComponentType;
 }
 
 const manifestFields = new Set([
