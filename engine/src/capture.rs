@@ -1715,10 +1715,7 @@ fn main() {
                 if handle.join().is_err() {
                     if let Ok(mut j) = shared.journal.lock() {
                         if id.starts_with("publication:") {
-                            if let Some(publication) = &mut j.publication {
-                                publication.state = "failed".into();
-                                j.error = Some("internal".into());
-                            }
+                            publication::worker_panicked(&mut j);
                         } else {
                             j.state = "failed".into();
                             j.error = Some("internal".into());
