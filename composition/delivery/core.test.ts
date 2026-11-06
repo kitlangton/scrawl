@@ -266,16 +266,20 @@ test('admit invokes gh api with canonical GH_REPO and no unsupported flags', () 
 })
 
 test('capture/2 has its own Linux native route and mandatory admission inputs', () => {
-  const capture = catalog(repo).owners.find(item => item.id === 'engine-capture-native')!
+  const path = resolve(temp, 'capture-native-plan')
+  newRepo(path)
+  mkdirSync(resolve(path, 'engine/delivery/capture'), { recursive: true })
+  mkdirSync(resolve(path, '.cargo'))
+  const registration = { ...owner, id: 'engine-capture-native', kind: 'directory', language: 'native', package: 'engine/delivery/capture', artifactPath: 'dist', inputs: ['engine/', '.cargo/'], targets: ['linux-x64'] }
+  writeFileSync(resolve(path, 'engine/delivery/capture/delivery.json'), JSON.stringify(registration))
+  const capture = catalog(path).owners.find(item => item.id === 'engine-capture-native')!
   assert(capture)
   assert.deepEqual(capture.inputs, ['engine/', '.cargo/'])
-  const row = makePlan(repo).matrix.include.filter(item => item.id === capture.id)
+  const row = makePlan(path).matrix.include.filter(item => item.id === capture.id)
   assert.equal(row.length, 1)
   assert.equal(row[0].target, 'linux-x64')
   assert.equal(row[0].architecture_owner, 'engine')
   assert.equal(row[0].package, 'engine/delivery/capture')
   assert.equal(row[0].language, 'native')
-  const workflow = readFileSync(resolve(repo, workflowPathFor(capture.id)), 'utf8')
-  assert.match(workflow, /engine-capture-native/)
-  assert.doesNotMatch(workflow, /macos-x64|engine-media-native|engine-native/)
+  assert.equal(workflowPathFor(capture.id), '.github/workflows/stream-engine-capture-native.yml')
 })

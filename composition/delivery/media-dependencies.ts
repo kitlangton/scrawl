@@ -10,7 +10,7 @@ export const mediaPackages = [
 ] as const
 
 // Capture/2 additionally ships the X11 source, H264 encoder and parser plugins.
-export const capturePackages = [...mediaPackages, 'libx11-dev', 'gstreamer1.0-x',
+export const capturePackages = [...mediaPackages, 'xvfb', 'x11-xserver-utils', 'libx11-dev', 'gstreamer1.0-x',
   'gstreamer1.0-plugins-bad', 'gstreamer1.0-plugins-ugly'] as const
 
 export function installCaptureDependencies(setup: UbuntuSetup): void {

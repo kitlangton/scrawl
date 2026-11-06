@@ -102,6 +102,11 @@ runs:
       if: inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success'
       shell: bash
       run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"
+    - name: Verify staged capture inventory and public SDK launch
+      if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-capture-native'
+      shell: bash
+      run: |
+        APPARENT_ENGINE_CAPTURE_BIN="$GITHUB_WORKSPACE/engine/delivery/capture/dist/apparent-engine-capture-launch" node --experimental-strip-types --test engine/delivery/capture/test/artifact.test.ts engine/tests/capture-peer.test.ts
     - name: Prepare the pinned Electron runtime
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.kind == 'app-shell'
       working-directory: composition/app
