@@ -129,6 +129,23 @@ fn live_capture_permit_is_shared_with_v1_without_changing_v1_receipts() {
 }
 
 #[test]
+fn capture2_owner_liveness_is_per_operation_not_global_capture_admission() {
+    let root = Fixture::new();
+    let first = Runtime::open(&root.0).unwrap();
+    let second = Runtime::open(&root.0).unwrap();
+    let owner = first.acquire_capture_owner(ID).unwrap().unwrap();
+    assert!(second.acquire_capture_owner(ID).unwrap().is_none());
+    assert!(second.acquire_capture_owner(ID2).unwrap().is_some());
+    // A capture/2 control can establish the named owner's liveness while a
+    // different protocol operation independently owns global live admission.
+    let global = first.acquire_live_capture().unwrap().unwrap();
+    assert!(second.acquire_capture_owner(ID).unwrap().is_none());
+    drop(owner);
+    assert!(second.acquire_capture_owner(ID).unwrap().is_some());
+    drop(global);
+}
+
+#[test]
 fn retained_material_maintenance_excludes_other_runtime_readers() {
     let root = Fixture::new();
     let first = Runtime::open(&root.0).unwrap();

@@ -73,7 +73,10 @@ moved donors. Its separate GStreamer capture and validation pipelines have been
 removed: it uses `Recorder` with a pinned output-file adapter and the existing
 reader for full-file readback. The adapter is required because the SDK materials
 contract binds an exclusively created file identity rather than a writable path.
-Core storage extensions and durable protocol glue are preserved from the earlier
-reviewed checkpoint, not substituted for Record output policy. This candidate
-remains unmerged pending native control/reconnect conformance, packaged guest
-proof, independent review and delivery admission; no new readiness is claimed.
+Cold controls use Core's anchored per-capture owner lock and metadata transaction;
+a durable v2 cancel bit defaults false when reading earlier journals. This is
+cooperative journal control, not a second capture registry. Core storage
+extensions and durable protocol glue are preserved from the earlier reviewed
+checkpoint, not substituted for Record output policy. Packaged runtime closure,
+real packaged SDK-to-worker execution, isolated guest proof, independent review
+and delivery admission remain open; no installed readiness is claimed.

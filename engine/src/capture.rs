@@ -1,8 +1,7 @@
 //! Linux capture/2 provider. This worker deliberately exposes X11 outputs only.
 #![cfg(target_os = "linux")]
 
-use apparent_capture_engine::{LiveCapturePermit, Runtime, new_id};
-use gst::prelude::*;
+use apparent_capture_engine::{CaptureOwnerPermit, LiveCapturePermit, Runtime, new_id};
 use gstreamer as gst;
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
@@ -63,11 +62,14 @@ struct Journal {
     admitted_monotonic_ns: Option<u64>,
     #[serde(default)]
     confirmed_at_ms: Option<u64>,
+    #[serde(default)]
+    cancel_requested: bool,
 }
 
 struct Shared {
     journal: Mutex<Journal>,
     directory: PathBuf,
+    runtime: Runtime,
     stop: AtomicBool,
     cancel: AtomicBool,
     epoch: Instant,
@@ -176,12 +178,33 @@ fn persist(shared: &Shared) -> io::Result<()> {
     persist_journal(shared, &j)
 }
 fn persist_journal(shared: &Shared, journal: &Journal) -> io::Result<()> {
+    let _transaction = shared.runtime.capture_transaction()?;
+    let current = read_journal(&shared.directory, &journal.capture_id, &journal.owner_token)
+        .map_err(|_| io::Error::other("capture journal changed"))?;
+    let mut merged = journal.clone();
+    let active = |state: &str| ["starting", "recording", "stopping"].contains(&state);
+    let terminal = ["materials-ready", "cancelled", "failed"].contains(&current.state.as_str());
+    if terminal && active(&merged.state) {
+        merged = current.clone();
+        if current.state == "materials-ready" && journal.cancel_requested {
+            merged.state = "cancelled".into();
+        }
+    } else {
+        merged.cancel_requested |= current.cancel_requested;
+    }
+    if current.state == "stopping" && merged.state == "recording" {
+        merged.state = "stopping".into();
+    }
+    if merged.cancel_requested && merged.state == "materials-ready" {
+        merged.state = "cancelled".into();
+    }
     apparent_capture_engine::SecureStore::open(&shared.directory)?.replace_checked(
-        &path_id(&journal.capture_id),
-        &serde_json::to_vec(journal).map_err(io::Error::other)?,
+        &path_id(&merged.capture_id),
+        &serde_json::to_vec(&merged).map_err(io::Error::other)?,
     )
 }
 fn persist_new(shared: &Shared) -> io::Result<()> {
+    let _transaction = shared.runtime.capture_transaction()?;
     let j = shared
         .journal
         .lock()
@@ -202,7 +225,7 @@ fn read_journal(directory: &Path, capture: &str, owner: &str) -> Result<Journal,
     let journal: Journal = serde_json::from_slice(&bytes).map_err(|_| "source_mismatch")?;
     if journal.capture_id != capture
         || journal.owner_token.len() != 64
-        || journal.owner_token != owner
+        || !apparent_capture_engine::identity_equal_secret(&journal.owner_token, owner)
     {
         return Err("permission_denied");
     }
@@ -389,6 +412,9 @@ fn handshake(ready: bool) -> Value {
     json!({"channel":"capture","protocolVersion":2,"implementation":"native","readiness":if ready {"ready"} else {"unavailable"},"capabilities":capabilities(ready)})
 }
 fn native_ready(sources: &[Source]) -> bool {
+    if std::env::var_os("APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE").is_some() {
+        return false;
+    }
     if sources.is_empty() || gst::init().is_err() {
         return false;
     }
@@ -422,19 +448,55 @@ fn status(j: &Journal) -> Value {
     v
 }
 
-fn recording_start(source: &Source, movie: &File, cancel: &AtomicBool, epoch: Instant)
-    -> Result<apparent_capture_engine::linux::Recorder, &'static str> {
+fn sync_control(shared: &Shared) -> Result<Journal, &'static str> {
+    let prior = shared.journal.lock().map_err(|_| "internal")?.clone();
+    let durable = read_journal(&shared.directory, &prior.capture_id, &prior.owner_token)?;
+    if durable.cancel_requested {
+        shared.cancel.store(true, Ordering::Release);
+        shared.stop.store(true, Ordering::Release);
+    } else if durable.state == "stopping" {
+        shared.stop.store(true, Ordering::Release);
+    }
+    Ok(durable)
+}
+
+fn recording_start(
+    source: &Source,
+    movie: &File,
+    shared: &Shared,
+    epoch: Instant,
+) -> Result<apparent_capture_engine::linux::Recorder, &'static str> {
     let native = apparent_capture_engine::linux::Source::X11 {
-        rect: [f64::from(source.x), f64::from(source.y), f64::from(source.width), f64::from(source.height)],
+        rect: [
+            f64::from(source.x),
+            f64::from(source.y),
+            f64::from(source.width),
+            f64::from(source.height),
+        ],
     };
     let recorder = apparent_capture_engine::linux::Recorder::new_with_file(
-        &native, (u32::from(source.width), u32::from(source.height)), (64, 64), movie, epoch)
-        .map_err(|_| "unavailable")?;
+        &native,
+        (u32::from(source.width), u32::from(source.height)),
+        (64, 64),
+        movie,
+        epoch,
+    )
+    .map_err(|_| "unavailable")?;
     let deadline = Instant::now() + START_LIMIT;
     while recorder.first_frame_ms().is_none() {
-        if cancel.load(Ordering::Acquire) { recorder.stop(); return Err("cancelled"); }
-        if Instant::now() >= deadline { recorder.stop(); return Err("deadline_exceeded"); }
-        if recorder.error().is_some() { recorder.stop(); return Err("unavailable"); }
+        let _ = sync_control(shared)?;
+        if shared.cancel.load(Ordering::Acquire) {
+            recorder.stop();
+            return Err("cancelled");
+        }
+        if Instant::now() >= deadline {
+            recorder.stop();
+            return Err("deadline_exceeded");
+        }
+        if recorder.error().is_some() {
+            recorder.stop();
+            return Err("unavailable");
+        }
         thread::sleep(Duration::from_millis(20));
     }
     Ok(recorder)
@@ -456,7 +518,8 @@ fn finalize(
         return Err("invalid_materials");
     }
     movie.sync_all().map_err(|_| "internal")?;
-    let timing = apparent_capture_engine::linux::media::validate_file(movie).map_err(|_| "invalid_materials")?;
+    let timing = apparent_capture_engine::linux::media::validate_file(movie)
+        .map_err(|_| "invalid_materials")?;
     let (video_duration_ms, video_pts_start_ms) = (timing.duration_ms, timing.first_pts_ns);
     let movie_digest = hash_file(movie.as_raw_fd()).map_err(|_| "invalid_materials")?;
     let duration = duration_ms;
@@ -502,7 +565,12 @@ fn finalize(
     Ok(manifest)
 }
 
-fn worker(shared: Arc<Shared>, source: Source, permit: LiveCapturePermit) {
+fn worker(
+    shared: Arc<Shared>,
+    source: Source,
+    permit: LiveCapturePermit,
+    _owner: CaptureOwnerPermit,
+) {
     let result = (|| -> Result<(), &'static str> {
         permit.check().map_err(|_| "internal")?;
         let capture_id = shared
@@ -523,8 +591,9 @@ fn worker(shared: Arc<Shared>, source: Source, permit: LiveCapturePermit) {
             );
         }
         persist(&shared).map_err(|_| "internal")?;
-        let recorder = recording_start(&source, &movie, &shared.cancel, shared.epoch)?;
-        let first_arrival = Duration::from_millis(recorder.first_frame_ms().ok_or("invalid_materials")?);
+        let recorder = recording_start(&source, &movie, &shared, shared.epoch)?;
+        let first_arrival =
+            Duration::from_millis(recorder.first_frame_ms().ok_or("invalid_materials")?);
         {
             let mut j = shared.journal.lock().map_err(|_| "internal")?;
             j.state = "recording".into();
@@ -532,7 +601,14 @@ fn worker(shared: Arc<Shared>, source: Source, permit: LiveCapturePermit) {
         persist(&shared).map_err(|_| "internal")?;
         let mut source_check = Instant::now() + Duration::from_millis(250);
         while !shared.stop.load(Ordering::Acquire) && !shared.cancel.load(Ordering::Acquire) {
-            if recorder.error().is_some() { recorder.stop(); return Err("unavailable"); }
+            let control = sync_control(&shared)?;
+            if control.cancel_requested {
+                break;
+            }
+            if recorder.error().is_some() {
+                recorder.stop();
+                return Err("unavailable");
+            }
             thread::sleep(Duration::from_millis(30));
             if Instant::now() >= source_check {
                 source_check = Instant::now() + Duration::from_millis(250);
@@ -565,7 +641,9 @@ fn worker(shared: Arc<Shared>, source: Source, permit: LiveCapturePermit) {
             .elapsed()
             .as_millis()
             .min(9_007_199_254_740_991) as u64;
-        if !recorder.finish(|_| {}) { return Err("invalid_materials"); }
+        if !recorder.finish(|_| {}) {
+            return Err("invalid_materials");
+        }
         if let Ok(value) = std::env::var("APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS") {
             if let Ok(ms) = value.parse::<u64>() {
                 thread::sleep(Duration::from_millis(ms.min(5_000)));
@@ -575,7 +653,12 @@ fn worker(shared: Arc<Shared>, source: Source, permit: LiveCapturePermit) {
         let manifest = finalize(&shared, &movie, &source, capture_duration, first_arrival)?;
         let mut j = shared.journal.lock().map_err(|_| "internal")?;
         let mut ready = j.clone();
-        ready.state = "materials-ready".into();
+        ready.state = if ready.cancel_requested {
+            "cancelled"
+        } else {
+            "materials-ready"
+        }
+        .into();
         ready.materials_id = Some(
             manifest["key"]["materialsId"]
                 .as_str()
@@ -587,19 +670,25 @@ fn worker(shared: Arc<Shared>, source: Source, permit: LiveCapturePermit) {
         // Do not expose the terminal state to inspect until its recovery record
         // has reached disk. The journal mutex also excludes a concurrent cancel.
         persist_journal(&shared, &ready).map_err(|_| "internal")?;
-        *j = ready;
+        *j = read_journal(&shared.directory, &ready.capture_id, &ready.owner_token)?;
         drop(j);
         let _ = capture_id;
         Ok(())
     })();
     if let Err(code) = result {
+        let durable_cancel = shared
+            .journal
+            .lock()
+            .ok()
+            .and_then(|j| read_journal(&shared.directory, &j.capture_id, &j.owner_token).ok())
+            .is_some_and(|j| j.cancel_requested);
         if let Ok(j) = shared.journal.lock() {
             if j.materials.is_none() {
                 let _ = remove_unsealed(&shared.directory, &j);
             }
         }
         if let Ok(mut j) = shared.journal.lock() {
-            if code == "cancelled" {
+            if code == "cancelled" || durable_cancel {
                 j.state = "cancelled".into();
                 j.error = None;
             } else {
@@ -686,7 +775,15 @@ fn request_binding(v: &Value) -> Value {
     json!({"captureId":v["captureId"],"ownerToken":v["ownerToken"],"bundleId":v["bundleId"],"bundlePath":v["bundlePath"],"source":v["source"],"options":v["options"],"invocation":v["invocation"]})
 }
 fn active_status(shared: &Shared) -> Result<Value, &'static str> {
-    let j = shared.journal.lock().map_err(|_| "internal")?;
+    let transaction = shared
+        .runtime
+        .capture_transaction()
+        .map_err(|_| "internal")?;
+    let prior = shared.journal.lock().map_err(|_| "internal")?.clone();
+    let durable = read_journal(&shared.directory, &prior.capture_id, &prior.owner_token)?;
+    drop(transaction);
+    let mut j = shared.journal.lock().map_err(|_| "internal")?;
+    *j = durable;
     Ok(status(&j))
 }
 
@@ -762,15 +859,32 @@ fn process_request(
                 if !active.contains_key(capture)
                     && ["starting", "recording", "stopping"].contains(&j.state.as_str())
                 {
-                    let permit = runtime
-                        .acquire_live_capture()
+                    let Some(_owner) = runtime
+                        .acquire_capture_owner(capture)
                         .map_err(|_| "internal")?
-                        .ok_or("busy")?;
-                    j.state = "failed".into();
-                    j.error = Some("unavailable".into());
+                    else {
+                        drop(j);
+                        return active_status(existing);
+                    };
+                    if j.materials.is_none() {
+                        remove_unsealed(root, &j)?;
+                    }
+                    j.state = if j.cancel_requested {
+                        "cancelled"
+                    } else {
+                        "failed"
+                    }
+                    .into();
+                    j.error = Some(
+                        if j.cancel_requested {
+                            "cancelled"
+                        } else {
+                            "unavailable"
+                        }
+                        .into(),
+                    );
                     drop(j);
                     persist(existing).map_err(|_| "internal")?;
-                    drop(permit);
                 } else {
                     drop(j);
                 }
@@ -794,30 +908,54 @@ fn process_request(
                     }
                     let mut recovered = recovered;
                     if ["starting", "recording", "stopping"].contains(&recovered.state.as_str()) {
-                        let permit = runtime
-                            .acquire_live_capture()
+                        let Some(_owner) = runtime
+                            .acquire_capture_owner(capture)
                             .map_err(|_| "internal")?
-                            .ok_or("busy")?;
+                        else {
+                            let shared = Arc::new(Shared {
+                                journal: Mutex::new(recovered),
+                                directory: root.to_owned(),
+                                runtime: runtime.clone(),
+                                stop: AtomicBool::new(false),
+                                cancel: AtomicBool::new(false),
+                                epoch: Instant::now(),
+                            });
+                            all.insert(capture.into(), shared.clone());
+                            return Ok(active_status(&shared)?);
+                        };
                         if recovered.materials.is_none() {
                             remove_unsealed(root, &recovered)?;
                         }
-                        recovered.state = "failed".into();
-                        recovered.error = Some("unavailable".into());
+                        recovered.state = if recovered.cancel_requested {
+                            "cancelled"
+                        } else {
+                            "failed"
+                        }
+                        .into();
+                        recovered.error = Some(
+                            if recovered.cancel_requested {
+                                "cancelled"
+                            } else {
+                                "unavailable"
+                            }
+                            .into(),
+                        );
                         let shared = Arc::new(Shared {
                             journal: Mutex::new(recovered),
                             directory: root.to_owned(),
+                            runtime: runtime.clone(),
                             stop: AtomicBool::new(false),
                             cancel: AtomicBool::new(false),
                             epoch: Instant::now(),
                         });
                         persist(&shared).map_err(|_| "internal")?;
-                        drop(permit);
                         all.insert(capture.into(), shared.clone());
                         return Ok(active_status(&shared)?);
                     }
                     let shared = Arc::new(Shared {
                         journal: Mutex::new(recovered),
                         directory: root.to_owned(),
+                        runtime: runtime.clone(),
                         stop: AtomicBool::new(false),
                         cancel: AtomicBool::new(false),
                         epoch: Instant::now(),
@@ -871,15 +1009,21 @@ fn process_request(
                 payload_digest: None,
                 admitted_monotonic_ns: Some(admitted_ns),
                 confirmed_at_ms: Some(confirmed_at_ms),
+                cancel_requested: false,
             };
             let shared = Arc::new(Shared {
                 journal: Mutex::new(journal),
                 directory: root.to_owned(),
+                runtime: runtime.clone(),
                 stop: AtomicBool::new(false),
                 cancel: AtomicBool::new(false),
                 epoch: admitted_at,
             });
             // The exact start binding is durable before admission or native effects.
+            let operation_owner = runtime
+                .acquire_capture_owner(capture)
+                .map_err(|_| "internal")?
+                .ok_or("busy")?;
             match persist_new(&shared) {
                 Ok(()) => (),
                 Err(e) if e.kind() == io::ErrorKind::AlreadyExists => {
@@ -927,7 +1071,7 @@ fn process_request(
             let worker_source = source.clone();
             let join = thread::Builder::new()
                 .name(format!("capture-{}", &capture[..8]))
-                .spawn(move || worker(worker_shared, worker_source, permit))
+                .spawn(move || worker(worker_shared, worker_source, permit, operation_owner))
                 .map_err(|_| "internal")?;
             active.insert(capture.into(), (shared.clone(), join));
             Ok(active_status(&shared)?)
@@ -939,33 +1083,57 @@ fn process_request(
             let shared = if let Some(x) = all.get(capture) {
                 x.clone()
             } else {
-                let j = read_journal(root, capture, owner)?;
+                let mut j = read_journal(root, capture, owner)?;
                 if ["starting", "recording", "stopping"].contains(&j.state.as_str()) {
-                    let permit = runtime
-                        .acquire_live_capture()
+                    if let Some(_owner) = runtime
+                        .acquire_capture_owner(capture)
                         .map_err(|_| "internal")?
-                        .ok_or("busy")?;
-                    let mut recovered = j;
-                    if recovered.materials.is_none() {
-                        remove_unsealed(root, &recovered)?;
+                    {
+                        if j.materials.is_none() {
+                            remove_unsealed(root, &j)?;
+                        }
+                        j.state = if j.cancel_requested {
+                            "cancelled"
+                        } else {
+                            "failed"
+                        }
+                        .into();
+                        j.error = Some(
+                            if j.cancel_requested {
+                                "cancelled"
+                            } else {
+                                "unavailable"
+                            }
+                            .into(),
+                        );
+                        let shared = Arc::new(Shared {
+                            journal: Mutex::new(j),
+                            directory: root.to_owned(),
+                            runtime: runtime.clone(),
+                            stop: AtomicBool::new(false),
+                            cancel: AtomicBool::new(false),
+                            epoch: Instant::now(),
+                        });
+                        persist(&shared).map_err(|_| "internal")?;
+                        all.insert(capture.into(), shared.clone());
+                        shared
+                    } else {
+                        let shared = Arc::new(Shared {
+                            journal: Mutex::new(j),
+                            directory: root.to_owned(),
+                            runtime: runtime.clone(),
+                            stop: AtomicBool::new(false),
+                            cancel: AtomicBool::new(false),
+                            epoch: Instant::now(),
+                        });
+                        all.insert(capture.into(), shared.clone());
+                        shared
                     }
-                    recovered.state = "failed".into();
-                    recovered.error = Some("unavailable".into());
-                    let shared = Arc::new(Shared {
-                        journal: Mutex::new(recovered),
-                        directory: root.to_owned(),
-                        stop: AtomicBool::new(false),
-                        cancel: AtomicBool::new(false),
-                        epoch: Instant::now(),
-                    });
-                    persist(&shared).map_err(|_| "internal")?;
-                    drop(permit);
-                    all.insert(capture.into(), shared.clone());
-                    shared
                 } else {
                     let shared = Arc::new(Shared {
                         journal: Mutex::new(j),
                         directory: root.to_owned(),
+                        runtime: runtime.clone(),
                         stop: AtomicBool::new(false),
                         cancel: AtomicBool::new(false),
                         epoch: Instant::now(),
@@ -978,13 +1146,11 @@ fn process_request(
             if j.owner_token != owner {
                 return Err("permission_denied");
             }
-            if ["starting", "recording", "stopping"].contains(&j.state.as_str())
-                && !active.contains_key(capture)
-            {
-                return Err("busy");
-            }
             match method {
-                "inspect" => Ok(status(&j)),
+                "inspect" => {
+                    drop(j);
+                    active_status(&shared)
+                }
                 "stop" => {
                     if j.state == "starting" {
                         return Err("busy");
@@ -1001,9 +1167,12 @@ fn process_request(
                 }
                 "cancel" => {
                     if ["starting", "recording", "stopping"].contains(&j.state.as_str()) {
-                        drop(j);
+                        j.cancel_requested = true;
+                        let snapshot = j.clone();
+                        persist_journal(&shared, &snapshot).map_err(|_| "internal")?;
                         shared.cancel.store(true, Ordering::Release);
                         shared.stop.store(true, Ordering::Release);
+                        drop(j);
                         Ok(active_status(&shared)?)
                     } else if j.state == "materials-ready" {
                         j.state = "cancelled".into();

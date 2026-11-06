@@ -16,6 +16,15 @@ pub struct LiveCapturePermit {
     store: Arc<Store>,
     lock: Lock,
 }
+/// Process-independent owner lock for one capture/2 journal. The lock file and
+/// its anchor are permanent; dropping this value is the operation's death signal.
+pub struct CaptureOwnerPermit {
+    _lock: Lock,
+}
+/// Short metadata transaction used by capture/2's owner-local journal adapter.
+pub struct CaptureTransaction {
+    _lock: Lock,
+}
 impl LiveCapturePermit {
     pub fn check(&self) -> io::Result<()> {
         self.lock.check(&self.store)
@@ -125,6 +134,23 @@ impl Session {
     }
 }
 impl Runtime {
+    /// Claim the per-operation owner lock. `None` means another live process
+    /// owns this operation; it says nothing about other captures.
+    pub fn acquire_capture_owner(&self, id: &str) -> io::Result<Option<CaptureOwnerPermit>> {
+        identity::validate(id, 32)?;
+        let _tx = self.transaction()?;
+        let lock = Lock::open(&self.store, &format!("capture2-owner-{id}.lock"))?;
+        if !lock.attempt(&self.store, false)? {
+            return Ok(None);
+        }
+        Ok(Some(CaptureOwnerPermit { _lock: lock }))
+    }
+    /// Serialize capture/2 journal reads and writes with v1 receipt metadata.
+    pub fn capture_transaction(&self) -> io::Result<CaptureTransaction> {
+        Ok(CaptureTransaction {
+            _lock: self.transaction()?,
+        })
+    }
     /// Acquire the process-independent live-capture slot without creating a v1 receipt.
     /// Media decoding and other offline jobs must not call this method.
     pub fn acquire_live_capture(&self) -> io::Result<Option<LiveCapturePermit>> {

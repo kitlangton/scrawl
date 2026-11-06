@@ -66,6 +66,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
   const oldGstDebugFile = process.env.GST_DEBUG_FILE;
   const oldFinalizeDelay = process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS;
   const oldReleaseDelay = process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS;
+  const oldReadinessUnavailable = process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
   process.env.DISPLAY = display;
   delete process.env.WAYLAND_DISPLAY;
   const runtime = mkdtempSync(join(tmpdir(), "apparent-capture-runtime-"));
@@ -122,12 +123,24 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.ok(["starting", "recording"].includes(started.state));
     const recording = await until(client, { captureId, ownerToken }, ["recording"]);
     assert.equal(recording.state, "recording");
+    process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
+    const coldStopClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    try {
+      const coldHello = await coldStopClient.handshake(15_000);
+      assert.equal(coldHello.readiness, "unavailable", "cold control client has no new source readiness");
+      const coldObserved = await coldStopClient.inspect({ captureId, ownerToken });
+      assert.equal(coldObserved.state, "recording", "cold inspect observes the authenticated live owner");
+      const coldStopped = await coldStopClient.stop({ captureId, ownerToken });
+      assert.equal(coldStopped.state, "stopping", "cold stop reaches the live owner without claiming global capture admission");
+    } finally {
+      await coldStopClient.close();
+      if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
+      else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
+    }
     for (const color of ["#11bb44", "#2244dd", "#e6d22a", "#cc2211"]) {
       execFileSync(xsetrootCommand, ["-solid", color]);
       await delay(180);
     }
-    const stopped = await client.stop({ captureId, ownerToken });
-    assert.equal(stopped.state, "stopping");
     const ready = await until(client, { captureId, ownerToken }, ["materials-ready"]);
     assert.equal(ready.state, "materials-ready");
     const manifest = ready.materials!;
@@ -232,7 +245,18 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.ok(reconnectSource);
     const fourth = startInput(reconnectSource, id(), token(), "cancel");
     await client.start(fourth);
-    await client.cancel({ captureId: fourth.captureId, ownerToken: fourth.ownerToken });
+    process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = "1";
+    const coldCancelClient = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    try {
+      const coldHello = await coldCancelClient.handshake(15_000);
+      assert.equal(coldHello.readiness, "unavailable");
+      const coldCancelled = await coldCancelClient.cancel({ captureId: fourth.captureId, ownerToken: fourth.ownerToken });
+      assert.ok(["starting", "recording", "stopping"].includes(coldCancelled.state));
+    } finally {
+      await coldCancelClient.close();
+      if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE;
+      else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
+    }
     const cancelled = await until(client, { captureId: fourth.captureId, ownerToken: fourth.ownerToken }, ["cancelled"]);
     assert.equal(cancelled.error, undefined, "cancelled is a terminal state, not a failed result");
     assert.throws(() => statSync(join(runtime, "capture-v2", "materials", fourth.captureId)), { code: "ENOENT" }, "cancel never leaves a sealed material root");
@@ -279,6 +303,27 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const postCrashSources = await client.discoverSources();
     const postCrashSource = postCrashSources.sources.find((item) => item.kind === "display");
     assert.ok(postCrashSource);
+    const cancelCrash = startInput(postCrashSource, id(), token(), "cancel-ack-crash");
+    await client.start(cancelCrash);
+    await until(client, { captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken }, ["recording"]);
+    const coldCancellation = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    try {
+      await coldCancellation.handshake(15_000);
+      await coldCancellation.cancel({ captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken });
+    } finally {
+      await coldCancellation.close();
+    }
+    const cancelOwner = (client as unknown as { transport: { child: { kill: (signal: string) => boolean; once: (event: string, callback: () => void) => void } } }).transport.child;
+    const cancelOwnerExit = new Promise<void>((resolveExit) => cancelOwner.once("exit", resolveExit));
+    assert.equal(cancelOwner.kill("SIGKILL"), true, "crash after the durable cancellation acknowledgment");
+    await cancelOwnerExit;
+    client = new CaptureClient(launchCaptureEngine(resolve(binary!), runtime, 10_000));
+    await delay(100);
+    await client.handshake(15_000);
+    const cancelledCrash = await client.inspect({ captureId: cancelCrash.captureId, ownerToken: cancelCrash.ownerToken });
+    assert.equal(cancelledCrash.state, "cancelled", "accepted cancellation survives owner crash and recovery");
+    assert.throws(() => statSync(join(runtime, "capture-v2", "materials", cancelCrash.captureId)), { code: "ENOENT" });
+
     const sixth = startInput(postCrashSource, id(), token(), "crash-during-capture");
     await client.start(sixth);
     await until(client, { captureId: sixth.captureId, ownerToken: sixth.ownerToken }, ["recording"]);
@@ -341,6 +386,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     if (oldGstDebugFile === undefined) delete process.env.GST_DEBUG_FILE; else process.env.GST_DEBUG_FILE = oldGstDebugFile;
     if (oldFinalizeDelay === undefined) delete process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS; else process.env.APPARENT_CAPTURE_TEST_FINALIZATION_DELAY_MS = oldFinalizeDelay;
     if (oldReleaseDelay === undefined) delete process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS; else process.env.APPARENT_CAPTURE_TEST_RELEASE_DELAY_AFTER_INTENT_MS = oldReleaseDelay;
+    if (oldReadinessUnavailable === undefined) delete process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE; else process.env.APPARENT_CAPTURE_TEST_READINESS_UNAVAILABLE = oldReadinessUnavailable;
     if (process.env.APPARENT_CAPTURE_EVIDENCE_DIR) {
       try {
         const evidence = resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR);

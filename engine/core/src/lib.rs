@@ -12,9 +12,11 @@ mod receipt;
 mod secure;
 mod session;
 pub use finalizer::FinalizerSuccess;
-pub use identity::{new_id, new_owner_token};
+pub use identity::{equal_secret as identity_equal_secret, new_id, new_owner_token};
 pub use lease::{BundleLease, LeaseKind};
 pub use receipt::{Receipt, Status};
 pub use secure::{Store as SecureStore, directory as open_directory};
 pub use session::Binding;
-pub use session::{Admission, Control, LiveCapturePermit, Runtime, Session};
+pub use session::{
+    Admission, CaptureOwnerPermit, CaptureTransaction, Control, LiveCapturePermit, Runtime, Session,
+};

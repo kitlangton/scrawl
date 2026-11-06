@@ -12,10 +12,18 @@ Launch with `--runtime-directory DIR --capture-channel capture
 --capture-protocol-version 2`. Provision a persistent private 0700 runtime root.
 No PATH lookup, Node, npm or Cargo is needed at runtime.
 
-This is an unmerged integration checkpoint, not a usable-producer handoff.
-Live-owner reconnect/control and durable cancellation conformance, package
-closure and isolated guest proof remain delivery gates. X11 display and the
-advertised preset area are the candidate sources; general picker/area selection,
-Wayland, macOS, audio, fact collectors, media/2 and publication are unavailable.
-Materials are never Saved. Existing native and installed behavior remains on its
-current route until verified consumer adoption.
+Cold inspect/stop/cancel now use the existing Core metadata transaction plus a
+per-capture anchored owner lock. They do not infer owner death from global live
+capture admission or new source readiness. Stop/cancel are journaled for the
+owner to observe; `cancel_requested` defaults false when reading earlier v2
+journals, and a cancel acknowledgment follows its durable write. Cancellation is
+sticky through finalization and crash recovery; a sealed manifest remains leased
+until explicit release. Core keeps global live admission for actual capture.
+
+This remains an unmerged candidate, not a usable-producer handoff. Packaged
+runtime closure, real packaged SDK-to-worker execution, isolated guest proof and
+independent review remain gates. X11 display and the advertised preset area are
+the candidate sources; general picker/area selection, Wayland, macOS, audio,
+fact collectors, media/2 and publication are unavailable. Materials are never
+Saved. Existing native and installed behavior remains on its current route until
+verified consumer adoption.
