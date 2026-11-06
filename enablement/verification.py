@@ -14,6 +14,7 @@ import re
 import stat
 import signal
 import sys
+import tempfile
 from pathlib import Path
 import subprocess
 from contextlib import contextmanager
@@ -603,17 +604,27 @@ def run_delivery_tests():
 
 
 def run_platform_resources_tests():
-    """Run the package's TypeScript-only npm test lane; native checks belong to its producer."""
+    """Run reviewed TS entrypoints without npm hooks; native checks belong to the producer."""
     package = ROOT / "shared/resources"
     controls = ("package.json", "package-lock.json", "tsconfig.json")
     if any(not (package / name).is_file() for name in controls):
         raise RuntimeError("Platform resources check inputs are missing; restore the registered package")
     if not (package / "node_modules/typescript/bin/tsc").is_file():
         raise RuntimeError("Platform resources checks need installed locked dependencies: run npm ci in shared/resources; the hook never installs dependencies")
-    manifest = json.loads((package / "package.json").read_text())
-    if not isinstance(manifest.get("scripts", {}).get("test"), str):
-        raise RuntimeError("Platform resources package must declare its TypeScript-only npm test script")
-    subprocess.run(["npm", "test"], cwd=package, check=True)
+    tests = ("test/client.test.ts", "test/artifact.test.ts")
+    if any(not (package / name).is_file() for name in tests):
+        raise RuntimeError("Platform resources TypeScript test entrypoints are missing")
+    with tempfile.TemporaryDirectory(prefix="apparent-resources-no-native-") as directory:
+        for tool in ("cargo", "rustc"):
+            shim = Path(directory) / tool
+            shim.write_text("#!/bin/sh\necho 'Native compilation belongs to the resource producer' >&2\nexit 97\n")
+            shim.chmod(0o755)
+        environment = {**os.environ, "PATH": directory + os.pathsep + os.environ.get("PATH", "")}
+        environment.pop("APPARENT_RESOURCE_HOST_BIN", None)
+        subprocess.run(["node", str(package / "node_modules/typescript/bin/tsc")],
+                       cwd=package, env=environment, check=True)
+        subprocess.run(["node", "--experimental-strip-types", "--test", *tests],
+                       cwd=package, env=environment, check=True)
 
 
 def run_connect_client_typescript_tests():
