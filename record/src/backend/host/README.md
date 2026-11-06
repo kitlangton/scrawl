@@ -34,6 +34,16 @@ through this binding. It does not install the producer into Preview or an existi
 Provider detach disposes only this adapter's draft and observers; it does not close
 the injected host port or cancel an already admitted mutation.
 
+For explicit local handoff composition, `createRecordLocalClipboardPort` accepts the
+published `NativeClipboardPort`, the same host's `NativeHostPort`, an exact
+capture/artifact resolver, and the producer's `MAX_UTF8_TEXT_BYTES`. The resolver must
+provide authenticated Saved and processing facts; the adapter checks their identity and
+bundle-path consistency, formats the existing full handoff text, then performs one
+fresh-state clipboard write. The native receipt must confirm the exact UTF-8 SHA-256 and
+byte length before Record returns `applied`. It never closes the injected ports, retries,
+truncates, or infers Saved/publication itself. This adapter is exported for explicit
+composition and is not wired into the capability provider or installed route.
+
 `AbsentDestinationAllocator` is an explicit capture/2 host primitive. Construct
 it with distinct absolute private control and destination roots, then call
 `allocate(recordRequestId)`. The returned `AbsentDestinationBinding` contains a

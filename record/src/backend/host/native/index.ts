@@ -3,6 +3,51 @@ import type { NativeAction, RecordNativeFacts, RecordNativePort, RecordPenConfig
 import type { RecordNativeHostInput, RecordNativePenInput, RecordPenColorConfigInput } from './pen.js';
 export type { RecordNativeHostInput, RecordNativePenInput, RecordPenColorConfigInput } from './pen.js';
 
+import type {
+  RecordLocalClipboardIdentity,
+  RecordLocalClipboardPort,
+  RecordLocalClipboardPortInput,
+} from '../../handoff/clipboard.js';
+export type {
+  NativeClipboardHostInput,
+  NativeClipboardPortInput,
+  NativeClipboardWriteResultInput,
+  RecordLocalClipboardIdentity,
+  RecordLocalClipboardPort,
+  RecordLocalClipboardPortInput,
+  RecordLocalClipboardRefusalReason,
+  RecordLocalClipboardResult,
+  RecordLocalHandoffResolution,
+} from '../../handoff/clipboard.js';
+
+/** Lazy loading keeps source-level native-host consumers independent of emitted handoff files. */
+export function createRecordLocalClipboardPort(input: RecordLocalClipboardPortInput): RecordLocalClipboardPort {
+  if (!input || !input.clipboard || typeof input.clipboard.writeText !== 'function'
+    || !input.nativeHost || typeof input.nativeHost.readSnapshot !== 'function'
+    || typeof input.resolveHandoff !== 'function'
+    || !Number.isSafeInteger(input.maximumTextBytes) || input.maximumTextBytes <= 0) {
+    throw new TypeError('Invalid local clipboard adapter inputs');
+  }
+  const adapterInput = {
+    clipboard: input.clipboard,
+    nativeHost: input.nativeHost,
+    resolveHandoff: input.resolveHandoff,
+    maximumTextBytes: input.maximumTextBytes,
+  };
+  let adapter: Promise<import('../../handoff/clipboard.js').RecordLocalClipboardPort> | undefined;
+  return {
+    copyLocal(identity: RecordLocalClipboardIdentity) {
+      // Preserve the caller tuple before the lazy module import yields.
+      const snapshot = identity && typeof identity === 'object'
+        ? { captureId: identity.captureId, artifactId: identity.artifactId }
+        : identity;
+      adapter ??= import('../../handoff/clipboard.js')
+        .then(module => module.createRecordLocalClipboardPort(adapterInput));
+      return adapter.then(port => port.copyLocal(snapshot));
+    },
+  };
+}
+
 /** Lazily loads the optional pen adapter so source-level native host tests stay independent of it. */
 export function createRecordPenConfigPort(input: {
   config: RecordPenColorConfigInput;
