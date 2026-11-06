@@ -25,7 +25,11 @@ export type OnboardingFactoryDependencies = Omit<OnboardingContributionProps, "c
   coaching?: CoachingHost<"onboarding-progress">;
   /** Narrow seam for owner tests; production uses the controller's default timer. */
   repairTimer?: RepairTimer;
+  /** Reports the owner's current visible surface. This never opens or closes a host surface. */
+  onSurfaceChange?(snapshot: OnboardingSurfaceSnapshot): void;
 };
+
+export type OnboardingSurfaceSnapshot = Readonly<{ kind: "hidden" | "tour" | "repair" }>;
 
 // The host binds this owner factory and its narrow progress capability. It owns neither
 // the Record client lifetime nor any native/window side effects.
@@ -41,6 +45,18 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
     let phase: "ready" | "dispose-failed" | "disposed" = "ready";
     const activationListeners = new Set<() => void>();
     const notify = () => { for (const listener of activationListeners) { try { listener(); } catch { activationListeners.delete(listener); } } };
+    let observedKind: OnboardingSurfaceSnapshot["kind"] | undefined;
+    const publishSurface = (force = false) => {
+      if (force || observedKind !== surface.kind) {
+        observedKind = surface.kind;
+        try { deps.onSurfaceChange?.(Object.freeze({ kind: surface.kind })); } catch { /* Host observers cannot break owner lifecycle. */ }
+      }
+    };
+    publishSurface(true);
+    const setSurface = (next: Surface) => {
+      surface = next;
+      publishSurface();
+    };
     const failedClose = () => { if (phase !== "ready") return; closeError = "Setup could not be closed. Please try again."; notify(); };
     let lifecycle = Promise.resolve();
     const serialize = <T>(operation: () => Promise<T>): Promise<T> => {
@@ -108,15 +124,15 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
             const loaded = controller.state;
             if (loaded.publication === "unknown") throw new Error("Onboarding progress could not be loaded");
             if (reason === "firstLaunch" && (loaded.progress.status === "completed" || loaded.progress.status === "deferred")) {
-              surface = { kind: "hidden" }; closeError = null; notify();
               await hideCoach();
+              setSurface({ kind: "hidden" }); closeError = null; notify();
               return;
             }
             if ((reason === "settings" || reason === "resume") && loaded.progress.status !== "in-progress") {
               const reopened = await controller.dispatch("reopen");
               if (reopened.publication !== "confirmed" || reopened.progress.status !== "in-progress") throw new Error("Onboarding could not be resumed safely");
             }
-            surface = { kind: "tour" }; closeError = null; notify();
+            setSurface({ kind: "tour" }); closeError = null; notify();
           });
         },
         permissionRepair: {
@@ -130,7 +146,7 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
                 && ids.length === permissionRepair.state.requestedIds.length && ids.every(id => permissionRepair.state.requestedIds.includes(id));
               const session = same && surface.kind === "repair" ? surface.session : ++repairSession;
               permissionRepair.activate(ids);
-              surface = { kind: "repair", returnTo, session }; closeError = null; notify();
+              setSurface({ kind: "repair", returnTo, session }); closeError = null; notify();
             });
           },
         },
@@ -138,11 +154,12 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
           return serialize(async () => {
             if (phase === "disposed") return;
             phase = "dispose-failed";
-            surface = { kind: "hidden" }; ++repairSession; notify();
+            ++repairSession;
             permissionRepair.dispose();
             controller.dispose();
             try { await hideCoach(); }
             catch (error) { phase = "dispose-failed"; throw error; }
+            setSurface({ kind: "hidden" }); notify();
             phase = "disposed";
           });
         },
@@ -165,17 +182,17 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
         if (phase !== "ready" || surface.kind !== "tour") return;
         await hideCoach();
         deps.close();
-        surface = { kind: "hidden" }; closeError = null; notify();
+        setSurface({ kind: "hidden" }); closeError = null; notify();
       });
     }
     async function restoreAfterRepair(session: number) {
       return serialize(async () => {
         if (phase !== "ready" || surface.kind !== "repair" || surface.session !== session) return;
         if (surface.returnTo === "tour") {
-          surface = { kind: "tour" };
+          setSurface({ kind: "tour" });
         } else {
           deps.close();
-          surface = { kind: "hidden" };
+          setSurface({ kind: "hidden" });
         }
         closeError = null; notify();
       });
