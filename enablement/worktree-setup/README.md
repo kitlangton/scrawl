@@ -14,7 +14,7 @@ For project `mcp:c63c1e72-12e4-40e0-9f78-10c3728e66ad` (`/home/simon/Projects/sc
 
 ```json
 {
-  "id": "apparent-worktree-prepare",
+  "id": "apparent-prepare",
   "name": "Prepare Apparent worktree",
   "command": "if test -f enablement/worktree-setup/prepare.ts; then node --experimental-strip-types enablement/worktree-setup/prepare.ts; else echo 'Apparent setup unavailable on this older commit; dependencies are not prepared.' >&2; fi",
   "icon": "configure",
@@ -23,7 +23,7 @@ For project `mcp:c63c1e72-12e4-40e0-9f78-10c3728e66ad` (`/home/simon/Projects/sc
 }
 ```
 
-`async: false` makes T3's top-level and delegated `t3_thread_launch` setup wait for completion; the installed `ThreadLaunchService` records a failed setup and does not advance that launched agent to its run. Do not infer success from a thread starting. In contrast, `t3_worktree_handoff` runs `ProjectSetupScriptRunner` and returns `setupScript.status: "started"`; it does not await the completion or translate a later failure into the handoff result. The caller must inspect the setup terminal/result or run the preparation command itself before relying on owner dependencies. A setup terminal is attached to the worktree thread, so the explicit owner command remains the portable completion check for handoff and recovery after rebase.
+`async: false` makes launch paths through T3's `ThreadLaunchService` wait for setup completion; a failed setup prevents that launched agent from starting. This does not cover every delegation path: a real `delegate_task(isolation: "worktree")` smoke on `01c1eb046` started with the architecture dependencies absent despite the enabled project script. Include the explicit preparation command in delegated implementation briefs before checks or builds; do not infer preparation from a started agent or a workspace-prepared activity label. In contrast, `t3_worktree_handoff` returns `setupScript.status: "started"` without awaiting completion. Inspect the setup terminal/result or run preparation explicitly before relying on dependencies. Script IDs must contain at most 24 lowercase letters, digits or hyphens.
 
 T3 project scripts have no task-context input contract. The baseline therefore runs automatically, while owner packages require an explicit follow-up command from the task's known owner. Never infer owner from the fresh worktree's empty diff and never compensate with all packages. Setup terminals run with the project's normal command environment; this command assumes Node, Python 3, npm and, for Bun owners, Bun are on `PATH`. Missing tools and network errors are reported as failures. Setup does not install tools or modify T3 settings itself.
 

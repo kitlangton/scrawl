@@ -106,8 +106,11 @@ class TempPreflightTests(unittest.TestCase):
         patterns = [command[-1] for command in commands]
         patterns[2] = 'delivery suites'
         self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'delivery suites', 'test_*.py',
-                                    'test_*push*.py', 'test_verification.py', 'test_release_gate.py',
-                                    'test_temp_preflight.py', 'test_owner_lanes.py'])
+                                    'test_pre_push_guard.py', 'test_commit_push_checkpoint.py',
+                                    'test_signing_push.py', 'test_mac_prepare_push.py',
+                                    'test_mac_cache_push.py', 'test_verification.py',
+                                    'test_release_gate.py', 'test_temp_preflight.py',
+                                    'test_owner_lanes.py'])
         app_check.assert_called_once_with()
         record_check.assert_called_once_with()
         onboarding_check.assert_called_once_with()
