@@ -1,4 +1,5 @@
 import assert from "node:assert/strict";
+import { replacePrivateStateFile, type StateReplacementResources } from "../../src/state/replacement.ts";
 import { createHash } from "node:crypto";
 import { constants } from "node:fs";
 import { createServer } from "node:http";
@@ -32,7 +33,7 @@ async function packedResourceSdk() {
   absoluteEnv("APPARENT_RESOURCE_SDK_CONSUMER", consumer);
   const entry = `${consumer}/node_modules/@apparent/native-resources/dist/index.js`;
   return await import(pathToFileURL(entry).href) as {
-  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => NamespaceResources & {
+  NativeResources: new (provider: { executable: string; protocol: 1; target: string; sha256: string }) => NamespaceResources & StateReplacementResources & {
     checkAcl(handle: import("node:fs/promises").FileHandle): Promise<{ state: "accepted" | "refused" }>;
     publish(parent: import("node:fs/promises").FileHandle, source: string, destination: string, options?: { signal?: AbortSignal }): Promise<{ state: "published" | "destination_exists" | "refused" | "publication_uncertain" }>;
   };
@@ -382,4 +383,38 @@ test("native snapshots refuse Darwin cancellation-record ACL grants", { skip: pr
     execFileSync("/bin/chmod", ["+a", "everyone allow read", cancellation]);
     await assert.rejects(readCredentialSnapshot(state, { scope: "read", approvedServer: server }, resources), error => error instanceof CredentialSnapshotError && error.category === "unsafe_file");
   } finally { execFileSync("/bin/chmod", ["-N", cancellation]); }
+}));
+
+test("native private-state replacement commits bounded bytes under the real queue lease", async () => fixture(async root => {
+  const state = path.join(root, "synthetic-state"); await mkdir(state, { mode: 0o700 });
+  const lock = await open(path.join(state, "queue.lock"), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  const acquired = await resources.lock(lock, { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired"); if (acquired.state !== "acquired") return;
+  try {
+    const destination = path.join(state, "synthetic.test");
+    const input = Buffer.from('{"version":1,"synthetic":true}');
+    assert.deepEqual(await replacePrivateStateFile(state, "synthetic.test", input, null, acquired.lease, resources), { state: "committed" });
+    assert.equal((await readFile(destination)).toString(), input.toString());
+    const previous = await lstat(destination, { bigint: true });
+    const expected = { device: String(previous.dev), inode: String(previous.ino) };
+    const next = Buffer.from('{"version":1,"synthetic":"replacement"}');
+    assert.deepEqual(await replacePrivateStateFile(state, "synthetic.test", next, expected, acquired.lease, resources), { state: "committed" });
+    assert.equal((await readFile(destination)).toString(), next.toString());
+    assert.equal((await lstat(destination)).mode & 0o777, 0o600);
+    assert.deepEqual((await readdir(state)).sort(), ["queue.lock", "synthetic.test"]);
+  } finally { await acquired.lease.release(); }
+}));
+
+test("native stale replacement refuses effect and removes only its private stage", async () => fixture(async root => {
+  const destination = path.join(root, "synthetic.test"); await writeFile(destination, "old", { mode: 0o600 });
+  const previous = await lstat(destination, { bigint: true });
+  const lock = await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600);
+  const acquired = await resources.lock(lock, { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired"); if (acquired.state !== "acquired") return;
+  try {
+    const expected = { device: String(previous.dev), inode: String(previous.ino + 1n) };
+    assert.deepEqual(await replacePrivateStateFile(root, "synthetic.test", Buffer.from("new"), expected, acquired.lease, resources), { state: "destination_changed" });
+    assert.equal(await readFile(destination, "utf8"), "old");
+    assert.deepEqual((await readdir(root)).sort(), ["queue.lock", "synthetic.test"]);
+  } finally { await acquired.lease.release(); }
 }));
