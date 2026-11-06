@@ -1,6 +1,6 @@
 //! Bounded, file-descriptor-pinned Linux GStreamer decoder.
 
-use apparent_capture_engine::linux::media::PinnedVideoReader;
+use apparent_capture_engine::linux::media::{IncompleteVideo, PinnedVideoReader};
 use std::fs::File;
 
 const SOURCE_EDGE_LIMIT: u32 = 16_384;
@@ -83,7 +83,9 @@ pub fn decode(
     if metadata.len() == 0 {
         return Err("source_incomplete");
     }
-    let reader = PinnedVideoReader::open(source).map_err(|_| "decode_failed")?;
+    let reader = PinnedVideoReader::open(source).map_err(|error| {
+        if error.is::<IncompleteVideo>() { "source_incomplete" } else { "decode_failed" }
+    })?;
     let mut total = 0u64;
     for &requested in times {
         let clamped_to_end = requested >= reader.duration_ms();

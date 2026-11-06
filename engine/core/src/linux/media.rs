@@ -47,12 +47,24 @@ pub struct VideoTiming {
 /// so callers can retain their own path and lease checks without reopening it.
 pub struct PinnedVideoReader(VideoReader);
 
+#[derive(Debug)]
+pub struct IncompleteVideo;
+
+impl std::fmt::Display for IncompleteVideo {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("Video has no positive duration")
+    }
+}
+impl std::error::Error for IncompleteVideo {}
+
 impl PinnedVideoReader {
     pub fn open(file: &File) -> Result<Self> {
-        Ok(Self(VideoReader::open_location(
+        let reader = VideoReader::open_location(
             &format!("/proc/self/fd/{}", file.as_raw_fd()),
             0,
-        )?))
+        )?;
+        if reader.duration_ms == 0 { return Err(IncompleteVideo.into()); }
+        Ok(Self(reader))
     }
 
     pub fn duration_ms(&self) -> u64 { self.0.duration_ms }
@@ -123,17 +135,15 @@ impl VideoReader {
             .context("No sink")?
             .downcast::<gst_app::AppSink>()
             .map_err(|_| anyhow!("Not an appsink"))?;
-        pipeline.set_state(gst::State::Paused)?;
-        let (result, _, _) = pipeline.state(gst::ClockTime::from_seconds(10));
+        // Own the pipeline before startup so every failure tears it down.
+        let mut reader = Self { pipeline, sink, duration_ms: 0 };
+        reader.pipeline.set_state(gst::State::Paused)?;
+        let (result, _, _) = reader.pipeline.state(gst::ClockTime::from_seconds(10));
         result.with_context(|| format!("Could not open {location}"))?;
-        let duration_ms = pipeline
+        reader.duration_ms = reader.pipeline
             .query_duration::<gst::ClockTime>()
             .map_or(0, gst::ClockTime::mseconds);
-        Ok(Self {
-            pipeline,
-            sink,
-            duration_ms,
-        })
+        Ok(reader)
     }
 
     /// Return the last frame at or before the requested movie time.
