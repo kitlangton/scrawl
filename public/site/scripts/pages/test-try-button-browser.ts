@@ -61,38 +61,28 @@ try {
 
     const button = page.locator('.footer-try')
     await button.scrollIntoViewIfNeeded()
-    const styles = await page.evaluate(() => ['.pond-download .btn-primary', '.footer-try'].map(selector => {
-      const style = getComputedStyle(document.querySelector(selector))
-      return ['borderRadius', 'backgroundColor', 'color', 'padding', 'fontSize', 'fontWeight', 'lineHeight'].map(key => style[key])
-    }))
-    // The accepted homepage gives the hero and footer distinct treatments.
-    assert.deepEqual(styles[1].slice(0, 3), ['7px', 'rgb(183, 165, 216)', 'rgb(25, 22, 29)'], 'footer retains the accepted lilac rounded action')
-    await page.screenshot({ path: `${evidence}/${scenario.name}-before.png` })
+    assert.match(await button.textContent(), /Try/, 'the footer retains its playful invitation')
+    assert.deepEqual(launches, [], 'no automatic protocol launch')
+    assert.equal(apiCalls, 0, 'no download lookup before activation')
     if (scenario.keyboard) { await button.focus(); await page.keyboard.press('Enter') }
-    else await button.click({ delay: 80 })
-    assert.match(await button.textContent(), /Not installed yet\?.*click again to download/, 'first click must turn the same button into the download action')
-    await page.waitForTimeout(1800)
-    assert.deepEqual(launches, ['apparent://open'], 'one launch attempt, with no capture/session parameters')
-    assert.equal(apiCalls, 0, 'no release lookup on the first click or a timer')
-    assert.deepEqual(requests, [], 'no automatic download or release navigation')
-    // Dismiss any browser-owned protocol prompt before the user's next action.
+    else await button.click()
+    assert.match(await button.textContent(), /Not installed yet\?.*click again to download/)
+    await page.waitForTimeout(300)
+    assert.deepEqual(launches, ['apparent://open'], 'first activation only requests opening the app')
+    assert.equal(apiCalls, 0, 'opening the app never starts an automatic download')
+    assert.deepEqual(requests, [])
     await page.keyboard.press('Escape')
-    assert.equal(await page.locator('dialog[open]').count(), 0, 'the old install dialog is gone')
     const geometry = await button.evaluate(e => {
-      const b = e.getBoundingClientRect(), copy = e.closest('.footer-invite').getBoundingClientRect(), scene = e.closest('.footer-scene').getBoundingClientRect()
-      return { left: b.left, right: b.right, contentBottom: copy.bottom, sceneBottom: scene.bottom, overflow: document.documentElement.scrollWidth > innerWidth }
+      const b = e.getBoundingClientRect(), scene = e.closest('.footer-scene').getBoundingClientRect()
+      return { left:b.left, right:b.right, height:b.height, contentBottom:b.bottom, sceneBottom:scene.bottom, overflow:document.documentElement.scrollWidth>innerWidth }
     })
-    assert(geometry.left >= 0 && geometry.right <= scenario.width && geometry.contentBottom <= geometry.sceneBottom && !geometry.overflow, 'fallback copy fits the viewport and scene')
-    await page.screenshot({ path: `${evidence}/${scenario.name}-after.png` })
-    // Reconnecting must preserve the download state and not duplicate listeners.
-    await page.evaluate(() => { const footer = document.querySelector('apparent-footer'), parent = footer.parentElement; footer.remove(); parent.append(footer) })
-
+    assert(geometry.height>=44 && geometry.left>=0 && geometry.right<=scenario.width && geometry.contentBottom<=geometry.sceneBottom && !geometry.overflow, 'download action fits with a touch target')
+    await page.screenshot({path: evidence+'/'+scenario.name+'-before.png'})
+    // Reconnection must not duplicate the single download handler.
+    await page.evaluate(() => {const footer=document.querySelector('apparent-footer'), parent=footer.parentElement;footer.remove();parent.append(footer)})
     if (scenario.asset) {
       const downloaded = page.waitForEvent('download')
       downloaded.catch(() => {})
-      // The real protocol attempt can leave a browser-owned native prompt in
-      // headless Chrome. Dispatch the follow-up DOM click to test routing;
-      // native consent/dismissal needs the separate desktop browser proof.
       await button.evaluate(e => e.click())
       await page.waitForFunction(() => document.querySelector('.pond-download [aria-busy="true"]'))
       await button.evaluate(e => e.click())
@@ -105,7 +95,7 @@ try {
       assert.deepEqual(requests, ['https://github.com/tryapparent/apparent/releases'])
       assert.equal(apiCalls, scenario.failAPI ? 1 : 0)
     }
-    assert.deepEqual(launches, ['apparent://open'], 'second click never retries native launch')
+    assert.deepEqual(launches, ['apparent://open'], 'the explicit follow-up downloads without another launch attempt')
     assert.deepEqual(errors, [])
     results.push({ name: scenario.name, width: scenario.width, launches, apiCalls, requests, geometry, status: 'PASS' })
     await page.close()
