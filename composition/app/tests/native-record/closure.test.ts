@@ -1,0 +1,56 @@
+import assert from 'node:assert/strict';
+import { test } from 'node:test';
+import { chmod, readFile, rm, stat, symlink, writeFile } from 'node:fs/promises';
+import { join } from 'node:path';
+import { readShell } from '../../scripts/artifacts.ts';
+import { stageRecordNative } from '../../scripts/record-native.ts';
+import { buildShell } from '../../scripts/build.ts';
+import { assemble, verifyAssembly } from '../../scripts/assemble.ts';
+
+import { fixture } from './fixture.ts';
+
+test('complete native closures preserve manifests, adjacent workers and executable modes; existing output is refused', async t => {
+  const f = await fixture(); t.after(() => rm(f.work, { recursive: true, force: true }));
+  const modes = await stageRecordNative(f.output, f.input);
+  assert.equal(Object.keys(modes).length, 8);
+  for (const [path, mode] of Object.entries(modes)) {
+    assert.equal((await stat(join(f.output, path))).mode & 0o7777, mode);
+    const [, slot, ...source] = path.split('/');
+    assert.deepEqual(await readFile(join(f.output, path)), await readFile(join(f.input[slot as 'capture'].directory, ...source)));
+  }
+  await assert.rejects(stageRecordNative(f.output, f.input), /EEXIST/);
+});
+
+test('unadmitted manifest, wrong source/target, changed worker, extra file, symlink and wrong mode fail before staging', async t => {
+  for (const change of ['digest', 'source', 'target', 'worker', 'extra', 'symlink', 'mode'] as const) {
+    const f = await fixture(); t.after(() => rm(f.work, { recursive: true, force: true }));
+    if (change === 'digest') f.input.capture.manifestSha256 = 'b'.repeat(64);
+    if (change === 'source') f.input.capture.sourceSha = 'b'.repeat(40);
+    if (change === 'target') (f.input as unknown as { target: string }).target = 'macos-x64';
+    const worker = join(f.input.capture.directory, 'libexec/worker');
+    if (change === 'worker') await writeFile(worker, 'tampered');
+    if (change === 'extra') await writeFile(join(f.input.media.directory, 'extra'), 'undeclared');
+    if (change === 'symlink') { await rm(worker); await symlink(join(f.input.media.directory, 'libexec/worker'), worker); }
+    if (change === 'mode') await chmod(worker, 0o644);
+    await assert.rejects(stageRecordNative(f.output, f.input), Error, change);
+    await assert.rejects(stat(join(f.output, 'native-record')), { code: 'ENOENT' });
+  }
+});
+
+test('Record-bound shell and assembled copy seal all native bytes and modes', { skip: process.platform !== 'linux' || process.arch !== 'x64' }, async t => {
+  const f = await fixture(); t.after(() => rm(f.work, { recursive: true, force: true }));
+  const binding = join(f.work, 'binding.ts');
+  await writeFile(binding, 'export function createRecordHostServices() { throw new Error("synthetic build only"); }');
+  await buildShell(f.output, undefined, { module: binding, nativeArtifacts: f.input });
+  const manifest = await readShell(f.output);
+  assert.equal(Object.keys(manifest.nativeFiles!).length, 8);
+  const assembly = join(f.work, 'assembly');
+  await assemble(f.output, [], assembly);
+  await verifyAssembly(assembly);
+  const worker = join(assembly, 'native-record/capture/libexec/worker');
+  await chmod(worker, 0o644);
+  await assert.rejects(verifyAssembly(assembly), /mode mismatch/);
+  await chmod(worker, 0o755);
+  await writeFile(worker, 'changed');
+  await assert.rejects(verifyAssembly(assembly), /checksum mismatch/);
+});

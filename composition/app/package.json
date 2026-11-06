@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "test": "node --experimental-strip-types --test tests/assembly.test.ts tests/host.test.ts tests/onboarding-progress-bridge.test.ts tests/host-lifecycle.test.ts tests/record/*.test.ts",
+    "test": "node --experimental-strip-types --test tests/assembly.test.ts tests/host.test.ts tests/onboarding-progress-bridge.test.ts tests/host-lifecycle.test.ts tests/record/*.test.ts tests/native-record/*.test.ts",
     "check": "npm --prefix ../../shared/contracts run build && npm --prefix ../../shared/contracts run typecheck && npm --prefix ../../shared/contracts test && node scripts/check-installed.ts && npm run typecheck && npm test",
     "build:shell": "node scripts/build.ts shell",
     "build:record": "node scripts/build-record.ts",
@@ -15,7 +15,7 @@
     "prestart": "npm run prepare:electron",
     "start": "electron dist/app",
     "package": "node scripts/package.ts dist/app dist/packages",
-    "test:electron": "node --experimental-strip-types --test --test-concurrency=1 tests/electron.test.ts tests/record-bridge.electron.test.ts tests/record/pill.electron.ts",
+    "test:electron": "node --experimental-strip-types --test --test-concurrency=1 tests/electron.test.ts tests/record-bridge.electron.test.ts tests/record/pill.electron.ts tests/native-record/closure.electron.ts",
     "test:electron:onboarding": "node --experimental-strip-types --test tests/onboarding-bridge.electron.test.ts",
     "test:electron:record": "node --experimental-strip-types --test --test-concurrency=1 tests/record-bridge.electron.test.ts tests/record/pill.electron.ts"
   },

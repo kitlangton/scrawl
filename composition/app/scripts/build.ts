@@ -6,6 +6,7 @@ import { createRequire } from 'node:module';
 import { APP_SHELL_API, REACT_VERSION } from '@apparent/app-contracts';
 import { digest, readRegular, shellFiles } from './artifacts.ts';
 import { checkInstalled } from './check-installed.ts';
+import { stageRecordNative, type RecordNativeArtifacts } from './record-native.ts';
 
 export const root = resolve(dirname(fileURLToPath(import.meta.url)), '..');
 const external = ['react', 'react/jsx-runtime', 'react-dom/client'];
@@ -27,12 +28,18 @@ export interface RecordMainBindingInput {
   /** Trusted composition module exporting createRecordHostServices({ profilePath }). */
   module: string;
   resolvePaths?: string[];
+  /** Complete externally admitted native payloads, staged without building owner source. */
+  nativeArtifacts?: RecordNativeArtifacts;
 }
 export async function buildShell(output: string, onboarding?: OnboardingMainBindingInput, record?: RecordMainBindingInput) {
   if (onboarding && record) throw new Error('Owner host bindings must be assembled separately');
+  if (record?.nativeArtifacts && (process.platform !== 'linux' || process.arch !== 'x64')) {
+    throw new Error('Record native Capture/2 assembly requires Linux x64');
+  }
   await checkInstalled();
   if (onboarding && !/^[a-f0-9]{64}$/.test(onboarding.configHost.sha256)) throw new Error('Invalid admitted config host digest');
   await mkdir(join(output, 'vendor'), { recursive: true });
+  const nativeFiles = record?.nativeArtifacts ? await stageRecordNative(output, record.nativeArtifacts) : undefined;
   await build({ ...common, entryPoints: [join(root, 'src/renderer.tsx')], outfile: join(output, 'renderer.js'),
     external: [...external, './registry.js'] });
   const require = createRequire(import.meta.url);
@@ -87,10 +94,10 @@ export async function buildShell(output: string, onboarding?: OnboardingMainBind
   await writeFile(join(output, 'package.json'), JSON.stringify({ name: 'apparent-foundation',
     productName: 'Apparent Foundation', version: '0.0.0', main: 'main.cjs' }, null, 2) + '\n');
   const files: Record<string, string> = {};
-  const inventory = [...shellFiles, ...(onboarding ? ['native/apparent-config-host', 'assets/frog.png', 'assets/apparent-app-icon.svg'] : [])];
+  const inventory = [...shellFiles, ...Object.keys(nativeFiles ?? {}), ...(onboarding ? ['native/apparent-config-host', 'assets/frog.png', 'assets/apparent-app-icon.svg'] : [])];
   for (const file of inventory) files[file] = digest(await readRegular(join(output, file)));
   await writeFile(join(output, 'manifest.json'), JSON.stringify({ schemaVersion: 1,
-    shellApi: APP_SHELL_API, reactVersion: REACT_VERSION, files }, null, 2) + '\n');
+    shellApi: APP_SHELL_API, reactVersion: REACT_VERSION, files, ...(nativeFiles ? { nativeFiles } : {}) }, null, 2) + '\n');
 }
 export async function buildApp(output: string, onboarding?: OnboardingMainBindingInput) {
   await buildShell(join(output, 'shell'), onboarding);
