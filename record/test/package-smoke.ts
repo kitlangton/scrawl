@@ -183,7 +183,7 @@ try {
     assert.equal(createHash('sha256').update(await readFile(path.join(admittedPayload, 'manifest.json'))).digest('hex'), createHash('sha256').update(await readFile(path.join(payload, 'manifest.json'))).digest('hex'), 'external extracted payload matches archive manifest');
     const capture2 = path.join(scratch, 'capture2');
     await initConsumer(capture2);
-    await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact], { cwd: capture2 });
+    await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact, 'react@19.2.0', 'react-dom@19.2.0'], { cwd: capture2 });
     const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
@@ -194,6 +194,9 @@ try {
       import {pathToFileURL} from 'node:url';
       import {CaptureClient, launchCaptureEngine} from '@apparent/engine-sdk/capture';
       import {createCapture2Host} from '@apparent/record/host/capture2';
+      import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
+      import {createRecordCapabilityProvider} from '@apparent/record/capabilities';
+      import {createRecordClientPillHost,disposeWorkflowPillHost} from '@apparent/record/ui';
       import {AbsentDestinationAllocator, SqliteCaptureMappingStore} from '@apparent/record/host';
       import {readCaptureMaterials} from '@apparent/record/host/materials';
       const {reconcileAndCancel,runBounded,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
@@ -253,6 +256,7 @@ try {
         const mappings = new SqliteCaptureMappingStore(control);
         const destinations = new AbsentDestinationAllocator(control,bundles);
         let host = createCapture2Host({client,mappings,destinations});
+        let recordRuntime, recordClient, pillHost;
         try {
           if (sceneSpawnError) throw sceneSpawnError;
           const deadline = Date.now()+150000;
@@ -266,17 +270,32 @@ try {
           const areaSource = discovery.sources.find(s=>s.kind==='area' && s.displayId===displaySource?.displayId);
           assert.ok(displaySource,'683x480 owned Xvfb display was not discovered'); assert.ok(areaSource,'advertised center-half area was not discovered');
           assert.deepEqual(areaSource.bounds,{x:170,y:120,width:341,height:240,scale:1});
-          const invocation = {kind:'explicit',invocationId:'a'.repeat(32),observedAtMs:Date.now()};
-          const options = {audio:'none',localOnly:true};
+          const options={audio:'none',localOnly:true};
+          const invocation={kind:'explicit',invocationId:'a'.repeat(32),observedAtMs:Date.now()};
+          recordRuntime = await createCapture2RecordRuntime({host,pollIntervalMs:200,createStartIntent(requestId,fresh) {
+            assert.equal(fresh.state,'available');
+            const source=fresh.sources.find(s=>s.id===displaySource.id); assert.ok(source,'explicit selection must match fresh discovery');
+            const digest=createHash('sha256').update(requestId,'utf8').digest('hex');
+            return {source,options,invocation:{...invocation,observedAtMs:Date.now()},destinationPath:path.join(bundles,'record-'+digest+'.apparent')};
+          }});
+          recordClient=createRecordCapabilityProvider({runtime:recordRuntime,capture2Start:recordRuntime,providerEpoch:'packed-native-provider',native:{readFacts:async()=>({version:1,providerEpoch:'packed-native-native',revision:1,readiness:[],shortcut:{effective:null,label:null,registration:'unknown',externallyManaged:false,draft:null}})}});
           const requestId = 'packed-native-display-'+Date.now();
-          const started = await host.start({requestId,source:displaySource,options,invocation});
-          assert.ok(['starting','recording'].includes(started.phase));
+          let before=recordClient.current();
+          const localOnly=await recordClient.execute({type:'start-capture',delivery:'local-only',requestId:'packed-native-local-only-'+Date.now(),expected:{providerEpoch:before.providerEpoch,revision:before.revision}});
+          assert.equal(localOnly.status,'refused','native remote-delivery refusal is not Record pipeline local-only enforcement');
+          let actionIds=0;
+          pillHost=createRecordClientPillHost(recordClient,{createRequestId:()=>actionIds++===0?requestId:'packed-pill-action-'+actionIds});
+          const initialPill=await pillHost.read(); assert.ok(initialPill.actions.some(action=>action.id==='record'&&action.enabled));
+          await pillHost.act(initialPill.revision,'record');
+          const active=await waitFor(async()=>recordClient.current().captures.find(x=>x.captureId===requestId&&x.phase==='recording'),'public RecordClient recording fact');
           const mapping = await mappings.getByRequestId(requestId); assert.ok(mapping?.capture2Intent);
           assert.equal(mapping.bundlePath,path.join(bundles,path.basename(mapping.bundlePath)));
           await assert.rejects(lstat(mapping.bundlePath),e=>e.code==='ENOENT','Record must reserve, never create, the final destination');
           const recording = await waitFor(async()=>{const x=await host.inspect(requestId);return x.phase==='recording'?x:null;},'real recording receipt');
           assert.equal(recording.requestId,requestId);
-          const stopReceipt = await host.stop(requestId);
+          const recordingPill=await pillHost.read(); assert.equal(recordingPill.phase,'recording');
+          await pillHost.act(recordingPill.revision,'finish');
+          const stopReceipt = await host.inspect(requestId);
           assert.ok(['stopping','materials-ready'].includes(stopReceipt.phase));
           const stopped = stopReceipt.phase==='materials-ready' ? stopReceipt : await waitFor(async()=>{const value=await host.inspect(requestId);return value.phase==='materials-ready'?value:null;},'retained materials ready');
           assert.ok(stopped.materials?.leaseId);
@@ -320,6 +339,8 @@ try {
           console.log('packed Record capture/2 native Xvfb consumer passed');
         } finally {
           await reconcileAndCancel(mappings,client,Date.now()+15000);
+          if(pillHost)disposeWorkflowPillHost(pillHost);
+          recordClient?.detach(); recordRuntime?.dispose();
           host.dispose();
           await client.close();
           clientClosed = true;

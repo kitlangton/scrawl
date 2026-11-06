@@ -1,8 +1,9 @@
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import test from "node:test";
+import type { CapabilitySnapshot, RecordClient, RecordCommand, CommandResult } from "../src/capabilities/index.ts";
 import { RecordWorkflow, type CaptureReceipt, type EngineClient, type EngineEvent, type Readiness } from "../dist/backend/workflow/controller.js";
-import { createWorkflowPillHost, disposeWorkflowPillHost } from "../dist/ui/workflow-host.js";
+import { createRecordClientPillHost, createWorkflowPillHost, disposeWorkflowPillHost } from "../dist/ui/workflow-host.js";
 
 class ScriptedEngine implements EngineClient {
   events = new EventEmitter();
@@ -177,4 +178,109 @@ test("unavailable, checking and starting states carry visible status content", a
   resolve({ ready: true }); await checking;
   assert.equal((await host.read())!.status, "Starting capture…");
   disposeWorkflowPillHost(host); workflow.dispose();
+});
+
+function recordClientFacts(): CapabilitySnapshot {
+  return { version: 2, providerEpoch: "provider-a", revision: 3, connection: "connected",
+    readiness: { requirements: [{ id: "screen", required: true, status: "granted", usableNow: true, relaunchNeeded: false, allowedRepairActions: [] }] },
+    shortcut: { effective: null, label: null, registration: "unknown", externallyManaged: false, draft: null },
+    pen: { effective: null, supported: [] }, captures: [], nextShortcutAdmission: { state: "idle" } };
+}
+
+function recordClientFixture() {
+  let value = recordClientFacts();
+  const observers = new Set<(snapshot: CapabilitySnapshot) => void>();
+  const commands: RecordCommand[] = [];
+  let detached = false;
+  const client: RecordClient = {
+    observe(listener) { observers.add(listener); listener(structuredClone(value)); return () => observers.delete(listener); },
+    async execute(command) {
+      commands.push(structuredClone(command));
+      if (command.expected.providerEpoch !== value.providerEpoch || command.expected.revision !== value.revision)
+        return { status: "refused", requestId: command.requestId, reason: "stale", snapshot: structuredClone(value) };
+      if (command.type === "start-capture") value = { ...value, revision: value.revision + 1, captures: [{ captureId: command.requestId, delivery: "host-default", phase: "recording", outcomes: [] }] };
+      for (const listener of observers) listener(structuredClone(value));
+      return { status: "accepted", requestId: command.requestId, snapshot: structuredClone(value) } as CommandResult;
+    },
+    detach() { detached = true; },
+  };
+  return { client, commands, value: () => value, emit(next: CapabilitySnapshot) { value = structuredClone(next); for (const listener of observers) listener(structuredClone(value)); }, isDetached: () => detached };
+}
+
+test("RecordClient pill sends host-default start through client and exact-ID lifecycle commands", async () => {
+  const fixture = recordClientFixture();
+  let ids = 0;
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => `pill-${++ids}` });
+  let view = (await host.read())!;
+  assert.deepEqual(view.actions.map(action => action.id), ["record"]);
+  await host.act(view.revision, "record");
+  assert.equal(fixture.commands[0]?.type, "start-capture");
+  assert.equal(fixture.commands[0]?.type === "start-capture" && fixture.commands[0].delivery, "host-default");
+  view = (await host.read())!;
+  await host.act(view.revision, "finish");
+  assert.deepEqual(fixture.commands.map(command => command.type), ["start-capture", "stop-capture"]);
+  assert.equal(fixture.commands[1]?.type === "stop-capture" && fixture.commands[1].captureId, "pill-1");
+  assert.equal(fixture.commands[1]?.expected.revision, 4);
+  disposeWorkflowPillHost(host);
+  assert.equal(fixture.isDetached(), false);
+});
+
+test("stale pill action is dropped; a complete replacement snapshot changes owned identity", async () => {
+  const fixture = recordClientFixture();
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => "action" });
+  const old = (await host.read())!;
+  fixture.emit({ ...fixture.value(), revision: 4, captures: [{ captureId: "other", delivery: "unknown", phase: "recording", outcomes: [] }] });
+  await host.act(old.revision, "finish");
+  assert.equal(fixture.commands.length, 0);
+  const current = (await host.read())!;
+  await host.act(current.revision, "cancel");
+  assert.equal(fixture.commands[0]?.type, "cancel-capture");
+  assert.equal(fixture.commands[0]?.type === "cancel-capture" && fixture.commands[0].captureId, "other");
+  assert.equal((await host.read())?.warning, "Delivery status unavailable");
+  disposeWorkflowPillHost(host);
+});
+
+test("ambiguous historical active facts are never arbitrarily bound to stop or cancel", async () => {
+  const fixture = recordClientFixture();
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => "action" });
+  fixture.emit({ ...fixture.value(), revision: 4, captures: [
+    { captureId: "prior-saved", delivery: "unknown", artifactId: "opaque-artifact", phase: "saved", outcomes: [{ kind: "save", at: "then", ok: true }] },
+    { captureId: "old-processing", delivery: "unknown", phase: "processing", outcomes: [] },
+    { captureId: "other-recording", delivery: "unknown", phase: "recording", outcomes: [] },
+  ] });
+  const view = (await host.read())!;
+  assert.equal(view.label, "Capture ownership needs reconciliation");
+  assert.notEqual(view.phase, "completed");
+  assert.deepEqual(view.actions.map(action => action.id), ["refresh"]);
+  await host.act(view.revision, "finish");
+  await host.act(view.revision, "cancel");
+  assert.equal(fixture.commands.length, 0);
+  disposeWorkflowPillHost(host);
+});
+
+test("only authenticated artifact identity displays saved state; local-only and readiness refusal stay visible", async () => {
+  const fixture = recordClientFixture();
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => "action" });
+  fixture.emit({ ...fixture.value(), revision: 4, readiness: { requirements: [{ id: "screen", required: true, status: "denied", usableNow: false, relaunchNeeded: false, allowedRepairActions: [] }] }, captures: [
+    { captureId: "historical-path-only", delivery: "local-only", phase: "saved", outcomes: [{ kind: "save", at: "now", ok: true, detail: "/private/fake.apparent" }] },
+  ] });
+  const view = (await host.read())!;
+  assert.notEqual(view.phase, "completed");
+  assert.notEqual(view.notice, "/private/fake.apparent");
+  assert.deepEqual(view.actions.map(action => action.id), ["refresh"]);
+  disposeWorkflowPillHost(host);
+});
+
+test("RecordClient pill retires old provider epochs after reconnect", async () => {
+  const fixture = recordClientFixture();
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => "reconnect-action" });
+  const old = fixture.value();
+  fixture.emit({ ...old, providerEpoch: "provider-b", revision: 1, captures: [{ captureId: "new-capture", delivery: "unknown", phase: "recording", outcomes: [] }] });
+  const replacement = (await host.read())!;
+  fixture.emit({ ...old, revision: 100, captures: [{ captureId: "retired-capture", delivery: "unknown", phase: "recording", outcomes: [] }] });
+  assert.equal((await host.read())!.revision, replacement.revision, "retired epoch cannot replace the current frame");
+  await host.act(replacement.revision, "finish");
+  assert.equal(fixture.commands[0]?.expected.providerEpoch, "provider-b");
+  assert.equal(fixture.commands[0]?.type === "stop-capture" && fixture.commands[0].captureId, "new-capture");
+  disposeWorkflowPillHost(host);
 });

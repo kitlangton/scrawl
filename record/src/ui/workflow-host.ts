@@ -1,4 +1,5 @@
 import { RecordWorkflow, type RecordState } from "../backend/workflow/controller.js";
+import type { CapabilitySnapshot, RecordClient, CaptureFact } from "../capabilities/index.js";
 import type { PillHost, PillView } from "./types.js";
 
 export type WorkflowPillHostOptions = {
@@ -60,6 +61,87 @@ export function createWorkflowPillHost(workflow: RecordWorkflow, options: Workfl
 export function disposeWorkflowPillHost(host: PillHost): void {
   hostDisposers.get(host)?.();
   hostDisposers.delete(host);
+}
+
+export type RecordClientPillHostOptions = {
+  createRequestId: () => string;
+  clock?: (snapshot: CapabilitySnapshot, capture?: CaptureFact) => string;
+};
+
+/** Binds the existing pill to the public, revisioned RecordClient contract. */
+export function createRecordClientPillHost(client: RecordClient, options: RecordClientPillHostOptions): PillHost {
+  let snapshot: CapabilitySnapshot | undefined;
+  const retiredEpochs = new Set<string>();
+  let revision = 0;
+  let disposed = false;
+  let view: PillView | null = null;
+  const observers = new Set<(value: PillView) => void>();
+  const publish = (next: CapabilitySnapshot) => {
+    if (disposed || retiredEpochs.has(next.providerEpoch) || (snapshot && next.providerEpoch === snapshot.providerEpoch && next.revision < snapshot.revision)) return;
+    if (snapshot && next.providerEpoch !== snapshot.providerEpoch) retiredEpochs.add(snapshot.providerEpoch);
+    snapshot = structuredClone(next);
+    view = presentClient(snapshot, ++revision, options);
+    for (const observer of [...observers]) try { observer(structuredClone(view)); } catch { observers.delete(observer); }
+  };
+  const unsubscribe = client.observe(publish);
+  const host: PillHost = {
+    manualDrag: false, read: async () => view && structuredClone(view), layout: async () => {}, beginDrag: async () => {},
+    beginPaste: async () => {}, cancelPaste: async () => {},
+    subscribe: callback => { if (!disposed) observers.add(callback); return () => observers.delete(callback); },
+    act: async (expectedRevision, action) => {
+      const observed = snapshot;
+      const currentView = view;
+      if (disposed || !observed || !currentView || expectedRevision !== currentView.revision) return;
+      const base = { requestId: options.createRequestId(), expected: { providerEpoch: observed.providerEpoch, revision: observed.revision } };
+      let command: import("../capabilities/index.js").RecordCommand | undefined;
+      const owned = observed.captures.find(item => item.captureId === currentViewCaptureId(observed));
+      if (action === "refresh") command = { ...base, type: "refresh" };
+      else if (action === "record" && canStart(observed)) command = { ...base, type: "start-capture", delivery: "host-default" };
+      else if (owned && action === "finish" && owned.phase === "recording") command = { ...base, type: "stop-capture", captureId: owned.captureId };
+      else if (owned && action === "cancel" && ["starting", "recording"].includes(owned.phase)) command = { ...base, type: "cancel-capture", captureId: owned.captureId };
+      else if (owned && action === "inspect" && ["unknown", "failed"].includes(owned.phase)) command = { ...base, type: "inspect-capture", captureId: owned.captureId };
+      if (command) await client.execute(command);
+    },
+  };
+  hostDisposers.set(host, () => { disposed = true; unsubscribe(); observers.clear(); });
+  return host;
+
+  function currentViewCaptureId(value: CapabilitySnapshot): string | undefined {
+    return activeCapture(value)?.captureId ?? value.captures.filter(item => item.phase === "saved").at(-1)?.captureId;
+  }
+}
+
+function activeCapture(value: CapabilitySnapshot): CaptureFact | undefined {
+  const active = value.captures.filter(item => ["starting", "recording", "processing", "unknown"].includes(item.phase));
+  return active.length === 1 ? active[0] : undefined;
+}
+function canStart(value: CapabilitySnapshot): boolean {
+  return value.connection === "connected" && value.readiness.requirements.every(item => !item.required || (item.usableNow && !item.relaunchNeeded)) &&
+    !value.captures.some(item => ["starting", "recording", "processing", "unknown"].includes(item.phase));
+}
+function presentClient(value: CapabilitySnapshot, revision: number, options: RecordClientPillHostOptions): PillView {
+  const active = activeCapture(value);
+  const hasAmbiguousOwnership = value.captures.filter(item => ["starting", "recording", "processing", "unknown"].includes(item.phase)).length > 1;
+  const saved = !active && !hasAmbiguousOwnership ? [...value.captures].reverse().find(item => item.phase === "saved" && item.artifactId) : undefined;
+  const failed = !active && !hasAmbiguousOwnership ? [...value.captures].reverse().find(item => item.phase === "failed") : undefined;
+  const state: RecordState = active ? active.phase === "starting" ? { phase: "starting", captureId: active.captureId, readiness: { ready: true } }
+    : active.phase === "recording" ? { phase: "recording", captureId: active.captureId, readiness: { ready: true } }
+      : active.phase === "processing" ? { phase: "processing", captureId: active.captureId, readiness: { ready: true } }
+        : { phase: "uncertain", captureId: active.captureId, readiness: { ready: false, reason: "Capture state unknown" }, message: "Capture state unknown" }
+    : failed ? { phase: "failed", captureId: failed.captureId, readiness: { ready: true }, message: "Capture failed" }
+      : { phase: "idle", readiness: { ready: canStart(value), reason: value.readiness.requirements.find(item => item.required && (!item.usableNow || item.relaunchNeeded))?.id ?? "Record capture unavailable" } };
+  const result = present(state, revision, { createRequestId: () => "", clock: () => options.clock?.(value, active ?? saved ?? failed) ?? "" });
+  if (hasAmbiguousOwnership) {
+    result.phase = "selecting"; result.label = "Capture ownership needs reconciliation"; result.status = result.label;
+    result.warning = "Multiple captures are active or unresolved";
+    result.actions = [{ id: "refresh", label: "Check capture", enabled: true, selected: false, primary: true }];
+  }
+  if (saved) { result.phase = "completed"; result.label = "Recording saved"; result.actions = [{ id: "record", label: "Record again", enabled: canStart(value), selected: false, primary: true }]; }
+  if (active?.phase === "unknown") result.actions = [{ id: "inspect", label: "Check status", enabled: true, selected: false, primary: true }];
+  if (saved) result.notice = saved.artifactId ?? null;
+  if (active?.delivery === "unknown" || active?.delivery === "local-only")
+    result.warning = result.warning ? `${result.warning}; delivery status unavailable` : "Delivery status unavailable";
+  return result;
 }
 
 function isStartable(state: RecordState): boolean {
