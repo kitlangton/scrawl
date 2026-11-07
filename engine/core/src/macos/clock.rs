@@ -215,6 +215,17 @@ mod tests {
     #[test]
     fn relative_milliseconds_rejects_values_outside_public_range() {
         assert_eq!(
+            checked_relative_milliseconds(t(0, 1, 0), t(MAX_CAPTURE_MILLISECONDS as i64, 1000, 0)),
+            Ok(MAX_CAPTURE_MILLISECONDS)
+        );
+        assert_eq!(
+            checked_relative_milliseconds(
+                t(0, 1, 0),
+                t(MAX_CAPTURE_MILLISECONDS as i64 + 1, 1000, 0)
+            ),
+            Err(ClockError::OutsidePublicRange)
+        );
+        assert_eq!(
             checked_relative_milliseconds(t(0, 1, 0), t(i64::MAX, 1, 0)),
             Err(ClockError::OutsidePublicRange)
         );
@@ -226,6 +237,52 @@ mod tests {
         assert_eq!(
             checked_floor_milliseconds(i128::MAX, 1),
             Err(ClockError::ArithmeticOverflow)
+        );
+    }
+
+    #[test]
+    fn invalid_and_non_numeric_flags_are_refused_in_either_operand() {
+        // CoreMedia flags: valid=1, rounded=2, +infinity=4, -infinity=8,
+        // indefinite=16. A rounded finite value remains numeric.
+        for flags in [0, 2, 1 | 4, 1 | 8, 1 | 16] {
+            let invalid = CMTime {
+                flags,
+                ..t(1, 1, 0)
+            };
+            assert_eq!(
+                checked_relative_milliseconds(invalid, t(2, 1, 0)),
+                Err(ClockError::InvalidTime)
+            );
+            assert_eq!(
+                checked_relative_milliseconds(t(0, 1, 0), invalid),
+                Err(ClockError::InvalidTime)
+            );
+        }
+        assert_eq!(
+            checked_relative_milliseconds(
+                t(0, 1, 0),
+                CMTime {
+                    flags: 3,
+                    ..t(1, 1, 0)
+                }
+            ),
+            Ok(1000)
+        );
+    }
+
+    #[test]
+    fn coremedia_host_clock_conversion_preserves_an_observed_timestamp() {
+        // Actual Darwin FFI/link check, without screen capture. This verifies
+        // the conversion ABI and host-clock identity, not SCK or movie origin.
+        let host = CMClock::host_time_clock();
+        let admission = CaptureAdmissionTime::now().unwrap();
+        let observed = host.time();
+        let mapped = map_sample_to_capture_clock(observed, &host, &host, admission).unwrap();
+        assert_eq!(mapped.source_pts, ClockTimestamp::from(observed));
+        assert_eq!(mapped.host_pts, ClockTimestamp::from(observed));
+        assert!(
+            mapped.capture_relative_ms
+                <= checked_relative_milliseconds(admission.0, host.time()).unwrap()
         );
     }
 }
