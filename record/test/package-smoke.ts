@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { checkGeneratedNodeScript, runQualification } from './native-qualification/native-qualification.ts';
+import { assertQualificationShutdownProtocol, checkGeneratedNodeScript, runQualification } from './native-qualification/native-qualification.ts';
 
 const run = promisify(execFile);
 const scratch = await mkdtemp(path.join(tmpdir(), 'record-packed-'));
@@ -240,45 +240,60 @@ try {
   `], { cwd: publication });
   process.stdout.write(publicationResult.stdout);
 
-  // The bounded Linux native qualification is opt-in. It installs the packed
-  // Record artifact and published SDK into a separate consumer, verifies and
-  // extracts the admitted capture/media artifacts into one private proof root,
-  // then exercises capture/2 and media/2 on owned synthetic Xvfb.
-  if (process.env.APPARENT_CAPTURE2_QUALIFY === '1') {
+  // Preparation installs the packed consumer and syntax-checks its frozen
+  // runner, but never starts Xvfb or a native worker. Execution remains separate.
+  if (process.env.APPARENT_CAPTURE2_QUALIFY === '1' || process.env.APPARENT_CAPTURE2_PREPARE_ONLY === '1') {
     const archive = process.env.APPARENT_CAPTURE2_ARCHIVE;
     const mediaArchive = process.env.APPARENT_MEDIA2_ARCHIVE;
     assert.ok(archive && path.isAbsolute(archive), 'APPARENT_CAPTURE2_ARCHIVE must name the admitted archive');
     assert.ok(mediaArchive && path.isAbsolute(mediaArchive), 'APPARENT_MEDIA2_ARCHIVE must name the admitted media archive');
+    const qualificationSdk = process.env.APPARENT_CAPTURE2_SDK_TARBALL;
+    assert.ok(qualificationSdk && path.isAbsolute(qualificationSdk), 'APPARENT_CAPTURE2_SDK_TARBALL must name the admitted SDK 0.4.4 tarball');
+    assert.equal(createHash('sha256').update(await readFile(qualificationSdk)).digest('hex'), '62e188a118261b73097372000d5ae4fe0f0e72ca2ad710f0714002f276856172', 'qualification requires the admitted SDK 0.4.4 package');
     const capture2 = path.join(scratch, 'capture2');
     await initConsumer(capture2);
-    await run('npm', ['install', '--no-audit', '--no-fund', tarball, sdkArtifact, 'react@19.2.0', 'react-dom@19.2.0'], { cwd: capture2 });
+    await run('npm', ['install', '--no-audit', '--no-fund', tarball, qualificationSdk, 'react@19.2.0', 'react-dom@19.2.0'], { cwd: capture2 });
+    const qualificationTypes = path.join(capture2, 'consumer.ts');
+    await writeFile(qualificationTypes, `
+      import { capture2MaterialsRoot } from '@apparent/engine-sdk/capture';
+      import { createStandardRecordCaptureCoordinator, type StandardRecordCaptureCoordinatorOptions, type RecordCaptureCoordinator } from '@apparent/record/host/capture2-coordinator';
+      declare const options: StandardRecordCaptureCoordinatorOptions;
+      const coordinator: Promise<RecordCaptureCoordinator> = createStandardRecordCaptureCoordinator(options);
+      const trustedRoot: string = capture2MaterialsRoot('/private/runtime', 'capture-id');
+      void [coordinator, trustedRoot];
+    `);
+    const qualificationTsc = path.join(root, 'node_modules/typescript/bin/tsc');
+    await run(process.execPath, [qualificationTsc, '--noEmit', '--strict', '--skipLibCheck', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', qualificationTypes], { cwd: capture2 });
+    const qualificationRuntime = await run(process.execPath, ['--input-type=module', '-e', `
+      import assert from 'node:assert/strict';
+      import { capture2MaterialsRoot } from '@apparent/engine-sdk/capture';
+      import { createStandardRecordCaptureCoordinator } from '@apparent/record/host/capture2-coordinator';
+      assert.equal(typeof capture2MaterialsRoot, 'function');
+      assert.equal(typeof createStandardRecordCaptureCoordinator, 'function');
+      console.log('packed Record standard coordinator and SDK 0.4.4 root consumer passed');
+    `], { cwd: capture2 });
+    process.stdout.write(qualificationRuntime.stdout);
     const nativeScript = `
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
       import {spawn} from 'node:child_process';
-      import {appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rm, stat, writeFile} from 'node:fs/promises';
+      import {appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, writeFile} from 'node:fs/promises';
       import {tmpdir} from 'node:os';
       import path from 'node:path';
       import {pathToFileURL} from 'node:url';
-      import {CaptureClient, launchCaptureEngine} from '@apparent/engine-sdk/capture';
-      import {Media2Client, launchMedia2Worker, prepareMedia2Request, encodeContactSheetLayout} from '@apparent/engine-sdk/media2';
-      import {createCapture2Host} from '@apparent/record/host/capture2';
-      import {createCapture2RecordRuntime} from '@apparent/record/host/capture2-runtime';
-      import {createRecordCapabilityProvider} from '@apparent/record/capabilities';
+      import {CaptureClient, capture2MaterialsRoot, launchCaptureEngine, preflightCapturePublication} from '@apparent/engine-sdk/capture';
+      import {Media2Client, launchMedia2Worker} from '@apparent/engine-sdk/media2';
+      import {createStandardRecordCaptureCoordinator} from '@apparent/record/host/capture2-coordinator';
       import {createRecordClientPillHost,disposeWorkflowPillHost} from '@apparent/record/ui';
       import {AbsentDestinationAllocator, SqliteCaptureMappingStore} from '@apparent/record/host';
-      import {readCaptureMaterials} from '@apparent/record/host/materials';
-      import {RecordMedia2Job} from '@apparent/record/processing/media2-consumer';
-      import {readRetainedDerivativeArtifacts} from '@apparent/record/processing/retained-artifacts';
-      import {assembleCanonicalBundle} from '@apparent/record/processing/bundle';
-      import {prepareRecordPublication} from '@apparent/record/publication';
-      import {preflightCapturePublication} from '@apparent/engine-sdk/capture';
-      const {reconcileAndCancel,runBounded,runCleanupSteps,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
+      const {runBounded,runCleanupSteps,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
 
       const archive = path.resolve(process.env.APPARENT_CAPTURE2_ARCHIVE);
-      const root = await realpath(await mkdtemp(path.join(tmpdir(), 'record-capture2-native-')));
+      const mediaArchive = path.resolve(process.env.APPARENT_MEDIA2_ARCHIVE);
+      const sdkTarball = path.resolve(process.env.APPARENT_CAPTURE2_SDK_TARBALL);
+      const root = await realpath(await mkdtemp(path.join(tmpdir(), 'record-standard-native-')));
       await chmod(root, 0o700);
-      console.log('private native proof root: ' + root);
+      console.log('private standard qualification root: ' + root);
       const logPath = path.join(root, 'qualification.log');
       await writeFile(logPath, '', {mode:0o600});
       const emittedScript = path.join(root,'qualification-script.mjs');
@@ -289,339 +304,207 @@ try {
         console.log(line);
         await appendFile(logPath, line + '\\n', {mode:0o600});
       };
-      const sourceSha = '0570f77576be2f2b552710a3710cd345444cfdce';
-      const acceptance = JSON.parse(await readFile(path.join(path.dirname(path.dirname(archive)), 'acceptance.json'), 'utf8'));
-      assert.equal(acceptance.sourceSha, sourceSha); assert.equal(acceptance.runId, '42252644242'); assert.equal(acceptance.conclusion, 'success'); assert.equal(acceptance.fresh, true);
-      const inputEvidence = path.join(root, 'native-inputs'); await mkdir(inputEvidence,{mode:0o700});
-      await copyFile(path.join(path.dirname(path.dirname(archive)),'acceptance.json'),path.join(inputEvidence,'acceptance.json'));
-      await chmod(path.join(inputEvidence,'acceptance.json'),0o600);
       const fileHash = bytes => createHash('sha256').update(bytes).digest('hex');
+      assert.equal(fileHash(await readFile(sdkTarball)), '62e188a118261b73097372000d5ae4fe0f0e72ca2ad710f0714002f276856172');
+      const inputEvidence = path.join(root, 'native-inputs'); await mkdir(inputEvidence,{mode:0o700});
+      await copyFile(sdkTarball,path.join(inputEvidence,'apparent-engine-sdk-0.4.4.tgz'));
+      await chmod(path.join(inputEvidence,'apparent-engine-sdk-0.4.4.tgz'),0o600);
       async function admitArtifact(kind, archivePath, expected) {
-        const evidence = path.dirname(archivePath), archiveBytes = await readFile(archivePath);
-        assert.equal(archiveBytes.byteLength, expected.size, kind + ' archive size');
-        assert.equal(fileHash(archiveBytes), expected.sha256, kind + ' archive hash');
-        const receipt = JSON.parse(await readFile(path.join(evidence,'receipt.json'),'utf8'));
-        const externalManifestBytes = await readFile(path.join(evidence,'manifest.json'));
-        const inventory = JSON.parse(await readFile(path.join(evidence,'inventory-verification.json'),'utf8'));
-        const attestation = JSON.parse(await readFile(path.join(evidence,'attestation.json'),'utf8'));
-        assert.equal(receipt.sourceSha,sourceSha); assert.equal(receipt.sha256,expected.sha256); assert.equal(receipt.size,expected.size); assert.equal(receipt.runId,'42252644242');
-        assert.equal(inventory.receipt.sha256,receipt.sha256); assert.equal(inventory.verifiedRegularFiles,expected.files);
-        const bundle=attestation[0]?.attestation?.bundle; assert.ok(bundle,'signed GitHub attestation bundle exists');
+        const evidence=path.dirname(archivePath), evidenceRoot=path.dirname(evidence), archiveBytes=await readFile(archivePath);
+        assert.equal(archiveBytes.byteLength,expected.size,kind+' component size'); assert.equal(fileHash(archiveBytes),expected.sha256,kind+' component SHA-256');
+        const receipt=JSON.parse(await readFile(path.join(evidence,'receipt.json'),'utf8'));
+        const accepted=JSON.parse(await readFile(path.join(evidenceRoot,expected.acceptedFile),'utf8'));
+        const inventoryDocument=JSON.parse(await readFile(path.join(evidenceRoot,'inventory-verification.json'),'utf8'));
+        const inventoryRecord=Array.isArray(inventoryDocument)?inventoryDocument.find(item=>item.receipt?.sha256===expected.sha256):inventoryDocument;
+        const inventoryAdmission=Array.isArray(inventoryDocument)?inventoryRecord?.admission:inventoryDocument[kind];
+        const inventoryReceipt=Array.isArray(inventoryDocument)?inventoryRecord?.receipt:inventoryDocument[kind+'Receipt'];
+        const fileCount=Array.isArray(inventoryDocument)?inventoryRecord?.runtimeFileCount:inventoryDocument.runtimeFiles?.length;
+        const attestation=JSON.parse(await readFile(path.join(evidence,'attestation.json'),'utf8'));
+        assert.equal(receipt.sourceSha,expected.sourceSha); assert.equal(receipt.sha256,expected.sha256); assert.equal(receipt.size,expected.size); assert.equal(receipt.runId,String(expected.runId));
+        assert.equal(accepted.sourceSha,expected.sourceSha); assert.equal(accepted.runId,expected.runId); assert.equal(accepted.componentSha256,expected.sha256);
+        assert.equal(inventoryAdmission.componentSha256,expected.sha256); assert.equal(inventoryAdmission.sourceSha,expected.sourceSha); assert.equal(inventoryAdmission.runId,expected.runId);
+        assert.equal(inventoryReceipt.sha256,expected.sha256); assert.equal(Number(inventoryReceipt.size),expected.size); assert.equal(fileCount,expected.files);
+        const bundle=attestation[0]?.attestation?.bundle; assert.ok(bundle,'signed source attestation bundle exists');
         const statement=JSON.parse(Buffer.from(bundle.dsseEnvelope.payload,'base64').toString('utf8'));
         assert.equal(statement.subject[0].digest.sha256,expected.sha256);
-        assert.equal(statement.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit,sourceSha);
+        assert.equal(statement.predicate.buildDefinition.resolvedDependencies[0].digest.gitCommit,expected.sourceSha);
         assert.equal(statement.predicate.buildDefinition.externalParameters.workflow.path,'.github/workflows/stream-engine.yml');
         const bundlePath=path.join(inputEvidence,kind+'.attestation.bundle.json');
         await writeFile(bundlePath,JSON.stringify(bundle),{mode:0o600});
-        const verification=await runBounded('gh',['attestation','verify',archivePath,'--bundle',bundlePath,'--repo','tryapparent/apparent','--signer-workflow','tryapparent/apparent/.github/workflows/stream-engine.yml','--source-digest',sourceSha,'--source-ref','refs/heads/main'],30000);
+        const verification=await runBounded('gh',['attestation','verify',archivePath,'--bundle',bundlePath,'--repo','tryapparent/apparent','--signer-workflow','tryapparent/apparent/.github/workflows/stream-engine.yml','--source-digest',expected.sourceSha,'--source-ref','refs/heads/main'],30000);
         await writeFile(path.join(inputEvidence,kind+'.attestation-verification.log'),verification.stdout+verification.stderr,{mode:0o600});
-        for(const name of ['receipt.json','manifest.json','inventory-verification.json','attestation.json']) {
-          const retained=path.join(inputEvidence,kind+'-'+name);
-          await copyFile(path.join(evidence,name),retained); await chmod(retained,0o600);
-        }
+        for(const name of ['receipt.json','attestation.json']) { const retained=path.join(inputEvidence,kind+'-'+name); await copyFile(path.join(evidence,name),retained); await chmod(retained,0o600); }
+        await copyFile(path.join(evidenceRoot,expected.acceptedFile),path.join(inputEvidence,kind+'-'+expected.acceptedFile));
+        await chmod(path.join(inputEvidence,kind+'-'+expected.acceptedFile),0o600);
+        const retainedInventory=path.join(inputEvidence,kind+'-inventory-verification.json');
+        await copyFile(path.join(evidenceRoot,'inventory-verification.json'),retainedInventory); await chmod(retainedInventory,0o600);
         const extraction=path.join(root,'runtime-artifacts',kind); await mkdir(extraction,{recursive:true,mode:0o700});
         await runBounded('tar',['-xzf',archivePath,'-C',extraction],30000);
         const payload=path.join(extraction,'stream-payload','payload');
-        const manifestBytes=await readFile(path.join(payload,'manifest.json'));
-        assert.equal(fileHash(manifestBytes),fileHash(externalManifestBytes),kind+' archived and admitted manifests match');
-        const manifest=JSON.parse(manifestBytes.toString('utf8'));
-        assert.equal(manifest.sourceSha,sourceSha); assert.deepEqual(manifest.runtimeFiles.length,expected.files);
+        const manifest=JSON.parse(await readFile(path.join(payload,'manifest.json'),'utf8'));
+        assert.equal(manifest.sourceSha,expected.manifestSourceSha); assert.equal(manifest.runtimeFiles.length,expected.files);
         const listed=new Map(manifest.runtimeFiles.map(file=>[file.path,file])), seen=new Set();
         async function walk(dir) {
           for(const entry of await readdir(dir,{withFileTypes:true})) {
             const full=path.join(dir,entry.name), relative=path.relative(payload,full), info=await lstat(full);
             assert.equal(info.isSymbolicLink(),false,kind+' payload symlink: '+relative);
             if(info.isDirectory()) await walk(full);
-            else {
-              assert.equal(info.isFile(),true,kind+' payload non-regular file: '+relative);
-              if(relative==='manifest.json') continue;
-              const declared=listed.get(relative); assert.ok(declared,kind+' unlisted payload file: '+relative); seen.add(relative);
-              assert.equal(info.mode&0o777,declared.mode,kind+' mode: '+relative);
-              assert.equal(fileHash(await readFile(full)),declared.sha256,kind+' file hash: '+relative);
-            }
+            else { assert.equal(info.isFile(),true,kind+' non-regular payload: '+relative); if(relative==='manifest.json') continue;
+              const declared=listed.get(relative); assert.ok(declared,kind+' unlisted payload: '+relative); seen.add(relative);
+              assert.equal(info.mode&0o777,declared.mode,kind+' mode: '+relative); assert.equal(fileHash(await readFile(full)),declared.sha256,kind+' hash: '+relative); }
           }
         }
-        await walk(payload); assert.equal(seen.size,listed.size,kind+' runtime closure is complete');
+        await walk(payload); assert.equal(seen.size,listed.size,kind+' exact runtime closure');
         if(kind==='media') {
           assert.ok(manifest.capabilities.includes('media/2'));
           assert.deepEqual(manifest.media2Launch.argv,['--media-runtime-directory','<capture-runtime-dir>','--media-channel','media','--media-protocol-version','2']);
           assert.equal(manifest.media2Launch.sharesCaptureRuntime,true);
+          assert.equal(manifest.visualObservations?.schema,'apparent.frame-observation-profile/1'); assert.equal(manifest.visualObservations?.chunkType,'apOB');
           assert.equal(manifest.launch.entry,'apparent-engine-frames'); assert.equal(manifest.launch.pathLookup,false); assert.equal(manifest.launch.runtimeBuilds,false);
-          assert.equal(listed.get('apparent-engine-frames').sha256,'c1301674edc6db8a3de7d4e0b02b50997a99a7d7880b0d280f7f0e5a55ae713c');
-          assert.equal(listed.get('libexec/apparent-engine-frames').sha256,'0713b448920446e1fd1f1a06bc75124d4b04af13793bd1ad8912e0a78ea3a037');
+          assert.equal(listed.get('apparent-engine-frames').sha256,'cf86ab5841ea5a847844518bc3e4f0bd94174f23ac86defba65dd2d8493c27e9');
+          assert.equal(listed.get('libexec/apparent-engine-frames').sha256,'62095759727d826073f67402942d7826185f6590dbae08be2fee3d501f3d3343');
         } else {
-          assert.ok(manifest.capabilities.includes('capture/2'));
+          assert.ok(manifest.capabilities.includes('capture/2')); assert.ok(manifest.capabilities.includes('authenticated-publication'));
           assert.deepEqual(manifest.launch.argv,['--runtime-directory','<private-runtime-dir>','--capture-channel','capture','--capture-protocol-version','2']);
           assert.equal(manifest.launch.entry,'apparent-engine-capture-launch'); assert.equal(manifest.launch.worker,'libexec/apparent-engine-capture');
           assert.equal(manifest.launch.pathLookup,false); assert.equal(manifest.launch.runtimeBuilds,false);
-          assert.equal(listed.get('apparent-engine-capture-launch').sha256,'524f26ff629e8a116c041700f42708a2993a15e423c771b98d8b18b55f15a1f1');
-          assert.equal(listed.get('libexec/apparent-engine-capture').sha256,'10ccdb950f9c6f72b3898b7bfa150fae3264bcbe8d90ca23a4064918dba94d07');
+          assert.equal(listed.get('apparent-engine-capture-launch').sha256,'fb2dfa941fcd7f9681a141b8213ecf6031eca82b424e608bbed3309d38b033e6');
+          assert.equal(listed.get('libexec/apparent-engine-capture').sha256,'63f02b819523367da1996d1bb3760118b8a34f840de2458b42996eda85ff822b');
         }
-        await recordLog(kind+' admitted archive',{path:archivePath,sha256:expected.sha256,size:expected.size,sourceSha,runtimeFiles:seen.size,payload});
+        await recordLog(kind+' admitted archive',{path:archivePath,sha256:expected.sha256,size:expected.size,sourceSha:expected.sourceSha,manifestSourceSha:expected.manifestSourceSha,runtimeFiles:seen.size,payload});
         return {payload,manifest};
       }
-      const captureArtifact=await admitArtifact('capture',path.resolve(process.env.APPARENT_CAPTURE2_ARCHIVE),{sha256:'21c8fd7eb3da9f5d9841ac75188e66df0da24225e4e4f892a65b86f6be87284e',size:10398173,files:54});
-      const mediaArtifact=await admitArtifact('media',path.resolve(process.env.APPARENT_MEDIA2_ARCHIVE),{sha256:'17a5f71442dc3920a7be5bc4836d186b2da212840ee3f2a2bd811f508ee4625b',size:100853159,files:186});
-      assert.deepEqual(acceptance.inventoriesVerified,{media:186,capture:54});
+      const captureArtifact=await admitArtifact('capture',archive,{acceptedFile:'capture-accepted.json',sourceSha:'c18340f1886d0b796717bee91333fc1c8533b993',manifestSourceSha:'c18340f1886d0b796717bee91333fc1c8533b993',runId:42319740724,sha256:'00577928145323f8c964dda8cc1e47668d1f58b7d571ec9f7fb896aadc277708',size:11197126,files:54});
+      const mediaArtifact=await admitArtifact('media',mediaArchive,{acceptedFile:'linux-accepted.json',sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',manifestSourceSha:'cf8356eb869038f6737a8e83c1cb4ab655fa0237',runId:42314800490,sha256:'cd7346951646f440c0d67e1fe10a8bc44dfde4329e3a9a3cc7d6f0d4297604f4',size:100858133,files:186});
       const capturePayload=captureArtifact.payload, captureManifest=captureArtifact.manifest, mediaPayload=mediaArtifact.payload, mediaManifest=mediaArtifact.manifest;
-      let xvfb, display = '', scene, client, mediaClient, host, recordRuntime, recordClient, pillHost, mappings;
-      let clientClosed = false;
-      let qualificationError;
-      let cleanupErrors = [];
-      const previousDisplay = process.env.DISPLAY, previousWayland = process.env.WAYLAND_DISPLAY;
+      let xvfb, display='', scene, client, mediaClient, coordinator, recordClient, pillHost, mappings;
+      let qualificationError, cleanupErrors=[], owningClientsClear=false;
+      const previousDisplay=process.env.DISPLAY, previousWayland=process.env.WAYLAND_DISPLAY;
       try {
-        xvfb = trackChild(spawn('Xvfb', ['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'], {stdio:['ignore','pipe','pipe']}));
-        display = await new Promise((resolve, reject) => {
-          const timer = setTimeout(() => reject(new Error('owned Xvfb startup deadline')), 5000);
-          xvfb.stdout.setEncoding('utf8'); xvfb.stdout.once('data', value => { clearTimeout(timer); resolve(':' + value.trim()); });
-          xvfb.once('exit', code => { clearTimeout(timer); reject(new Error('owned Xvfb exited: ' + code)); });
-          xvfb.once('error', reject);
-        });
-        const env = {...process.env, DISPLAY:display}; delete env.WAYLAND_DISPLAY;
-        process.env.DISPLAY=display; delete process.env.WAYLAND_DISPLAY;
-        scene = trackChild(spawn('xmessage', ['-geometry','+170+120','-timeout','240','Record capture2 synthetic Xvfb scene'], {env, stdio:'ignore'}));
-        let sceneSpawnError;
-        scene.once('error', error => { sceneSpawnError = error; });
-        const runtime = path.join(root, 'runtime'), control = path.join(root, 'control'), bundles = path.join(root, 'bundles');
-        await Promise.all([runtime,control,bundles].map(dir => mkdir(dir,{mode:0o700})));
-        const transport = launchCaptureEngine(path.join(capturePayload, captureManifest.launch.entry), runtime, 40000);
-        client = new CaptureClient(transport);
-        mappings = new SqliteCaptureMappingStore(control);
-        const destinations = new AbsentDestinationAllocator(control,bundles);
-        host = createCapture2Host({client,mappings,destinations});
-          if (sceneSpawnError) throw sceneSpawnError;
-          const deadline = Date.now()+150000;
-          const waitFor = async (fn, label) => {
-            while (Date.now()<deadline) { const value=await fn(); if (value) return value; await new Promise(r=>setTimeout(r,250)); }
-            throw new Error('qualification deadline waiting for '+label);
-          };
-          const ready = await waitFor(async()=>{const value=await host.readiness();return value.ready?value:null;},'native capture readiness');
-          const discovery = await host.discoverSources(); assert.equal(discovery.state,'available');
-          const displaySource = discovery.sources.find(s=>s.kind==='display' && s.bounds.width===683 && s.bounds.height===480);
-          const areaSource = discovery.sources.find(s=>s.kind==='area' && s.displayId===displaySource?.displayId);
-          assert.ok(displaySource,'683x480 owned Xvfb display was not discovered'); assert.ok(areaSource,'advertised center-half area was not discovered');
-          assert.deepEqual(areaSource.bounds,{x:170,y:120,width:341,height:240,scale:1});
-          const options={audio:'none',localOnly:true};
-          const invocation={kind:'explicit',invocationId:'a'.repeat(32),observedAtMs:Date.now()};
-          recordRuntime = await createCapture2RecordRuntime({host,pollIntervalMs:200,createStartIntent(requestId,fresh) {
-            assert.equal(fresh.state,'available');
-            const source=fresh.sources.find(s=>s.id===displaySource.id); assert.ok(source,'explicit selection must match fresh discovery');
-            const digest=createHash('sha256').update(requestId,'utf8').digest('hex');
-            return {source,options,invocation:{...invocation,observedAtMs:Date.now()},destinationPath:path.join(bundles,'record-'+digest+'.apparent')};
-          }});
-          recordClient=createRecordCapabilityProvider({runtime:recordRuntime,capture2Start:recordRuntime,providerEpoch:'packed-native-provider',native:{readFacts:async()=>({version:1,providerEpoch:'packed-native-native',revision:1,readiness:[],shortcut:{effective:null,label:null,registration:'unknown',externallyManaged:false,draft:null}})}});
-          const requestId = 'packed-native-display-'+Date.now();
-          let before=recordClient.current();
-          const localOnly=await recordClient.execute({type:'start-capture',delivery:'local-only',requestId:'packed-native-local-only-'+Date.now(),expected:{providerEpoch:before.providerEpoch,revision:before.revision}});
-          assert.equal(localOnly.status,'refused','native remote-delivery refusal is not Record pipeline local-only enforcement');
-          let actionIds=0;
-          pillHost=createRecordClientPillHost(recordClient,{createRequestId:()=>actionIds++===0?requestId:'packed-pill-action-'+actionIds});
-          const initialPill=await pillHost.read(); assert.ok(initialPill.actions.some(action=>action.id==='record'&&action.enabled));
-          await pillHost.act(initialPill.revision,'record');
-          const active=await waitFor(async()=>recordClient.current().captures.find(x=>x.captureId===requestId&&x.phase==='recording'),'public RecordClient recording fact');
-          await new Promise(resolve=>setTimeout(resolve,1800));
-          const mapping = await mappings.getByRequestId(requestId); assert.ok(mapping?.capture2Intent);
-          assert.equal(mapping.bundlePath,path.join(bundles,path.basename(mapping.bundlePath)));
-          await assert.rejects(lstat(mapping.bundlePath),e=>e.code==='ENOENT','Record must reserve, never create, the final destination');
-          const recording = await waitFor(async()=>{const x=await host.inspect(requestId);return x.phase==='recording'?x:null;},'real recording receipt');
-          assert.equal(recording.requestId,requestId);
-          const recordingPill=await pillHost.read(); assert.equal(recordingPill.phase,'recording');
-          await pillHost.act(recordingPill.revision,'finish');
-          const stopReceipt = await host.inspect(requestId);
-          assert.ok(['stopping','materials-ready'].includes(stopReceipt.phase));
-          const stopped = stopReceipt.phase==='materials-ready' ? stopReceipt : await waitFor(async()=>{const value=await host.inspect(requestId);return value.phase==='materials-ready'?value:null;},'retained materials ready');
-          assert.ok(stopped.materials?.leaseId);
-          const manifestBeforeRestart = stopped.materials;
-          host.dispose(); host = createCapture2Host({client,mappings,destinations});
-          const cold = await host.inspect(requestId);
-          assert.equal(cold.phase,'materials-ready'); assert.deepEqual(cold.materials,manifestBeforeRestart);
-          const loaded = await readCaptureMaterials({manifest:cold.materials,expected:{key:cold.materials.key,leaseId:cold.materials.leaseId,bundleId:mapping.bundleId},trustedRoot:cold.materials.root});
-          assert.deepEqual(Buffer.from(loaded.payloadBytes),await readFile(path.join(cold.materials.root,cold.materials.payloadFile.relativePath)));
-          assert.equal(createHash('sha256').update(loaded.payloadBytes).digest('hex'),cold.materials.key.revision);
-          assert.equal(loaded.materials.payload.safety.nativeRemoteDelivery,'forbidden');
-          assert.equal(loaded.materials.payload.safety.safeForProcessing,true);
-          assert.ok(loaded.materials.payload.clock.durationMs>0);
-          assert.deepEqual(loaded.materials.payload.collection,{context:'unavailable',interactions:'unavailable',candidates:'unavailable',transcript:'unavailable',acceptedStrokes:'unavailable'});
-          assert.equal(loaded.materials.payload.confirmedSource.id,displaySource.id);
-          assert.deepEqual(loaded.materials.payload.confirmedSource.rectangle,displaySource.bounds);
-          await recordLog('retained capture materials',{requestId,leaseId:cold.materials.leaseId,materials:cold.materials.key,root:cold.materials.root,
-            durationMs:loaded.materials.payload.clock.durationMs,clock:loaded.materials.payload.clock,video:loaded.materials.payload.video,collection:loaded.materials.payload.collection});
-          const movie = path.join(cold.materials.root,loaded.materials.payload.video.file);
-          const probe = await runBounded('ffprobe',['-v','error','-count_frames','-show_entries','stream=codec_name,width,height,nb_read_frames','-of','json',movie],15000);
-          const stream = JSON.parse(probe.stdout).streams.find(x=>x.codec_type==='video') ?? JSON.parse(probe.stdout).streams[0];
-          assert.ok(stream && Number(stream.nb_read_frames)>0,'saved capture must contain decoded video frames');
-          assert.equal(stream.codec_name,'h264');
-          assert.equal(stream.width,682,'683px Xvfb capture encodes the actual even-width 682px stream');
-          await runBounded('ffmpeg',['-v','error','-i',movie,'-f','null','-'],20000);
-          await recordLog('complete capture decode',{display:displaySource.bounds,area:areaSource.bounds,frameWidth:stream.width,frameHeight:stream.height,frames:stream.nb_read_frames,
-            clock:loaded.materials.payload.clock,collection:loaded.materials.payload.collection,requestId,leaseId:cold.materials.leaseId,movie});
-
-          const mediaEntry = mediaManifest.runtimeFiles.find(file=>file.path==='apparent-engine-frames');
-          assert.ok(mediaEntry);
-          const mediaRuntime = path.join(root,'runtime');
-          mediaClient = new Media2Client(launchMedia2Worker(path.join(mediaPayload,mediaEntry.path),mediaRuntime,40000));
-          const mediaHandshake = await mediaClient.handshake(5000);
-          assert.equal(mediaHandshake.implementation,'native');
-          assert.deepEqual(mediaHandshake.capabilities,{retainedFrames:true,contactSheet:true,nativeJobAuthority:true});
-          const selectedTimes = [0,750,750];
-          const layout = {schema:'apparent.contact-sheet-layout/1',width:960,height:180,backgroundRgb:[16,20,28],fit:'stretch',sampling:'legacy-bilinear',clipping:'reject',
-            tiles:[{requestIndex:1,x:0,y:0,width:320,height:180},{requestIndex:2,x:320,y:0,width:320,height:180},{requestIndex:3,x:640,y:0,width:320,height:180}]};
-          assert.deepEqual(layout.tiles.map(tile=>tile.requestIndex),[1,2,3],'Record explicitly supplies one sheet tile for each ordered slot');
-          assert.deepEqual(selectedTimes,[0,750,750],'Record preserves duplicate caller-selected capture times as distinct slots');
-          assert.ok(loaded.materials.payload.clock.durationMs>1000,'capture must cover each caller-selected timestamp');
-          const jobId=createHash('sha256').update('record-media2:'+requestId).digest('hex').slice(0,32);
-          const derivativeRoot=path.join(root,'derivative-output',jobId);
-          await mkdir(path.dirname(derivativeRoot),{mode:0o700});
-          const request=prepareMedia2Request({schema:'apparent.retained-frame-request/1',materials:loaded.materials.manifest.key,leaseId:loaded.materials.payload.leaseId,
-            jobId,outputDirectory:derivativeRoot,requestedBundleMs:selectedTimes,limits:{maxFrames:3,maxEdge:320,maxTotalPixels:2_000_000,deadlineMs:45_000},contactSheet:layout},loaded.materials).request;
-          const layoutBytes=encodeContactSheetLayout(layout);
-          assert.deepEqual(Buffer.from(layoutBytes),Buffer.from(encodeContactSheetLayout(request.contactSheet)));
-          const mediaInput={ownerToken:mapping.ownerToken,request,materials:loaded.materials};
-          const mediaJournal=path.join(root,'media2-jobs',jobId+'.sqlite');
-          await mkdir(path.dirname(mediaJournal),{mode:0o700});
-          let mediaJob=await RecordMedia2Job.create(mediaClient,mediaJournal,mediaInput);
-          assert.equal(mediaJob.state,'ready');
-          let mediaStatus;
-          try { mediaStatus=await mediaJob.derive(mapping.ownerToken,60_000); }
-          catch(error) {
-            await recordLog('media2 derive reply',{state:mediaJob.state,name:error?.name,message:error?.message,dispatched:error?.dispatched??'unknown'});
-            if(mediaJob.state!=='unknown') throw error;
-            mediaStatus=await mediaJob.inspect(mapping.ownerToken,60_000);
-          }
-          await recordLog('media2 derive status',{state:mediaStatus.state,jobId:mediaStatus.jobId,requestSha256:mediaStatus.requestSha256});
-          const mediaDeadline=Date.now()+50_000;
-          while(mediaStatus.state==='running'&&Date.now()<mediaDeadline) {
-            await new Promise(resolve=>setTimeout(resolve,250));
-            mediaStatus=await mediaJob.inspect(mapping.ownerToken,60_000);
-            await recordLog('media2 inspect status',{state:mediaStatus.state,jobId:mediaStatus.jobId,requestSha256:mediaStatus.requestSha256});
-          }
-          assert.equal(mediaStatus.state,'complete','native derivative must reach a validated complete job');
-          assert.equal(mediaJob.state,'complete');
-          const originalTuple={ownerToken:mapping.ownerToken,request,materials:loaded.materials};
-          await mediaClient.close(); mediaClient=undefined;
-          mediaClient=new Media2Client(launchMedia2Worker(path.join(mediaPayload,mediaEntry.path),mediaRuntime,40000));
-          const restartedHandshake=await mediaClient.handshake(5000);
-          assert.deepEqual(restartedHandshake,mediaHandshake,'restarted media/2 client negotiates the same native capabilities');
-          mediaJob=await RecordMedia2Job.reopen(mediaClient,mediaJournal,originalTuple);
-          assert.equal(mediaJob.state,'complete');
-          const inspected=await mediaJob.inspect(mapping.ownerToken,60_000);
-          assert.equal(inspected.state,'complete','cold native inspection reconciles the same completed request');
-          const derivative=mediaJob.derivative; assert.ok(derivative,'Record retains the SDK-validated derivative document');
-          const envelope=derivative.envelope;
-          assert.deepEqual(envelope.payload.frames.map(frame=>[frame.requestIndex,frame.requestedBundleMs]),[[1,0],[2,750],[3,750]]);
-          assert.deepEqual(envelope.payload.frames.map(frame=>frame.effectiveVideoMs),selectedTimes.map(time=>Math.max(0,time-loaded.materials.payload.clock.videoOffsetMs)));
-          assert.deepEqual(envelope.payload.frames.map(frame=>frame.clampedToStart),selectedTimes.map(time=>time<loaded.materials.payload.clock.videoOffsetMs));
-          assert.ok(envelope.payload.frames.every(frame=>Number.isSafeInteger(frame.actualVideoMs)&&frame.actualVideoMs<=loaded.materials.payload.clock.durationMs&&typeof frame.clampedToEnd==='boolean'));
-          assert.equal(envelope.payload.contactSheet.width,layout.width); assert.equal(envelope.payload.contactSheet.height,layout.height);
-          assert.equal(envelope.payload.contactSheet.layoutSha256,createHash('sha256').update(layoutBytes).digest('hex'));
-          const bundlePath=mapping.bundlePath;
-          const imageMappings=[...selectedTimes.map((_,index)=>({bundlePath:'frames/frame-'+String(index+1).padStart(2,'0')+'.png',selector:{kind:'frame',requestIndex:index+1}})),
-            {bundlePath:'contact-sheet.png',selector:{kind:'contact-sheet'}}];
-          const retained=await readRetainedDerivativeArtifacts({document:derivative,materials:loaded.materials,trustedRoot:derivativeRoot,mappings:imageMappings,
-            limits:{maxFileBytes:16*1024*1024,maxAggregateBytes:40*1024*1024}});
-          assert.equal(retained.artifacts.length,4);
-          const frameHashes=[];
-          for(const item of retained.artifacts) {
-            const png=Buffer.from(item.bytes);
-            assert.equal(png.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
-            assert.equal(createHash('sha256').update(png).digest('hex'),item.sha256);
-            const expected=item.role==='contact-sheet'?envelope.payload.contactSheet:envelope.payload.frames[imageMappings.find(binding=>binding.bundlePath===item.relativePath).selector.requestIndex-1];
-            assert.deepEqual([png.readUInt32BE(16),png.readUInt32BE(20)],[expected.width,expected.height]);
-            if(item.role==='frame') frameHashes.push(item.sha256);
-          }
-          assert.notEqual(envelope.payload.frames[0].file.relativePath,envelope.payload.frames[1].file.relativePath);
-          await recordLog('native media2 derivative',{jobId,requestSha256:mediaJob.requestSha256,receiptId:envelope.receiptId,root:envelope.root,
-            request:request.requestedBundleMs,frames:envelope.payload.frames.map(frame=>({requestIndex:frame.requestIndex,requestedBundleMs:frame.requestedBundleMs,
-              effectiveVideoMs:frame.effectiveVideoMs,actualVideoMs:frame.actualVideoMs,clampedToStart:frame.clampedToStart,clampedToEnd:frame.clampedToEnd,
-              width:frame.width,height:frame.height,sha256:frame.file.sha256,path:frame.file.relativePath})),contactSheet:{width:envelope.payload.contactSheet.width,
-              height:envelope.payload.contactSheet.height,sha256:envelope.payload.contactSheet.file.sha256,path:envelope.payload.contactSheet.file.relativePath},frameHashes});
-
-          const canonicalReasons=['initial','initial','initial'];
-          const frames=envelope.payload.frames.map((frame,index)=>({index:frame.requestIndex,timeMs:frame.requestedBundleMs,absolutePath:path.join(bundlePath,imageMappings[index].bundlePath),
-            artifactPath:imageMappings[index].bundlePath,canonicalReason:canonicalReasons[index]}));
-          const confirmed=loaded.materials.payload.confirmedSource;
-          const assemblyInput={manifest:loaded.materials.manifest,payloadBytes:loaded.payloadBytes,facts:loaded.assemblyFacts,
-            admission:{captureId:loaded.materials.manifest.key.captureId,materialsId:loaded.materials.manifest.key.materialsId,createdAtMs:loaded.materials.payload.invocation.observedAtMs,
-              bundleId:loaded.materials.payload.bundleId,bundlePath,target:{mode:'display',displayId:confirmed.displayId,
-                frame:{x:confirmed.rectangle.x,y:confirmed.rectangle.y,width:confirmed.rectangle.width,height:confirmed.rectangle.height,scale:confirmed.rectangle.scale}},
-              source:confirmed.kind},frames,marks:[],artifacts:[...retained.artifacts],materialReferences:[{role:'video',relativePath:loaded.materials.payload.video.file}],
-            processingWarnings:[{kind:'videoOnlyInteractionTelemetry'},{kind:'noMicrophoneAudio'},{kind:'noTranscript',message:'This synthetic Xvfb qualification did not request audio.'}]};
-          const assembly=assembleCanonicalBundle(assemblyInput);
-          const apparent=JSON.parse(new TextDecoder().decode(assembly.apparentJson));
-          assert.equal(apparent.video,loaded.materials.payload.video.file);
-          assert.equal(apparent.contactSheet,'contact-sheet.png');
-          assert.deepEqual(apparent.keyframes.map(frame=>[frame.index,frame.t,frame.reason,frame.file]),frames.map(frame=>[frame.index,frame.timeMs,frame.canonicalReason,frame.artifactPath]));
-          assert.equal(assembly.inventory.entries.find(entry=>entry.path===loaded.materials.payload.video.file)?.provenance,'material-reference');
-          const publicationId=createHash('sha256').update('record-media2-publication:'+requestId).digest('hex').slice(0,32);
-          const derivativeBindings=retained.derivative2Artifacts;
-          const prepared=await prepareRecordPublication({ownerToken:mapping.ownerToken,publicationId,stagingRoot:path.join(root,'staging'),destinationPath:bundlePath,
-            materialsManifest:loaded.materials.manifest,materialsPayloadBytes:loaded.payloadBytes,assembly,
-            artifactBytes:Object.fromEntries(retained.artifacts.map(item=>[item.relativePath,item.bytes])),derivatives2:[derivative],derivative2Artifacts:derivativeBindings});
-          assert.equal(preflightCapturePublication(prepared.input).plan.publicationId,publicationId);
-          for(const binding of imageMappings) {
-            const entry=prepared.plan.entries.find(item=>item.relativePath===binding.bundlePath);
-            assert.equal(entry?.input.kind,'derivative2');
-            assert.deepEqual(entry.input.selector,binding.selector);
-          }
-          assert.equal(prepared.plan.entries.find(item=>item.role==='video')?.input.kind,'material');
-          assert.equal(prepared.plan.entries.find(item=>item.role==='video')?.sha256,loaded.materials.payload.files.find(file=>file.relativePath===loaded.materials.payload.video.file).sha256);
-          assert.equal(prepared.plan.entries.find(item=>item.role==='video')?.byteLength,loaded.materials.payload.files.find(file=>file.relativePath===loaded.materials.payload.video.file).identity.size);
-          assert.equal(Buffer.from(prepared.input.planBytes).includes(Buffer.from(mapping.ownerToken)),false,'private plan must not contain owner token');
-          assert.equal((await readFile(mediaJournal)).includes(Buffer.from(mapping.ownerToken)),false,'private media journal must not contain owner token');
-          assert.equal((await readdir(path.join(root,'staging',publicationId),{recursive:true})).some(file=>file==='capture.mp4'),false,'material-reference media is not copied into JavaScript staging');
-          await assert.rejects(lstat(bundlePath),error=>error.code==='ENOENT','processing plan preparation must not create a Saved bundle');
-          await recordLog('Record native processing plan',{materials:loaded.materials.manifest.key,requestId,jobId,receiptId:envelope.receiptId,
-            bundlePath,publicationId,planPath:path.join(root,'staging',publicationId,'publication-plan.json'),planSha256:prepared.input.planFile.planSha256,
-            entries:prepared.plan.entries.map(entry=>({path:entry.relativePath,role:entry.role,input:entry.input.kind,sha256:entry.sha256,byteLength:entry.byteLength,
-              selector:entry.input.kind==='derivative2'?entry.input.selector:undefined})),saved:false,published:false});
-
-          const cancelId='packed-native-cancel-'+Date.now();
-          await host.discoverSources();
-          const areaStarted=await host.start({requestId:cancelId,source:areaSource,options,invocation:{...invocation,invocationId:'b'.repeat(32),observedAtMs:Date.now()}});
-          assert.ok(['starting','recording'].includes(areaStarted.phase));
-          const areaMapping=await mappings.getByRequestId(cancelId); assert.ok(areaMapping?.capture2Intent);
-          assert.equal((await waitFor(async()=>{const x=await host.inspect(cancelId);return x.phase==='recording'?x:null;},'area recording receipt')).phase,'recording');
-          host.dispose();
-          assert.equal((await client.inspect({captureId:areaMapping.captureId,ownerToken:areaMapping.ownerToken})).state,'recording','dispose must detach without stopping native capture');
-          host=createCapture2Host({client,mappings,destinations});
-          const reconciled=await host.inspect(cancelId); assert.equal(reconciled.phase,'recording');
-          const cancelReceipt=await host.cancel(cancelId); assert.ok(['recording','cancelled'].includes(cancelReceipt.phase));
-          const nativeCancelled=await waitFor(async()=>{const value=await client.inspect({captureId:areaMapping.captureId,ownerToken:areaMapping.ownerToken});return value.state==='cancelled'?value:null;},'native cancel completion');
-          assert.equal(nativeCancelled.state,'cancelled');
-          assert.equal((await host.inspect(cancelId)).phase,'cancelled');
-          assert.equal(await lstat(areaMapping.bundlePath).then(()=>true,()=>false),false,'cancel must not create final destination');
-          console.log('packed Record capture/2 native Xvfb consumer passed');
-      } catch (error) {
-        qualificationError = error;
-      } finally {
-        const cleanupSteps = [];
-        if (mappings && client) cleanupSteps.push({label:'capture reconciliation',run:()=>reconcileAndCancel(mappings,client,Date.now()+15000)});
-        if (mediaClient) cleanupSteps.push({label:'media/2 client close',run:async()=>{await mediaClient.close();mediaClient=undefined;}});
-        if (pillHost) cleanupSteps.push({label:'pill host disposal',run:()=>disposeWorkflowPillHost(pillHost)});
-        if (recordClient) cleanupSteps.push({label:'Record client detach',run:()=>recordClient.detach()});
-        if (recordRuntime) cleanupSteps.push({label:'Record runtime disposal',run:()=>recordRuntime.dispose()});
-        if (host) cleanupSteps.push({label:'capture host disposal',run:()=>host.dispose()});
-        if (client && !clientClosed) cleanupSteps.push({label:'capture client close',run:async()=>{await client.close();clientClosed=true;}});
-        if (scene) cleanupSteps.push({label:'synthetic scene exit',run:()=>waitForExit(scene,1000)});
-        if (xvfb) cleanupSteps.push({label:'owned Xvfb exit',run:()=>waitForExit(xvfb,1000)});
-        cleanupErrors = await runCleanupSteps(cleanupSteps);
-        for (const failure of cleanupErrors) console.error(failure.stack);
+        xvfb=trackChild(spawn('Xvfb',['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'],{stdio:['ignore','pipe','pipe']}));
+        display=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('owned Xvfb startup deadline')),5000);
+          xvfb.stdout.setEncoding('utf8'); xvfb.stdout.once('data',value=>{clearTimeout(timer);resolve(':'+value.trim());});
+          xvfb.once('exit',code=>{clearTimeout(timer);reject(new Error('owned Xvfb exited: '+code));}); xvfb.once('error',reject);});
+        const env={...process.env,DISPLAY:display}; delete env.WAYLAND_DISPLAY; process.env.DISPLAY=display; delete process.env.WAYLAND_DISPLAY;
+        scene=trackChild(spawn('xmessage',['-geometry','+170+120','-timeout','240','Record standard synthetic Xvfb scene'],{env,stdio:'ignore'}));
+        let sceneSpawnError; scene.once('error',error=>{sceneSpawnError=error;});
+        const runtime=path.join(root,'runtime'), control=path.join(root,'control'), bundles=path.join(root,'bundles');
+        await Promise.all([runtime,control,bundles].map(dir=>mkdir(dir,{mode:0o700})));
+        client=new CaptureClient(launchCaptureEngine(path.join(capturePayload,captureManifest.launch.entry),runtime,40000));
+        const mediaEntry=mediaManifest.runtimeFiles.find(file=>file.path==='apparent-engine-frames'); assert.ok(mediaEntry);
+        mediaClient=new Media2Client(launchMedia2Worker(path.join(mediaPayload,mediaEntry.path),runtime,40000));
+        const captureHandshake=await client.handshake(5000); assert.equal(captureHandshake.implementation,'native');
+        const mediaHandshake=await mediaClient.handshake(5000); assert.equal(mediaHandshake.implementation,'native');
+        mappings=new SqliteCaptureMappingStore(control); const destinations=new AbsentDestinationAllocator(control,bundles);
+        const options={audio:'none',localOnly:true}, invocation={kind:'explicit',invocationId:'a'.repeat(32),observedAtMs:Date.now()};
+        const requestId='packed-standard-native-'+Date.now();
+        const createStartIntent=(id,fresh)=>{assert.equal(fresh.state,'available');
+          const source=fresh.sources.find(item=>item.kind==='display'&&item.bounds.width===683&&item.bounds.height===480);
+          assert.ok(source,'fresh discovery must contain the owned 683x480 synthetic display');
+          const digest=createHash('sha256').update(id,'utf8').digest('hex');
+          return {source,options,invocation:{...invocation,observedAtMs:Date.now()},destinationPath:path.join(bundles,'record-'+digest+'.apparent')};};
+        const coordinatorOptions={captureClient:client,mediaClient,mappings,destinations,privateControlRoot:control,createStartIntent,
+          trustedMaterialsRoot:mapping=>capture2MaterialsRoot(runtime,mapping.captureId),preflight:preflightCapturePublication,
+          pollIntervalMs:200,operationTimeoutMs:10000,standardProcessing:{requestVideoProof:true}};
+        coordinator=await createStandardRecordCaptureCoordinator(coordinatorOptions);
+        const createProvider=providerEpoch=>coordinator.createProvider({providerEpoch,native:{readFacts:async()=>({version:1,providerEpoch:providerEpoch+'-facts',revision:1,readiness:[],shortcut:{effective:null,label:null,registration:'unknown',externallyManaged:false,draft:null}})}});
+        recordClient=createProvider('packed-standard-native-provider');
+        if(sceneSpawnError) throw sceneSpawnError;
+        const deadline=Date.now()+150000, waitFor=async(fn,label)=>{while(Date.now()<deadline){const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,250));}throw new Error('qualification deadline waiting for '+label);};
+        const before=recordClient.current();
+        const localOnly=await recordClient.execute({type:'start-capture',delivery:'local-only',requestId:'packed-local-only-'+Date.now(),expected:{providerEpoch:before.providerEpoch,revision:before.revision}});
+        assert.equal(localOnly.status,'refused','native delivery prohibition is not proof of whole-pipeline local-only enforcement');
+        let actionIds=0; pillHost=createRecordClientPillHost(recordClient,{createRequestId:()=>actionIds++===0?requestId:'packed-pill-action-'+actionIds});
+        const initialPill=await pillHost.read(); assert.ok(initialPill.actions.some(action=>action.id==='record'&&action.enabled));
+        await pillHost.act(initialPill.revision,'record');
+        await waitFor(async()=>recordClient.current().captures.find(item=>item.captureId===requestId&&item.phase==='recording'),'public provider recording fact');
+        await new Promise(resolve=>setTimeout(resolve,1800));
+        const mapping=await mappings.getByRequestId(requestId); assert.ok(mapping?.capture2Intent);
+        assert.equal(mapping.bundlePath,path.join(bundles,path.basename(mapping.bundlePath)));
+        await assert.rejects(lstat(mapping.bundlePath),error=>error.code==='ENOENT','destination stays absent before authenticated publication');
+        const recordingPill=await pillHost.read(); assert.equal(recordingPill.phase,'recording'); await pillHost.act(recordingPill.revision,'finish');
+        const saved=await waitFor(async()=>{await coordinator.reconcile();const facts=await coordinator.captureFacts.readFacts();return facts.captures.find(fact=>fact.captureId===requestId&&fact.phase==='saved');},'authenticated Record Saved output');
+        assert.equal(saved.delivery,'unknown','nativeRemoteDelivery forbidden does not imply local-only delivery'); assert.equal(saved.artifactId,mapping.bundleId);
+        const originalHandoff=await coordinator.resolveHandoff({captureId:requestId,artifactId:saved.artifactId});
+        assert.ok(originalHandoff?.savedBundle.status==='saved','exact public request/artifact binding resolves after authenticated Saved');
+        assert.equal(originalHandoff.savedBundle.bundlePath,mapping.bundlePath);
+        await recordLog('authenticated Record Saved output',{requestId,artifactId:saved.artifactId,bundlePath:originalHandoff.savedBundle.bundlePath,
+          processing:originalHandoff.processing,requestVideoProof:originalHandoff.requestVideoProof,delivery:saved.delivery});
+        const entries=await readdir(originalHandoff.savedBundle.bundlePath,{recursive:true,withFileTypes:true}), pngs=[];
+        for(const entry of entries) if(entry.isFile()&&entry.name.toLowerCase().endsWith('.png')) {
+          const imagePath=path.join(originalHandoff.savedBundle.bundlePath,entry.parentPath??'',entry.name), bytes=await readFile(imagePath);
+          assert.equal(bytes.subarray(0,8).toString('hex'),'89504e470d0a1a0a');
+          pngs.push({path:path.relative(originalHandoff.savedBundle.bundlePath,imagePath),sha256:fileHash(bytes),byteLength:bytes.byteLength,width:bytes.readUInt32BE(16),height:bytes.readUInt32BE(20)});
+        }
+        assert.ok(pngs.length>=2,'standard visual processing should publish selected frames and the requested contact sheet');
+        await recordLog('Saved image inventory',{pngs});
+        await disposeWorkflowPillHost(pillHost); pillHost=undefined; recordClient.detach(); recordClient=undefined; await coordinator.dispose(); coordinator=undefined;
+        coordinator=await createStandardRecordCaptureCoordinator(coordinatorOptions); recordClient=createProvider('packed-standard-native-reopened-provider');
+        await coordinator.reconcile();
+        const reopenedFacts=await coordinator.captureFacts.readFacts(), reopenedSaved=reopenedFacts.captures.find(fact=>fact.captureId===requestId&&fact.phase==='saved');
+        assert.deepEqual(reopenedSaved,saved,'restart preserves the same authenticated Saved fact');
+        const reopenedHandoff=await coordinator.resolveHandoff({captureId:requestId,artifactId:saved.artifactId});
+        assert.deepEqual(reopenedHandoff,originalHandoff,'same public request/artifact resolves identical handoff after restart');
+        await recordLog('cold standard coordinator handoff',{requestId,artifactId:saved.artifactId,bundlePath:reopenedHandoff.savedBundle.bundlePath,
+          processing:reopenedHandoff.processing,requestVideoProof:reopenedHandoff.requestVideoProof});
+        console.log('packed Record standard coordinator native Xvfb qualification completed');
+      } catch(error) { qualificationError=error; }
+      finally {
+        const cleanupSteps=[];
+        if(pillHost) cleanupSteps.push({label:'pill host disposal',run:()=>disposeWorkflowPillHost(pillHost)});
+        if(recordClient) cleanupSteps.push({label:'Record client detach',run:()=>recordClient.detach()});
+        if(coordinator) cleanupSteps.push({label:'coordinator drain and disposal',run:async()=>{const report=await coordinator.shutdown();await recordLog('coordinator shutdown report',report);await coordinator.dispose();owningClientsClear=report.scope==='record-coordinator'&&report.admission==='closed'&&report.localDrain==='complete'&&report.runtimeClearance==='clear';coordinator=undefined;if(!owningClientsClear)throw new Error('Owning clients must remain retained: coordinator clearance is unresolved');}});
+        if(mediaClient) cleanupSteps.push({label:'media/2 client close',run:async()=>{if(!owningClientsClear)throw new Error('Media owning close refused without positive clearance');await mediaClient.close();mediaClient=undefined;}});
+        if(client) cleanupSteps.push({label:'capture client close',run:async()=>{if(!owningClientsClear)throw new Error('Capture owning close refused without positive clearance');await client.close();}});
+        if(scene) cleanupSteps.push({label:'synthetic scene exit',run:()=>waitForExit(scene,1000)});
+        if(xvfb) cleanupSteps.push({label:'owned Xvfb exit',run:()=>waitForExit(xvfb,1000)});
+        cleanupErrors=await runCleanupSteps(cleanupSteps); for(const failure of cleanupErrors) console.error(failure.stack);
         if(previousDisplay===undefined)delete process.env.DISPLAY;else process.env.DISPLAY=previousDisplay;
         if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;
-        console.error('private native proof retained for inspection and recovery: '+root);
+        console.error('private standard qualification evidence retained: '+root);
       }
-      if (qualificationError || cleanupErrors.length) throw new AggregateError([...(qualificationError?[qualificationError]:[]),...cleanupErrors],'native qualification failed; inspect retained proof and cleanup results',{cause:qualificationError});
+      if(qualificationError||cleanupErrors.length) throw new AggregateError([...(qualificationError?[qualificationError]:[]),...cleanupErrors],'standard native qualification failed; inspect retained evidence and cleanup report',{cause:qualificationError});
     `;
-    // The consumer scratch is removed in the outer finally; the native proof
-    // root retains its own script copy independently.
+    // The consumer scratch is removed in the outer finally; only an explicit
+    // prepare-only invocation retains the generated script outside that scratch.
     const qualificationPacket = path.join(scratch,'qualification-script');
     await mkdir(qualificationPacket,{mode:0o700});
     const qualificationScript = path.join(qualificationPacket,'qualification.mjs');
     await writeFile(qualificationScript,nativeScript,{mode:0o600});
     await checkGeneratedNodeScript(nativeScript);
     console.log('private generated native script packet: '+qualificationScript);
-    const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', nativeScript], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_MEDIA2_ARCHIVE: mediaArchive, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts'), APPARENT_QUALIFICATION_SCRIPT_PATH: qualificationScript } });
-    process.stdout.write(capture2Result.stdout);
+    if (process.env.APPARENT_CAPTURE2_PREPARE_ONLY === '1') {
+      const output = process.env.APPARENT_CAPTURE2_PREPARATION_DIR;
+      assert.ok(output && path.isAbsolute(output), 'APPARENT_CAPTURE2_PREPARATION_DIR must name an absolute private preparation directory');
+      await mkdir(output,{recursive:true,mode:0o700}); await chmod(output,0o700);
+      const frozenScript=path.join(output,'qualification.mjs');
+      await copyFile(qualificationScript,frozenScript); await chmod(frozenScript,0o600);
+      const base=(await run('git',['merge-base','HEAD','origin/main'],{cwd:root})).stdout.trim();
+      const candidateHead=(await run('git',['rev-parse','HEAD'],{cwd:root})).stdout.trim();
+      const packet={schema:1,mode:'offline-preparation-only',base,candidateHead,
+        preparedAt:new Date().toISOString(),sdk:{path:qualificationSdk,version:'0.4.4',sha256:'62e188a118261b73097372000d5ae4fe0f0e72ca2ad710f0714002f276856172',
+          acceptedPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk-accepted.json',receiptPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk/receipt.json',attestationPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk/attestation.json'},
+        capture:{path:archive,acceptedPath:path.join(path.dirname(path.dirname(archive)),'capture-accepted.json'),receiptPath:path.join(path.dirname(archive),'receipt.json'),attestationPath:path.join(path.dirname(archive),'attestation.json'),inventoryPath:path.join(path.dirname(path.dirname(archive)),'inventory-verification.json'),sourceSha:'c18340f1886d0b796717bee91333fc1c8533b993',runId:42319740724,artifactId:13552701819,sha256:'00577928145323f8c964dda8cc1e47668d1f58b7d571ec9f7fb896aadc277708',runtimeFiles:54},
+        media:{path:mediaArchive,acceptedPath:path.join(path.dirname(path.dirname(mediaArchive)),'linux-accepted.json'),receiptPath:path.join(path.dirname(mediaArchive),'receipt.json'),attestationPath:path.join(path.dirname(mediaArchive),'attestation.json'),inventoryPath:path.join(path.dirname(path.dirname(mediaArchive)),'inventory-verification.json'),sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',manifestSourceSha:'cf8356eb869038f6737a8e83c1cb4ab655fa0237',runId:42314800490,artifactId:13550580801,sha256:'cd7346951646f440c0d67e1fe10a8bc44dfde4329e3a9a3cc7d6f0d4297604f4',runtimeFiles:186},
+        runner:frozenScript,runnerSha256:createHash('sha256').update(nativeScript).digest('hex'),syntaxChecked:true,nativeExecuted:false,resourcesAllocated:false,
+        nextRun:{explicitOptIn:'APPARENT_CAPTURE2_QUALIFY=1',attempts:1,deadlineMs:240000,deadlineSemantics:'observation budget only; it is not capture cancel/end intent and does not guarantee bounded cleanup of an unresolved owning peer',
+          executionBlockedUntil:'a child-to-parent coordinator shutdown/drain and positive-clearance protocol plus safe SDK owning-handle release are available',
+          display:'inspect existing process inventory, then owned synthetic Xvfb only',runtime:'one canonical private 0700 capture/media runtime',
+          flow:'public Record pill start/finish -> standard coordinator -> authenticated Saved -> same-binding restart resolver',copy:'not exercised',
+          preflight:'verify current Xvfb/process inventory and all frozen artifacts before a separately authorized run',
+          cleanup:'request coordinator admission closure and local drain; close owning clients only after closed admission, complete drain, clear runtime ownership and disposal; if unresolved, preserve private authority/runtime and peers without process-group signals',
+          stopOn:'archive or attestation mismatch, non-native handshake, unknown media/publication result, cleanup error; retain the private root'}};
+      await writeFile(path.join(output,'preparation.json'),JSON.stringify(packet,null,2)+'\n',{mode:0o600});
+      console.log('offline qualification preparation retained: '+output+' (native execution skipped)');
+    } else {
+      // SDK 0.4.4 exposes recovery release, not safe release of an unresolved
+      // owning capture/media handle. Do not start native peers until the
+      // supervisor can request coordinator admission closure/drain and observe
+      // positive clearance before any process-group cleanup.
+      assertQualificationShutdownProtocol(false);
+      const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', nativeScript], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_MEDIA2_ARCHIVE: mediaArchive, APPARENT_CAPTURE2_SDK_TARBALL: qualificationSdk, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts'), APPARENT_QUALIFICATION_SCRIPT_PATH: qualificationScript } });
+      process.stdout.write(capture2Result.stdout);
+    }
   }
   const sdkDeclarations = path.join(publication, 'consumer.ts');
   await writeFile(sdkDeclarations, `
