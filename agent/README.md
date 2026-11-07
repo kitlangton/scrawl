@@ -67,7 +67,12 @@ recording. For dual-capability manifests, the installer also accepts the exact
 additive `visualObservations` profile `apparent.frame-observation-profile/1`
 (`media/2-frame-png`, `apOB`, `apparent.visual-luma/1`) while preserving it in
 the copied manifest. This metadata does not enable observations, SDK capture/2,
-recording or Mac routing. Node 22.18+ and an existing npm are required.
+recording or Mac routing. The exact additive `recoveryLaunch` metadata is also
+preserved on dual-capability manifests (`apparent.engine-recovery-peer/1`,
+`media/2`, the fixed recovery-peer argv, `startsFreshCapture: false` and
+`onInputEof: retain-admitted-finite-work`). It is descriptive only: this
+installer still launches and handshakes over media/1 and never starts a
+recovery peer. Node 22.18+ and an existing npm are required.
 
 ```sh
 node /absolute/path/to/extracted-agent-package/dist/install-local.js \
