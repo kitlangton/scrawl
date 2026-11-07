@@ -100,3 +100,11 @@ client; missing metadata or an old artifact never becomes a safe-close fallback.
 The peer retains finite jobs under their original deadlines when the caller
 releases its connection. See [SDK ownership semantics](../../sdk/README-recovery.md).
 Recovery artifact admission and affected-platform proof remain separate gates.
+
+Media/2 records native-created output identities before writing image or receipt
+bytes. After the supervised worker is reaped, cancellation, deadline, failure
+and owner-loss reconciliation remove only those recorded files and the matching
+empty `frames` directory. The caller's output root stays in place. Completed
+output is preserved; unknown entries, replacements and reservations interrupted
+before identity binding remain private and fail closed. Cleanup reuses Core's
+pinned Store and no-replace leaf quarantine, not recursive pathname deletion.
