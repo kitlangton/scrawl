@@ -22,7 +22,7 @@ Current acceptance inventory (library/fixture capability is not installed adopti
 | Workflow | Implemented checkpoint | Remaining acceptance |
 |---|---|---|
 | Browser and hosted API | Canonical combined TypeScript Worker, live sign-in and shared-link management | Preserve live routing/auth/privacy contracts during later changes |
-| Account and Settings | TypeScript account/device policy; device/revoke HTTP, login-marker and private identity publication plus revocation-state preparation | Rust still supplies installed HTTP/private facts and durable effects; login/logout/config adoption remains |
+| Account and Settings | TypeScript account/device policy; device/revoke HTTP, approved credential preparation, login-marker and private identity publication plus revocation-state preparation | Rust still supplies installed HTTP/private facts and durable effects; login/logout/config adoption remains |
 | CLI and recipients | Grammar, local and remote account-status reads, share-management transport, state-backed retrieval/publication and callable Node host | Installed argv/host/resource/writer admission and platform proof |
 | Renewal | Compatible journals, exchange, completed recovery and coordinator library | Live sole-writer adoption, installed recovery and removal of temporary Rust bridge |
 | Queue and sender | Planner, fenced admission/retirement/retry/worker and encrypted spool/HTTP capabilities | Host settings and stable snapshots, host recovery integration and uncommitted-spool settlement, worker/caller adoption |

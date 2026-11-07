@@ -679,6 +679,15 @@ full login publication and coordinated writer adoption remain separate gates.
 
 ## Anonymous device protocol transport
 
+The internal `prepareLoginCredential` validates a private approved reply into a
+frozen stored-credential proposal. It pins the caller-approved API, separate
+approval-site origin, scope, fresh generation and endpoint identity, and reuses
+the credential lifecycle validator with the original poll issue time. The local
+Worker fixtures use these proposals for encrypted transfers on both API mounts.
+It grants no consent or freshness authority and writes no files. Tokens remain
+private strings without an erasure guarantee; durable config/credential commit,
+one-shot transaction ownership and installed login remain host work.
+
 `./device-transport` supplies `requestDeviceStart` and `requestDevicePoll` for
 the existing device authorization policy. Each call sends one anonymous POST to
 the caller-approved root or `/connect` API base, without redirects, bearer

@@ -1,5 +1,5 @@
 import assert from "node:assert/strict";
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { createServer, type Server } from "node:http";
 import { once } from "node:events";
 import { resolve } from "node:path";
@@ -16,6 +16,7 @@ import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-trans
 import { readSenderPeerAuthority } from "../../src/sender/authority.ts";
 import { revokeDeviceGrant } from "../../src/account/revoke.ts";
 import { decodeStoredCredential } from "../../src/credentials/wire.ts";
+import { prepareLoginCredential } from "../../src/credentials/login-grant.ts";
 import { requestDeviceStart, requestDevicePoll } from "../../src/account/device.ts";
 import { readAccountStatus } from "../../src/account/status.ts";
 import { listShares, revokeShare } from "../../src/account/shares.ts";
@@ -113,10 +114,17 @@ async function authorize(
     cookie: account.cookie, csrf: account.csrf, origin: account.origin,
   });
   assert.equal(approved.status, 200, "synthetic account approves the pending device via cookie and CSRF");
-  const credential = await requestDevicePoll({ approvedServer, deviceCode: device.deviceCode }) as DeviceCredential & { status: string };
-  assert.equal(credential.status, "approved");
+  const issuedAt = Math.floor(Date.now() / 1000);
+  const reply = await requestDevicePoll({ approvedServer, deviceCode: device.deviceCode });
+  const credential = prepareLoginCredential(reply, { approvedServer, scope, issuedAt,
+    siteOrigin: account.origin, generation: randomBytes(16).toString("hex"),
+    encryptionIdentity: randomBytes(16).toString("hex") });
+  assert.equal(credential.site, account.origin);
   assert.equal(credential.scope, scope);
-  return credential;
+  assert.equal(Object.isFrozen(credential), true);
+  assert.deepEqual(decodeStoredCredential(encoder.encode(JSON.stringify(credential)), scope, approvedServer), credential);
+  return { accessToken: credential.token, refreshToken: credential.refreshToken!, grantId: credential.grantId!, scope,
+    expiresIn: credential.expiresAt! - issuedAt, refreshExpiresIn: credential.refreshExpiresAt! - issuedAt };
 }
 
 async function uploadEncryptedCapture(
