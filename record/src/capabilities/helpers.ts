@@ -15,3 +15,10 @@ export function hasConfirmedArtifactOpen(snapshot: CapabilitySnapshot, captureId
     outcome.kind === "artifact-open" && outcome.ok && outcome.artifactId === capture.artifactId
   );
 }
+
+/** A sealed initial interval was padded, not observed as silence. */
+export interface AudioInitialGapWarning { kind: "audioInitialGap"; atMs: number }
+export function audioInitialGapText(atMs: number): string {
+  if (!Number.isSafeInteger(atMs) || atMs < 0) throw new RangeError("Invalid initial audio gap");
+  return `Audio gap: [0, ${atMs} ms) was unobserved and padded with zeros, not recorded silence.`;
+}

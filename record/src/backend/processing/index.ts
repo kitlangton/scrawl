@@ -1,3 +1,4 @@
+import { audioInitialGapText, type AudioInitialGapWarning } from "@apparent/record/capabilities";
 import { isAbsolute, relative, resolve, sep } from "node:path";
 
 /** Record-owned assembly of semantic handoff text from facts supplied by Engine. */
@@ -58,6 +59,7 @@ export interface ContextChange {
 }
 
 export type ProcessingWarning =
+  | AudioInitialGapWarning
   | { kind: "videoOnlyInteractionTelemetry" }
   | { kind: "imageQuality"; message: string }
   | { kind: "noMicrophoneAudio" }
@@ -271,6 +273,10 @@ function validate(input: ProcessingInput): void {
       }
     }
   }
+  for (const warning of input.warnings ?? []) {
+    if (warning.kind === "audioInitialGap" && (!Number.isSafeInteger(warning.atMs) || warning.atMs < 0 || warning.atMs >= input.durationMs))
+      throw new RangeError("Initial audio gap must precede a captured sample within the recording");
+  }
   for (const segment of input.transcript.segments) {
     if (!Number.isSafeInteger(segment.startMs) || segment.startMs < 0 || segment.startMs > input.durationMs)
       throw new RangeError("transcript time must be within the recording duration");
@@ -332,6 +338,7 @@ export function assembleProcessingOutput(
       lines.push("Interaction context: timed CLI video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes. Use the app's recording shortcut for interaction context.");
     else if (warning.kind === "imageQuality") lines.push(`Image quality: ${warning.message}`);
     else if (warning.kind === "noMicrophoneAudio") lines.push("No microphone audio was saved. Check the microphone and try again.");
+    else if (warning.kind === "audioInitialGap") lines.push(audioInitialGapText(warning.atMs));
     else if (warning.kind === "noTranscript") lines.push(`No transcript: ${warning.message}`);
     else lines.push("No words transcribed. Your audio was saved—check it or try again closer to the microphone.");
   }

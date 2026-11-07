@@ -63,6 +63,12 @@ class PrePushGuardTests(unittest.TestCase):
                      cwd=HOOK.parents[1])
         if result.returncode:
             raise RuntimeError(result.stdout + result.stderr)
+        # Delivery's real matrix creates its own Git repositories. Run it once
+        # here; nested hook scenarios only need command admission/propagation.
+        result = run("node", "--experimental-strip-types", "--test",
+                     "composition/delivery/core.test.ts", cwd=HOOK.parents[1])
+        if result.returncode:
+            raise RuntimeError(result.stdout + result.stderr)
 
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory(prefix=".pf-", dir=Path.home())
@@ -139,14 +145,16 @@ class PrePushGuardTests(unittest.TestCase):
             shutil.copy2(HOOK.parents[1] / name, target)
         package = self.repo / "onboarding"
         self.prepare_npm_install(package, package)
-        # Preserve the dependency-free delivery check closure for conservative
-        # unknown-history selection; it never invokes this hook suite.
+        # The real delivery matrix runs in setUpClass. Keep a real Node test
+        # invocation in every nested verifier, including failure propagation,
+        # without repeating delivery's unrelated Git/archive fixture work.
         delivery = self.repo / "composition/delivery"
         delivery.mkdir(parents=True)
-        for name in ("core.ts", "cli.ts", "core.test.ts", "runtime/pr-candidate.ts", "runtime/pr-candidate.test.ts",
-                     "consumer/handoff.ts", "consumer/handoff.test.ts"):
-            (delivery / name).parent.mkdir(parents=True, exist_ok=True)
-            shutil.copy2(SELECTOR.parents[1] / "composition/delivery" / name, delivery / name)
+        (delivery / "core.test.ts").write_text(
+            'import test from "node:test"; import assert from "node:assert/strict";\n'
+            'test("hook delivery admission", () => assert.equal(\n'
+            '  process.env.HOOK_DELIVERY_STATUS ?? "0", "0", "delivery fixture failed"));\n'
+        )
         # File-length tests exercise pre-commit only, so this closure stays
         # finite and never recursively invokes the pre-push test suite.
         for name in (".githooks/pre-commit", "enablement/directory-width/check.py",
@@ -523,6 +531,12 @@ class PrePushGuardTests(unittest.TestCase):
         result = self.push(env=dict(self.env, MOCK_STATUS="1"))
         self.assertNotEqual(result.returncode, 0)
         self.assertIn("failed", result.stderr)
+        self.log.unlink()
+        result = self.push(env=dict(self.env, HOOK_DELIVERY_STATUS="1"))
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("delivery fixture failed", result.stdout)
+        self.assertIn("verification failed", result.stderr)
+        self.assertFalse(self.log.exists(), "delivery failure must stop before Cargo")
 
     def test_explicit_build_allocation_reaches_all_cargo_commands(self):
         result = self.push(env=dict(self.env, T3_BUILD_JOBS="7"))

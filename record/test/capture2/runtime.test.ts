@@ -47,6 +47,36 @@ async function setup(t: { after(fn: () => void | Promise<void>): void }) {
 }
 const expected = (client: ReturnType<typeof createRecordCapabilityProvider>) => ({ providerEpoch: client.current().providerEpoch, revision: client.current().revision });
 
+test("SDK invocation preflight refusal leaves no capture and permits a corrected start", async t => {
+  const ctx = await setup(t);
+  ctx.client.detach(); ctx.runtime.dispose();
+  let invalid = true;
+  const runtime = await createCapture2RecordRuntime({ host: ctx.host,
+    createStartIntent: (requestId, discovery) => ({ source: discovery.sources[0]!,
+      options: { audio: "none", localOnly: true },
+      invocation: { ...invocation, invocationId: invalid ? requestId : invocation.invocationId },
+      destinationPath: join(ctx.root, "corrected.apparent") }) });
+  const client = createRecordCapabilityProvider({ runtime, capture2Start: runtime, providerEpoch: "preflight-provider",
+    native: { readFacts: async () => ({ version: 1, providerEpoch: "native", revision: 1, readiness: [],
+      shortcut: { effective: null, label: null, registration: "unavailable", externallyManaged: false, draft: null } }) } });
+  t.after(() => { client.detach(); runtime.dispose(); ctx.host.dispose(); });
+  await new Promise(resolve => setImmediate(resolve));
+  const requestId = "12345678-1234-4123-8123-123456789abc";
+  const rejected = await client.execute({ type: "start-capture", delivery: "host-default", requestId, expected: expected(client) });
+  assert.equal(rejected.status, "refused");
+  assert.deepEqual(await ctx.mappings.listRequestIds("capture2"), []);
+  assert.equal(ctx.transport.requests.some(request => request.method === "start"), false);
+  assert.equal(runtime.startup.state, "ready");
+  assert.deepEqual(runtime.unresolvedOwnership().requestIds, []);
+  assert.equal(runtime.state.phase, "idle");
+  assert.deepEqual(rejected.snapshot.captures, [], "a validation refusal is not an unknown capture");
+  invalid = false;
+  const accepted = await client.execute({ type: "start-capture", delivery: "host-default", requestId: "corrected-request", expected: expected(client) });
+  assert.equal(accepted.status, "accepted");
+  assert.equal(ctx.transport.requests.filter(request => request.method === "start").length, 1);
+  assert.deepEqual(await ctx.mappings.listRequestIds("capture2"), ["corrected-request"]);
+});
+
 test("provider composes capture2 start, stop and materials without changing public request identity", async t => {
   const ctx = await setup(t);
   const local = await ctx.client.execute({ type: "start-capture", delivery: "local-only", requestId: "local-refused", expected: expected(ctx.client) });
@@ -135,16 +165,19 @@ test("lost start reply reserves public ownership, blocks admission and recovers 
   ctx.client.detach(); ctx.runtime.dispose(); ctx.host.dispose();
 });
 
-test("readiness changes cannot strand a definitely-undispatched reservation", async () => {
+for (const changeDuring of ['discovery', 'start'] as const) test(`readiness changes during ${changeDuring} survive definitely-undispatched refusal`, async () => {
   let emit!: (event: import('../../src/backend/host/capture2.ts').Capture2Event) => void;
   const host = {
     subscribe(listener: typeof emit) { emit = listener; return () => undefined; },
     readiness: async () => ({ ready: true }), reconcile: async () => [],
     discoverSources: async () => {
-      emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic readiness changed' } });
+      if (changeDuring === 'discovery') emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic readiness changed' } });
       return { state: 'available' as const, sources: [source] };
     },
-    start: async () => { throw Object.assign(new Error('synthetic refusal before dispatch'), { dispatched: false }); },
+    start: async () => {
+      if (changeDuring === 'start') emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic readiness changed' } });
+      throw Object.assign(new Error('synthetic refusal before dispatch'), { dispatched: false });
+    },
     inspect: async () => { throw new Error('no capture was dispatched'); },
     stop: async () => { throw new Error('no capture was dispatched'); },
     cancel: async () => { throw new Error('no capture was dispatched'); }, dispose() {},
@@ -154,6 +187,9 @@ test("readiness changes cannot strand a definitely-undispatched reservation", as
     assert.equal((await runtime.startCapture('not-dispatched')).outcome, 'refused');
     assert.deepEqual(runtime.unresolvedOwnership().requestIds, []);
     assert.equal(runtime.startup.state, 'ready');
+    assert.equal(runtime.state.phase, 'idle');
+    assert.deepEqual(runtime.state.readiness, { ready: false, reason: 'synthetic readiness changed' });
+    assert.equal((await runtime.startCapture('still-unavailable')).outcome, 'refused');
   } finally { runtime.dispose(); }
 });
 

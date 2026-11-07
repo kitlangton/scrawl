@@ -10,7 +10,7 @@ runs:
         cache-dependency-path: composition/architecture/package-lock.json
     - name: Selection, artifact admission and workflow contracts
       shell: bash
-      run: node --experimental-strip-types --test composition/delivery/*.test.ts composition/delivery/platform/*.test.ts enablement/verification/web/workflow.test.ts
+      run: node --experimental-strip-types --test composition/delivery/*.test.ts composition/delivery/platform/*.test.ts enablement/verification/web/workflow.test.ts enablement/desktop/*.test.ts
     - name: Install the isolated architecture checker
       shell: bash
       run: npm --prefix composition/architecture ci --ignore-scripts --prefer-offline --no-fund

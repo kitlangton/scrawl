@@ -692,3 +692,13 @@ test("causal receipt identities cannot be rebound across snapshots or reconnect"
 test("a provider cannot ambiguously install both clipboard effect contracts",()=>{
  const {runtime}=runtimeFixture();assert.throws(()=>createRecordCapabilityProvider({runtime,providerEpoch:"two-ports",clipboard:{copyLocal:async()=>({status:"outcome-unknown"})},clipboardTextReadback:{copyLocal:async()=>({status:"outcome-unknown"})}}),/Choose one clipboard effect contract/);
 });
+
+ test("public saved audio-gap warnings remain scoped and malformed warnings fail closed",async()=>{
+  for(const warning of [{kind:"audioInitialGap",atMs:125},{kind:"audioInitialGap",atMs:-1},{kind:"audioInitialGap",atMs:"125"},{kind:"recordedSilence",atMs:125}]){
+    const {runtime}=runtimeFixture(),facts=outputFacts();facts.captures=[{captureId:"gap",artifactId:"artifact-gap",phase:"saved",delivery:"unknown",outcomes:[{kind:"save",ok:true,at:"now"}],warnings:[warning as never]}];
+    const client=createRecordCapabilityProvider({runtime,providerEpoch:"gap-warning",captureFacts:{readFacts:async()=>facts}});
+    await new Promise(resolve=>setImmediate(resolve));
+    if(warning.kind==="audioInitialGap"&&warning.atMs===125)assert.deepEqual(client.current().captures[0]?.warnings,[warning]);else assert.equal(client.current().captures.length,0);
+    client.detach();
+  }
+ });

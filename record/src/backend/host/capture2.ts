@@ -161,7 +161,13 @@ export function createCapture2Host(input: { client: CaptureClient; mappings: Cap
         if (!ready.ready || handshake?.implementation !== "native") throw Object.assign(new Error("Capture/2 is unavailable; no native start was dispatched"), { dispatched: false });
         if (!discovery || discovery.state !== "available" || !discovery.sources.some(source => isDeepStrictEqual(source, intent.source))) throw new Error("Capture source is not the exact descriptor in the current discovery generation");
         if (!intent.requestId.trim() || intent.options.localOnly !== true || !["none", "microphone"].includes(intent.options.audio)) throw new Error("Explicit local capture intent is required");
-        validateCaptureRequest({ channel: "capture", protocolVersion: 2, clientId: client.clientId, rpcId: randomUUID().replaceAll("-", ""), method: "start", ownerToken: "0".repeat(64), captureId: "0".repeat(32), bundleId: "record-preflight.apparent", bundlePath: "/record-preflight.apparent", source: intent.source, options: intent.options, invocation: intent.invocation });
+        try {
+          validateCaptureRequest({ channel: "capture", protocolVersion: 2, clientId: client.clientId, rpcId: randomUUID().replaceAll("-", ""), method: "start", ownerToken: "0".repeat(64), captureId: "0".repeat(32), bundleId: "record-preflight.apparent", bundlePath: "/record-preflight.apparent", source: intent.source, options: intent.options, invocation: intent.invocation });
+        } catch (cause) {
+          // This validator runs before destination/mapping allocation and client.start.
+          // Its rejection proves non-dispatch; later failures retain conservative ownership.
+          throw Object.assign(new Error("Capture/2 request preflight refused; no native start was dispatched", { cause }), { dispatched: false });
+        }
         // Recheck durable capture/2 ownership before reserving a new public ID.
         // Unknown inspection is busy: it cannot prove that another capture ended.
         const inspectedRequestIds = await mappings.listRequestIds("capture2");
