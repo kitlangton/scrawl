@@ -95,4 +95,54 @@ export async function beginLoginState(directoryPath: string,
     return refused("state_unavailable");
   } finally { await pinned?.handle.close().catch(() => {}); }
 }
+
+/** Confirms that a begun login receipt still names the current host-side incarnation. */
+export function assertLoginStateCurrent(directoryPath: string, receipt: LoginReceipt, resources: NamespaceResources,
+  options: { signal?: AbortSignal; lockTimeoutMs?: number } = {}): Promise<void> {
+  // Read only own scalar properties before any await; getters/proxies and later caller mutation cannot change the transaction.
+  let scope: unknown, approvedServer: unknown, loginId: unknown, cancellation: unknown, directoryIdentity: unknown;
+  let signal: AbortSignal | undefined, lockTimeoutMs: number | undefined;
+  let guarded: NamespaceResources;
+  try {
+    scope = receipt?.scope; approvedServer = receipt?.approvedServer; loginId = receipt?.loginId;
+    cancellation = receipt?.cancellation; directoryIdentity = receipt?.directoryIdentity;
+    signal = options?.signal; lockTimeoutMs = options?.lockTimeoutMs;
+    guarded = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources) };
+  } catch { return Promise.reject(new CredentialSnapshotError("invalid_credential")); }
+  try {
+    if (receipt?.state !== "begun" || (scope !== "read" && scope !== "upload") || typeof approvedServer !== "string"
+      || normalizeRecipientServer(approvedServer) !== approvedServer || typeof loginId !== "string" || !/^[0-9a-f]{32}$/.test(loginId)
+      || !(cancellation === null || typeof cancellation === "string" && Buffer.byteLength(JSON.stringify(cancellation), "utf8") <= 128)
+      || typeof directoryIdentity !== "string" || directoryIdentity.length === 0
+      || (lockTimeoutMs !== undefined && (!Number.isSafeInteger(lockTimeoutMs) || lockTimeoutMs < 0 || lockTimeoutMs > 60_000)))
+      throw new CredentialSnapshotError("invalid_credential");
+  } catch { return Promise.reject(new CredentialSnapshotError("invalid_credential")); }
+  const facts = { scope, approvedServer, loginId, cancellation, directoryIdentity } as {
+    scope: LoginScope; approvedServer: string; loginId: string; cancellation: string | null; directoryIdentity: string;
+  };
+  return (async () => {
+    let pinned: Awaited<ReturnType<typeof admitTrustedDirectory>> | undefined;
+    try {
+      pinned = await admitTrustedDirectory(directoryPath, guarded, "private-state", signal);
+      if (pinned.identity !== facts.directoryIdentity) throw new CredentialSnapshotError("stale_snapshot");
+      await withStateQueue(pinned.path, { scope: facts.scope, approvedServer: facts.approvedServer }, guarded,
+        { signal, lockTimeoutMs }, async (directory, lease) => {
+          const check = async () => {
+            checkSignal(signal, lease.signal); lease.assertHeld(); await lease.assertCurrent();
+            if (directory.identity !== facts.directoryIdentity || !await samePathFd(directory)) throw new CredentialSnapshotError("stale_snapshot");
+            if (await pendingIntent(directory.path)) throw new CredentialSnapshotError("revocation_pending");
+            if (await readCancellation(directory, guarded, signal) !== facts.cancellation) throw new CredentialSnapshotError("stale_snapshot");
+          };
+          await check();
+          const marker = await readOptionalStateFile(directory, `${facts.scope}.login`, 128, guarded, signal,
+            bytes => decodeStrictJson(bytes, 128));
+          if (marker !== facts.loginId) throw new CredentialSnapshotError("stale_snapshot");
+          await check();
+        });
+    } catch (error) {
+      if (error instanceof CredentialSnapshotError) throw error;
+      throw new CredentialSnapshotError(signal?.aborted ? "cancelled" : "unavailable");
+    } finally { await pinned?.handle.close().catch(() => {}); }
+  })();
+}
 class Pending extends Error {}

@@ -3,7 +3,7 @@ import assert from "node:assert/strict";
 import { chmod, lstat, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile, link, type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beginLoginState, type LoginResources } from "../../src/account/login-state.ts";
+import { assertLoginStateCurrent, beginLoginState, type LoginResources } from "../../src/account/login-state.ts";
 import type { NamespaceResources } from "../../src/state/queue-transaction.ts";
 import type { StateReplacementResources } from "../../src/state/replacement.ts";
 
@@ -132,4 +132,27 @@ test("all failed lease checkpoints release transferred directory descriptors", {
     assert.equal(await openRoots(), 0, `checkpoint ${checkpoint} must consume all root descriptors`);
     await rm(f.file("read.login"), { force: true });
   }
+}));
+
+test("currentness accepts both scopes without changing state and rejects superseded login or cancellation", () => fixture(async f => {
+  const read = await beginLoginState(f.root, context(), f.resources);
+  const upload = await beginLoginState(f.root, context("upload", true), f.resources);
+  assert.equal(read.state, "begun"); assert.equal(upload.state, "begun");
+  const before = await Promise.all((await readdir(f.root)).map(async name => [name, await readFile(f.file(name))] as const));
+  await assertLoginStateCurrent(f.root, read, f.resources);
+  await assertLoginStateCurrent(f.root, upload, f.resources);
+  assert.deepEqual(await Promise.all((await readdir(f.root)).map(async name => [name, await readFile(f.file(name))] as const)), before);
+  await beginLoginState(f.root, context(), f.resources);
+  await assert.rejects(assertLoginStateCurrent(f.root, read, f.resources));
+  await f.put("cancellation", "changed");
+  assert.equal(upload.state, "begun");
+  await assert.rejects(assertLoginStateCurrent(f.root, upload, f.resources));
+}));
+
+test("currentness rejects malformed receipts and revocation intent before marker reads", () => fixture(async f => {
+  const result = await beginLoginState(f.root, context(), f.resources); assert.equal(result.state, "begun");
+  const malformed = { ...result, loginId: "../bad" } as typeof result;
+  await assert.rejects(assertLoginStateCurrent(f.root, malformed, f.resources));
+  await f.put("revocation-current.intent", false);
+  await assert.rejects(assertLoginStateCurrent(f.root, result, f.resources));
 }));
