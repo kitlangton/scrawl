@@ -18,6 +18,8 @@ import type {
 import { validatePublicationPlan } from "./capture-documents/publication.ts";
 import type { DerivativeDocumentInput } from "./capture-documents/types.ts";
 import type { Derivative2DocumentInput } from "./media2/types.ts";
+import type { CaptureInkPort, RegisterInkProducerInput, SubmitInkEventsInput, FinishInkProducerInput } from "./ink/contracts.ts";
+import { validateRegisterInkInput, validateSubmitInkInput, validateFinishInkInput, validateInkRegistrationReceipt, validateInkBatchReceipt, validateInkFinishReceipt } from "./ink/validation.ts";
 import { MAX_DOCUMENT_BYTES, relativePath, validateSealedFile, validateMaterialEnvelopeIdentity } from "./capture-documents/common.ts";
 export { validatePublicationPlan } from "./capture-documents/publication.ts";
 export {
@@ -224,6 +226,9 @@ export type CaptureRequest = Base &
   (
     | { method: "handshake" }
     | { method: "discoverSources" }
+    | ({ method: "registerInkProducer" } & RegisterInkProducerInput)
+    | ({ method: "submitInkEvents" } & SubmitInkEventsInput)
+    | ({ method: "finishInkProducer" } & FinishInkProducerInput)
     | {
         method: "start";
         ownerToken: string;
@@ -351,6 +356,9 @@ export function validateCaptureRequest(
       "rpcId",
       "method",
     ],
+    registerInkProducer: ["channel","protocolVersion","clientId","rpcId","method","ingressVersion","ownerToken","captureId","source","observation"],
+    submitInkEvents: ["channel","protocolVersion","clientId","rpcId","method","ingressVersion","ownerToken","captureId","registrationId","producerToken","sequence","eventsJson","batchSha256"],
+    finishInkProducer: ["channel","protocolVersion","clientId","rpcId","method","ingressVersion","ownerToken","captureId","registrationId","producerToken","finalSequence","seal"],
     start: [
       "channel",
       "protocolVersion",
@@ -433,6 +441,9 @@ export function validateCaptureRequest(
   if (typeof method !== "string" || !fields[method])
     throw new Error("unknown capture/2 method");
   exact(x, fields[method]);
+  if(method==="registerInkProducer") validateRegisterInkInput(x);
+  else if(method==="submitInkEvents") validateSubmitInkInput(x);
+  else if(method==="finishInkProducer") validateFinishInkInput(x);
   if (method === "start") {
     if (!id(x.captureId) || !hex(64).test(String(x.ownerToken)))
       throw new Error("invalid start authority");
@@ -451,7 +462,7 @@ export function validateCaptureRequest(
       ["id", "generation", "kind", "displayId", "bounds"],
     );
     text(s.id, "source id");
-    if (!id(s.generation) || !["display", "area"].includes(String(s.kind)))
+    if (typeof s.generation !== "string" || !s.generation || !["display", "area"].includes(String(s.kind)))
       throw new Error("invalid source identity");
     const o = object(x.options, "options");
     exact(o, ["audio", "localOnly"]);
@@ -502,7 +513,7 @@ export function validateCaptureRequest(
   }
 }
 
-export class CaptureClient {
+export class CaptureClient implements CaptureInkPort {
   readonly clientId = randomBytes(16).toString("hex");
   private readonly transport: CaptureTransport;
   private allowTestDouble: boolean;
@@ -775,6 +786,21 @@ export class CaptureClient {
       throw new Error("release result identity mismatch");
     return x as { released: boolean; captureId: string; materialsId: string };
   }
+  async registerInkProducer(input:RegisterInkProducerInput, timeoutMs=5000) {
+    this.requireHandshake(); const safe=validateRegisterInkInput(input);
+    const receipt=await this.rpc("registerInkProducer",safe as unknown as Record<string,unknown>,timeoutMs);
+    return validateInkRegistrationReceipt(receipt,safe);
+  }
+  async submitInkEvents(input:SubmitInkEventsInput, timeoutMs=5000) {
+    this.requireHandshake(); const safe=validateSubmitInkInput(input);
+    const receipt=await this.rpc("submitInkEvents",safe as unknown as Record<string,unknown>,timeoutMs);
+    return validateInkBatchReceipt(receipt,safe);
+  }
+  async finishInkProducer(input:FinishInkProducerInput, timeoutMs=5000) {
+    this.requireHandshake(); const safe=validateFinishInkInput(input);
+    const receipt=await this.rpc("finishInkProducer",safe as unknown as Record<string,unknown>,timeoutMs);
+    return validateInkFinishReceipt(receipt,safe);
+  }
   close() {
     return this.transport.close();
   }
@@ -809,7 +835,7 @@ function validateSource(v: unknown): SourceDescriptor {
   );
   text(x.id, "source id");
   if (
-    !id(x.generation) ||
+    typeof x.generation !== "string" || !x.generation ||
     !["display", "area"].includes(String(x.kind)) ||
     !Number.isSafeInteger(x.displayId) ||
     Number(x.displayId) < 0

@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnSync } from "node:child_process";
@@ -68,6 +69,18 @@ test("capture/2 is a separate strict channel and reference peer cannot claim nat
   );
   assert.equal((await client.discoverSources()).state, "unavailable");
   await client.close();
+});
+
+test("synthetic CaptureClient exercises strict native ink ingress receipts and exact UTF8 digest", async()=>{
+ const host={processEpoch:"epoch",revision:1,pid:2,startTicks:"9007199254740993"};
+ const input={ingressVersion:1 as const,...authority,source:{id:"display:1",generation:"source-gen"},observation:{host,producerId:"c".repeat(32),generation:1,bootId:"boot",clock:"linux-clock-monotonic-observation" as const,output:{name:"DP-1",physical:{x:0,y:0,width:640,height:360},compositor:{x:0,y:0,width:640,height:360,scale:1 as const}},surfaces:[{surfaceId:"screen",transformId:"t1",nativeIncarnation:"inc",target:"capture-rectangle" as const,pointSpace:"desktop-physical" as const,contentRectangle:{x:0,y:0,width:640,height:360},plane:{width:640,height:360}}]}};
+ const raw='[{"kind":"begin","gestureId":"0123456789abcdef0123456789abcdef","surfaceId":"screen","transformId":"t1","nativeIncarnation":"inc","timeNs":"9007199254740993","x":1.0,"y":2}]';const digest=createHash("sha256").update(Buffer.from(raw,"utf8")).digest("hex");
+ const client=new CaptureClient(scripted(req=>req.method==="registerInkProducer"?{ingressVersion:1,captureId,producerId:input.observation.producerId,generation:1,registrationId:"d".repeat(32),producerToken:"e".repeat(64),nextSequence:0,clock:{kind:input.observation.clock,bootId:"boot",admissionMonotonicNs:"9007199254740993"},limits:{maxWireBytes:65536,maxBatchJsonBytes:16384,maxPointsPerBatch:256,maxPointsPerGesture:2400,maxBatches:4096,maxSurfaces:8,maxGestures:4096,maxTotalPoints:65536,maxFactBytes:4194304,finishGraceMs:2000}}:req.method==="submitInkEvents"?{ingressVersion:1,captureId,registrationId:"d".repeat(32),sequence:0,batchSha256:digest,nextSequence:1,outcome:"accepted"}: {ingressVersion:1,captureId,registrationId:"d".repeat(32),finalSequence:null,state:"complete"})); await client.handshake();
+ const registration=await client.registerInkProducer(input);assert.equal(registration.clock.admissionMonotonicNs,"9007199254740993");
+ const batch=await client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:raw,batchSha256:digest});assert.equal(batch.outcome,"accepted");
+ const finish=await client.finishInkProducer({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),finalSequence:null,seal:{state:"sealed-and-drained",observedAtNs:"9007199254740994",nativeRevision:2}});assert.equal(finish.state,"complete");
+ await assert.rejects(client.registerInkProducer({...input,source:{id:"",generation:"g"}}),/source/);
+ await assert.rejects(client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:raw,batchSha256:"0".repeat(64)}),/digest/);
 });
 
 test("timeouts and late or wrong-version replies cannot resolve a new RPC", async () => {
