@@ -291,3 +291,15 @@ aligned WAV to its existing supervised lifetime, cancellation and drain before
 sealing transcript facts. Neither this API nor a file's presence establishes
 model readiness, original-fact authority or public voice availability. Default
 Core does not depend on the speech runtime.
+
+`audio::model::ModelFile::verify` accepts an explicitly opened read-only regular
+FD and independently trusted expected size/SHA256. It hashes incrementally under
+a caller deadline, preserves the FD offset and checks metadata before/after; no
+file path, model selection or fetch is inferred. Owner/root file ownership,
+non-writable group/other mode and one link are required. Verification proves
+bytes, not a usable model/backend. `PinnedRecognizer` on Linux loads via that
+held FD and revalidates before/after native work. A mutable source cannot become
+successful original-fact evidence after revalidation fails. Native load/run and
+filesystem reads are synchronous: an existing supervised child must still enforce
+hard cancellation, memory/time limits and reaping. This API does not promise to
+interrupt a blocked native call or establish capture/transcript readiness.

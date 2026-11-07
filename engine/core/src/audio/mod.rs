@@ -2,6 +2,8 @@
 //! No microphone selection, recording policy or speech-selection policy.
 
 #[cfg(feature = "local-speech")]
+pub mod model;
+#[cfg(feature = "local-speech")]
 pub mod speech;
 
 use anyhow::{Result, ensure};
