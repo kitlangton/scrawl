@@ -127,7 +127,8 @@ export type QualificationCaptureOwnerCloseResult =
 
 function captureOwnerCloseRefusal(input: QualificationCaptureOwnerCloseInput): string | undefined {
   if (!input.endIntent) return 'no explicit foreground finish/end/interrupt intent';
-  if (!canReleaseQualificationRecoveryPeers(input)) return 'coordinator admission, local drain, disposal, or borrower drain is unresolved';
+  if (input.externalAdmissionClosed !== true || input.admission !== 'closed' || input.localDrain !== 'complete' || input.disposed !== true || input.borrowersDrained !== true)
+    return 'coordinator admission, local drain, disposal, or borrower drain is unresolved';
   if (input.mediaDispatchedOnCapturePeer || input.publicationDispatchedOnCapturePeer) return 'capture-owning peer has processing/publication work';
   return undefined;
 }
@@ -141,7 +142,12 @@ export async function closeQualificationCaptureOwner(input: QualificationCapture
     if (outcome === 'signal-requested-after-timeout' || outcome === 'kill-requested-after-timeout') {
       return { state: 'unknown', status: 3, outcome, runtimeClearance: 'not-established' };
     }
-    return { state: 'ended', status: 0, outcome, runtimeClearance: 'not-established' };
+    switch (outcome) {
+      case 'already-exited': case 'eof-exited': case 'exit-observed': case 'signal-exited': case 'kill-exited':
+        return { state: 'ended', status: 0, outcome, runtimeClearance: 'not-established' };
+      default:
+        return { state: 'unknown', status: 3, error: 'unrecognized owning close outcome', runtimeClearance: 'not-established' };
+    }
   } catch (error) {
     return { state: 'unknown', status: 3, error: error instanceof Error ? error.message : String(error), runtimeClearance: 'not-established' };
   }

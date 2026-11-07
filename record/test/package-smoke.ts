@@ -624,8 +624,12 @@ try {
         try { await cooperativeShutdown(shutdownRequest??{requestId:null,reason:'runner-finally'}); }
         catch(error) { cleanupErrors.push(error instanceof Error ? error : new Error(String(error))); }
         const cleanupSteps=[];
-        if(scene) cleanupSteps.push({label:'synthetic scene exit',run:()=>waitForExit(scene,1000)});
-        if(xvfb) cleanupSteps.push({label:'owned Xvfb exit',run:()=>waitForExit(xvfb,1000)});
+        // Keep the capture source alive when its owner is retained or its exit was not observed.
+        const captureSourceCanRetire=!client&&(!captureOwnerCloseResult||captureOwnerCloseResult.state==='ended');
+        if(captureSourceCanRetire) {
+          if(scene) cleanupSteps.push({label:'synthetic scene exit',run:()=>waitForExit(scene,1000)});
+          if(xvfb) cleanupSteps.push({label:'owned Xvfb exit',run:()=>waitForExit(xvfb,1000)});
+        } else if(scene||xvfb) cleanupErrors.push(new Error('synthetic display retained with unresolved capture owner'));
         const displayCleanupErrors=await runCleanupSteps(cleanupSteps); cleanupErrors.push(...displayCleanupErrors); for(const failure of cleanupErrors) console.error(failure.stack);
         if(previousDisplay===undefined)delete process.env.DISPLAY;else process.env.DISPLAY=previousDisplay;
         if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;

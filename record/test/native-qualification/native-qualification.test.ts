@@ -244,3 +244,21 @@ test('positive explicit fixture cleanup terminates only the owned test group', a
     }
   }
 });
+
+test('owning capture cannot use never-injected recovery exemption to bypass any drain fact', async () => {
+  for (const missing of [{externalAdmissionClosed:false},{admission:'open'},{localDrain:'unknown'},{disposed:false},{borrowersDrained:false}]) {
+    let calls=0;
+    const result=await closeQualificationCaptureOwner({...drainedQualification,...missing,neverInjected:true,endIntent:'finish',mediaDispatchedOnCapturePeer:false,publicationDispatchedOnCapturePeer:false,
+      close:async()=>{calls++;return 'eof-exited';}});
+    assert.equal(result.state,'retained'); assert.equal(result.status,3); assert.equal(calls,0);
+  }
+});
+
+test('unknown runtime close results never establish an ended capture owner', async () => {
+  for (const unexpected of [undefined,null,false,{},[],'future-close-result']) {
+    const result=await closeQualificationCaptureOwner({...drainedQualification,endIntent:'finish',mediaDispatchedOnCapturePeer:false,publicationDispatchedOnCapturePeer:false,
+      close:async()=>unexpected as never});
+    assert.equal(result.state,'unknown'); assert.equal(result.status,3);
+    assert.equal('runtimeClearance' in result&&result.runtimeClearance,'not-established');
+  }
+});
