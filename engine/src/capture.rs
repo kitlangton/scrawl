@@ -546,7 +546,7 @@ fn finalize(
     movie: &File,
     source: &Source,
     duration_ms: u64,
-    first_arrival: Duration,
+    video_origin_ns: u64,
 ) -> Result<Value, &'static str> {
     let (materials_id, lease_id) = (
         new_id().map_err(|_| "internal")?,
@@ -573,9 +573,7 @@ fn finalize(
     // Caller observedAtMs is wall-clock time; preserve invocation identity, but
     // report when the native worker admitted it on the capture monotonic epoch.
     invocation["observedAtMs"] = json!(0);
-    let first_arrival_ns =
-        u64::try_from(first_arrival.as_nanos()).map_err(|_| "invalid_materials")?;
-    let video_offset_ms = first_arrival_ns
+    let video_offset_ms = video_origin_ns
         .checked_sub(video_pts_start_ms)
         .map(|ns| ns.saturating_add(999_999) / 1_000_000)
         .ok_or("invalid_materials")?;
@@ -632,8 +630,7 @@ fn worker(
         }
         persist(&shared).map_err(|_| "internal")?;
         let recorder = recording_start(&source, &movie, &shared, shared.epoch)?;
-        let first_arrival =
-            Duration::from_millis(recorder.first_frame_ms().ok_or("invalid_materials")?);
+        let video_origin_ns = recorder.video_origin_ns().ok_or("invalid_materials")?;
         {
             let mut j = shared.journal.lock().map_err(|_| "internal")?;
             j.state = "recording".into();
@@ -692,7 +689,7 @@ fn worker(
             }
         }
         movie.sync_all().map_err(|_| "invalid_materials")?;
-        let manifest = finalize(&shared, &movie, &source, capture_duration, first_arrival)?;
+        let manifest = finalize(&shared, &movie, &source, capture_duration, video_origin_ns)?;
         let mut j = shared.journal.lock().map_err(|_| "internal")?;
         let mut ready = j.clone();
         ready.state = if ready.cancel_requested {

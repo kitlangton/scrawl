@@ -13,6 +13,18 @@ use gstreamer_app as gst_app;
 
 const FPS: u32 = 30;
 
+fn capture_elapsed_at_gst_pts(
+    sampled_capture_elapsed_ns: u128,
+    sampled_gst_clock_ns: u64,
+    pipeline_base_time_ns: u64,
+    pts_ns: u64,
+) -> Option<u64> {
+    let pts_clock_time_ns = pipeline_base_time_ns.checked_add(pts_ns)?;
+    let elapsed = i128::try_from(sampled_capture_elapsed_ns).ok()?;
+    let delta = i128::from(pts_clock_time_ns) - i128::from(sampled_gst_clock_ns);
+    u64::try_from(elapsed.checked_add(delta)?).ok()
+}
+
 pub fn init_gstreamer() -> Result<()> {
     static READY: OnceLock<std::result::Result<(), String>> = OnceLock::new();
     match READY.get_or_init(|| gst::init().map_err(|error| error.to_string())) {
@@ -174,6 +186,7 @@ pub struct Recorder {
     candidate: (u32, u32),
     video: bool,
     first_frame_ms: Arc<AtomicU64>,
+    video_origin_ns: Arc<AtomicU64>,
     last: Option<Vec<u8>>,
     pinned_movie: Option<File>,
 }
@@ -247,14 +260,18 @@ impl Recorder {
             .downcast::<gst_app::AppSink>()
             .map_err(|_| anyhow!("Not an appsink"))?;
         let first_frame_ms = Arc::new(AtomicU64::new(u64::MAX));
+        let video_origin_ns = Arc::new(AtomicU64::new(u64::MAX));
         let video = encoder.is_some();
         if let Some(sink) = pipeline
             .by_name("encoder")
             .and_then(|e| e.static_pad("sink"))
         {
-            // The movie starts at its first frame: note when that was on the capture clock, and
-            // shift every frame so the movie's clock starts at zero.
+            // The movie starts at its first frame: note its PTS on the capture
+            // clock, and shift every frame so the movie's clock starts at zero.
+            // Callback arrival remains a readiness signal, not the source PTS.
             let first = Arc::clone(&first_frame_ms);
+            let origin = Arc::clone(&video_origin_ns);
+            let pipeline = pipeline.downgrade();
             let base: Arc<Mutex<Option<gst::ClockTime>>> = Arc::new(Mutex::new(None));
             sink.add_probe(gst::PadProbeType::BUFFER, move |_, info| {
                 if let Some(gst::PadProbeData::Buffer(buffer)) = info.data.as_mut() {
@@ -264,7 +281,21 @@ impl Recorder {
                     let pts = buffer.pts();
                     if base.is_none() {
                         *base = pts;
-                        first.store(started_at.elapsed().as_millis() as u64, Ordering::Release);
+                        let callback_arrival_ms = started_at.elapsed().as_millis() as u64;
+                        if let (Some(pts), Some(pipeline)) = (pts, pipeline.upgrade())
+                            && let (Some(clock), Some(base_time)) = (pipeline.clock(), pipeline.base_time())
+                            && let Some(capture_ns) = capture_elapsed_at_gst_pts(
+                                started_at.elapsed().as_nanos(),
+                                clock.time().nseconds(),
+                                base_time.nseconds(),
+                                pts.nseconds(),
+                            )
+                        {
+                            origin.store(capture_ns, Ordering::Release);
+                        }
+                        // A reader that observes readiness must also observe
+                        // the origin written above, when mapping succeeded.
+                        first.store(callback_arrival_ms, Ordering::Release);
                     }
                     if let (Some(pts), Some(zero)) = (pts, *base) {
                         let buffer = buffer.make_mut();
@@ -284,6 +315,7 @@ impl Recorder {
             candidate,
             video,
             first_frame_ms,
+            video_origin_ns,
             last: None,
             pinned_movie,
         })
@@ -328,6 +360,13 @@ impl Recorder {
 
     pub fn first_frame_ms(&self) -> Option<u64> {
         let value = self.first_frame_ms.load(Ordering::Acquire);
+        (value != u64::MAX).then_some(value)
+    }
+
+    /// Capture-epoch time represented by the first video PTS, mapped through
+    /// GStreamer's active clock rather than the later encoder-pad callback time.
+    pub fn video_origin_ns(&self) -> Option<u64> {
+        let value = self.video_origin_ns.load(Ordering::Acquire);
         (value != u64::MAX).then_some(value)
     }
 
@@ -516,6 +555,84 @@ mod tests {
     }
 
     #[test]
+    fn gst_pts_maps_to_capture_epoch_not_encoder_callback_arrival() {
+        assert_eq!(
+            capture_elapsed_at_gst_pts(1_000_000_000, 5_000_000_000, 4_000_000_000, 750_000_000),
+            Some(750_000_000)
+        );
+        assert_eq!(
+            capture_elapsed_at_gst_pts(10, 5_000, 4_000, 0),
+            None,
+            "PTS before the capture epoch is rejected rather than wrapped"
+        );
+        assert_eq!(
+            capture_elapsed_at_gst_pts(u128::MAX, 5_000, 4_000, 0),
+            None,
+            "unrepresentable capture time is rejected"
+        );
+    }
+
+    #[test]
+    fn synthetic_video_endpoint_tracks_stop_with_one_final_frame_interval() {
+        if !synthetic_available() {
+            return;
+        }
+        use std::os::unix::fs::OpenOptionsExt;
+        let movie = std::env::temp_dir().join(format!(
+            "apparent-capture-endpoint-{}-{}.mp4",
+            std::process::id(),
+            crate::new_id().unwrap()
+        ));
+        struct Cleanup(std::path::PathBuf);
+        impl Drop for Cleanup {
+            fn drop(&mut self) {
+                let _ = std::fs::remove_file(&self.0);
+            }
+        }
+        let _cleanup = Cleanup(movie.clone());
+        let file = std::fs::OpenOptions::new()
+            .read(true)
+            .write(true)
+            .create_new(true)
+            .mode(0o600)
+            .open(&movie)
+            .unwrap();
+        let started_at = Instant::now();
+        let mut recorder = Recorder::new(
+            &Source::Test,
+            (640, 360),
+            (320, 180),
+            Some(&movie),
+            started_at,
+        )
+        .unwrap();
+        wait_for_candidate(&mut recorder);
+        std::thread::sleep(Duration::from_millis(350));
+        let stop_ns = u64::try_from(started_at.elapsed().as_nanos()).unwrap();
+        let origin_ns = recorder
+            .video_origin_ns()
+            .expect("first scheduled PTS maps through the active pipeline clock");
+        assert!(recorder.finish(|error| panic!("finish failed: {error}")));
+        let timing = super::super::media::validate_file(&File::open(&movie).unwrap()).unwrap();
+        let video_offset_ns = origin_ns
+            .checked_sub(timing.first_pts_ns)
+            .expect("decoded first PTS cannot precede the mapped movie origin");
+        let offset_ms = video_offset_ns.saturating_add(999_999) / 1_000_000;
+        let video_end_ms = offset_ms + timing.duration_ms;
+        let stop_ms = stop_ns / 1_000_000;
+        let final_frame_ms =
+            (1_000_000_000u64 + FPS as u64 * 1_000_000 - 1) / (FPS as u64 * 1_000_000);
+        let rounding_ms = 2; // Two ceils and one floor add less than 3 ms.
+        let endpoint_difference_ms = video_end_ms.abs_diff(stop_ms);
+        assert!(
+            endpoint_difference_ms <= final_frame_ms + rounding_ms,
+            "scheduled video endpoint must track native stop (stop={stop_ms}ms, offset={offset_ms}ms, video={}ms, difference={endpoint_difference_ms}ms, frame-bound={final_frame_ms}ms + rounding={rounding_ms}ms)",
+            timing.duration_ms
+        );
+        file.sync_all().unwrap();
+    }
+
+    #[test]
     fn source_owns_stream_fd_and_sends_close_only_when_dropped() {
         use std::io::Read;
         use std::os::unix::net::UnixStream;
@@ -544,6 +661,7 @@ mod tests {
             candidate: (2, 1),
             video: false,
             first_frame_ms: Arc::new(AtomicU64::new(u64::MAX)),
+            video_origin_ns: Arc::new(AtomicU64::new(u64::MAX)),
             last: Some(pixels.clone()),
             pinned_movie: None,
         };
