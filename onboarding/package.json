@@ -33,13 +33,15 @@
     "react": "^19.2.0"
   },
   "peerDependenciesMeta": {
-    "@apparent/app-contracts": { "optional": true },
+    "@apparent/app-contracts": {
+      "optional": true
+    },
     "@apparent/record": {
       "optional": true
     }
   },
   "devDependencies": {
-    "@apparent/record": "file:vendor/record-0.1.0-afd73fb.tgz",
+    "@apparent/record": "file:vendor/record-0.1.0-a2e7628.tgz",
     "@types/jsdom": "^30.0.0",
     "@types/node": "22.19.0",
     "@types/react": "19.2.0",
