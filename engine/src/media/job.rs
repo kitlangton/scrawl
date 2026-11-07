@@ -15,7 +15,7 @@ use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::RawFd;
 use std::os::fd::{AsRawFd, FromRawFd};
 use std::os::unix::{
-    fs::{MetadataExt, OpenOptionsExt},
+    fs::MetadataExt,
     net::UnixStream,
     process::{CommandExt, ExitStatusExt},
 };
@@ -24,14 +24,12 @@ use std::process::{Child, Command, Stdio};
 use std::time::Instant;
 
 const DIAGNOSTICS_SWITCH: &str = "APPARENT_MEDIA_TEST_DIAGNOSTICS";
-const DIAGNOSTICS_FILE: &str = "APPARENT_MEDIA_TEST_DIAGNOSTICS_FILE";
-const MAX_DIAGNOSTIC_BYTES: u64 = 4096;
 
 fn diagnostics_enabled() -> bool {
     std::env::var_os(DIAGNOSTICS_SWITCH).is_some_and(|value| value == "1")
 }
 
-/// Emit bounded, non-secret diagnostics only for the existing synthetic test path.
+/// Bounded static labels for the opt-in synthetic test. No paths, raw error text or file sink.
 pub(crate) fn diagnostic_failure(stage: &'static str, code: &'static str, bus_code: Option<i32>) {
     if !diagnostics_enabled() {
         return;
@@ -48,34 +46,9 @@ pub(crate) fn diagnostic_failure(stage: &'static str, code: &'static str, bus_co
 }
 
 fn write_diagnostic(record: &str) {
-    if !diagnostics_enabled() || record.len() > 256 {
-        return;
+    if diagnostics_enabled() && record.len() <= 256 {
+        let _ = std::io::stderr().lock().write_all(record.as_bytes());
     }
-    eprint!("{record}");
-    let Some(path) = std::env::var_os(DIAGNOSTICS_FILE) else {
-        return;
-    };
-    let mut options = std::fs::OpenOptions::new();
-    options
-        .create(true)
-        .append(true)
-        .mode(0o600)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK | libc::O_CLOEXEC);
-    let Ok(mut file) = options.open(path) else {
-        return;
-    };
-    let Ok(metadata) = file.metadata() else {
-        return;
-    };
-    if !metadata.is_file()
-        || metadata.uid() != unsafe { libc::geteuid() }
-        || metadata.mode() & 0o777 != 0o600
-        || metadata.nlink() != 1
-        || metadata.len().saturating_add(record.len() as u64) > MAX_DIAGNOSTIC_BYTES
-    {
-        return;
-    }
-    let _ = file.write_all(record.as_bytes());
 }
 
 fn diagnostic_worker_exit(child: &mut Child) {
@@ -153,13 +126,14 @@ pub(crate) fn spawn_reexec(
     cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if diagnostics_enabled() {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .env_clear();
     if diagnostics_enabled() {
         cmd.env(DIAGNOSTICS_SWITCH, "1");
-        if let Some(path) = std::env::var_os(DIAGNOSTICS_FILE) {
-            cmd.env(DIAGNOSTICS_FILE, path);
-        }
     }
     cmd.env("GST_REGISTRY", "/dev/null")
         .env("GST_REGISTRY_FORK", "no");
