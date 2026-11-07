@@ -1,6 +1,8 @@
 //! Linux GStreamer screen recording execution shared by native capture callers.
 pub mod export;
 pub mod media;
+#[cfg(feature = "linux-portal")]
+pub mod portal;
 pub mod recorder;
 pub use recorder::{
     CandidateFrame, Recorder, Source, Stream, can_record_video, encode_synthetic, init_gstreamer,
