@@ -458,31 +458,23 @@ enum Exporter {
     let hevc = plan.codec == "hevc"
     let pixels = Double(plan.width * plan.height) * Double(plan.fps)
     let bitRate = Int(min(18_000_000, max(1_500_000, pixels * (hevc ? 0.045 : 0.065))))
-    var compression: [String: Any] = [
-      AVVideoAverageBitRateKey: bitRate,
-      AVVideoMaxKeyFrameIntervalDurationKey: 2,
-      AVVideoExpectedSourceFrameRateKey: plan.fps,
-      AVVideoAllowFrameReorderingKey: true,
-    ]
-    if !hevc { compression[AVVideoProfileLevelKey] = AVVideoProfileLevelH264HighAutoLevel }
-    let videoIn = AVAssetWriterInput(mediaType: .video, outputSettings: [
-      AVVideoCodecKey: hevc ? AVVideoCodecType.hevc : AVVideoCodecType.h264,
-      AVVideoWidthKey: plan.width,
-      AVVideoHeightKey: plan.height,
-      AVVideoColorPropertiesKey: [
-        AVVideoColorPrimariesKey: AVVideoColorPrimaries_ITU_R_709_2,
-        AVVideoTransferFunctionKey: AVVideoTransferFunction_ITU_R_709_2,
-        AVVideoYCbCrMatrixKey: AVVideoYCbCrMatrix_ITU_R_709_2,
-      ],
-      AVVideoCompressionPropertiesKey: compression,
-    ])
-    videoIn.expectsMediaDataInRealTime = false
-    let adaptor = AVAssetWriterInputPixelBufferAdaptor(assetWriterInput: videoIn, sourcePixelBufferAttributes: [
-      kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
-      kCVPixelBufferWidthKey as String: plan.width,
-      kCVPixelBufferHeightKey as String: plan.height,
-      kCVPixelBufferIOSurfacePropertiesKey as String: [String: Any](),
-    ])
+    let videoConfiguration = VideoEncodingConfiguration(
+      codec: hevc ? .hevc : .h264,
+      width: plan.width,
+      height: plan.height,
+      averageBitRate: bitRate,
+      maxKeyFrameIntervalDuration: 2,
+      expectedSourceFrameRate: plan.fps,
+      allowsFrameReordering: true,
+      expectsMediaDataInRealTime: false,
+      profileLevel: hevc ? nil : AVVideoProfileLevelH264HighAutoLevel,
+      colorProperties: .rec709,
+      pixelBufferPool: VideoPixelBufferPool(
+        pixelFormat: kCVPixelFormatType_32BGRA,
+        usesIOSurface: true
+      )
+    )
+    let (videoIn, adaptor) = videoConfiguration.makeInput()
     writer.add(videoIn)
 
     // Audio: the plan's file from `audioStartMs`, laid at the start of the output.

@@ -287,6 +287,7 @@ fn compile_helper() {
             "engine/native/Export.swift",
             "engine/native/LiveTranscribe.swift",
             "engine/native/Media.swift",
+            "engine/native/Writer.swift",
             "capture/engine/native/Mirror.swift",
             "engine/native/PlaybackVolume.swift",
             "engine/native/ScreenProbe.swift",
