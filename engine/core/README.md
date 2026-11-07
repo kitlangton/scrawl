@@ -13,9 +13,15 @@ movie stream, RGBA frame acquisition and teardown into `src/macos.rs`. The legac
 Mac caller still selects the target and exclusions, owns prompt/experiment policy,
 sampling cadence, geometry and timestamp conversion. The feature uses the existing
 ScreenCaptureKit 11.0.0/macOS 15 API and is absent from default Core and Linux
-dependency closures. This extraction does not establish a standalone Mac provider,
-first-frame readiness, filter-application acknowledgement or capture/2 support;
-the affected Mac seam still requires native qualification.
+dependency closures. The strict explicit-display entry reads a complete pixel-backed
+first sample separately from its callback-observation time. Its optional
+`CaptureAdmissionTime` entry converts that sample through the SCK synchronization
+clock to CoreMedia host time and checked capture-relative integer milliseconds.
+The caller samples admission at its actual owning admission point. This does not
+derive time from a callback or establish encoded movie origin/`videoOffsetMs`.
+ARM64 macOS 26.6.2 qualification covers that clock readback and the Store-backed
+native output guard; Intel exact-head checks remain separate. Standalone Mac
+provider, durable journal, filter acknowledgement and capture/2 support remain open.
 
 ## Source and retained review
 
