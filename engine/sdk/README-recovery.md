@@ -5,6 +5,31 @@ admitted native recovery artifact; it does not upgrade earlier native packages.
 Native qualification and per-platform delivery remain separate adoption gates.
 Existing SDK versions and their immutable tarballs remain unchanged.
 
+## Explicit owning capture close
+
+For the built-in transport returned by `launchCaptureEngine`, SDK0.4.5 guarantees
+that every resolved ordinary `CaptureClient.close()` releases the SDK's Node
+process/stdio references, owned listeners and RPC/
+shutdown timers. New requests refuse as soon as close starts; concurrent calls
+share the same promise. EOF, TERM at the configured shutdown timeout, KILL at
+twice that timeout and the final local deadline at three times that timeout keep
+their existing meaning. Use the admitted capture artifact's shutdown budget.
+Inherited output pipes cannot keep the one-shot caller alive after close resolves.
+
+This is deliberately ending an owning connection, not recovery release. The
+native capture/2 provider stops a recording/stopping capture on EOF and cancels
+a starting capture. `close()` itself sends no Stop or Cancel RPC. Its outcome
+still distinguishes observed exit from an unobserved signal/kill request; local
+cleanup never upgrades either to terminal capture, runtime clearance, Saved or
+material release. SDK044 and older immutable packages retain their old behavior.
+
+The caller must separately authorize ending the peer and drain all local requests
+and borrowers. A timeout is unknown, not ending or discard permission. In a
+foreground finish workflow the caller requests Stop on the original authority;
+Cancel requires explicit cancellation intent. Shared or processing/publication
+connections retain their owning workflow's closure rules. Recovery peers still
+require the separately negotiated release handle below.
+
 `launchCaptureRecoveryPeer` and `launchMedia2RecoveryPeer` return a normal client,
 immutable native lifetime facts and a separately owned `release()` handle. They
 append `--recovery-peer-v1 <private nonce>` to the existing six launch arguments.

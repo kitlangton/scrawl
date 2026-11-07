@@ -1,14 +1,15 @@
 import assert from "node:assert/strict";
 import { spawn, execFileSync } from "node:child_process";
 import { createHash, randomBytes } from "node:crypto";
-import { chmodSync, copyFileSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
+import { chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, rmdirSync, statSync, symlinkSync, unlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
+import { fileURLToPath } from "node:url";
 import { CaptureClient, capture2MaterialsRoot, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
 import { validateMaterialsDocument } from "../sdk/src/capture-documents/index.ts";
-import { Media2Client, Media2RpcError, Media2TransportError, launchMedia2Worker, type Media2JobInput } from "../sdk/src/media2/index.ts";
+import { Media2Client, Media2RpcError, Media2TransportError, launchMedia2Worker, type Derivative2Envelope, type Media2JobInput } from "../sdk/src/media2/index.ts";
 import { launchCaptureRecoveryPeer } from "../sdk/src/recovery/index.ts";
 
 const id = () => randomBytes(16).toString("hex");
@@ -125,7 +126,7 @@ async function deriveRetainedFrames(runtime: string, ownerToken: string, materia
     const derivative = status.derivative;
     // The public SDK validates detached bytes, original request/layout, native
     // material/lease/job/root binding and every ordered frame/sheet seal.
-    const envelope = derivative.envelope as import("../sdk/src/media2/index.ts").Derivative2Envelope;
+    const envelope = derivative.envelope as Derivative2Envelope;
     assert.deepEqual(envelope.payload.frames.map(frame => frame.requestedBundleMs), input.request.requestedBundleMs);
     assert.deepEqual(envelope.payload.frames.map(frame => frame.requestIndex), [1, 2, 3]);
     assert.equal(envelope.payload.frames[0].file.sha256, envelope.payload.frames[2].file.sha256);
@@ -198,7 +199,7 @@ async function deriveRetainedFrames(runtime: string, ownerToken: string, materia
     assert.equal(afterLoss.jobId, lossAccepted.jobId, "cold recovery keeps the original job identity");
     assert.equal(afterLoss.requestSha256, lossAccepted.requestSha256, "cold recovery keeps the original request digest, output path, materials and lease binding");
     if (afterLoss.state === "complete") {
-      const envelope = afterLoss.derivative.envelope as import("../sdk/src/media2/index.ts").Derivative2Envelope;
+      const envelope = afterLoss.derivative.envelope as Derivative2Envelope;
       assert.equal(envelope.payload.jobId, lossInput.request.jobId);
       assert.equal(envelope.payload.requestSha256, afterLoss.requestSha256);
       assert.deepEqual(envelope.payload.materials, materials.manifest.key);
@@ -483,20 +484,143 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
       execFileSync(ffmpegCommand, ["-v", "error", "-i", areaMovie, "-frames:v", "1", join(evidence, "first-frame.png")]);
     }
 
-    const third = startInput(source, id(), token(), "eof");
-    await client.start(third);
-    await until(client, { captureId: third.captureId, ownerToken: third.ownerToken }, ["recording"]);
-    // Recording begins at the first source buffer; let it traverse the encoder
-    // and muxer before exercising stdin-EOF finalization.
-    await delay(160);
-    assert.equal(await client.close(), "eof-exited", "stdin EOF drains and exits without a signal request");
+    const third = startInput(source, id(), token(), "foreground-close-finish");
+    const authorityPath = join(runtime, "foreground-close-input.json");
+    writeFileSync(authorityPath, JSON.stringify(third), { mode: 0o600, flag: "wx" });
+    chmodSync(authorityPath, 0o600);
+    const authorityStat = statSync(authorityPath, { bigint: true });
+    assert.equal(Number(authorityStat.mode & 0o777n), 0o600, "the original input and owner tuple is persisted privately before dispatch");
+    assert.deepEqual(JSON.parse(readFileSync(authorityPath, "utf8")), third);
+
+    // The previous peer is idle and has no borrowed requests. The dedicated
+    // foreground caller below owns the new capture and issues exactly one Start.
+    assert.equal(await client.close(), "eof-exited", "the prior idle owner drains before the dedicated peer launches");
+    client = undefined;
+    const callerScript = fileURLToPath(new URL("./capture/foreground-close-caller.ts", import.meta.url));
+    const callerProgressPath = `${authorityPath}.progress`;
+    const caller = spawn(process.execPath, ["--experimental-strip-types", callerScript, resolve(binary!), runtime, authorityPath], {
+      cwd: process.cwd(),
+      env: process.env,
+      stdio: ["ignore", "pipe", "pipe"],
+    });
+    let callerStdout = "";
+    let callerOutputTooLarge = false;
+    caller.stdout?.on("data", (chunk: Buffer) => {
+      if (Buffer.byteLength(callerStdout) + chunk.length <= 4096) callerStdout += chunk.toString("utf8");
+      else callerOutputTooLarge = true;
+    });
+    caller.stderr?.on("data", () => {});
+    const callerClosed = new Promise<{ code: number | null; signal: NodeJS.Signals | null }>((resolveClose, rejectClose) => {
+      caller.once("error", rejectClose);
+      caller.once("close", (code, signal) => resolveClose({ code, signal }));
+    });
+    let callerTimer: NodeJS.Timeout | undefined;
+    let callerResult: { kind: "closed"; result: { code: number | null; signal: NodeJS.Signals | null } } | { kind: "timeout" };
+    try {
+      callerResult = await Promise.race([
+        callerClosed.then((result) => ({ kind: "closed" as const, result })),
+        new Promise<{ kind: "timeout" }>((resolveTimeout) => {
+          // The admitted SDK artifact uses a 40s shutdown budget and can take
+          // up to 3x that budget to resolve ordinary close(). Keep margin for
+          // process scheduling; this harness timeout never turns a kill into proof.
+          callerTimer = setTimeout(() => resolveTimeout({ kind: "timeout" }), 150_000);
+        }),
+      ]);
+    } finally {
+      if (callerTimer) clearTimeout(callerTimer);
+    }
+    if (callerResult.kind === "timeout") {
+      preserveCancelRuntime = true;
+      // The harness may stop a stuck caller for containment, but its signal is
+      // never treated as the required natural status-3 exit or native outcome.
+      caller.kill("SIGTERM");
+      await Promise.race([callerClosed, delay(1_000)]);
+      if (caller.exitCode === null && caller.signalCode === null) {
+        caller.kill("SIGKILL");
+        await Promise.race([callerClosed, delay(1_000)]);
+      }
+      const progress = existsSync(callerProgressPath) ? readFileSync(callerProgressPath, "utf8").trim() : "unobserved";
+      throw new Error(`foreground caller safety timeout at ${progress}; terminated caller is not exit proof and runtime is retained`);
+    }
+    assert.equal(callerOutputTooLarge, false, "the dedicated caller prints only its bounded nonsecret status");
+    const callerLines = callerStdout.trim().split("\n");
+    assert.equal(callerLines.length, 1, "the dedicated caller emits one nonsecret status line");
+    const callerStatus = JSON.parse(callerLines[0]);
+    assert.equal(callerResult.result.signal, null, "the dedicated caller must exit naturally");
+    assert.equal(callerResult.result.code, 3, `unknown Stop outcome uses caller status 3; nonsecret caller status=${JSON.stringify(callerStatus)}`);
+    assert.equal(callerStatus.status, "finish-intent-complete");
+    assert.equal(callerStatus.intent, "finish");
+    assert.equal(callerStatus.stopOutcome, "unknown");
+    assert.equal(callerStatus.requestsDrained, true);
+    assert.equal(callerStatus.startDispatches, 1, "the dedicated caller dispatches Start exactly once");
+    assert.equal(callerStatus.stopDispatches, 1, "the dedicated caller dispatches Stop exactly once");
+    assert.equal(callerStatus.stopResponseDropped, true, "the transport adapter withheld the actual native Stop response");
+    assert.equal(callerStatus.closeOutcome, "eof-exited", "ordinary close exits through EOF without timeout signaling");
+
+    // The caller's close result is not terminal authority. Reconnect and inspect
+    // the same private tuple before validating or releasing any native material.
+    const persistedThird = JSON.parse(readFileSync(authorityPath, "utf8")) as typeof third;
+    assert.equal(Number(statSync(authorityPath, { bigint: true }).mode & 0o777n), 0o600);
+    const { source: persistedSource, ...persistedTuple } = persistedThird;
+    const { source: originalSource, ...originalTuple } = third;
+    assert.deepEqual(persistedTuple, originalTuple, "cold reconciliation keeps the original private capture/owner request tuple");
+    const { generation: _persistedGeneration, ...persistedSourceIdentity } = persistedSource;
+    const { generation: _originalGeneration, ...originalSourceIdentity } = originalSource;
+    assert.deepEqual(persistedSourceIdentity, originalSourceIdentity, "the one-shot peer refreshes only the private X11 source generation");
     client = capturePeerClient(runtime);
-    await delay(100);
     await client.handshake(15_000);
-    const recovered = await client.inspect({ captureId: third.captureId, ownerToken: third.ownerToken });
-    assert.equal(recovered.state, "materials-ready", `authenticated reconnect recovers the sealed EOF result (${recovered.error?.code ?? "no error"})`);
-    assert.ok(recovered.materials?.payloadFile.sha256);
-    await client.releaseMaterials({ captureId: third.captureId, ownerToken: third.ownerToken, materialsId: recovered.materials!.key.materialsId, leaseId: recovered.materials!.leaseId });
+    const recovered = await client.inspect({ captureId: persistedThird.captureId, ownerToken: persistedThird.ownerToken });
+    assert.equal(recovered.state, "materials-ready", `authenticated cold inspect resolves the Stop outcome (${recovered.error?.code ?? "no error"})`);
+    const closeManifest = recovered.materials;
+    assert.ok(closeManifest?.payloadFile.sha256);
+    assert.deepEqual(closeManifest.key.captureId, third.captureId);
+    assert.equal(closeManifest.root, capture2MaterialsRoot(runtime, third.captureId));
+    assert.equal(closeManifest.key.revision, closeManifest.payloadFile.sha256, "the detached payload seal binds the original materials revision");
+    const closePayloadPath = join(closeManifest.root, closeManifest.payloadFile.relativePath);
+    const closePayloadBytes = readFileSync(closePayloadPath);
+    const closePayloadStat = statSync(closePayloadPath, { bigint: true });
+    assert.equal(createHash("sha256").update(closePayloadBytes).digest("hex"), closeManifest.payloadFile.sha256);
+    assert.equal(closePayloadStat.dev.toString(), closeManifest.payloadFile.identity.device);
+    assert.equal(closePayloadStat.ino.toString(), closeManifest.payloadFile.identity.inode);
+    assert.equal(closePayloadStat.size, BigInt(closeManifest.payloadFile.identity.size));
+    assert.equal(closePayloadStat.mtimeNs.toString(), closeManifest.payloadFile.identity.modifiedNs);
+    const closeDocument = validateMaterialsDocument(closeManifest, closePayloadBytes);
+    assert.equal(closeDocument.payload.identity.captureId, third.captureId);
+    assert.equal(closeDocument.payload.identity.materialsId, closeManifest.key.materialsId);
+    assert.equal(closeDocument.payload.bundleId, third.bundleId);
+    assert.equal(closeDocument.payload.safety.safeForProcessing, true);
+    assert.equal(closeDocument.payload.video.width, 1366);
+    assert.equal(closeDocument.payload.video.height, 768);
+    assert.equal(closeDocument.payload.clock.epoch, "capture-admission-monotonic");
+    const closeMovie = join(closeManifest.root, closeDocument.payload.video.file);
+    const closeVideoSeal = closeDocument.payload.files.find((file) => file.relativePath === "recording.mp4");
+    assert.ok(closeVideoSeal);
+    const closeMovieBytes = readFileSync(closeMovie);
+    const closeMovieStat = statSync(closeMovie, { bigint: true });
+    assert.equal(createHash("sha256").update(closeMovieBytes).digest("hex"), closeVideoSeal.sha256);
+    assert.equal(closeMovieStat.dev.toString(), closeVideoSeal.identity.device);
+    assert.equal(closeMovieStat.ino.toString(), closeVideoSeal.identity.inode);
+    assert.equal(closeMovieStat.size, BigInt(closeVideoSeal.identity.size));
+    assert.equal(closeMovieStat.mtimeNs.toString(), closeVideoSeal.identity.modifiedNs);
+    const closeProbe = JSON.parse(execFileSync(ffprobeCommand, ["-v", "error", "-select_streams", "v:0", "-show_entries", "stream=codec_name,width,height", "-show_entries", "format=duration", "-of", "json", closeMovie], { encoding: "utf8" }));
+    assert.deepEqual(closeProbe.streams[0], { codec_name: "h264", width: 1366, height: 768 });
+    assert.ok(Math.abs(Number(closeProbe.format.duration) * 1000 - closeDocument.payload.video.durationMs) < 250);
+    const closeEvidence = process.env.APPARENT_CAPTURE_EVIDENCE_DIR
+      ? join(resolve(process.env.APPARENT_CAPTURE_EVIDENCE_DIR), "foreground-close")
+      : undefined;
+    if (closeEvidence) {
+      mkdirSync(closeEvidence, { recursive: true, mode: 0o700 });
+      copyFileSync(closeMovie, join(closeEvidence, "recording.mp4"));
+      copyFileSync(closePayloadPath, join(closeEvidence, "materials.json"));
+      writeFileSync(join(closeEvidence, "manifest.json"), `${JSON.stringify(closeManifest, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      writeFileSync(join(closeEvidence, "ffprobe.json"), `${JSON.stringify(closeProbe, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+      execFileSync(ffmpegCommand, ["-v", "error", "-i", closeMovie, "-frames:v", "1", join(closeEvidence, "first-frame.png")]);
+      writeFileSync(join(closeEvidence, "caller-status.json"), `${JSON.stringify({ ...callerStatus, processExitCode: callerResult.result.code, processSignal: callerResult.result.signal }, null, 2)}\n`, { mode: 0o600, flag: "wx" });
+    }
+    const closeReleased = await client.releaseMaterials({ captureId: third.captureId, ownerToken: third.ownerToken, materialsId: closeManifest.key.materialsId, leaseId: closeManifest.leaseId });
+    assert.equal(closeReleased.released, true, "native material cleanup follows authenticated terminal inspection and seal validation");
+    assert.throws(() => statSync(closeMovie), { code: "ENOENT" });
+    assert.throws(() => statSync(closePayloadPath), { code: "ENOENT" });
 
     const reconnectSources = await client.discoverSources();
     const reconnectSource = reconnectSources.sources.find((item) => item.kind === "display");

@@ -3,6 +3,11 @@ import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
+import { spawnSync } from "node:child_process";
+import { mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import {
   CaptureClient,
   encodeCaptureRequest,
@@ -51,7 +56,7 @@ test("capture/2 is a separate strict channel and reference peer cannot claim nat
     clientId: "a".repeat(32),
     rpcId: "b".repeat(32),
     method: "handshake",
-  };
+  } as const;
   assert.match(encodeCaptureRequest(base), /"channel":"capture"/);
   assert.throws(
     () => validateCaptureRequest({ ...base, unknown: true }),
@@ -116,6 +121,7 @@ test("test-double handshake cannot return a native Saved receipt", async () => {
           rpcId: request.rpcId,
           result: new ReferenceCapturePeer().handshake,
         };
+      if (!("captureId" in request)) throw new Error("fixture expects an owned capture request");
       return {
         channel: "capture",
         protocolVersion: 2,
@@ -163,11 +169,13 @@ test("close distinguishes observed signal exits from signal requests", async () 
       stderr: PassThrough;
       exitCode: number | null;
       kill: (signal: "SIGTERM" | "SIGKILL") => boolean;
+      unref: () => void;
     };
     child.stdin = new PassThrough();
     child.stdout = new PassThrough();
     child.stderr = new PassThrough();
     child.exitCode = null;
+    child.unref = () => {};
     const finish = (signal: "SIGTERM" | "SIGKILL" | null) => {
       child.exitCode = 0;
       child.emit("exit", 0, signal);
@@ -190,6 +198,49 @@ test("close distinguishes observed signal exits from signal requests", async () 
     await new ChildProcessCaptureTransport(makeChild(false), 10).close(),
     "signal-exited",
   );
+});
+
+test("explicit owning close releases local resources even when native exit is unobserved", async () => {
+  const child = new EventEmitter() as unknown as ChildProcessWithoutNullStreams;
+  Object.assign(child, { stdin: new PassThrough(), stdout: new PassThrough(), stderr: new PassThrough(), exitCode: null });
+  let released = 0;
+  child.kill = () => false;
+  child.unref = () => { released++; };
+  const transport = new ChildProcessCaptureTransport(child, 10);
+  const closing = transport.close();
+  assert.equal(transport.close(), closing, "concurrent close shares the same outcome");
+  assert.equal(await closing, "kill-requested-after-timeout", "local cleanup never invents native exit");
+  assert.equal(released, 1);
+  assert.ok(child.stdin.destroyed && child.stdout.destroyed && child.stderr.destroyed);
+  assert.equal(child.listenerCount("exit"), 0);
+  await assert.rejects(transport.request({ channel: "capture", protocolVersion: 2, clientId: "a".repeat(32), rpcId: "b".repeat(32), method: "handshake" }), /closed/);
+  assert.equal(await transport.close(), "kill-requested-after-timeout");
+  assert.equal(released, 1);
+});
+
+test("owning close lets a one-shot caller exit while finite inherited-pipe work continues", async () => {
+  const root = await mkdtemp(join(tmpdir(), "capture-close-"));
+  try {
+    for (const mode of ["caller-eof", "caller-already"]) {
+      const marker = join(root, mode);
+      const caller = spawnSync(process.execPath, ["--experimental-strip-types",
+        fileURLToPath(new URL("./capture/close-caller.ts", import.meta.url)), mode, marker],
+      { encoding: "utf8", timeout: 5000 });
+      await writeFile(marker + ".release", "release finite fixture", { flag: "wx", mode: 0o600 });
+      // Reconcile the test-owned finite descendant even if the regression fails.
+      let completion: { finished: boolean } | undefined;
+      const deadline = Date.now() + 2000;
+      while (Date.now() < deadline) {
+        try { completion = JSON.parse(await readFile(marker, "utf8")); break; }
+        catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
+        await new Promise(done => setTimeout(done, 20));
+      }
+      assert.equal(completion?.finished, true, "finite fixture work survives local close and finishes");
+      assert.equal(caller.error, undefined, `one-shot caller must finish without exit/unref/kill: ${caller.stderr}`);
+      assert.equal(caller.status, 0);
+      assert.deepEqual(JSON.parse(caller.stdout), { outcome: mode === "caller-eof" ? "eof-exited" : "already-exited" });
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
 });
 
 test("publication reconnect checks pending and terminal identities against the restored plan", async () => {
@@ -221,7 +272,7 @@ test("cached capabilities and sources cannot be changed through returned objects
   const hello = await client.handshake(); hello.capabilities.displayCapture = false;
   const catalog = await client.discoverSources();
   catalog.sources[0].generation = "0".repeat(32);
-  const start = { ...authority, bundleId: "take", bundlePath: "/captures/take.apparent", source, options: { audio: "none" as const, localOnly: true as const }, invocation: { kind: "explicit", invocationId: "a".repeat(32), observedAtMs: 0 } };
+  const start = { ...authority, bundleId: "take", bundlePath: "/captures/take.apparent", source, options: { audio: "none" as const, localOnly: true as const }, invocation: { kind: "explicit" as const, invocationId: "a".repeat(32), observedAtMs: 0 } };
   await assert.rejects(client.start({ ...start, source: catalog.sources[0] }), /advertised/);
   assert.equal((await client.start(start)).state, "starting"); assert.equal(starts, 1);
   await assert.rejects(client.inspect({ ...authority, rpcId: "0".repeat(32) } as typeof authority), /reserved/);

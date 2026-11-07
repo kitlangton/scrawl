@@ -2,7 +2,7 @@ import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
 import { isDeepStrictEqual } from "node:util";
-import { releaseLocalRequests } from "./recovery/local.ts";
+import { releaseLocalRequests, releaseProcessReferences } from "./recovery/local.ts";
 import type {
   MaterialsDocument,
   MaterialsKey,
@@ -1016,27 +1016,29 @@ export class ChildProcessCaptureTransport implements CaptureTransport {
   private closePromise?: Promise<CaptureCloseOutcome>;
   private child: ChildProcessWithoutNullStreams;
   private shutdownMs: number;
+  private onStdoutData = (chunk: Buffer) => this.onData(Buffer.from(chunk));
+  private onStdoutError = () => this.fail(new Error("capture Engine stdout failed"));
+  private onStdoutEnd = () => this.fail(new Error("capture Engine output ended"));
+  private onStdinError = () => this.fail(new Error("capture Engine stdin failed"));
+  private onStderrData = () => {};
+  private onStderrError = () => {};
+  private onChildError = () => this.fail(new Error("capture Engine process failed"));
+  private onChildExit = () => {
+    this.closed = true;
+    this.fail(new Error("capture Engine exited"));
+  };
   constructor(child: ChildProcessWithoutNullStreams, shutdownMs = 3000) {
     timeout(shutdownMs);
     this.child = child;
     this.shutdownMs = shutdownMs;
-    child.stdout.on("data", (chunk) => this.onData(Buffer.from(chunk)));
-    child.stdout.on("error", () =>
-      this.fail(new Error("capture Engine stdout failed")),
-    );
-    child.stdout.on("end", () => this.fail(new Error("capture Engine output ended")));
-    child.stdin.on("error", () =>
-      this.fail(new Error("capture Engine stdin failed")),
-    );
-    child.stderr.on("data", () => {});
-    child.stderr.on("error", () => {});
-    child.on("error", () =>
-      this.fail(new Error("capture Engine process failed")),
-    );
-    child.on("exit", () => {
-      this.closed = true;
-      this.fail(new Error("capture Engine exited"));
-    });
+    child.stdout.on("data", this.onStdoutData);
+    child.stdout.on("error", this.onStdoutError);
+    child.stdout.on("end", this.onStdoutEnd);
+    child.stdin.on("error", this.onStdinError);
+    child.stderr.on("data", this.onStderrData);
+    child.stderr.on("error", this.onStderrError);
+    child.on("error", this.onChildError);
+    child.on("exit", this.onChildExit);
   }
   private onData(chunk: Buffer) {
     if (this.terminal) return;
@@ -1125,47 +1127,56 @@ export class ChildProcessCaptureTransport implements CaptureTransport {
     if (this.closePromise) return this.closePromise;
     this.closing = true;
     this.closePromise = new Promise((done) => {
-      if (this.closed) {
-        done("already-exited");
-        return;
-      }
+      let settled = false;
+      let eof: NodeJS.Timeout | undefined;
+      let kill: NodeJS.Timeout | undefined;
+      let reap: NodeJS.Timeout | undefined;
+      const settle = (result: CaptureCloseOutcome) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(eof); clearTimeout(kill); clearTimeout(reap);
+        this.child.off("exit", exited);
+        this.child.stdout.off("data", this.onStdoutData);
+        this.child.stdout.off("error", this.onStdoutError);
+        this.child.stdout.off("end", this.onStdoutEnd);
+        this.child.stdin.off("error", this.onStdinError);
+        this.child.stderr.off("data", this.onStderrData);
+        this.child.stderr.off("error", this.onStderrError);
+        this.child.off("error", this.onChildError);
+        this.child.off("exit", this.onChildExit);
+        this.bytes = Buffer.alloc(0);
+        releaseProcessReferences(this.child);
+        done(result);
+      };
       let outcome: CaptureCloseOutcome = "eof-exited";
       let requestedSignal: "SIGTERM" | "SIGKILL" | undefined;
-      const eof = setTimeout(() => {
+      const exited = (code: number | null, signal: NodeJS.Signals | null) => settle(
+        requestedSignal === "SIGKILL" ? "kill-exited"
+          : requestedSignal === "SIGTERM" ? "signal-exited"
+          : code === 0 && signal === null ? "eof-exited" : "exit-observed",
+      );
+      if (this.closed) { settle("already-exited"); return; }
+      eof = setTimeout(() => {
         if (!this.closed) {
           outcome = "signal-requested-after-timeout";
           requestedSignal = "SIGTERM";
-          this.child.kill("SIGTERM");
+          try { this.child.kill("SIGTERM"); } catch { /* Exit remains unobserved. */ }
         }
       }, this.shutdownMs);
-      const kill = setTimeout(() => {
+      kill = setTimeout(() => {
         if (!this.closed) {
           outcome = "kill-requested-after-timeout";
           requestedSignal = "SIGKILL";
-          this.child.kill("SIGKILL");
+          try { this.child.kill("SIGKILL"); } catch { /* Exit remains unobserved. */ }
         }
       }, this.shutdownMs * 2);
-      const reap = setTimeout(() => done(outcome), this.shutdownMs * 3);
-      this.child.once("exit", (code, signal) => {
-        clearTimeout(eof);
-        clearTimeout(kill);
-        clearTimeout(reap);
-        this.closed = true;
-        done(
-          requestedSignal === "SIGKILL"
-            ? "kill-exited"
-            : requestedSignal === "SIGTERM"
-              ? "signal-exited"
-              : code === 0 && signal === null
-                ? "eof-exited"
-                : "exit-observed",
-        );
-      });
+      reap = setTimeout(() => settle(outcome), this.shutdownMs * 3);
+      this.child.once("exit", exited);
       this.child.stdin.end();
     });
     this.fail(
       new Error(
-        "capture transport closed; native EOF semantics are unimplemented",
+        "capture transport closed; native outcome requires original-tuple reconciliation",
       ),
     );
     return this.closePromise;
