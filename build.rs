@@ -288,8 +288,8 @@ fn compile_helper() {
             "engine/native/LiveTranscribe.swift",
             "engine/native/Media.swift",
             "capture/engine/native/Mirror.swift",
-            "capture/engine/native/PlaybackVolume.swift",
-            "capture/engine/native/ScreenProbe.swift",
+            "engine/native/PlaybackVolume.swift",
+            "engine/native/ScreenProbe.swift",
         ],
         &[
             "capture/desktop/native/Onboarding.swift",
