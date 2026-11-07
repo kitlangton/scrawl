@@ -35,6 +35,7 @@ import { retireQueuedJob, resumeQueuedRetirement } from "../../src/queue/prune.t
 import { withStateQueue } from "../../src/state/queue-transaction.ts";
 import { stateFileStamp } from "../../src/state/credential-files.ts";
 import { retryQueuedUploads, RetryError } from "../../src/queue/retry.ts";
+import { publishRevocationIntent, readRevocationIntentsWithinLease } from "../../src/account/revocation-intent.ts";
 import { runUploadWorkerOnce } from "../../src/queue/worker.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
@@ -89,6 +90,40 @@ if (installedResources) after(async () => {
 assert.equal(typeof resources.checkAcl, "function", "native SDK must provide descriptor ACL verification");
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
+
+test("native revocation intents publish before queue contention and block credential reads", async () => fixture(async root => {
+  const server = "https://app.tryapparent.com/connect";
+  const fence = { signal: new AbortController().signal, assertHeld() {} };
+  await withStateQueue(root, { scope: "upload", approvedServer: server }, resources, {}, async (directory, lease) => {
+    const first = await publishRevocationIntent(root, false, fence, resources);
+    const second = await publishRevocationIntent(root, true, fence, resources);
+    assert.equal(first.state, "committed", "intent publication must not wait for the already-held queue lease");
+    assert.equal(second.state, "committed"); assert.notEqual(first.name, second.name);
+    const snapshot = await readRevocationIntentsWithinLease(directory, lease, resources);
+    assert.equal(snapshot.logout, true); assert.equal(snapshot.intents.length, 2);
+    assert.deepEqual(snapshot.intents.map(item => item.logout).sort(), [false, true]);
+    for (const item of snapshot.intents) mode((await lstat(path.join(root, item.name))).mode, 0o600, "intent");
+    await writeFile(path.join(root, "revocation-malformed.intent"), "{}", { mode: 0o600 });
+    await assert.rejects(readRevocationIntentsWithinLease(directory, lease, resources), /revocation_intent_unavailable/);
+  });
+  await assert.rejects(readCredentialSnapshot(root, { scope: "read", approvedServer: server }, resources), { category: "revocation_pending" });
+}));
+
+test("native intent publication retains uncertain effects after root replacement", async () => fixture(async root => {
+  const previous = `${root}-previous`;
+  try {
+    const guarded = { checkAcl: resources.checkAcl.bind(resources), async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
+      const result = await resources.replaceFile(...args);
+      assert.equal(result.state, "replaced");
+      await rename(root, previous); await mkdir(root, { mode: 0o700 });
+      return { state: "publication_uncertain" as const };
+    } };
+    const result = await publishRevocationIntent(root, true, { signal: new AbortController().signal, assertHeld() {} }, guarded);
+    assert.equal(result.state, "uncertain");
+    assert.equal(await readFile(path.join(previous, result.name), "utf8"), "true");
+    assert.deepEqual(await readdir(root), []);
+  } finally { await rm(previous, { recursive: true, force: true }); }
+}));
 
 test("native upload worker spans spool recovery and transfer with independent queue access", async () => fixture(async root => {
   const id = "c".repeat(32), generation = "d".repeat(32);
