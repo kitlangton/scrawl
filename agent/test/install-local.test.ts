@@ -333,6 +333,75 @@ test('dual media manifest accepts only the exact additive visual observation pro
   }
 }));
 
+test('dual media manifest accepts only exact additive recovery launch metadata without enabling recovery', async () => withTemp(async (directory) => {
+  const base = await fixtureRoot(directory);
+  const dual = structuredClone(base.manifest) as any;
+  dual.capabilities = ['media/1', 'media/2'];
+  dual.media2Launch = {
+    argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'],
+    sharesCaptureRuntime: true,
+  };
+  dual.visualObservations = {
+    schema: 'apparent.frame-observation-profile/1',
+    appliesTo: 'media/2-frame-png',
+    chunkType: 'apOB',
+    algorithm: 'apparent.visual-luma/1',
+  };
+  dual.recoveryLaunch = {
+    schema: 'apparent.engine-recovery-peer/1',
+    channel: 'media/2',
+    argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2', '--recovery-peer-v1', '<private-peer-nonce>'],
+    startsFreshCapture: false,
+    onInputEof: 'retain-admitted-finite-work',
+  };
+  assert.deepEqual(validateManifest(dual).recoveryLaunch, dual.recoveryLaunch);
+
+  const archive = join(directory, 'agent.tgz');
+  await writeFile(archive, agentTar, { mode: 0o600 });
+  const prefix = join(directory, 'recovery-prefix');
+  const bytes = Buffer.from(`${JSON.stringify(dual, null, 2)}\n`);
+  await writeFile(join(base.root, 'manifest.json'), bytes, { mode: 0o600 });
+  await installLocal({ agentPath: archive, agentSha256: sha256(agentTar), nativeRoot: base.root,
+    manifestSha256: sha256(bytes), prefix }, fixtureDependencies());
+  const launcher = await readFile(join(prefix, 'apparent-agent'), 'utf8');
+  assert.match(launcher, /apparent-engine-frames/);
+  assert.doesNotMatch(launcher, /recovery-peer-v1|private-peer-nonce|media-protocol-version.*2|capture-runtime-dir/);
+  assert.deepEqual(JSON.parse(await readFile(join(prefix, 'native-media/manifest.json'), 'utf8')), dual);
+  const receipt = JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8'));
+  assert.equal(receipt.nativeEntry, join(prefix, 'native-media/apparent-engine-frames'));
+  assert.deepEqual(receipt.claims, [
+    'local Agent consumer installed',
+    'native media/1 handshake and confirmed close passed; no codec claim',
+    'does not imply current-main artifact admission or global routing',
+  ]);
+
+  const malformed = [
+    (value: any) => { value.recoveryLaunch.schema = 'apparent.engine-recovery-peer/2'; },
+    (value: any) => { value.recoveryLaunch.channel = 'capture/2'; },
+    (value: any) => { value.recoveryLaunch.argv = ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1']; },
+    (value: any) => { value.recoveryLaunch.argv.push('--extra'); },
+    (value: any) => { value.recoveryLaunch.startsFreshCapture = true; },
+    (value: any) => { value.recoveryLaunch.onInputEof = 'cancel-admitted-work'; },
+    (value: any) => { delete value.recoveryLaunch.onInputEof; },
+    (value: any) => { value.recoveryLaunch.extra = true; },
+    (value: any) => { value.recoveryLaunch.schema = 1; },
+    (value: any) => { value.recoveryLaunch.argv = null; },
+    (value: any) => { value.recoveryLaunch = null; },
+    (value: any) => { value.capabilities = ['media/1']; delete value.media2Launch; },
+  ];
+  for (const [index, change] of malformed.entries()) {
+    const value = structuredClone(dual);
+    change(value);
+    const badPrefix = join(directory, `invalid-recovery-${index}`);
+    const invalidBytes = Buffer.from(`${JSON.stringify(value, null, 2)}\n`);
+    await writeFile(join(base.root, 'manifest.json'), invalidBytes, { mode: 0o600 });
+    assert.throws(() => validateManifest(value));
+    await assert.rejects(installLocal({ agentPath: archive, agentSha256: sha256(agentTar), nativeRoot: base.root,
+      manifestSha256: sha256(invalidBytes), prefix: badPrefix }, fixtureDependencies()));
+    await assert.rejects(lstat(badPrefix), { code: 'ENOENT' });
+  }
+}));
+
 test('native inventory aggregate, file-count, entry-count and per-file bounds fail before prefix creation', async () => withTemp(async (directory) => {
   const { input, native } = await fixtureInputs(directory);
   const noPrefix = async (limits: typeof DEFAULT_LIMITS, pattern: RegExp, suffix: string) => {

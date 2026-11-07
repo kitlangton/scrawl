@@ -157,6 +157,24 @@ For retained materials, use the same private Engine runtime root that owns the
 capture/2 journal. Media/2 must not search other runtimes or infer authority from
 caller file paths. Sharing that root does not acquire the live-capture slot.
 
+SDK0.4.4 exports `capture2MaterialsRoot(privateRuntimeDirectory, captureId)` from
+`@apparent/engine-sdk/capture`. This is the capture/2 provider's supported expected
+path binding: `<runtime>/capture-v2/materials/<captureId>`. Use the exact private,
+canonical runtime independently configured for the admitted native launch and the
+original capture ID from the host's durable admission/mapping, never values taken
+only from a manifest. Capture/2 providers using this layout retain it across
+reconnect; future incompatible layouts need a separate versioned contract.
+
+The helper is pure: it validates normalized absolute paths and lowercase32hex
+capture IDs, creates nothing, and performs no filesystem discovery, authentication,
+alias/ownership check or lease acquisition. It supplies Record's independently
+host-trusted expected root; require the authenticated manifest and detached payload
+to match it and preserve their capture/material/revision/lease and sealed-file
+checks. A matching path alone proves neither native origin nor Saved or safe
+release. Retain the original runtime and mapping through recovery. Only the
+qualified Linux capture/2 provider is currently available; this helper does not
+make Mac capture/2 or another provider available.
+
 `preflightMedia2Dispatch({ownerToken,request,materials}, timeoutMs)` validates
 local input before reserving dispatch. The client shares that exact preflight;
 local rejection has `dispatched:false`. `derive`, `inspect` and `cancel` accept

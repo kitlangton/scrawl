@@ -4,12 +4,24 @@ import { createHash } from "node:crypto";
 import { validateDerivativeEnvelope } from "../src/capture-documents/derivative.ts";
 import { validateInferenceEnvelope } from "../src/capture-documents/inference.ts";
 import { validateMaterialsDocument, validateStrokeFacts } from "../src/capture-documents/materials.ts";
-import { CaptureClient, CapturePublicationPreflightError, preflightCapturePublication, validatePublicationPlan } from "../src/capture.ts";
+import { CaptureClient, CapturePublicationPreflightError, capture2MaterialsRoot, preflightCapturePublication, validatePublicationPlan } from "../src/capture.ts";
 import { ReferenceCapturePeer } from "../src/capture-testing.ts";
 import type { CapturePublishInput, CaptureTransport } from "../src/capture.ts";
 import { validateContextFacts, validateFactFile } from "../src/capture-documents/facts.ts";
 
 const id = (n: string) => n.repeat(32);
+
+test("public capture/2 materials root binds host runtime and original capture identity", () => {
+  assert.equal(capture2MaterialsRoot("/trusted/engine runtime", id("a")), `/trusted/engine runtime/capture-v2/materials/${id("a")}`);
+  assert.notEqual(capture2MaterialsRoot("/other/runtime", id("a")), capture2MaterialsRoot("/trusted/runtime", id("a")));
+  assert.notEqual(capture2MaterialsRoot("/trusted/runtime", id("b")), capture2MaterialsRoot("/trusted/runtime", id("a")));
+  for (const root of ["", "relative", "/trusted/../other", "/trusted//runtime", "/trusted/runtime/", "/trusted\0runtime", `/${"a".repeat(4090)}`]) {
+    assert.throws(() => capture2MaterialsRoot(root, id("a")));
+  }
+  for (const captureId of ["", "A".repeat(32), "g".repeat(32), "a".repeat(31), "../capture", `${id("a")}/other`]) {
+    assert.throws(() => capture2MaterialsRoot("/trusted/runtime", captureId));
+  }
+});
 const hash = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 const bytes = (value: unknown) => Buffer.from(JSON.stringify(value), "utf8");
 const sealed = (path: string, content = path) => ({ relativePath: path, identity: { device: "1", inode: "2", size: content.length, modifiedNs: "3" }, sha256: hash(Buffer.from(content)) });

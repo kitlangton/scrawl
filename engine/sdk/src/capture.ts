@@ -16,6 +16,7 @@ import type { Derivative2DocumentInput } from "./media2/types.ts";
 import { MAX_DOCUMENT_BYTES, relativePath, validateSealedFile, validateMaterialEnvelopeIdentity } from "./capture-documents/common.ts";
 export { validatePublicationPlan } from "./capture-documents/publication.ts";
 export {
+  capture2MaterialsRoot,
   validateMaterialsDocument,
   validateFactFile,
 } from "./capture-documents/index.ts";

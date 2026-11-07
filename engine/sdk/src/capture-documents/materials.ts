@@ -1,7 +1,22 @@
 import { absolutePath, contained, exact, fail, id, optionalExact, parseDetached, record, relativePath, safeInt, sha, string, validateMaterialEnvelopeIdentity, validateMaterialsKey, validateSealedFile } from "./common.ts";
 import type { MaterialsDocument, MaterialsManifest, MaterialsPayload, SealedFile } from "./types.ts";
 import { isDeepStrictEqual } from "node:util";
+import { join } from "node:path";
 import { validateConfirmedSource, validateInvocation } from "./facts.ts";
+
+/** Expected capture/2 materials location derived only from host-owned launch/admission
+ * inputs. This performs no filesystem discovery or authentication. Use the exact private
+ * runtime passed to the admitted native provider and the original admitted captureId,
+ * then require the authenticated manifest/payload to match and validate all sealed reads.
+ * Never supply a runtime or captureId obtained only from an untrusted manifest.
+ */
+export function capture2MaterialsRoot(runtimeDirectory: string, captureId: string): string {
+  absolutePath(runtimeDirectory, "capture runtime directory");
+  id(captureId, "admitted captureId");
+  const root = join(runtimeDirectory, "capture-v2", "materials", captureId);
+  absolutePath(root, "expected materials root");
+  return root;
+}
 
 const factSchemas = { context: "apparent.capture-context/1", interactions: "apparent.capture-interactions/1", candidates: "apparent.capture-candidates/1", transcript: "apparent.capture-transcript/1", acceptedStrokes: "apparent.capture-strokes/1" } as const;
 

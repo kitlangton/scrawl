@@ -177,6 +177,19 @@ The active native caller remains authoritative migration debt. This source chang
 
 ## Queue and command adoption boundaries
 
+The internal `queue/worker` runner retains the existing single-link `worker.lock`
+across one upload pass and rechecks its original inode before queue transactions
+and transfer guards. It releases `queue.lock` for network work so foreground
+cancellation can proceed, then uses the existing expiry, retry/backoff and failure
+policies with fresh job/credential/cancellation/consent facts before replacement.
+Unknown effects stop the pass without replay. The host must settle uncertainty
+before scheduling another pass. Fresh bounded local settings, transfer execution
+and deadline-aware status-only progress ports are required; callbacks retain
+ownership until their promises settle and transfers must use the fresh guard.
+This supplies no filesystem snapshot admission, auth renewal or progress HTTP
+implementation by itself. It has no public worker export or production caller;
+Rust remains the sole live worker until coordinated adoption and platform gates.
+
 The queue API's `planAdmission` returns a detached, frozen plan for automatic
 private, explicit private or public-copy admission. It preserves first-match
 deduplication in supplied queue order and the donor's cancellation → pruning →
