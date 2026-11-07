@@ -165,16 +165,19 @@ test("lost start reply reserves public ownership, blocks admission and recovers 
   ctx.client.detach(); ctx.runtime.dispose(); ctx.host.dispose();
 });
 
-test("readiness changes cannot strand a definitely-undispatched reservation", async () => {
+for (const changeDuring of ['discovery', 'start'] as const) test(`readiness changes during ${changeDuring} survive definitely-undispatched refusal`, async () => {
   let emit!: (event: import('../../src/backend/host/capture2.ts').Capture2Event) => void;
   const host = {
     subscribe(listener: typeof emit) { emit = listener; return () => undefined; },
     readiness: async () => ({ ready: true }), reconcile: async () => [],
     discoverSources: async () => {
-      emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic readiness changed' } });
+      if (changeDuring === 'discovery') emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic readiness changed' } });
       return { state: 'available' as const, sources: [source] };
     },
-    start: async () => { throw Object.assign(new Error('synthetic refusal before dispatch'), { dispatched: false }); },
+    start: async () => {
+      if (changeDuring === 'start') emit({ type: 'readiness-changed', readiness: { ready: false, reason: 'synthetic readiness changed' } });
+      throw Object.assign(new Error('synthetic refusal before dispatch'), { dispatched: false });
+    },
     inspect: async () => { throw new Error('no capture was dispatched'); },
     stop: async () => { throw new Error('no capture was dispatched'); },
     cancel: async () => { throw new Error('no capture was dispatched'); }, dispose() {},
@@ -184,6 +187,9 @@ test("readiness changes cannot strand a definitely-undispatched reservation", as
     assert.equal((await runtime.startCapture('not-dispatched')).outcome, 'refused');
     assert.deepEqual(runtime.unresolvedOwnership().requestIds, []);
     assert.equal(runtime.startup.state, 'ready');
+    assert.equal(runtime.state.phase, 'idle');
+    assert.deepEqual(runtime.state.readiness, { ready: false, reason: 'synthetic readiness changed' });
+    assert.equal((await runtime.startCapture('still-unavailable')).outcome, 'refused');
   } finally { runtime.dispose(); }
 });
 

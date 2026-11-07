@@ -148,7 +148,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
       const definitelyNotDispatched = !!error && typeof error === "object" && (error as { dispatched?: unknown }).dispatched === false;
       if (!disposed && definitelyNotDispatched && known.get(requestId) === reservation) {
         releaseReservation(requestId, reservation);
-        if (state.phase === "checking" && state.captureId === requestId) publish(previousState);
+        if (state.phase === "checking" && state.captureId === requestId) publish({ ...previousState, readiness });
       }
       if (!definitelyNotDispatched && !disposed && known.get(requestId) === reservation) { known.set(requestId, { requestId, phase: "unknown" }); startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "unknown", phase: "unknown" }] }; publish({ phase: "uncertain", captureId: requestId, readiness, message: error instanceof Error ? error.message : String(error) }); }
       return { state, outcome: definitelyNotDispatched ? "refused" : "outcome-unknown" };
