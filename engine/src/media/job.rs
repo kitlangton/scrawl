@@ -14,13 +14,9 @@ use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::RawFd;
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::{
-    fs::MetadataExt,
-    net::UnixStream,
-    process::{CommandExt, ExitStatusExt},
-};
+use std::os::unix::{fs::MetadataExt, net::UnixStream, process::ExitStatusExt};
 use std::path::Path;
-use std::process::{Child, Command, Stdio};
+use std::process::Child;
 use std::time::Instant;
 
 const DIAGNOSTICS_SWITCH: &str = "APPARENT_MEDIA_TEST_DIAGNOSTICS";

@@ -11,6 +11,7 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CaptureClient,
+  launchCaptureEngine,
   encodeCaptureRequest,
   validateCaptureRequest,
 } from "../src/capture.ts";
@@ -379,4 +380,28 @@ test("Rust original ink seal round-trips through the public SDK reader", { skip:
   assert.deepEqual(fact.strokes[0].rgb, [12, 34, 56]);
   const tampered = Buffer.from(bytes); tampered[tampered.length - 2] ^= 1;
   assert.throws(() => validateFactFile(fixture.seal, tampered, materials, "acceptedStrokes"));
+});
+
+// Generated executable fixture proves only exact child launch/environment input.
+// It does not open a model, runtime, microphone or native capture.
+test("speech launch requires explicit local input and clears inherited model approval", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engine-speech-launch-"));
+  const executable = join(root, "fixture-engine");
+  const output = join(root, "environment.json");
+  const before = { model: process.env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1, profile: process.env.APPARENT_CAPTURE_SPEECH_PROFILE_V1, output: process.env.APPARENT_TEST_ENV_OUTPUT };
+  try {
+    await writeFile(executable, '#!' + process.execPath + '\nconst fs=require("node:fs");fs.writeFileSync(process.env.APPARENT_TEST_ENV_OUTPUT,JSON.stringify({model:process.env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1,profile:process.env.APPARENT_CAPTURE_SPEECH_PROFILE_V1}),{flag:"w"});\n', { mode: 0o755 });
+    process.env.APPARENT_TEST_ENV_OUTPUT = output;
+    process.env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1 = "/unapproved/ambient-model";
+    process.env.APPARENT_CAPTURE_SPEECH_PROFILE_V1 = "parakeet-unified-en-0.6b-Q8_0";
+    await launchCaptureEngine(executable, join(root, "runtime"), 5000).close();
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), {});
+    const localSpeech = { profile: "parakeet-unified-en-0.6b-Q8_0" as const, modelFile: join(root, "explicit-model.gguf") };
+    await launchCaptureEngine(executable, join(root, "runtime"), 5000, { localSpeech }).close();
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { model: localSpeech.modelFile, profile: localSpeech.profile });
+    assert.throws(() => launchCaptureEngine(executable, join(root, "runtime"), 5000, { localSpeech: { ...localSpeech, modelFile: "relative.gguf" } }));
+  } finally {
+    for (const [key, value] of [["APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1",before.model],["APPARENT_CAPTURE_SPEECH_PROFILE_V1",before.profile],["APPARENT_TEST_ENV_OUTPUT",before.output]] as const) { if (value === undefined) delete process.env[key]; else process.env[key]=value; }
+    await rm(root, { recursive: true, force: true });
+  }
 });

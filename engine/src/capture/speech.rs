@@ -84,7 +84,16 @@ pub fn transcribe(
         crate::execution::Profile::Speech,
         false,
     )?;
-    let mut child = OwnedChild(child);
+    let bytes = collect(OwnedChild(child), deadline, &shared.cancel)?;
+    let value: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid_materials")?;
+    validate_result(&value, duration)?;
+    Ok(value)
+}
+fn collect(
+    mut child: OwnedChild,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+) -> Result<Vec<u8>, &'static str> {
     let mut out = child.0.stdout.take().ok_or("internal")?;
     let fd = out.as_raw_fd();
     let flags = unsafe { libc::fcntl(fd, libc::F_GETFL) };
@@ -95,7 +104,7 @@ pub fn transcribe(
     let mut status = None;
     let mut eof = false;
     loop {
-        if shared.cancel.load(Ordering::Acquire) || Instant::now() >= deadline {
+        if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
             return Err("unavailable");
         }
         let mut buf = [0u8; 8192];
@@ -124,13 +133,13 @@ pub fn transcribe(
         }
         thread::sleep(Duration::from_millis(5));
     }
-    if !status.unwrap().success() || Instant::now() >= deadline {
+    if !status.unwrap().success() || Instant::now() >= deadline || cancelled.load(Ordering::Acquire)
+    {
         return Err("unavailable");
     }
-    let value: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid_materials")?;
-    validate_result(&value, duration)?;
-    Ok(value)
+    Ok(bytes)
 }
+
 fn validate_result(value: &Value, duration: u64) -> Result<(), &'static str> {
     let object = value.as_object().ok_or("invalid_materials")?;
     if object.len() != 4
@@ -215,6 +224,11 @@ pub fn child() -> Result<(), &'static str> {
     let result = recognizer
         .run(&samples, deadline)
         .map_err(|_| "unavailable")?;
+    if result.text.len() > MAX_RESULT
+        || result.segments.len().saturating_add(result.words.len()) > 65536
+    {
+        return Err("invalid_materials");
+    }
     let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
     let segments: Vec<Value> = if text.is_empty() {
         vec![]
@@ -263,5 +277,57 @@ mod tests {
             assert!(validate_result(&json!({"provider":"transcribe.cpp/parakeet","model":PROFILE,"text":"x","segments":[{"startMs":start,"endMs":end,"text":"x"}]}),100).is_err())
         }
         assert!(validate_result(&json!({"provider":"transcribe.cpp/parakeet","model":PROFILE,"text":"x","segments":[]}),100).is_err());
+    }
+    #[test]
+    fn actual_child_cancel_timeout_and_output_bound_are_reaped() {
+        use std::process::{Command, Stdio};
+        for cancelled in [false, true] {
+            let process = Command::new("/bin/sleep")
+                .arg("30")
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let pid = process.id();
+            assert!(
+                collect(
+                    OwnedChild(process),
+                    Instant::now() + Duration::from_millis(20),
+                    &AtomicBool::new(cancelled)
+                )
+                .is_err()
+            );
+            let mut status = 0;
+            assert_eq!(
+                unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) },
+                -1
+            );
+            assert_eq!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+        }
+        let process = Command::new("/usr/bin/head")
+            .args(["-c", "5000000", "/dev/zero"])
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = process.id();
+        assert_eq!(
+            collect(
+                OwnedChild(process),
+                Instant::now() + Duration::from_secs(5),
+                &AtomicBool::new(false)
+            ),
+            Err("invalid_materials")
+        );
+        let mut status = 0;
+        assert_eq!(
+            unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
     }
 }
