@@ -102,3 +102,27 @@ test("an uncertain create preserves observed bytes and never reports admission",
     assert.equal(JSON.parse(await readFile(path.join(f.root, `${id}.job`), "utf8")).id, id);
   } finally { await f.close(); }
 });
+
+test("public copy keeps its awaiting-share donor shape", async () => {
+  const f = await fixture();
+  try {
+    f.input.intent = "public-copy";
+    const result = await admitQueuedUpload(f.input, f.resources);
+    assert.equal(result.state, "admitted");
+    const saved = JSON.parse(await readFile(path.join(f.root, `${id}.job`), "utf8"));
+    assert.equal(saved.status, "awaiting_share"); assert.equal(saved.shared, true); assert.equal(saved.publicCopy, true); assert.equal(saved.encrypted, false);
+  } finally { await f.close(); }
+});
+
+test("retention equality is inclusive and stale plain jobs retire through the donor helper", async () => {
+  const f = await fixture();
+  try {
+    const inclusive = "c".repeat(32), expired = "d".repeat(32);
+    await writeFile(path.join(f.root, `${inclusive}.job`), encodeJob({ ...row("/tmp/other.apparent"), id: inclusive, created: 40 }), { mode: 0o600 });
+    await writeFile(path.join(f.root, `${expired}.job`), encodeJob({ ...row("/tmp/other.apparent"), id: expired, created: 39 }), { mode: 0o600 });
+    const result = await admitQueuedUpload(f.input, f.resources);
+    assert.equal(result.state, "admitted"); assert.deepEqual(result.retiredJobIds, [expired]);
+    await assert.rejects(readFile(path.join(f.root, `${expired}.job`)), { code: "ENOENT" });
+    assert.equal(JSON.parse(await readFile(path.join(f.root, `${inclusive}.job`), "utf8")).created, 40);
+  } finally { await f.close(); }
+});
