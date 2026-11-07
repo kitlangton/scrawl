@@ -31,12 +31,12 @@ async function pinFile(file: string, resources: QueueRetirementResources): Promi
     return { identity: ident(before), stamp: stateFileStamp(before) };
   } finally { if (!consumed) await handle.close().catch(() => {}); }
 }
-async function listExact(dir: string, expected: Set<string>): Promise<void> {
+async function listExact(dir: string, expected: Set<string>, recovery = false): Promise<void> {
   const names = await readdir(dir);
-  if (names.length !== expected.size || names.some(name => !expected.has(name))) throw new Error();
+  if (names.some(name => !expected.has(name)) || (!recovery && names.length !== expected.size)) throw new Error();
 }
 
-async function inventorySpool(state: StateDirectory, job: Job, resources: QueueRetirementResources, signal: AbortSignal) {
+async function inventorySpool(state: StateDirectory, job: Job, resources: QueueRetirementResources, signal: AbortSignal, recovery = false) {
   const rootPath = path.join(state.path, `${job.id}.sealed`);
   try { await lstat(rootPath); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
@@ -46,50 +46,69 @@ async function inventorySpool(state: StateDirectory, job: Job, resources: QueueR
     const grouped = job.grouped === true, profile: StoredSpoolProfile = grouped ? "evidence-first-v1" : "root";
     if (!job.encrypted || !job.encryption || job.encryption.context.captureId !== job.id
       || job.encryption.context.origin !== job.server || job.encryption.context.group !== undefined) throw new Error();
+    const contextExpected = { ...job.encryption.context } as Context;
+    let committed: ReturnType<typeof decodeStoredEncryptedSpool> | null = null;
+    if (recovery) {
+      const encoded = new TextEncoder().encode(JSON.stringify({ metadata: job.encryption, files: job.files }));
+      try { committed = decodeStoredEncryptedSpool(encoded, { context: contextExpected, profile }); }
+      finally { encoded.fill(0); }
+    }
+    if (recovery && job.files.length < 2) throw new Error();
     const receipt = await readStateEvidence(root, "spool-state.json", 2_000_000, resources, signal,
-      bytes => decodeStoredEncryptedSpool(bytes, { context: { ...job.encryption!.context } as Context, profile }));
-    if (!receipt) throw new Error();
-    const context = receipt.value.metadata.context;
-    if (context.captureId !== job.id || context.origin !== job.server || !receipt.value.metadata.recipientGrants.includes(context.senderGrantId)) throw new Error();
-    const expected = new Map(receipt.value.files.map(asset => [asset.path, asset]));
-    if (expected.size !== receipt.value.files.length || expected.size > 34) throw new Error();
+      bytes => decodeStoredEncryptedSpool(bytes, { context: contextExpected, profile }));
+    if (!receipt && !recovery) throw new Error();
+    const record = receipt?.value ?? committed!;
+    const context = record.metadata.context;
+    if (context.captureId !== job.id || context.origin !== job.server || !record.metadata.recipientGrants.includes(context.senderGrantId)) throw new Error();
+    if (recovery && (JSON.stringify([...record.metadata.recipientGrants].sort()) !== JSON.stringify([...job.encryption.recipientGrants].sort())
+      || JSON.stringify(record.files.map(f => [f.path, f.size, f.sha256]).sort()) !== JSON.stringify(committed!.files.map(f => [f.path, f.size, f.sha256]).sort()))) throw new Error();
+    const expected = new Map(record.files.map(asset => [asset.path, asset]));
+    if (expected.size !== record.files.length || expected.size > 34) throw new Error();
     const dirs = new Map<string, string>([["", root.identity]]), files = new Map<string, string>(), stamps = new Map<string, string>();
     const rootNames = new Set<string>(["spool-state.json", ...(grouped ? ["evidence", "media"] : [])]);
     if (!grouped) for (const name of expected.keys()) rootNames.add(name.split("/")[0]!);
-    await listExact(rootPath, rootNames);
-    const receiptPath = path.join(rootPath, "spool-state.json"), receiptStat = await lstat(receiptPath, { bigint: true });
-    if (stateFileStamp(receiptStat) !== receipt.expectedStamp) throw new Error();
-    files.set("spool-state.json", ident(receiptStat));
-    stamps.set("spool-state.json", receipt.expectedStamp);
+    await listExact(rootPath, rootNames, recovery);
+    const receiptPath = path.join(rootPath, "spool-state.json"), receiptStat = await lstat(receiptPath, { bigint: true }).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+    if (receiptStat) { if (!receipt || stateFileStamp(receiptStat) !== receipt.expectedStamp) throw new Error(); files.set("spool-state.json", ident(receiptStat)); stamps.set("spool-state.json", receipt.expectedStamp); }
     for (const group of grouped ? ["evidence", "media"] : [""]) {
       const prefix = group ? `${group}/` : "", names = [...expected.keys()].filter(name => name.startsWith(prefix)).map(name => name.slice(prefix.length));
       const dirPath = group ? path.join(rootPath, group) : rootPath;
       if (group) {
-        const admitted = await admitTrustedDirectory(dirPath, resources, "private-state", signal);
+        const groupExists = await lstat(dirPath, { bigint: true }).then(() => true).catch(error => { if (recovery && (error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; });
+        if (!groupExists) continue;
+        const admitted = await admitTrustedDirectory(dirPath, resources, "private-state", signal).catch(error => { if (recovery && (error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; });
+        if (!admitted) continue;
         dirs.set(group, admitted.identity); await admitted.handle.close();
-        await listExact(dirPath, new Set(names.map(name => name.split("/")[0]!)));
+        await listExact(dirPath, new Set(names.map(name => name.split("/")[0]!)), recovery);
       }
       const chunks = names.filter(name => name.startsWith("sealed/"));
       if (chunks.length) {
-        const chunkPath = path.join(dirPath, "sealed"), admitted = await admitTrustedDirectory(chunkPath, resources, "private-state", signal);
-        dirs.set(`${group ? `${group}/` : ""}sealed`, admitted.identity); await admitted.handle.close();
-        await listExact(chunkPath, new Set(chunks.map(name => name.slice("sealed/".length))));
+        const chunkPath = path.join(dirPath, "sealed");
+        const chunkExists = await lstat(chunkPath, { bigint: true }).then(() => true).catch(error => { if (recovery && (error as NodeJS.ErrnoException).code === "ENOENT") return false; throw error; });
+        const admitted = chunkExists ? await admitTrustedDirectory(chunkPath, resources, "private-state", signal) : null;
+        if (admitted) {
+          dirs.set(`${group ? `${group}/` : ""}sealed`, admitted.identity); await admitted.handle.close();
+          await listExact(chunkPath, new Set(chunks.map(name => name.slice("sealed/".length))), recovery);
+        }
       }
       for (const name of names) {
-        const asset = expected.get(prefix + name)!, file = path.join(rootPath, prefix, name), pinned = await pinFile(file, resources);
+        const asset = expected.get(prefix + name)!, file = path.join(rootPath, prefix, name);
+        const present = await lstat(file, { bigint: true }).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : Promise.reject(error));
+        if (!present && recovery) continue;
+        const pinned = await pinFile(file, resources);
         if ((await lstat(file, { bigint: true })).size !== BigInt(asset.size)) throw new Error();
         files.set(prefix + name, pinned.identity);
         stamps.set(prefix + name, pinned.stamp);
       }
     }
-    if (files.size !== expected.size + 1 || files.size > 35) throw new Error();
+    if ((!recovery && files.size !== expected.size + 1) || files.size > 35) throw new Error();
     return { handle: root.handle, identity: root.identity, files, dirs, stamps };
   } catch (error) { await root.handle.close().catch(() => {}); throw error; }
 }
 
 /** Removes only the validated ID's .sealed subtree and .job record. */
-export async function retireQueuedJob(state: StateDirectory, lease: CurrentNamespaceLease,
-  resources: QueueRetirementResources, input: QueueRetirementInput): Promise<QueueRetirementResult> {
+async function retireQueuedJobInternal(state: StateDirectory, lease: CurrentNamespaceLease,
+  resources: QueueRetirementResources, input: QueueRetirementInput, recovery: boolean): Promise<QueueRetirementResult> {
   let effects = false, spoolHandle: FileHandle | undefined, expectedBytes: Uint8Array | undefined;
   try {
     const expectedStamp = input.expectedStamp, assertFresh = input.assertFresh;
@@ -121,7 +140,7 @@ export async function retireQueuedJob(state: StateDirectory, lease: CurrentNames
     };
     await fence(); checkSignal(undefined, lease.signal); await verifyJob();
     let spool: Awaited<ReturnType<typeof inventorySpool>>;
-    try { spool = await inventorySpool(state, expected, resources, lease.signal); } catch { return result("refused"); }
+    try { spool = await inventorySpool(state, expected, resources, lease.signal, recovery); } catch { return result("refused"); }
     if (spool) {
       spoolHandle = spool.handle;
       const authorizedMissingFiles = new Set<string>(), authorizedMissingDirs = new Set<string>();
@@ -160,4 +179,15 @@ export async function retireQueuedJob(state: StateDirectory, lease: CurrentNames
     return remains === null ? result("retired") : result("uncertain");
   } catch { return result(effects ? "uncertain" : "refused"); }
   finally { expectedBytes?.fill(0); await spoolHandle?.close().catch(() => {}); }
+}
+
+export function retireQueuedJob(state: StateDirectory, lease: CurrentNamespaceLease,
+  resources: QueueRetirementResources, input: QueueRetirementInput): Promise<QueueRetirementResult> {
+  return retireQueuedJobInternal(state, lease, resources, input, false);
+}
+
+/** Explicit host-settlement capability. Never call as a retry from fresh retirement. */
+export function resumeQueuedRetirement(state: StateDirectory, lease: CurrentNamespaceLease,
+  resources: QueueRetirementResources, input: QueueRetirementInput): Promise<QueueRetirementResult> {
+  return retireQueuedJobInternal(state, lease, resources, input, true);
 }
