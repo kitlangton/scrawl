@@ -115,3 +115,26 @@ identity, hash, length, and selector remain bound. The caller still chooses
 frame selection, layout, canonical reasons, final paths, and admission before
 assembly. Local byte consistency does not authenticate native origin or create
 Saved state, publish, copy, or release retained materials.
+
+Standard sealed drawing consumption uses the existing original-materials ingress.
+`createStandardRecordCaptureCoordinator` validates `acceptedStrokes` before planning
+and final selection and persists the exact Record projection in the existing plan.
+`projectOriginalAcceptedStrokes` is also exported from `@apparent/record/processing/bundle`;
+it validates the original sealed fact and maps IDs, surface dimensions and normalized
+bundle-clock points without shape inference. The assembler obtains optional RGB only
+from that original fact, preserving absent versus black.
+
+Canonical v1 stroke arrays omit original IDs and surface/transform references. Therefore
+assembly also publishes the exact original fact path/seal as a material-backed
+`companion`, with an absolute reference and count in summary/handoff. Original accepted
+times, source IDs, surfaces/transforms and any producer-supported board state remain in
+the unmodified document. This does not invent undo/clear events or replay missing history.
+Collected-empty retains its empty document; unavailable retains no document or text.
+The same publication binding persists handoff context, and only authenticated Saved
+exposes it after restart. Interactions still require an explicit richer policy.
+
+These consumer contracts and isolated fixtures do not advertise native ink. Actual
+production requires Engine's authenticated accepted-stroke ingress, immutable original
+fact/seals and same capture/material revision/lease, with qualified surface/transform,
+clock, clipping and board undo/clear/reopen semantics plus admitted artifact/native proof.
+Platform supplies controls only; it does not author canonical geometry or attest facts.

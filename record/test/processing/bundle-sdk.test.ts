@@ -1804,3 +1804,115 @@ test("standard visual selection CAS preserves its original plan and refuses a di
   const duplicate=structuredClone(input);setSealedWarnings(duplicate,[{code:"audio-initial-gap",atMs:125},{code:"audio-initial-gap",atMs:126}]);assert.throws(()=>assembleCanonicalBundle(duplicate),/duplicate initial audio/);
   const forged=await fixture();forged.processingWarnings=[{kind:"audioInitialGap",atMs:125}];assert.throws(()=>assembleCanonicalBundle(forged),/original sealed materials warning/);
  });
+
+test("standard original ink persists exact projection and publishes its sealed source document", async () => {
+  const { planStandardVisual, finishStandardVisual } = await import("../../dist/backend/host/capture2/standard-visual.js");
+  const { projectOriginalAcceptedStrokes } = await import("@apparent/record/processing/bundle");
+  const root = await realpath(await mkdtemp(join(tmpdir(), "record-standard-ink-")));
+  try {
+    for (const collected of [false, true]) for (const empty of collected ? [false, true] : [true]) {
+      const input = await fixture();
+      const payload = JSON.parse(new TextDecoder().decode(input.payloadBytes));
+      payload.collection.interactions = "unavailable"; delete payload.facts.interactions; delete input.facts.interactions;
+      payload.files = payload.files.filter((file: { relativePath: string }) => file.relativePath !== "facts/interactions.json");
+      const document = { schema: "apparent.capture-strokes/1", identity, coordinates: "target-normalized-10000",
+        surfaces: [{ surfaceId: "screen-original", transformId: "transform-original", width: 800, height: 600, target: "capture-rectangle" },
+          { surfaceId: "board-original", transformId: "board-transform", width: 800, height: 600, target: "whiteboard-canvas" }],
+        strokes: empty ? [] : [undefined, [0, 0, 0], [15, 127, 240]].map((rgb, i) => ({ id: String(i + 1).repeat(32), surface: i === 1 ? "whiteboard" : "screen", surfaceId: i === 1 ? "board-original" : "screen-original", transformId: i === 1 ? "board-transform" : "transform-original",
+          startMs: 100, endMs: 200, acceptedAtMs: 250, ...(rgb ? { rgb } : {}), points: [{ x: 100, y: 200, timeMs: 100 }, { x: 300, y: 400, timeMs: 200 }] })) };
+      const installFact = (doc: unknown) => {
+        const content = bytes(doc), seal = sealed("facts/strokes.json", content, "original-stroke-inode");
+        const file = { relativePath: seal.relativePath, identity: seal.identity, sha256: seal.sha256 };
+        input.facts.acceptedStrokes = { file, bytes: content };
+        payload.files = payload.files.filter((entry: { relativePath: string }) => entry.relativePath !== file.relativePath);
+        payload.files.push(file); payload.facts.acceptedStrokes = { file: file.relativePath, schema: "apparent.capture-strokes/1" };
+        payload.collection.acceptedStrokes = "collected";
+      };
+      if (collected) installFact(document);
+      const reseal = () => {
+        input.payloadBytes = bytes(payload); input.manifest.key.revision = sha(input.payloadBytes);
+        input.manifest.payloadFile.sha256 = sha(input.payloadBytes); input.manifest.payloadFile.identity.size = input.payloadBytes.byteLength;
+        for (const artifact of input.artifacts) artifact.materials = { ...input.manifest.key };
+        return validateMaterialsDocument(input.manifest, input.payloadBytes);
+      };
+      const materials = reseal(), directory = join(root, `${collected}-${empty}`);
+      await mkdir(directory);
+      const base = { schema: 1 as const, materialsManifest: materials.manifest, trustedMaterialsRoot: materials.manifest.root,
+        materialsLimits: { maxFileBytes: 8_000_000, maxAggregateBytes: 20_000_000 }, artifactLimits: { maxFileBytes: 64_000_000, maxAggregateBytes: 128_000_000 },
+        admission: { ...input.admission, bundlePath: join(directory, "ink.apparent") }, marks: [], requestVideoProof: false,
+        publicationId: "1".repeat(32), stagingRoot: join(directory, "private"), contactSheetPath: "contact-sheet.png" };
+      const plan = planStandardVisual(materials, base, directory, input.facts.transcript, input.facts.acceptedStrokes);
+      const store = new SqlitePublicationBindingStore(join(directory, "store"));
+      await store.reserveProcessing({ schema: 1, captureId: identity.captureId, requestId: "original-ink", materials: materials.manifest.key,
+        leaseId: materials.manifest.leaseId, bundleId: base.admission.bundleId, bundlePath: base.admission.bundlePath, plan });
+      const reopened = await new SqlitePublicationBindingStore(join(directory, "store")).getProcessing(identity.captureId);
+      assert.deepEqual(reopened!.plan, plan);
+      const samples = plan.samples.flatMap(request => request.requestedBundleMs.map((timeMs, i) => ({ id: `${request.jobId}:${i + 1}`, timeMs, width: 640, height: 480, thumbnail: new Array<number>(2304).fill(0) })));
+      const final = finishStandardVisual(reopened!.plan as typeof plan, materials, samples, input.facts.transcript, input.facts.acceptedStrokes);
+      const assembly = assembleCanonicalBundle({ ...input, admission: base.admission,
+        frames: input.frames.map(frame => ({ ...frame, absolutePath: join(base.admission.bundlePath, frame.artifactPath) })),
+        additionalCanonicalFacts: final.additionalCanonicalFacts });
+      const canonical = JSON.parse(new TextDecoder().decode(assembly.apparentJson));
+      assert.equal(canonical.strokes.length, empty ? 0 : 3);
+      if (collected) {
+        const fact = input.facts.acceptedStrokes!;
+        const entry = assembly.inventory.entries.find(entry => entry.path === fact.file.relativePath)!;
+        assert.equal(entry.provenance, "material-reference"); assert.equal(entry.role, "companion"); assert.equal(entry.sha256, sha(fact.bytes));
+        assert.equal(assembly.processing.acceptedStrokeDocument?.strokeCount, document.strokes.length);
+        assert.match(new TextDecoder().decode(assembly.summaryMd), /Original annotation data: .*facts\/strokes.json/);
+        if (!empty) {
+          assert.deepEqual(canonical.strokes.map((s: { rgb?: number[] }) => s.rgb), [undefined, [0, 0, 0], [15, 127, 240]]);
+          assert.deepEqual(canonical.strokes[0].pts, [100, 200, 0, 300, 400, 100]);
+          const tampered = structuredClone(plan); tampered.base.additionalCanonicalFacts!.strokes![0]!.fw++;
+          assert.throws(() => finishStandardVisual(tampered, materials, samples, input.facts.transcript, fact), /persisted standard projection/);
+        }
+        const prepared = await prepareRecordPublication(stagingInput(input, assembly, directory, base.publicationId, base.admission.bundlePath));
+        const published = prepared.plan.entries.find(entry => entry.relativePath === fact.file.relativePath)!;
+        assert.deepEqual(published.input, { kind: "material", relativePath: fact.file.relativePath });
+        assert.equal(published.sha256, fact.file.sha256);
+        assert.deepEqual((await prepareRecordPublication(stagingInput(input, assembly, directory, base.publicationId, base.admission.bundlePath))).plan, prepared.plan);
+        // Synthetic public method ports exercise the existing Saved authority, not native origin.
+        const sdk = {
+          async handshake() { return { implementation: "native", capabilities: { publication: true } }; },
+          async publish(request: { captureId: string; publicationId: string; planFile: { planSha256: string } }) {
+            return { captureId: request.captureId, state: "publishing", publicationId: request.publicationId, planSha256: request.planFile.planSha256 };
+          },
+          async inspectPublication(request: { captureId: string; publicationId: string; planSha256: string; expected: { materials: MaterialsDocument["manifest"]["key"]; bundleId: string; bundlePath: string; manifestSha256: string } }) {
+            return { captureId: request.captureId, state: "saved", publicationId: request.publicationId, planSha256: request.planSha256,
+              materials: input.manifest, publication: { captureId: request.captureId, ...request.expected, publicationId: request.publicationId,
+                planSha256: request.planSha256, artifactVersion: 1, artifactProvenance: "native", inventorySha256: "9".repeat(64) } };
+          },
+        } as unknown as CaptureClient;
+        const outputRoot = join(directory, "output-store"), requestId = "original-ink-public";
+        const output = createRecordPublicationOutput(sdk, outputRoot, preflightCapturePublication);
+        const assemblyInput = { ...input, admission: base.admission, frames: input.frames.map(frame => ({ ...frame, absolutePath: join(base.admission.bundlePath, frame.artifactPath) })), additionalCanonicalFacts: final.additionalCanonicalFacts };
+        await output.publish({ status: { captureId: identity.captureId, state: "materials-ready", materials: input.manifest } as never,
+          assembly: assemblyInput, ownerToken: "c".repeat(64), publicationId: base.publicationId, stagingRoot: join(directory, "output-staging"),
+          destinationPath: base.admission.bundlePath, requestId, requestVideoProof: false });
+        assert.equal(await output.resolveHandoff({ captureId: requestId, artifactId: base.admission.bundleId }), null);
+        const reopenedOutput = createRecordPublicationOutput(sdk, outputRoot, preflightCapturePublication);
+        await reopenedOutput.reconcile({ captureId: identity.captureId, ownerToken: "c".repeat(64), publicationId: base.publicationId,
+          materials: input.manifest.key, leaseId: input.manifest.leaseId, bundleId: base.admission.bundleId, bundlePath: base.admission.bundlePath });
+        const resolution = await reopenedOutput.resolveHandoff({ captureId: requestId, artifactId: base.admission.bundleId });
+        assert.deepEqual(resolution!.handoff.processing.acceptedStrokeDocument, assembly.processing.acceptedStrokeDocument);
+        const { formatLocalHandoff } = await import("../../dist/backend/handoff/index.js");
+        assert.match(formatLocalHandoff(resolution!.handoff).text, /Original annotation data: .*facts\/strokes.json/);
+        assert.equal((await reopenedOutput.captureFacts.readFacts()).captures[0]!.delivery, "unknown");
+        assert.equal(sha(fact.bytes), fact.file.sha256, "original annotation bytes and seal remain unchanged");
+        assert.throws(() => planStandardVisual(materials, base, directory, input.facts.transcript), /original sealed fact/);
+        for (const mutate of [(d: typeof document) => { d.identity.captureId = "f".repeat(32); },
+          (d: typeof document) => { d.strokes[0]!.transformId = "foreign"; },
+          (d: typeof document) => { d.strokes[0]!.points[0]!.timeMs = 99; },
+          (d: typeof document) => { d.strokes[0]!.points[0]!.x = 10001; }]) {
+          if (empty) break;
+          const bad = structuredClone(document); mutate(bad); installFact(bad); const badMaterials = reseal();
+          assert.throws(() => projectOriginalAcceptedStrokes(badMaterials, input.facts.acceptedStrokes));
+        }
+      } else {
+        assert.equal(assembly.processing.acceptedStrokeDocument, undefined);
+        assert.equal(assembly.inventory.entries.some(entry => entry.role === "companion"), false);
+        assert.throws(() => projectOriginalAcceptedStrokes(materials, { file: sealed("facts/strokes.json", bytes(document), "foreign"), bytes: bytes(document) }), /unavailable/);
+      }
+    }
+  } finally { await rm(root, { recursive: true, force: true }); }
+});
