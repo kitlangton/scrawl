@@ -679,6 +679,19 @@ full login publication and coordinated writer adoption remain separate gates.
 
 ## Anonymous device protocol transport
 
+The internal `createDeviceLoginTransport` joins the existing device policy and
+HTTP ports into one private session. It binds polls to the started code, retains
+the original poll issue time, and consumes approval before one host commit
+attempt. Its 15-minute lifetime includes idle time before start. Disposal aborts
+requests; cancellation or a lost host fence after possible commit effects returns
+`unverified-commit`. The host must implement the injected current-login fence
+and credential/config commit under the sole-writer protocol. Neither shapes nor
+this adapter establish consent, durable identity linkage or installed authority.
+The compiled local Worker fixture exercises both scopes/API mounts with synthetic
+fences and a memory-only commit sink. Disposal drops private references, without
+claiming erasure of immutable strings. Callbacks that ignore cancellation remain
+awaited and responsible for their effects; no uncertain commit is retried.
+
 The internal `prepareLoginCredential` validates a private approved reply into a
 frozen stored-credential proposal. It pins the caller-approved API, separate
 approval-site origin, scope, fresh generation and endpoint identity, and reuses
