@@ -100,6 +100,227 @@ fn seal(store: &SecureStore, relative: &str, leaf: &str) -> SealedFile {
     }
 }
 
+fn write_tracked_frame(f: &Fixture, reference: &JobReference, contents: &[u8]) -> File {
+    f.registry
+        .reserve_output_directory(reference, &f.output)
+        .unwrap();
+    let frames = f.output.create_child("frames").unwrap();
+    f.registry
+        .record_output_directory(reference, &f.output, &frames)
+        .unwrap();
+    f.registry
+        .reserve_output_file(reference, &f.output, "frames/frame-001.png")
+        .unwrap();
+    let mut file = frames.file("frame-001.png", true).unwrap();
+    f.registry
+        .record_output_file(reference, &f.output, "frames/frame-001.png", &file)
+        .unwrap();
+    file.write_all(contents).unwrap();
+    file.sync_all().unwrap();
+    file
+}
+
+fn write_tracked_root_file(f: &Fixture, reference: &JobReference, name: &str, contents: &[u8]) {
+    f.registry
+        .reserve_output_file(reference, &f.output, name)
+        .unwrap();
+    let mut file = f.output.file(name, true).unwrap();
+    f.registry
+        .record_output_file(reference, &f.output, name, &file)
+        .unwrap();
+    file.write_all(contents).unwrap();
+    file.sync_all().unwrap();
+}
+
+#[test]
+fn reaped_partial_outputs_are_removed_for_cancel_deadline_failure_and_owner_loss() {
+    for (suffix, checkpoint, expected_state) in [
+        ("1", Checkpoint::Cancel, StoredJobState::Cancelled),
+        ("2", Checkpoint::Deadline, StoredJobState::DeadlineExceeded),
+        ("3", Checkpoint::Failed, StoredJobState::Failed),
+        ("4", Checkpoint::OwnerLost, StoredJobState::OwnerLost),
+    ] {
+        let f = fixture();
+        let mut binding = f.binding.clone();
+        binding.job_id = suffix.repeat(32);
+        binding.receipt_id = format!("{}{}", suffix, "a".repeat(31));
+        let JobOutcome::Owned(claim) = f.registry.begin(binding.clone(), f.output.clone()).unwrap()
+        else {
+            panic!()
+        };
+        let reference = intent_from_binding(&binding).unwrap().reference();
+        write_tracked_frame(&f, &reference, b"partial frame");
+        write_tracked_root_file(&f, &reference, "receipt.json", b"partial receipt");
+        std::fs::write(f.root_path.join("output/caller-owned.txt"), b"preserve").unwrap();
+        drop(claim);
+
+        assert!(matches!(
+            f.registry
+                .finish_reaped(&binding, f.output.clone(), checkpoint)
+                .unwrap(),
+            JobOutcome::ExistingFailed(_)
+        ));
+        assert_eq!(
+            f.registry.inspect_reference(&reference).unwrap().state,
+            expected_state
+        );
+        assert!(!f.root_path.join("output/frames").exists());
+        assert!(!f.root_path.join("output/receipt.json").exists());
+        assert_eq!(
+            std::fs::read(f.root_path.join("output/caller-owned.txt")).unwrap(),
+            b"preserve"
+        );
+        let root = f.root_path.clone();
+        drop(f);
+        std::fs::remove_dir_all(root).unwrap();
+    }
+}
+
+#[test]
+fn cleanup_refuses_replaced_files_and_preserves_untracked_frames_entries() {
+    let f = fixture();
+    let JobOutcome::Owned(claim) = f
+        .registry
+        .begin(f.binding.clone(), f.output.clone())
+        .unwrap()
+    else {
+        panic!()
+    };
+    let reference = intent_from_binding(&f.binding).unwrap().reference();
+    let original = write_tracked_frame(&f, &reference, b"native bytes");
+    let original_meta = original.metadata().unwrap();
+    let frame_path = f.root_path.join("output/frames/frame-001.png");
+    std::fs::remove_file(&frame_path).unwrap();
+    let frames = f.output.existing_child("frames").unwrap();
+    frames
+        .write_new("frame-001.png", b"replacement bytes")
+        .unwrap();
+    drop(claim);
+    assert!(
+        f.registry
+            .finish_reaped(&f.binding, f.output.clone(), Checkpoint::Failed)
+            .is_err()
+    );
+    assert_eq!(std::fs::read(&frame_path).unwrap(), b"replacement bytes");
+    assert_ne!(
+        original_meta.ino(),
+        frames
+            .file("frame-001.png", false)
+            .unwrap()
+            .metadata()
+            .unwrap()
+            .ino()
+    );
+    let root = f.root_path.clone();
+    drop(f);
+    std::fs::remove_dir_all(root).unwrap();
+
+    let f = fixture();
+    let JobOutcome::Owned(claim) = f
+        .registry
+        .begin(f.binding.clone(), f.output.clone())
+        .unwrap()
+    else {
+        panic!()
+    };
+    let reference = intent_from_binding(&f.binding).unwrap().reference();
+    write_tracked_frame(&f, &reference, b"native bytes");
+    let frames = f.output.existing_child("frames").unwrap();
+    frames
+        .write_new("caller-owned.txt", b"keep unknown entry")
+        .unwrap();
+    drop(claim);
+    assert!(
+        f.registry
+            .finish_reaped(&f.binding, f.output.clone(), Checkpoint::Cancel)
+            .is_err()
+    );
+    assert!(!f.root_path.join("output/frames/frame-001.png").exists());
+    assert_eq!(
+        std::fs::read(f.root_path.join("output/frames/caller-owned.txt")).unwrap(),
+        b"keep unknown entry"
+    );
+    let root = f.root_path.clone();
+    drop(f);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
+#[test]
+fn cleanup_preserves_reservations_without_a_bound_inode() {
+    let f = fixture();
+    let JobOutcome::Owned(claim) = f
+        .registry
+        .begin(f.binding.clone(), f.output.clone())
+        .unwrap()
+    else {
+        panic!()
+    };
+    f.output.create_child("frames").unwrap();
+    drop(claim);
+    assert!(
+        f.registry
+            .finish_reaped(&f.binding, f.output.clone(), Checkpoint::Failed)
+            .is_err()
+    );
+    assert!(f.root_path.join("output/frames").is_dir());
+    let root = f.root_path.clone();
+    drop(f);
+    std::fs::remove_dir_all(root).unwrap();
+
+    let f = fixture();
+    let JobOutcome::Owned(claim) = f
+        .registry
+        .begin(f.binding.clone(), f.output.clone())
+        .unwrap()
+    else {
+        panic!()
+    };
+    let reference = intent_from_binding(&f.binding).unwrap().reference();
+    f.registry
+        .reserve_output_directory(&reference, &f.output)
+        .unwrap();
+    f.output.create_child("frames").unwrap();
+    drop(claim);
+    assert!(
+        f.registry
+            .finish_reaped(&f.binding, f.output.clone(), Checkpoint::Failed)
+            .is_err()
+    );
+    assert!(f.root_path.join("output/frames").is_dir());
+    let root = f.root_path.clone();
+    drop(f);
+    std::fs::remove_dir_all(root).unwrap();
+
+    let f = fixture();
+    let JobOutcome::Owned(claim) = f
+        .registry
+        .begin(f.binding.clone(), f.output.clone())
+        .unwrap()
+    else {
+        panic!()
+    };
+    let reference = intent_from_binding(&f.binding).unwrap().reference();
+    f.registry
+        .reserve_output_file(&reference, &f.output, "receipt.json")
+        .unwrap();
+    let mut receipt = f.output.file("receipt.json", true).unwrap();
+    receipt.write_all(b"uncertain partial receipt").unwrap();
+    receipt.sync_all().unwrap();
+    drop(claim);
+    assert!(
+        f.registry
+            .finish_reaped(&f.binding, f.output.clone(), Checkpoint::Failed)
+            .is_err()
+    );
+    assert_eq!(
+        std::fs::read(f.root_path.join("output/receipt.json")).unwrap(),
+        b"uncertain partial receipt"
+    );
+    let root = f.root_path.clone();
+    drop(f);
+    std::fs::remove_dir_all(root).unwrap();
+}
+
 #[test]
 fn live_owner_collision_and_replay_cannot_rebind_request() {
     let f = fixture();
@@ -247,9 +468,12 @@ fn losing_supervisor_reconciliation_leaves_the_live_intent_untouched() {
     let f = fixture();
     let intent = intent_from_binding(&f.binding).unwrap();
     let reference = intent.reference();
-    let JobOutcome::Owned(claim) = f.registry.admit(intent, f.output.clone()).unwrap() else {
+    let JobOutcome::Owned(mut claim) = f.registry.admit(intent, f.output.clone()).unwrap() else {
         panic!()
     };
+    claim.bind_source(f.binding.clone()).unwrap();
+    let frame = write_tracked_frame(&f, &reference, b"live owner output");
+    let frame_path = f.root_path.join("output/frames/frame-001.png");
     let started = std::time::Instant::now();
     assert!(matches!(
         f.registry
@@ -258,9 +482,11 @@ fn losing_supervisor_reconciliation_leaves_the_live_intent_untouched() {
         JobOutcome::ExistingInProgress
     ));
     assert!(started.elapsed() < std::time::Duration::from_secs(1));
+    assert_eq!(std::fs::read(&frame_path).unwrap(), b"live owner output");
+    assert_eq!(frame.metadata().unwrap().len(), 17);
     assert_eq!(
         f.registry.inspect_reference(&reference).unwrap().state,
-        StoredJobState::Preparing
+        StoredJobState::Running
     );
     let mut wrong = reference.clone();
     wrong.request_sha256 = "9".repeat(64);
@@ -284,12 +510,18 @@ fn cold_recovery_never_fences_a_live_owner_or_rebinds_an_abandoned_job() {
     let f = fixture();
     let intent = intent_from_binding(&f.binding).unwrap();
     let reference = intent.reference();
-    let JobOutcome::Owned(claim) = f.registry.admit(intent, f.output.clone()).unwrap() else {
+    let JobOutcome::Owned(mut claim) = f.registry.admit(intent, f.output.clone()).unwrap() else {
         panic!()
     };
     assert_eq!(
         f.registry.reconcile_if_ownerless(&reference).unwrap().state,
         StoredJobState::Preparing
+    );
+    claim.bind_source(f.binding.clone()).unwrap();
+    write_tracked_frame(&f, &reference, b"abandoned frame");
+    assert_eq!(
+        f.registry.reconcile_if_ownerless(&reference).unwrap().state,
+        StoredJobState::Running
     );
     drop(claim);
     let mut wrong = reference.clone();
@@ -297,12 +529,13 @@ fn cold_recovery_never_fences_a_live_owner_or_rebinds_an_abandoned_job() {
     assert!(f.registry.reconcile_if_ownerless(&wrong).is_err());
     assert_eq!(
         f.registry.inspect_reference(&reference).unwrap().state,
-        StoredJobState::Preparing
+        StoredJobState::Running
     );
     assert_eq!(
         f.registry.reconcile_if_ownerless(&reference).unwrap().state,
         StoredJobState::OwnerLost
     );
+    assert!(!f.root_path.join("output/frames").exists());
     assert_eq!(
         f.registry.reconcile_if_ownerless(&reference).unwrap().state,
         StoredJobState::OwnerLost
@@ -531,7 +764,7 @@ fn supervisor_records_cancel_or_deadline_only_after_reaping_owner() {
 #[test]
 fn completed_authority_requires_registry_and_detects_output_tampering() {
     let f = fixture();
-    let frames = f.output.child("frames").unwrap();
+    let frames = f.output.create_child("frames").unwrap();
     frames
         .write_new("frame-001.png", b"native-image-bytes")
         .unwrap();
@@ -565,8 +798,17 @@ fn completed_authority_requires_registry_and_detects_output_tampering() {
     else {
         panic!()
     };
+    let reference = intent_from_binding(&f.binding).unwrap().reference();
     claim.complete(receipt, &envelope).unwrap();
     drop(claim);
+    assert!(matches!(
+        f.registry
+            .finish_reaped(&f.binding, f.output.clone(), Checkpoint::Cancel)
+            .unwrap(),
+        JobOutcome::ExistingComplete(_, _)
+    ));
+    assert!(f.root_path.join("output/frames/frame-001.png").exists());
+    assert!(f.root_path.join("output/receipt.json").exists());
     assert_eq!(
         f.registry
             .request_cancel(&intent_from_binding(&f.binding).unwrap().reference())
@@ -576,7 +818,6 @@ fn completed_authority_requires_registry_and_detects_output_tampering() {
     f.output
         .write_new("manifest.json", br#"{"schema":"caller-forgery"}"#)
         .unwrap();
-    let reference = intent_from_binding(&f.binding).unwrap().reference();
     let inspected = f.registry.inspect_reference(&reference).unwrap();
     assert_eq!(inspected.state, StoredJobState::Complete);
     assert!(inspected.binding.is_some());

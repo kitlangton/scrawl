@@ -116,6 +116,27 @@ pub struct JobIntent {
     pub admitted_at_ms: u64,
 }
 
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct OwnedOutputInventory {
+    schema: String,
+    files: Vec<OwnedOutputFile>,
+    frames_directory: Option<OwnedOutputDirectory>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct OwnedOutputDirectory {
+    identity: Option<OutputIdentity>,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(deny_unknown_fields, rename_all = "camelCase")]
+struct OwnedOutputFile {
+    relative_path: String,
+    identity: Option<OutputIdentity>,
+}
+
 impl JobIntent {
     fn reference(&self) -> JobReference {
         JobReference {
@@ -294,6 +315,7 @@ impl NativeReceipt {
     }
 }
 
+#[derive(Clone)]
 pub struct JobRegistry {
     namespace: Arc<SecureStore>,
 }
@@ -313,6 +335,250 @@ impl JobRegistry {
         Ok(Self {
             namespace: root.child("materials-media-2")?,
         })
+    }
+
+    /// Durably record the private `frames` directory created exclusively by
+    /// the supervised output sink. This is cleanup ownership, not receipt
+    /// authority; caller must be the admitted worker holding its owner lock.
+    pub(crate) fn reserve_output_directory(
+        &self,
+        reference: &JobReference,
+        output: &Arc<SecureStore>,
+    ) -> Result<()> {
+        let job = self.namespace.existing_child(&reference.job_id)?;
+        let _control = control_lock(&job)?;
+        let intent = read_job_intent(&job)?;
+        ensure!(
+            intent.matches_reference(reference),
+            "job reference mismatch"
+        );
+        ensure!(
+            read_job_state(&job)? == StoredJobState::Running,
+            "job is not running"
+        );
+        check_output_identity_values(&intent.output_identity, output)?;
+        ensure!(
+            !output.entry_exists("frames")?,
+            "unowned frames directory exists"
+        );
+        let mut inventory = read_owned_inventory(&job)?;
+        if inventory.frames_directory.is_some() {
+            return Ok(());
+        }
+        inventory.frames_directory = Some(OwnedOutputDirectory { identity: None });
+        job.write("owned-output.json", &serde_json::to_vec(&inventory)?)?;
+        Ok(())
+    }
+
+    pub(crate) fn record_output_directory(
+        &self,
+        reference: &JobReference,
+        output: &Arc<SecureStore>,
+        directory: &SecureStore,
+    ) -> Result<()> {
+        let job = self.namespace.existing_child(&reference.job_id)?;
+        let _control = control_lock(&job)?;
+        let intent = read_job_intent(&job)?;
+        ensure!(
+            intent.matches_reference(reference),
+            "job reference mismatch"
+        );
+        ensure!(
+            read_job_state(&job)? == StoredJobState::Running,
+            "job is not running"
+        );
+        check_output_identity_values(&intent.output_identity, output)?;
+        let expected = output.existing_child("frames")?;
+        let actual_metadata = directory.directory_metadata()?;
+        let expected_metadata = expected.directory_metadata()?;
+        ensure!(
+            actual_metadata.dev() == expected_metadata.dev()
+                && actual_metadata.ino() == expected_metadata.ino(),
+            "frames directory identity changed"
+        );
+        let identity = OutputIdentity {
+            device: actual_metadata.dev().to_string(),
+            inode: actual_metadata.ino().to_string(),
+        };
+        let mut inventory = read_owned_inventory(&job)?;
+        let directory = inventory
+            .frames_directory
+            .as_mut()
+            .ok_or_else(|| std::io::Error::other("frames directory reservation missing"))?;
+        if let Some(previous) = &directory.identity {
+            ensure!(previous == &identity, "frames directory identity changed");
+            return Ok(());
+        }
+        directory.identity = Some(identity);
+        job.write("owned-output.json", &serde_json::to_vec(&inventory)?)?;
+        Ok(())
+    }
+
+    /// Persist an allowlisted output path before its exclusive file creation.
+    /// If the worker dies before inode binding, cleanup will preserve any
+    /// resulting file and report the unresolved reservation.
+    pub(crate) fn reserve_output_file(
+        &self,
+        reference: &JobReference,
+        output: &Arc<SecureStore>,
+        relative_path: &str,
+    ) -> Result<()> {
+        let job = self.namespace.existing_child(&reference.job_id)?;
+        let _control = control_lock(&job)?;
+        let intent = read_job_intent(&job)?;
+        ensure!(
+            intent.matches_reference(reference),
+            "job reference mismatch"
+        );
+        ensure!(
+            read_job_state(&job)? == StoredJobState::Running,
+            "job is not running"
+        );
+        check_output_identity_values(&intent.output_identity, output)?;
+        let (store, leaf) = if let Some(leaf) = relative_path.strip_prefix("frames/") {
+            let index = leaf
+                .strip_prefix("frame-")
+                .and_then(|name| name.strip_suffix(".png"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .ok_or_else(|| std::io::Error::other("invalid output frame path"))?;
+            ensure!(
+                index > 0
+                    && index <= intent.requested_bundle_ms.len()
+                    && leaf == format!("frame-{index:03}.png"),
+                "invalid output frame path"
+            );
+            let frames = output.existing_child("frames")?;
+            let inventory = read_owned_inventory(&job)?;
+            ensure!(
+                inventory
+                    .frames_directory
+                    .as_ref()
+                    .and_then(|dir| dir.identity.as_ref())
+                    == Some(&OutputIdentity {
+                        device: frames.directory_metadata()?.dev().to_string(),
+                        inode: frames.directory_metadata()?.ino().to_string(),
+                    }),
+                "frames directory is not registered"
+            );
+            (frames, leaf.to_owned())
+        } else {
+            ensure!(
+                relative_path == "receipt.json"
+                    || (relative_path == "contact-sheet.png" && intent.layout.is_some()),
+                "invalid output file path"
+            );
+            (output.clone(), relative_path.to_owned())
+        };
+        ensure!(!store.entry_exists(&leaf)?, "output path already exists");
+        let mut inventory = read_owned_inventory(&job)?;
+        if let Some(previous) = inventory
+            .files
+            .iter()
+            .find(|owned| owned.relative_path == relative_path)
+        {
+            ensure!(previous.identity.is_none(), "output path already tracked");
+            return Ok(());
+        }
+        ensure!(inventory.files.len() < 50, "owned output inventory full");
+        inventory.files.push(OwnedOutputFile {
+            relative_path: relative_path.to_owned(),
+            identity: None,
+        });
+        job.write("owned-output.json", &serde_json::to_vec(&inventory)?)?;
+        Ok(())
+    }
+
+    /// Record a newly created file inode before the worker writes bytes to it,
+    /// so failures and cancellation during a write remain safely cleanable.
+    pub(crate) fn record_output_file(
+        &self,
+        reference: &JobReference,
+        output: &Arc<SecureStore>,
+        relative_path: &str,
+        file: &File,
+    ) -> Result<()> {
+        let job = self.namespace.existing_child(&reference.job_id)?;
+        let _control = control_lock(&job)?;
+        let intent = read_job_intent(&job)?;
+        ensure!(
+            intent.matches_reference(reference),
+            "job reference mismatch"
+        );
+        ensure!(
+            read_job_state(&job)? == StoredJobState::Running,
+            "job is not running"
+        );
+        check_output_identity_values(&intent.output_identity, output)?;
+        let (store, leaf) = if let Some(leaf) = relative_path.strip_prefix("frames/") {
+            let index = leaf
+                .strip_prefix("frame-")
+                .and_then(|name| name.strip_suffix(".png"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .ok_or_else(|| std::io::Error::other("invalid output frame path"))?;
+            ensure!(
+                index > 0
+                    && index <= intent.requested_bundle_ms.len()
+                    && leaf == format!("frame-{index:03}.png"),
+                "invalid output frame path"
+            );
+            let frames = output.existing_child("frames")?;
+            let inventory = read_owned_inventory(&job)?;
+            let metadata = frames.directory_metadata()?;
+            let identity = OutputIdentity {
+                device: metadata.dev().to_string(),
+                inode: metadata.ino().to_string(),
+            };
+            ensure!(
+                inventory
+                    .frames_directory
+                    .as_ref()
+                    .and_then(|dir| dir.identity.as_ref())
+                    == Some(&identity),
+                "frames directory ownership missing"
+            );
+            (frames, leaf.to_owned())
+        } else {
+            ensure!(
+                relative_path == "receipt.json"
+                    || (relative_path == "contact-sheet.png" && intent.layout.is_some()),
+                "invalid output file path"
+            );
+            (output.clone(), relative_path.to_owned())
+        };
+        let metadata = file.metadata()?;
+        ensure!(
+            metadata.is_file()
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.mode() & 0o777 == 0o600
+                && metadata.nlink() == 1,
+            "unsafe output file"
+        );
+        let named = store.file(&leaf, false)?;
+        let named_metadata = named.metadata()?;
+        ensure!(
+            metadata.dev() == named_metadata.dev() && metadata.ino() == named_metadata.ino(),
+            "output file identity changed"
+        );
+        let mut inventory = read_owned_inventory(&job)?;
+        if let Some(previous) = inventory
+            .files
+            .iter_mut()
+            .find(|owned| owned.relative_path == relative_path)
+        {
+            let identity = OutputIdentity {
+                device: metadata.dev().to_string(),
+                inode: metadata.ino().to_string(),
+            };
+            if let Some(existing) = &previous.identity {
+                ensure!(existing == &identity, "output path already tracked");
+                return Ok(());
+            }
+            previous.identity = Some(identity);
+        } else {
+            return Err(std::io::Error::other("output path reservation missing").into());
+        }
+        job.write("owned-output.json", &serde_json::to_vec(&inventory)?)?;
+        Ok(())
     }
 
     /// Persist and exclusively own the exact original request before any source
@@ -507,7 +773,8 @@ impl JobRegistry {
     /// Reconcile an abandoned job after caller authentication. Acquiring the
     /// kernel-held execution lock excludes every native writer; admission holds
     /// it before publishing intent and an existing intent is never executed anew.
-    /// This fences metadata only: partial files are retained, never deleted here.
+    /// Terminal reconciliation also removes only files whose native-created
+    /// identities were durably recorded by this job.
     pub fn reconcile_if_ownerless(&self, reference: &JobReference) -> Result<StoredJob> {
         ensure!(valid_id(&reference.job_id), "invalid job reference");
         let job = self.namespace.existing_child(&reference.job_id)?;
@@ -520,16 +787,22 @@ impl JobRegistry {
             intent.matches_reference(reference),
             "job reference mismatch"
         );
-        if matches!(
-            read_job_state(&job)?,
-            StoredJobState::Preparing | StoredJobState::Running
-        ) {
+        let state = read_job_state(&job)?;
+        if matches!(state, StoredJobState::Preparing | StoredJobState::Running) {
             let terminal = if read_cancel_intent(&job, reference)?.is_some() {
                 "cancelled"
             } else {
                 "owner_lost"
             };
             replace_state(&job, terminal)?;
+        }
+        if state != StoredJobState::Complete {
+            let intent = read_job_intent(&job)?;
+            let output = Arc::new(SecureStore::open(std::path::Path::new(
+                &intent.output_root,
+            ))?);
+            check_output_identity_values(&intent.output_identity, &output)?;
+            cleanup_owned_output(&job, &output)?;
         }
         drop(control);
         drop(owner);
@@ -743,12 +1016,18 @@ impl JobRegistry {
                         terminal_state(reason)
                     };
                 replace_state(&job, terminal)?;
+                cleanup_owned_output(&job, &output)?;
                 Ok(JobOutcome::ExistingFailed(terminal))
             }
-            "cancelled" => Ok(JobOutcome::ExistingFailed("cancelled")),
-            "deadline_exceeded" => Ok(JobOutcome::ExistingFailed("deadline_exceeded")),
-            "failed" => Ok(JobOutcome::ExistingFailed("failed")),
-            "owner_lost" => Ok(JobOutcome::ExistingFailed("owner_lost")),
+            "cancelled" | "deadline_exceeded" | "failed" | "owner_lost" => {
+                cleanup_owned_output(&job, &output)?;
+                Ok(JobOutcome::ExistingFailed(match state.state.as_str() {
+                    "cancelled" => "cancelled",
+                    "deadline_exceeded" => "deadline_exceeded",
+                    "failed" => "failed",
+                    _ => "owner_lost",
+                }))
+            }
             _ => Err(std::io::Error::other("unknown terminal job state").into()),
         }
     }
@@ -793,6 +1072,7 @@ impl JobRegistry {
                     terminal_state(reason)
                 };
                 replace_state_create(&job, terminal)?;
+                cleanup_owned_output(&job, &output)?;
                 Ok(JobOutcome::ExistingFailed(terminal))
             }
             Some(bytes) => match parse_state(&bytes)?.as_str() {
@@ -803,6 +1083,7 @@ impl JobRegistry {
                         terminal_state(reason)
                     };
                     replace_state(&job, terminal)?;
+                    cleanup_owned_output(&job, &output)?;
                     Ok(JobOutcome::ExistingFailed(terminal))
                 }
                 "complete" => {
@@ -817,10 +1098,17 @@ impl JobRegistry {
                             .ok_or_else(|| std::io::Error::other("completed envelope missing"))?,
                     ))
                 }
-                "cancelled" => Ok(JobOutcome::ExistingFailed("cancelled")),
-                "deadline_exceeded" => Ok(JobOutcome::ExistingFailed("deadline_exceeded")),
-                "failed" => Ok(JobOutcome::ExistingFailed("failed")),
-                "owner_lost" => Ok(JobOutcome::ExistingFailed("owner_lost")),
+                "cancelled" | "deadline_exceeded" | "failed" | "owner_lost" => {
+                    cleanup_owned_output(&job, &output)?;
+                    Ok(JobOutcome::ExistingFailed(
+                        match parse_state(&bytes)?.as_str() {
+                            "cancelled" => "cancelled",
+                            "deadline_exceeded" => "deadline_exceeded",
+                            "failed" => "failed",
+                            _ => "owner_lost",
+                        },
+                    ))
+                }
                 _ => Err(std::io::Error::other("unknown job state").into()),
             },
         }
@@ -1211,6 +1499,141 @@ fn check_output_identity_values(expected: &OutputIdentity, output: &SecureStore)
             && metadata.ino().to_string() == expected.inode,
         "job output directory identity changed"
     );
+    Ok(())
+}
+
+fn read_owned_inventory(job: &SecureStore) -> Result<OwnedOutputInventory> {
+    match job.read("owned-output.json")? {
+        Some(bytes) => {
+            ensure!(bytes.len() <= 16 * 1024, "owned output inventory too large");
+            let inventory: OwnedOutputInventory = serde_json::from_slice(&bytes)?;
+            ensure!(
+                inventory.schema == "apparent.media2-owned-output/1",
+                "invalid owned output inventory"
+            );
+            ensure!(
+                inventory.files.len() <= 50,
+                "owned output inventory too large"
+            );
+            Ok(inventory)
+        }
+        None => Ok(OwnedOutputInventory {
+            schema: "apparent.media2-owned-output/1".into(),
+            files: Vec::new(),
+            frames_directory: None,
+        }),
+    }
+}
+
+/// Remove only registered native output identities. The caller holds the
+/// execution-owner and control locks after worker reap. Any path, identity or
+/// directory ambiguity leaves the remaining evidence untouched and returns
+/// an error so cleanup is never reported as complete.
+fn cleanup_owned_output(job: &SecureStore, output: &Arc<SecureStore>) -> Result<()> {
+    let Some(bytes) = job.read("owned-output.json")? else {
+        ensure!(
+            !output.entry_exists("frames")?
+                && !output.entry_exists("contact-sheet.png")?
+                && !output.entry_exists("receipt.json")?,
+            "unowned media output entry present"
+        );
+        return Ok(());
+    };
+    let intent = read_job_intent(job)?;
+    ensure!(bytes.len() <= 16 * 1024, "owned output inventory too large");
+    let inventory: OwnedOutputInventory = serde_json::from_slice(&bytes)?;
+    ensure!(
+        inventory.schema == "apparent.media2-owned-output/1",
+        "invalid owned output inventory"
+    );
+    ensure!(
+        inventory.files.len() <= 50,
+        "owned output inventory too large"
+    );
+    let mut names = std::collections::BTreeSet::new();
+    let mut frame_entries = Vec::new();
+    for file in &inventory.files {
+        ensure!(
+            names.insert(file.relative_path.as_str()),
+            "duplicate owned output"
+        );
+        if let Some(leaf) = file.relative_path.strip_prefix("frames/") {
+            let index = leaf
+                .strip_prefix("frame-")
+                .and_then(|name| name.strip_suffix(".png"))
+                .and_then(|index| index.parse::<usize>().ok())
+                .ok_or_else(|| std::io::Error::other("invalid owned frame path"))?;
+            ensure!(
+                index > 0
+                    && index <= intent.requested_bundle_ms.len()
+                    && leaf == format!("frame-{index:03}.png"),
+                "invalid owned frame path"
+            );
+            frame_entries.push(file);
+            continue;
+        } else {
+            ensure!(
+                file.relative_path == "receipt.json"
+                    || (file.relative_path == "contact-sheet.png" && intent.layout.is_some()),
+                "invalid owned output path"
+            );
+            if let Some(identity) = &file.identity {
+                output.remove_file_if_identity(
+                    &file.relative_path,
+                    identity.device.parse()?,
+                    identity.inode.parse()?,
+                )?;
+            } else {
+                ensure!(
+                    !output.entry_exists(&file.relative_path)?,
+                    "unidentified reserved output remains"
+                );
+            }
+            continue;
+        }
+    }
+    if !frame_entries.is_empty() || inventory.frames_directory.is_some() {
+        if output.entry_exists("frames")? {
+            let frames = output.existing_child("frames")?;
+            let directory = inventory
+                .frames_directory
+                .as_ref()
+                .ok_or_else(|| std::io::Error::other("frames directory ownership missing"))?;
+            let expected = directory
+                .identity
+                .as_ref()
+                .ok_or_else(|| std::io::Error::other("frames directory identity missing"))?;
+            check_output_identity_values(expected, &frames)?;
+            for file in frame_entries {
+                let leaf = file.relative_path.strip_prefix("frames/").unwrap();
+                if let Some(identity) = &file.identity {
+                    frames.remove_file_if_identity(
+                        leaf,
+                        identity.device.parse()?,
+                        identity.inode.parse()?,
+                    )?;
+                } else {
+                    ensure!(
+                        !frames.entry_exists(leaf)?,
+                        "unidentified reserved frame remains"
+                    );
+                }
+            }
+            output.remove_empty_child_if_identity(
+                "frames",
+                expected.device.parse()?,
+                expected.inode.parse()?,
+            )?;
+        } else {
+            // A prior cleanup removed the tracked directory, or it was never
+            // created after reservation. Its absence makes all child names absent.
+        }
+    } else {
+        ensure!(
+            !output.entry_exists("frames")?,
+            "unowned frames directory present"
+        );
+    }
     Ok(())
 }
 

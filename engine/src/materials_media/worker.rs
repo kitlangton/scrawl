@@ -276,10 +276,14 @@ mod native {
             request_sha256: digest(input.request_json.as_bytes()),
         };
         let started = Instant::now();
-        let mut sink = StoreSink::new(Arc::new(
-            SecureStore::open(Path::new(&request.output_directory))
-                .map_err(|_| "invalid_output")?,
-        ));
+        let mut sink = StoreSink::new(
+            Arc::new(
+                SecureStore::open(Path::new(&request.output_directory))
+                    .map_err(|_| "invalid_output")?,
+            ),
+            registry.clone(),
+            reference.clone(),
+        );
         let result = execute_retained(
             &registry,
             &runtime,
@@ -324,11 +328,19 @@ mod native {
 
     struct StoreSink {
         root: Arc<SecureStore>,
+        frames: Option<Arc<SecureStore>>,
+        registry: JobRegistry,
+        reference: JobReference,
     }
 
     impl StoreSink {
-        fn new(root: Arc<SecureStore>) -> Self {
-            Self { root }
+        fn new(root: Arc<SecureStore>, registry: JobRegistry, reference: JobReference) -> Self {
+            Self {
+                root,
+                frames: None,
+                registry,
+                reference,
+            }
         }
     }
 
@@ -343,13 +355,34 @@ mod native {
                 if leaf.is_empty() || leaf.contains('/') {
                     anyhow::bail!("invalid output path");
                 }
-                (self.root.child("frames")?, leaf.to_owned())
+                let frames = match &self.frames {
+                    Some(frames) => frames.clone(),
+                    None => {
+                        self.registry
+                            .reserve_output_directory(&self.reference, &self.root)
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                        let frames = self.root.create_child("frames")?;
+                        self.registry
+                            .record_output_directory(&self.reference, &self.root, &frames)
+                            .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+                        self.frames = Some(frames.clone());
+                        frames
+                    }
+                };
+                (frames, leaf.to_owned())
             } else if matches!(relative_path, "receipt.json" | "contact-sheet.png") {
                 (self.root.clone(), relative_path.to_owned())
             } else {
                 anyhow::bail!("invalid output path");
             };
-            let mut file = store.file(&leaf, true)?;
+            self.registry
+                .reserve_output_file(&self.reference, &self.root, relative_path)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let file = store.file(&leaf, true)?;
+            self.registry
+                .record_output_file(&self.reference, &self.root, relative_path, &file)
+                .map_err(|error| anyhow::anyhow!(error.to_string()))?;
+            let mut file = file;
             file.write_all(bytes)?;
             file.sync_all()?;
             store.directory_file()?.sync_all()?;
@@ -490,6 +523,8 @@ mod native {
     #[cfg(test)]
     mod tests {
         use super::*;
+        use crate::materials_media::Binding;
+        use apparent_capture_engine::materials_media::DerivativeOutputSink;
         use std::os::unix::fs::PermissionsExt;
 
         #[test]
@@ -591,6 +626,69 @@ mod native {
             let bytes = serde_json::to_string(&request).unwrap();
             assert!(Active::start(&runtime_path, &capture_id, &owner_token, &bytes).is_err());
             assert!(!runtime_overlap.exists());
+            std::fs::remove_dir_all(base).unwrap();
+        }
+
+        #[test]
+        fn store_sink_tracks_native_files_for_post_reap_cleanup() {
+            use std::os::unix::fs::MetadataExt;
+
+            let base = std::env::temp_dir().canonicalize().unwrap().join(format!(
+                "media2-worker-output-cleanup-{}",
+                apparent_capture_engine::new_id().unwrap()
+            ));
+            std::fs::create_dir(&base).unwrap();
+            std::fs::set_permissions(&base, std::fs::Permissions::from_mode(0o700)).unwrap();
+            let runtime = Arc::new(SecureStore::create(&base.join("runtime")).unwrap());
+            let output = Arc::new(SecureStore::create(&base.join("output")).unwrap());
+            let metadata = output.directory_metadata().unwrap();
+            let registry = JobRegistry::open(runtime).unwrap();
+            let binding: Binding = serde_json::from_value(serde_json::json!({
+                "schema":"apparent.media2-job/1",
+                "captureId":"a".repeat(32),
+                "materials":{"captureId":"a".repeat(32),"materialsId":"b".repeat(32),"revision":"c".repeat(64)},
+                "materialsRoot":base.join("retained").display().to_string(),
+                "materialsRootIdentity":{"device":"1","inode":"2"},
+                "leaseId":"d".repeat(32),
+                "sourceVideo":{"relativePath":"recording.mov","identity":{"device":"1","inode":"2","size":1,"modifiedNs":"3"},"sha256":"e".repeat(64)},
+                "videoOffsetMs":0,
+                "jobId":apparent_capture_engine::new_id().unwrap(),
+                "receiptId":apparent_capture_engine::new_id().unwrap(),
+                "requestSha256":"f".repeat(64),
+                "requestedBundleMs":[0],
+                "limits":{"maxFrames":1,"maxEdge":64,"maxTotalPixels":4096,"deadlineMs":1000},
+                "outputRoot":base.join("output").display().to_string(),
+                "outputIdentity":{"device":metadata.dev().to_string(),"inode":metadata.ino().to_string()},
+                "layout":null
+            })).unwrap();
+            let JobOutcome::Owned(claim) = registry.begin(binding.clone(), output.clone()).unwrap()
+            else {
+                panic!()
+            };
+            let reference = JobReference {
+                capture_id: binding.capture_id.clone(),
+                materials: binding.materials.clone(),
+                lease_id: binding.lease_id.clone(),
+                job_id: binding.job_id.clone(),
+                request_sha256: binding.request_sha256.clone(),
+            };
+            let mut sink = StoreSink::new(output.clone(), registry.clone(), reference);
+            sink.write_new_synced("frames/frame-001.png", b"native partial frame")
+                .unwrap();
+            std::fs::write(base.join("output/caller-owned.txt"), b"preserve").unwrap();
+            drop(sink);
+            drop(claim);
+            assert!(matches!(
+                registry
+                    .finish_reaped(&binding, output, Checkpoint::Failed)
+                    .unwrap(),
+                JobOutcome::ExistingFailed("failed")
+            ));
+            assert!(!base.join("output/frames").exists());
+            assert_eq!(
+                std::fs::read(base.join("output/caller-owned.txt")).unwrap(),
+                b"preserve"
+            );
             std::fs::remove_dir_all(base).unwrap();
         }
     }

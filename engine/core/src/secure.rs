@@ -165,6 +165,22 @@ impl Store {
         self.dir.sync_all()?;
         Ok(child)
     }
+    /// Exclusively create a private child directory. Unlike [`Self::child`],
+    /// an existing name is never adopted as native-owned output.
+    pub fn create_child(
+        self: &std::sync::Arc<Self>,
+        key: &str,
+    ) -> io::Result<std::sync::Arc<Self>> {
+        self.check()?;
+        let leaf = name(key)?;
+        if unsafe { libc::mkdirat(self.dir.as_raw_fd(), leaf.as_ptr(), 0o700) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        let child = self.existing_child(key)?;
+        child.dir.sync_all()?;
+        self.dir.sync_all()?;
+        Ok(child)
+    }
     /// Open an existing private child without provisioning state on lookup.
     pub fn existing_child(
         self: &std::sync::Arc<Self>,
@@ -230,8 +246,7 @@ impl Store {
             )
         })
     }
-    #[cfg(feature = "publication")]
-    pub(crate) fn entry_exists(&self, key: &str) -> io::Result<bool> {
+    pub fn entry_exists(&self, key: &str) -> io::Result<bool> {
         self.check()?;
         let key = name(key)?;
         let mut stat = std::mem::MaybeUninit::<libc::stat>::uninit();
@@ -368,6 +383,82 @@ impl Store {
         })?;
         self.validate(&file)?;
         Ok(file)
+    }
+    /// Unlink a private regular file only when the current leaf still names
+    /// the exact device/inode recorded by its native creator. Missing leaves
+    /// are already clean; replacements, links and unsafe files fail closed.
+    pub fn remove_file_if_identity(
+        &self,
+        key: &str,
+        expected_device: u64,
+        expected_inode: u64,
+    ) -> io::Result<bool> {
+        use std::os::unix::fs::MetadataExt;
+        self.check()?;
+        let key = name(key)?;
+        let file = match cvt(unsafe {
+            libc::openat(
+                self.dir.as_raw_fd(),
+                key.as_ptr(),
+                libc::O_RDONLY | libc::O_NOFOLLOW | libc::O_CLOEXEC | libc::O_NONBLOCK,
+            )
+        }) {
+            Ok(file) => file,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let metadata = file.metadata()?;
+        if !metadata.is_file()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o777 != 0o600
+            || metadata.nlink() != 1
+            || metadata.dev() != expected_device
+            || metadata.ino() != expected_inode
+        {
+            return Err(invalid());
+        }
+        if unsafe { libc::unlinkat(self.dir.as_raw_fd(), key.as_ptr(), 0) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.dir.sync_all()?;
+        Ok(true)
+    }
+    /// Remove an empty private child directory only when its named device and
+    /// inode still match the native-created directory recorded by its owner.
+    pub fn remove_empty_child_if_identity(
+        &self,
+        key: &str,
+        expected_device: u64,
+        expected_inode: u64,
+    ) -> io::Result<bool> {
+        use std::os::unix::fs::MetadataExt;
+        self.check()?;
+        let key = name(key)?;
+        let directory = match cvt(unsafe {
+            libc::openat(
+                self.dir.as_raw_fd(),
+                key.as_ptr(),
+                libc::O_RDONLY | libc::O_DIRECTORY | libc::O_NOFOLLOW | libc::O_CLOEXEC,
+            )
+        }) {
+            Ok(directory) => directory,
+            Err(error) if error.kind() == io::ErrorKind::NotFound => return Ok(false),
+            Err(error) => return Err(error),
+        };
+        let metadata = directory.metadata()?;
+        if !metadata.is_dir()
+            || metadata.uid() != unsafe { libc::geteuid() }
+            || metadata.mode() & 0o777 != 0o700
+            || metadata.dev() != expected_device
+            || metadata.ino() != expected_inode
+        {
+            return Err(invalid());
+        }
+        if unsafe { libc::unlinkat(self.dir.as_raw_fd(), key.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
+            return Err(io::Error::last_os_error());
+        }
+        self.dir.sync_all()?;
+        Ok(true)
     }
     pub fn validate(&self, f: &File) -> io::Result<()> {
         let m = f.metadata()?;
@@ -607,6 +698,86 @@ mod tests {
         assert_eq!(
             store.read("record.json").unwrap().as_deref(),
             Some(&b"first"[..])
+        );
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn identity_checked_output_removal_preserves_replacements_and_unknown_entries() {
+        use std::os::unix::fs::MetadataExt;
+
+        let path = temp();
+        let root = std::sync::Arc::new(Store::open(&path).unwrap());
+        let frames = root.create_child("frames").unwrap();
+        assert!(root.create_child("frames").is_err());
+
+        frames.write_new("frame.png", b"native frame").unwrap();
+        let original = frames.file("frame.png", false).unwrap().metadata().unwrap();
+        assert!(
+            frames
+                .remove_file_if_identity("frame.png", original.dev(), original.ino())
+                .unwrap()
+        );
+        assert!(
+            !frames
+                .remove_file_if_identity("frame.png", original.dev(), original.ino())
+                .unwrap()
+        );
+
+        frames
+            .write_new("replacement.png", b"foreign replacement")
+            .unwrap();
+        let replaced_file = frames.file("replacement.png", false).unwrap();
+        let replaced = replaced_file.metadata().unwrap();
+        fs::remove_file(path.join("frames/replacement.png")).unwrap();
+        frames
+            .write_new("replacement.png", b"new caller file")
+            .unwrap();
+        assert!(
+            frames
+                .remove_file_if_identity("replacement.png", replaced.dev(), replaced.ino())
+                .is_err()
+        );
+        assert_eq!(
+            fs::read(path.join("frames/replacement.png")).unwrap(),
+            b"new caller file"
+        );
+        drop(replaced_file);
+
+        fs::write(path.join("frames/unknown.txt"), b"keep me").unwrap();
+        let frame_metadata = frames.directory_metadata().unwrap();
+        assert!(
+            root.remove_empty_child_if_identity(
+                "frames",
+                frame_metadata.dev(),
+                frame_metadata.ino()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(path.join("frames/unknown.txt")).unwrap(),
+            b"keep me"
+        );
+        fs::remove_file(path.join("frames/unknown.txt")).unwrap();
+
+        let original_frames = frames.directory_metadata().unwrap();
+        drop(frames);
+        fs::rename(path.join("frames"), path.join("retained-frames")).unwrap();
+        let replacement = root.create_child("frames").unwrap();
+        replacement
+            .write_new("keep.txt", b"replacement directory")
+            .unwrap();
+        assert!(
+            root.remove_empty_child_if_identity(
+                "frames",
+                original_frames.dev(),
+                original_frames.ino()
+            )
+            .is_err()
+        );
+        assert_eq!(
+            fs::read(path.join("frames/keep.txt")).unwrap(),
+            b"replacement directory"
         );
         fs::remove_dir_all(path).unwrap();
     }
