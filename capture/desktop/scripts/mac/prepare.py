@@ -68,7 +68,7 @@ def prepare(root, candidate):
             'tree': git(root, 'rev-parse', 'HEAD^{tree}').decode().strip(),
             'scenario': 'engine-native-swift-closure', 'inputs': inputs,
             'command': ['python3', ENTRY], 'working_directory': '.',
-            'fixture': 'sibling Swift test source; PCM generated in memory',
+            'fixture': 'sibling Swift tests; PCM and timestamped BGRA frames generated in memory',
             'request_ids': 'not applicable: no capture-control requests',
             'guest_requirements': ['Darwin', 'Python 3', 'xcrun with Swift 6.2+',
                                    'macOS SDK: Speech, AVFoundation, CoreGraphics',
