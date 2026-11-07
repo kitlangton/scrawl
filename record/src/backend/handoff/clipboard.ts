@@ -21,7 +21,7 @@ type NativeClipboardResult<K extends string> =
   | { status: "outcome-unknown" };
 
 export type NativeClipboardWriteResultInput = NativeClipboardResult<"applied">;
-/** Transient exact supplied-text observation; no selection ownership or paste guarantee. */
+/** Local write submission plus matching independent byte observation; no compositor ACK, readback-origin, ownership or paste guarantee. */
 export type NativeClipboardTextReadbackResultInput = NativeClipboardResult<"written-readback">;
 export interface NativeClipboardTextReadbackPortInput {
   writeTextReadback(text: string, observed: { processEpoch: string; revision: number }): Promise<NativeClipboardTextReadbackResultInput>;

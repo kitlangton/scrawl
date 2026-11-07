@@ -74,7 +74,7 @@ export type ArtifactOpenOutcome = {
   | { ok: true; evidence: "viewer-ack" | "os-observation" }
   | { ok: false; reason: "refused" | "failed" }
 );
-/** Exact supplied-text receipt scoped to one immutable artifact. native-text-readback is transient byte observation only, not clipboard ownership or paste. */
+/** Exact supplied-text receipt scoped to one immutable artifact. native-text-readback is local submission plus matching byte observation, not compositor ACK, readback origin, ownership or paste. */
 export type ClipboardCopyOutcome = {
   kind: "copy"; at: string; ok: true; evidence: "native-write-readback" | "native-text-readback";
   artifactId: string; requestId: string; digest: string; byteLength: number;
@@ -151,7 +151,7 @@ export type RecordCommand = CommandBase & (
 export type CommandResult =
   /** Dispatch accepted; no operation outcome is implied. Observe provider facts. */
   | { status: "accepted"; requestId: string; snapshot: CapabilitySnapshot }
-  /** Transient supplied-text readback; no exclusive/current/enduring clipboard ownership or paste guarantee. */
+  /** Local supplied-text submission plus matching independent readback; no compositor ACK, readback-origin or ownership/paste guarantee. */
   | { status: "written-readback"; requestId: string; snapshot: CapabilitySnapshot }
   | { status: "applied"; requestId: string; snapshot: CapabilitySnapshot; receipt?: { captureId?: string } }
   | { status: "refused"; requestId: string; reason: string; snapshot: CapabilitySnapshot }
