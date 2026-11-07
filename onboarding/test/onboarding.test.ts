@@ -66,9 +66,87 @@ test("host progress codec preserves owner metadata and rejects future schema", (
   assert.equal(legacy.status, "deferred"); assert.equal(legacy.stage, "practice-start");
   assert.equal(legacy.legacy.tutorial, "practiced"); assert.equal(legacy.legacy.relaunchedAt, 1700000000000); assert.equal(legacy.legacy.shortcutChosen, true); assert.equal(legacy.legacy.firstCaptureCompleted, true);
   const encoded = onboardingProgressCodec.encode(legacy); assert.notEqual(encoded, legacy);
-  assert.throws(() => onboardingProgressCodec.decode({ schema: 2, status: "completed" }), /Unsupported onboarding progress schema/);
+  assert.throws(() => onboardingProgressCodec.decode({ schema: 3, status: "completed" }), /Unsupported onboarding progress schema/);
+  const prior = onboardingProgressCodec.decode({ schema: 1, status: "completed", stage: "complete", attemptId: null, admissionId: null, practiceBaselineIds: [], legacy: initialProgress().legacy, manualPasteConfirmed: false });
+  assert.equal(prior.setupCompleted, true, "schema-1 completion remains remembered during migration");
+  const current = onboardingProgressCodec.decode({ ...initialProgress(), setupCompleted: false });
+  assert.equal(current.setupCompleted, false);
   const accessor = { ...initialProgress() }; Object.defineProperty(accessor, "stage", { enumerable: true, get() { throw new Error("getter executed"); } });
   assert.throws(() => onboardingProgressCodec.encode(accessor), /accessors/);
+});
+
+test("setup completion requires this controller's exact observed physical shortcut trial and CAS confirmation", async () => {
+  const f = fixture("shortcut-trial-idle");
+  f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  await f.controller.load();
+  await f.controller.dispatch("continue");
+  const request = f.driver.commands().find(c => c.type === "begin-shortcut-trial");
+  assert.ok(request && request.type === "begin-shortcut-trial");
+  assert.equal(f.controller.state.progress.setupCompleted, false, "dispatch acceptance is not a press and release");
+  const base = f.driver.current();
+  const observed = { state: "observed" as const, reservationId: request.reservationId, sourceEpoch: request.sourceEpoch, sourceRevision: request.sourceRevision, bindingId: request.bindingId, effectiveBinding: request.effectiveBinding, pressId: "physical-press-1", pressedAt: "2026-11-07T10:00:00.000Z", releasedAt: "2026-11-07T10:00:00.100Z" };
+  assert.equal(f.driver.publish({ ...base, revision: base.revision + 1, shortcutTrial: observed }), true);
+  await new Promise(resolve => setImmediate(resolve));
+  assert.equal(f.controller.state.progress.setupCompleted, true);
+  assert.equal(f.progress.value.setupCompleted, true, "the physical fact must be read back through CAS");
+  f.controller.dispose();
+});
+
+test("first run with unavailable trial facts stays pending and issues no capture command", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load();
+  const markup = renderToStaticMarkup(createElement(OnboardingContribution, { controller: f.controller, Button: TestButton, close() {} }));
+  assert.match(markup, /A physical shortcut check is not available yet/);
+  await f.controller.dispatch("continue");
+  assert.equal(f.controller.state.progress.setupCompleted, false);
+  assert.equal(f.controller.state.progress.stage, "shortcut");
+  assert.equal(f.driver.commands().some(c => c.type === "start-capture" || c.type === "arm-next-shortcut"), false);
+  assert.match(f.controller.state.error ?? "", /physical shortcut trial is not available/);
+  f.controller.dispose();
+});
+
+test("terminal trial rearm preserves its exact retained identity while using fresh current selectors", async () => {
+  const f = fixture("shortcut-trial-terminal-rearm-available"); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load();
+  await f.controller.beginShortcutTrial();
+  const command = f.driver.commands().find(c => c.type === "begin-shortcut-trial"); assert.ok(command && command.type === "begin-shortcut-trial");
+  assert.deepEqual(command.replaces, { reservationId: "fixture-trial-reservation", sourceEpoch: "fixture-native-epoch", sourceRevision: 1, bindingId: "binding-fixture-1", effectiveBinding: "Ctrl+Shift+R" });
+  assert.deepEqual({ sourceEpoch: command.sourceEpoch, sourceRevision: command.sourceRevision, bindingId: command.bindingId, effectiveBinding: command.effectiveBinding }, { sourceEpoch: "fixture-native-epoch-current", sourceRevision: 7, bindingId: "binding-current", effectiveBinding: "Alt+R" });
+  assert.equal(f.progress.value.setupCompleted, false); f.controller.dispose();
+});
+
+test("unrelated, stale-epoch and unknown trial facts do not complete setup", async () => {
+  for (const invalid of [
+    { state: "observed" as const, reservationId: "someone-else", sourceEpoch: "fixture-native-epoch", sourceRevision: 1, bindingId: "binding-fixture-1", effectiveBinding: "Ctrl+Shift+R", pressId: "unrelated", pressedAt: "2026-11-07T10:00:00.000Z", releasedAt: "2026-11-07T10:00:00.100Z" },
+  ]) {
+    const f = fixture("shortcut-trial-idle"); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load(); await f.controller.beginShortcutTrial();
+    const base = f.driver.current(); f.driver.publish({ ...base, revision: base.revision + 1, shortcutTrial: invalid });
+    await new Promise(resolve => setImmediate(resolve)); assert.equal(f.progress.value.setupCompleted, false); f.controller.dispose();
+  }
+  for (const scenario of ["shortcut-trial-stale-epoch", "shortcut-trial-unknown"] as const) {
+    const f = fixture(scenario); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await f.controller.load();
+    await f.controller.beginShortcutTrial(); assert.equal(f.progress.value.setupCompleted, false); f.controller.dispose();
+  }
+});
+
+test("setup remains pending when its CAS result is unknown, its binding changes, or its provider epoch changes", async () => {
+  const unknown = fixture("shortcut-trial-idle"); unknown.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await unknown.controller.load(); await unknown.controller.beginShortcutTrial();
+  const request = unknown.driver.commands().find(c => c.type === "begin-shortcut-trial"); assert.ok(request && request.type === "begin-shortcut-trial");
+  unknown.progress.unknown = true;
+  let current = unknown.driver.current(); unknown.driver.publish({ ...current, revision: current.revision + 1, shortcutTrial: { state: "observed", reservationId: request.reservationId, sourceEpoch: request.sourceEpoch, sourceRevision: request.sourceRevision, bindingId: request.bindingId, effectiveBinding: request.effectiveBinding, pressId: "confirmed-physical", pressedAt: "2026-11-07T10:00:00.000Z", releasedAt: "2026-11-07T10:00:00.100Z" } });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(unknown.controller.state.progress.setupCompleted, false); assert.equal(unknown.controller.state.publication, "unknown"); unknown.controller.dispose();
+
+  const conflict = fixture("shortcut-trial-idle"); conflict.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await conflict.controller.load(); await conflict.controller.beginShortcutTrial();
+  const conflictCommand = conflict.driver.commands().find(c => c.type === "begin-shortcut-trial"); assert.ok(conflictCommand && conflictCommand.type === "begin-shortcut-trial"); conflict.progress.conflict = true;
+  current = conflict.driver.current(); conflict.driver.publish({ ...current, revision: current.revision + 1, shortcutTrial: { state: "observed", reservationId: conflictCommand.reservationId, sourceEpoch: conflictCommand.sourceEpoch, sourceRevision: conflictCommand.sourceRevision, bindingId: conflictCommand.bindingId, effectiveBinding: conflictCommand.effectiveBinding, pressId: "conflict-physical", pressedAt: "2026-11-07T10:00:00.000Z", releasedAt: "2026-11-07T10:00:00.100Z" } });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(conflict.progress.value.setupCompleted, false); assert.equal(conflict.controller.state.error?.includes("changed elsewhere"), true); conflict.controller.dispose();
+
+  const changed = fixture("shortcut-trial-idle"); changed.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await changed.controller.load(); await changed.controller.beginShortcutTrial();
+  const trialCommand = changed.driver.commands().find(c => c.type === "begin-shortcut-trial"); assert.ok(trialCommand && trialCommand.type === "begin-shortcut-trial");
+  current = changed.driver.current(); changed.driver.publish({ ...current, revision: current.revision + 1, shortcut: { ...current.shortcut, bindingId: "replacement-binding" }, shortcutTrial: { state: "observed", reservationId: trialCommand.reservationId, sourceEpoch: trialCommand.sourceEpoch, sourceRevision: trialCommand.sourceRevision, bindingId: trialCommand.bindingId, effectiveBinding: trialCommand.effectiveBinding, pressId: "old-binding-physical", pressedAt: "2026-11-07T10:00:00.000Z", releasedAt: "2026-11-07T10:00:00.100Z" } });
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(changed.progress.value.setupCompleted, false); changed.controller.dispose();
+
+  const epoch = fixture("shortcut-trial-idle"); epoch.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await epoch.controller.load(); await epoch.controller.beginShortcutTrial();
+  current = epoch.driver.current(); assert.equal(epoch.driver.reconnect({ ...current, providerEpoch: "fixture-epoch-new", revision: 1, shortcutTrial: { state: "observed", reservationId: "replayed", sourceEpoch: "fixture-native-epoch", sourceRevision: 1, bindingId: "binding-fixture-1", effectiveBinding: "Ctrl+Shift+R", pressId: "old-epoch-press", pressedAt: "2026-11-07T10:00:00.000Z", releasedAt: "2026-11-07T10:00:00.100Z" } }), true);
+  await new Promise(resolve => setImmediate(resolve)); assert.equal(epoch.progress.value.setupCompleted, false); epoch.controller.dispose();
 });
 
 test("host factory loads before rendering and applies first-launch versus explicit resume policy", async () => {
@@ -88,6 +166,21 @@ test("host factory loads before rendering and applies first-launch versus explic
   assert.equal(dom.window.document.querySelector("main.onboarding-shell")?.getAttribute("data-stage"), "screen-ink");
   await act(async () => { root.unmount(); }); dom.window.close();
   await hosted.activation.dispose(); await assert.rejects(hosted.activation.activate({ reason: "resume" }), /cannot be activated/);
+});
+
+test("completed setup returns through the owner entry callback; replay is explicit and retains completion", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "completed", stage: "complete", setupCompleted: true };
+  let entries = 0;
+  const hosted = await onboardingContributionFactory.create({ progress: f.progress, record: f.client, id: () => "return-entry", Button: TestButton, close() {}, openRecordingEntry: async () => { entries++; return entries > 1; } });
+  await assert.rejects(hosted.activation.activate({ reason: "resume" }), /not opened/);
+  assert.equal(entries, 1); assert.equal(hosted.module.id, "onboarding");
+  await hosted.activation.replayTour();
+  assert.equal(f.progress.value.setupCompleted, true, "explicit replay retains remembered setup completion");
+  assert.equal(f.progress.value.stage, "welcome");
+  await hosted.activation.activate({ reason: "resume" });
+  assert.equal(entries, 2);
+  assert.equal(f.progress.value.setupCompleted, true);
+  await hosted.activation.dispose();
 });
 
 test("renders the actual React contribution with accessible controls and packed Record fixture pen choices", async () => {
@@ -163,7 +256,7 @@ test("granted-but-unusable permissions and external shortcuts do not pass setup"
   const f = fixture("permission-granted-relaunch-needed"); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "permissions" }; await f.controller.load();
   await f.controller.dispatch("continue"); assert.equal(f.controller.state.progress.stage, "permissions"); assert.match(f.controller.state.error ?? "", /Some required access/); f.controller.dispose();
   const g = fixture("external-shortcut-save-failure"); g.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" }; await g.controller.load();
-  await g.controller.dispatch("continue"); assert.equal(g.controller.state.progress.stage, "shortcut"); assert.match(g.controller.state.error ?? "", /shortcut is not ready/); g.controller.dispose();
+  await g.controller.dispatch("continue"); assert.equal(g.controller.state.progress.stage, "shortcut"); assert.match(g.controller.state.error ?? "", /physical shortcut trial is not available/); g.controller.dispose();
 });
 
 test("practice excludes baseline, unreserved, and host-default shortcut captures", async () => {
@@ -478,7 +571,7 @@ test("capture updates during a progress write are reconciled after it completes"
 });
 
 test("complete mounted branded lesson follows one local-only admitted capture to confirmed open", async () => {
-  const f = fixture(), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
+  const f = fixture("shortcut-trial-idle"), dom = new JSDOM("<div id='root'></div>", { url: "http://localhost" });
   Object.defineProperty(globalThis, "window", { configurable: true, value: dom.window }); Object.defineProperty(globalThis, "document", { configurable: true, value: dom.window.document }); Object.defineProperty(globalThis, "IS_REACT_ACT_ENVIRONMENT", { configurable: true, value: true });
   Object.defineProperty(dom.window, "matchMedia", { configurable: true, value: () => ({ matches: true }) });
   let commandId = 0;
@@ -487,6 +580,10 @@ test("complete mounted branded lesson follows one local-only admitted capture to
     if (command.type === "select-pen") {
       current = { ...current, revision: current.revision + 1, pen: { ...current.pen, effective: command.value } };
       f.driver.publish(current); return { status: "applied", requestId: command.requestId, snapshot: current };
+    }
+    if (command.type === "begin-shortcut-trial") {
+      current = { ...current, revision: current.revision + 1, shortcutTrial: { state: "observed", reservationId: command.reservationId, sourceEpoch: command.sourceEpoch, sourceRevision: command.sourceRevision, bindingId: command.bindingId, effectiveBinding: command.effectiveBinding, pressId: "lesson-press", pressedAt: "2026-11-07T10:00:00.000Z", releasedAt: "2026-11-07T10:00:00.100Z" } };
+      f.driver.publish(current); return { status: "accepted", requestId: command.requestId, snapshot: current };
     }
     if (command.type === "arm-next-shortcut") {
       current = { ...current, revision: current.revision + 1, nextShortcutAdmission: { state: "armed", admissionId: command.admissionId, delivery: command.delivery, expiresAt: command.expiresAt } };
@@ -510,7 +607,8 @@ test("complete mounted branded lesson follows one local-only admitted capture to
   await click("Use this pen"); assert.equal(f.controller.state.progress.stage, "permissions", "reduced motion advances after confirmed provider readback");
   assert.equal(f.controller.state.progress.stage, "permissions");
   await click("Choose recording shortcut"); assert.equal(f.controller.state.progress.stage, "shortcut");
-  await click("Try a capture"); assert.equal(f.controller.state.progress.stage, "practice-start");
+  await click("Try your shortcut"); assert.equal(f.controller.state.progress.setupCompleted, true);
+  await click("Continue to practice"); assert.equal(f.controller.state.progress.stage, "practice-start");
   const admissionId = f.controller.state.progress.admissionId!; assert.equal(f.driver.current().nextShortcutAdmission.state, "armed");
   const practice = capture("lesson-capture", "starting", [outcome("shortcut")], undefined, "local-only", admissionId);
   await publishSnapshot(s => ({ ...s, nextShortcutAdmission: { state: "consumed", admissionId, captureId: practice.captureId }, captures: [...s.captures, practice] }));
@@ -548,7 +646,7 @@ test("complete mounted branded lesson follows one local-only admitted capture to
 });
 
 test("cancelled practice can reserve again after reconnect and deferral releases the pending scope", async () => {
-  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut", setupCompleted: true };
   const issued: string[] = [];
   const first = f.driver.current(); f.driver.publish({ ...first, revision: first.revision + 1, nextShortcutAdmission: { state: "idle" } });
   f.client.execute = async command => {
@@ -597,7 +695,7 @@ test("a late progress read after dispose cannot publish stale setup state", asyn
 });
 
 test("accepted arm retains association until delayed armed and consumed snapshots", async () => {
-  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut", setupCompleted: true };
   const s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
   await f.controller.load(); await f.controller.dispatch("continue");
   const admissionId = f.controller.state.progress.admissionId!;
@@ -611,7 +709,7 @@ test("accepted arm retains association until delayed armed and consumed snapshot
 });
 
 test("deferral cannot hide a pending accepted reservation without terminal readback", async () => {
-  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut", setupCompleted: true };
   const s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
   await f.controller.load(); await f.controller.dispatch("continue");
   const admissionId = f.controller.state.progress.admissionId!;
@@ -624,7 +722,7 @@ test("deferral cannot hide a pending accepted reservation without terminal readb
 });
 
 test("refused reservation clears intent and permits another attempt", async () => {
-  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut", setupCompleted: true };
   const s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
   f.driver.setNextResult("refused"); await f.controller.load(); await f.controller.dispatch("continue");
   assert.equal(f.controller.state.progress.admissionId, null);
@@ -633,7 +731,7 @@ test("refused reservation clears intent and permits another attempt", async () =
 });
 
 test("disposal cancels a reservation armed after its accepted command", async () => {
-  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut" };
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "shortcut", setupCompleted: true };
   let s = f.driver.current(); f.driver.publish({ ...s, revision: s.revision + 1, nextShortcutAdmission: { state: "idle" } });
   await f.controller.load(); await f.controller.dispatch("continue");
   const admissionId = f.controller.state.progress.admissionId!;

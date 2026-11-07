@@ -33,7 +33,9 @@
     "react": "^19.2.0"
   },
   "peerDependenciesMeta": {
-    "@apparent/app-contracts": { "optional": true },
+    "@apparent/app-contracts": {
+      "optional": true
+    },
     "@apparent/record": {
       "optional": true
     }
