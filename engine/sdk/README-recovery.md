@@ -7,7 +7,7 @@ Existing SDK versions and their immutable tarballs remain unchanged.
 
 ## Explicit owning capture close
 
-For the built-in transport returned by `launchCaptureWorker`, SDK0.4.5 guarantees
+For the built-in transport returned by `launchCaptureEngine`, SDK0.4.5 guarantees
 that every resolved ordinary `CaptureClient.close()` releases the SDK's Node
 process/stdio references, owned listeners and RPC/
 shutdown timers. New requests refuse as soon as close starts; concurrent calls
