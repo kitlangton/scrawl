@@ -247,30 +247,47 @@ try {
     const mediaArchive = process.env.APPARENT_MEDIA2_ARCHIVE;
     assert.ok(archive && path.isAbsolute(archive), 'APPARENT_CAPTURE2_ARCHIVE must name the admitted archive');
     assert.ok(mediaArchive && path.isAbsolute(mediaArchive), 'APPARENT_MEDIA2_ARCHIVE must name the admitted media archive');
+    const qualificationRecordTarball=process.env.APPARENT_CAPTURE2_RECORD_TARBALL;
+    assert.ok(qualificationRecordTarball&&path.isAbsolute(qualificationRecordTarball),'APPARENT_CAPTURE2_RECORD_TARBALL must name the admitted #949 Record package');
+    const qualificationRecordSha256=createHash('sha256').update(await readFile(qualificationRecordTarball)).digest('hex');
+    assert.equal(qualificationRecordSha256,'c831210bdcc01a41c1b140b255c81713b9a88516bad81f73157378c74d3985b6','qualification requires the admitted #949 Record package');
     const qualificationSdk = process.env.APPARENT_CAPTURE2_SDK_TARBALL;
     assert.ok(qualificationSdk && path.isAbsolute(qualificationSdk), 'APPARENT_CAPTURE2_SDK_TARBALL must name the admitted SDK 0.4.4 tarball');
     assert.equal(createHash('sha256').update(await readFile(qualificationSdk)).digest('hex'), '62e188a118261b73097372000d5ae4fe0f0e72ca2ad710f0714002f276856172', 'qualification requires the admitted SDK 0.4.4 package');
     const capture2 = path.join(scratch, 'capture2');
     await initConsumer(capture2);
-    await run('npm', ['install', '--no-audit', '--no-fund', tarball, qualificationSdk, 'react@19.2.0', 'react-dom@19.2.0'], { cwd: capture2 });
+    await run('npm', ['install', '--no-audit', '--no-fund', qualificationRecordTarball, qualificationSdk, 'react@19.2.0', 'react-dom@19.2.0'], { cwd: capture2 });
     const qualificationTypes = path.join(capture2, 'consumer.ts');
     await writeFile(qualificationTypes, `
-      import { capture2MaterialsRoot } from '@apparent/engine-sdk/capture';
+      import { capture2MaterialsRoot, type CaptureClient } from '@apparent/engine-sdk/capture';
+      import { type Media2Client } from '@apparent/engine-sdk/media2';
+      import { launchCaptureRecoveryPeer, launchMedia2RecoveryPeer, type RecoveryPeer } from '@apparent/engine-sdk/recovery';
       import { createStandardRecordCaptureCoordinator, type StandardRecordCaptureCoordinatorOptions, type RecordCaptureCoordinator } from '@apparent/record/host/capture2-coordinator';
       declare const options: StandardRecordCaptureCoordinatorOptions;
+      declare const publicationRecoveryPeer: RecoveryPeer<CaptureClient>;
+      declare const mediaRecoveryPeer: RecoveryPeer<Media2Client>;
       const coordinator: Promise<RecordCaptureCoordinator> = createStandardRecordCaptureCoordinator(options);
+      declare const opened: RecordCaptureCoordinator;
+      const facts: ReturnType<RecordCaptureCoordinator['captureFacts']['readFacts']> = opened.captureFacts.readFacts();
+      const handoff: ReturnType<RecordCaptureCoordinator['resolveHandoff']> = opened.resolveHandoff({captureId:'public-request',artifactId:'saved-artifact'});
+      const separated: StandardRecordCaptureCoordinatorOptions = {...options, publicationClient: publicationRecoveryPeer.client, mediaClient: mediaRecoveryPeer.client};
+      const peerReleases: Promise<unknown[]> = Promise.all([publicationRecoveryPeer.release(), mediaRecoveryPeer.release()]);
+      const peerLaunches = [launchCaptureRecoveryPeer('/absolute/capture', '/private/runtime'), launchMedia2RecoveryPeer('/absolute/media', '/private/runtime')];
       const trustedRoot: string = capture2MaterialsRoot('/private/runtime', 'capture-id');
-      void [coordinator, trustedRoot];
+      void [coordinator, facts, handoff, separated, peerReleases, peerLaunches, trustedRoot];
     `);
     const qualificationTsc = path.join(root, 'node_modules/typescript/bin/tsc');
     await run(process.execPath, [qualificationTsc, '--noEmit', '--strict', '--skipLibCheck', '--types', 'node', '--typeRoots', path.join(root, 'node_modules/@types'), '--target', 'ES2022', '--module', 'NodeNext', '--moduleResolution', 'NodeNext', qualificationTypes], { cwd: capture2 });
     const qualificationRuntime = await run(process.execPath, ['--input-type=module', '-e', `
       import assert from 'node:assert/strict';
       import { capture2MaterialsRoot } from '@apparent/engine-sdk/capture';
+      import { launchCaptureRecoveryPeer, launchMedia2RecoveryPeer } from '@apparent/engine-sdk/recovery';
       import { createStandardRecordCaptureCoordinator } from '@apparent/record/host/capture2-coordinator';
       assert.equal(typeof capture2MaterialsRoot, 'function');
+      assert.equal(typeof launchCaptureRecoveryPeer, 'function');
+      assert.equal(typeof launchMedia2RecoveryPeer, 'function');
       assert.equal(typeof createStandardRecordCaptureCoordinator, 'function');
-      console.log('packed Record standard coordinator and SDK 0.4.4 root consumer passed');
+      console.log('packed Record standard coordinator, SDK 0.4.4 root and recovery-peer consumer passed');
     `], { cwd: capture2 });
     process.stdout.write(qualificationRuntime.stdout);
     const nativeScript = `
@@ -282,11 +299,12 @@ try {
       import path from 'node:path';
       import {pathToFileURL} from 'node:url';
       import {CaptureClient, capture2MaterialsRoot, launchCaptureEngine, preflightCapturePublication} from '@apparent/engine-sdk/capture';
-      import {Media2Client, launchMedia2Worker} from '@apparent/engine-sdk/media2';
+      import {Media2Client} from '@apparent/engine-sdk/media2';
+      import {launchCaptureRecoveryPeer, launchMedia2RecoveryPeer} from '@apparent/engine-sdk/recovery';
       import {createStandardRecordCaptureCoordinator} from '@apparent/record/host/capture2-coordinator';
       import {createRecordClientPillHost,disposeWorkflowPillHost} from '@apparent/record/ui';
       import {AbsentDestinationAllocator, SqliteCaptureMappingStore} from '@apparent/record/host';
-      const {runBounded,runCleanupSteps,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
+      const {QUALIFICATION_IPC_SCHEMA,runBounded,runCleanupSteps,trackChild,waitForExit} = await import(pathToFileURL(process.env.APPARENT_QUALIFICATION_HELPERS).href);
 
       const archive = path.resolve(process.env.APPARENT_CAPTURE2_ARCHIVE);
       const mediaArchive = path.resolve(process.env.APPARENT_MEDIA2_ARCHIVE);
@@ -357,7 +375,8 @@ try {
         await walk(payload); assert.equal(seen.size,listed.size,kind+' exact runtime closure');
         if(kind==='media') {
           assert.ok(manifest.capabilities.includes('media/2'));
-          assert.deepEqual(manifest.media2Launch.argv,['--media-runtime-directory','<capture-runtime-dir>','--media-channel','media','--media-protocol-version','2']);
+          assert.deepEqual(manifest.recoveryLaunch.argv,['--media-runtime-directory','<capture-runtime-dir>','--media-channel','media','--media-protocol-version','2','--recovery-peer-v1','<private-peer-nonce>']);
+          assert.equal(manifest.recoveryLaunch.startsFreshCapture,false); assert.equal(manifest.recoveryLaunch.onInputEof,'retain-admitted-finite-work');
           assert.equal(manifest.media2Launch.sharesCaptureRuntime,true);
           assert.equal(manifest.visualObservations?.schema,'apparent.frame-observation-profile/1'); assert.equal(manifest.visualObservations?.chunkType,'apOB');
           assert.equal(manifest.launch.entry,'apparent-engine-frames'); assert.equal(manifest.launch.pathLookup,false); assert.equal(manifest.launch.runtimeBuilds,false);
@@ -365,21 +384,73 @@ try {
           assert.equal(listed.get('libexec/apparent-engine-frames').sha256,'62095759727d826073f67402942d7826185f6590dbae08be2fee3d501f3d3343');
         } else {
           assert.ok(manifest.capabilities.includes('capture/2')); assert.ok(manifest.capabilities.includes('authenticated-publication'));
+          assert.deepEqual(manifest.recoveryLaunch.argv,['--runtime-directory','<private-runtime-dir>','--capture-channel','capture','--capture-protocol-version','2','--recovery-peer-v1','<private-peer-nonce>']);
+          assert.equal(manifest.recoveryLaunch.startsFreshCapture,false); assert.equal(manifest.recoveryLaunch.onInputEof,'retain-admitted-finite-work');
           assert.deepEqual(manifest.launch.argv,['--runtime-directory','<private-runtime-dir>','--capture-channel','capture','--capture-protocol-version','2']);
           assert.equal(manifest.launch.entry,'apparent-engine-capture-launch'); assert.equal(manifest.launch.worker,'libexec/apparent-engine-capture');
           assert.equal(manifest.launch.pathLookup,false); assert.equal(manifest.launch.runtimeBuilds,false);
-          assert.equal(listed.get('apparent-engine-capture-launch').sha256,'fb2dfa941fcd7f9681a141b8213ecf6031eca82b424e608bbed3309d38b033e6');
-          assert.equal(listed.get('libexec/apparent-engine-capture').sha256,'63f02b819523367da1996d1bb3760118b8a34f840de2458b42996eda85ff822b');
+          assert.equal(listed.get('libexec/apparent-engine-capture').sha256,'fa0cc1b1848918ebf07afad15942f3bd1d72a514c86ce67b6866250c0ce78b70');
         }
         await recordLog(kind+' admitted archive',{path:archivePath,sha256:expected.sha256,size:expected.size,sourceSha:expected.sourceSha,manifestSourceSha:expected.manifestSourceSha,runtimeFiles:seen.size,payload});
         return {payload,manifest};
       }
-      const captureArtifact=await admitArtifact('capture',archive,{acceptedFile:'capture-accepted.json',sourceSha:'c18340f1886d0b796717bee91333fc1c8533b993',manifestSourceSha:'c18340f1886d0b796717bee91333fc1c8533b993',runId:42319740724,sha256:'00577928145323f8c964dda8cc1e47668d1f58b7d571ec9f7fb896aadc277708',size:11197126,files:54});
+      const captureArtifact=await admitArtifact('capture',archive,{acceptedFile:'capture-accepted.json',sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',manifestSourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',runId:42314800490,sha256:'741bf093eb85c598cc92bb6da6287cb03b8d454836de83783e1a90c3d450c335',size:11198544,files:54});
       const mediaArtifact=await admitArtifact('media',mediaArchive,{acceptedFile:'linux-accepted.json',sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',manifestSourceSha:'cf8356eb869038f6737a8e83c1cb4ab655fa0237',runId:42314800490,sha256:'cd7346951646f440c0d67e1fe10a8bc44dfde4329e3a9a3cc7d6f0d4297604f4',size:100858133,files:186});
       const capturePayload=captureArtifact.payload, captureManifest=captureArtifact.manifest, mediaPayload=mediaArtifact.payload, mediaManifest=mediaArtifact.manifest;
-      let xvfb, display='', scene, client, mediaClient, coordinator, recordClient, pillHost, mappings;
-      let qualificationError, cleanupErrors=[], owningClientsClear=false;
+      let xvfb, display='', scene, client, publicationRecoveryPeer, mediaRecoveryPeer, coordinator, recordClient, pillHost, mappings;
+      let qualificationError, cleanupErrors=[], finishRequested=false, shutdownRequested=false, shutdownRequest, shutdownPromise;
+      let coordinatorShutdownReport, coordinatorDisposed=false, localAdmissionClosed=false, localDrainComplete=false;
+      const recoveryPeerReleases=[];
       const previousDisplay=process.env.DISPLAY, previousWayland=process.env.WAYLAND_DISPLAY;
+      const sendShutdownReport=(requestId,report)=>new Promise((resolve,reject)=>{
+        if(typeof process.send!=='function') { reject(new Error('qualification supervisor IPC channel is unavailable')); return; }
+        process.send({schema:QUALIFICATION_IPC_SCHEMA,kind:'shutdown-report',requestId,report},error=>error?reject(error):resolve());
+      });
+      const cooperativeShutdown=(request)=>{
+        shutdownRequested=true;
+        shutdownPromise??=(async()=>{
+          const steps=[];
+          if(pillHost) steps.push({label:'pill host admission close',run:async()=>{await disposeWorkflowPillHost(pillHost);pillHost=undefined;}});
+          if(recordClient) steps.push({label:'provider observer detach',run:()=>{recordClient.detach();recordClient=undefined;}});
+          if(coordinator) steps.push({label:'coordinator shutdown',run:async()=>{
+            coordinatorShutdownReport=await coordinator.shutdown();
+            await recordLog('coordinator shutdown report',coordinatorShutdownReport);
+            localAdmissionClosed=coordinatorShutdownReport.admission==='closed';
+            localDrainComplete=coordinatorShutdownReport.localDrain==='complete';
+            if(!localAdmissionClosed||!localDrainComplete) throw new Error('local coordinator admission/drain is unresolved; recovery peers retained');
+          }});
+          if(coordinator) steps.push({label:'coordinator disposal',run:async()=>{await coordinator.dispose();coordinatorDisposed=true;coordinator=undefined;}});
+          if(publicationRecoveryPeer) steps.push({label:'publication recovery connection release',run:async()=>{
+            if(!(localAdmissionClosed&&localDrainComplete&&coordinatorDisposed)) return;
+            const result=await publicationRecoveryPeer.release(); recoveryPeerReleases.push({role:'publication',result}); publicationRecoveryPeer=undefined;
+          }});
+          if(mediaRecoveryPeer) steps.push({label:'media recovery connection release',run:async()=>{
+            if(!(localAdmissionClosed&&localDrainComplete&&coordinatorDisposed)) return;
+            const result=await mediaRecoveryPeer.release(); recoveryPeerReleases.push({role:'media',result}); mediaRecoveryPeer=undefined;
+          }});
+          const errors=await runCleanupSteps(steps);
+          const report={schema:QUALIFICATION_IPC_SCHEMA,requestId:request.requestId,reason:request.reason,
+            coordinatorShutdown:coordinatorShutdownReport??null,coordinatorDisposed,localAdmissionClosed,localDrainComplete,
+            runtimeClearance:coordinatorShutdownReport?.runtimeClearance??'unknown',work:coordinatorShutdownReport?.work??null,
+            recoveryPeerReleases:captureRecoveryPeerResults(),captureOwner:{state:'retained',finishRequested,
+              close:'not-attempted',reason:finishRequested?'SDK 0.4.5 normal-close local-resource contract is not yet admitted':'no explicit finish intent'},
+            cleanupErrors:errors.map(error=>({message:error.message,cause:error.cause instanceof Error?error.cause.message:undefined})),authorityRoot:root};
+          await recordLog('cooperative shutdown report',report);
+          if(request.requestId) await sendShutdownReport(request.requestId,report);
+          if(errors.length) throw new AggregateError(errors,'cooperative coordinator shutdown retained cleanup failures');
+          return report;
+        })();
+        return shutdownPromise;
+      };
+      const captureRecoveryPeerResults=()=>structuredClone(recoveryPeerReleases);
+      process.on('message',message=>{
+        if(!message||typeof message!=='object'||Array.isArray(message)) return;
+        if(message.schema!==QUALIFICATION_IPC_SCHEMA||message.kind!=='shutdown-request'||typeof message.requestId!=='string'||
+           !['deadline','output-limit'].includes(message.reason)) return;
+        shutdownRequest={requestId:message.requestId,reason:message.reason};
+        shutdownRequested=true;
+        if(coordinator) void cooperativeShutdown(shutdownRequest).catch(error=>recordLog('cooperative shutdown IPC failed',{message:error.message,authorityRoot:root}));
+      });
       try {
         xvfb=trackChild(spawn('Xvfb',['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'],{stdio:['ignore','pipe','pipe']}));
         display=await new Promise((resolve,reject)=>{const timer=setTimeout(()=>reject(new Error('owned Xvfb startup deadline')),5000);
@@ -391,10 +462,16 @@ try {
         const runtime=path.join(root,'runtime'), control=path.join(root,'control'), bundles=path.join(root,'bundles');
         await Promise.all([runtime,control,bundles].map(dir=>mkdir(dir,{mode:0o700})));
         client=new CaptureClient(launchCaptureEngine(path.join(capturePayload,captureManifest.launch.entry),runtime,40000));
+        const captureEntry=path.join(capturePayload,captureManifest.launch.entry);
         const mediaEntry=mediaManifest.runtimeFiles.find(file=>file.path==='apparent-engine-frames'); assert.ok(mediaEntry);
-        mediaClient=new Media2Client(launchMedia2Worker(path.join(mediaPayload,mediaEntry.path),runtime,40000));
+        publicationRecoveryPeer=await launchCaptureRecoveryPeer(captureEntry,runtime);
+        mediaRecoveryPeer=await launchMedia2RecoveryPeer(path.join(mediaPayload,mediaEntry.path),runtime);
+        assert.equal(publicationRecoveryPeer.lifetime.channel,'capture/2'); assert.equal(publicationRecoveryPeer.lifetime.role,'recovery');
+        assert.equal(publicationRecoveryPeer.lifetime.startsFreshCapture,false); assert.equal(publicationRecoveryPeer.lifetime.onInputEof,'retain-admitted-finite-work');
+        assert.equal(mediaRecoveryPeer.lifetime.channel,'media/2'); assert.equal(mediaRecoveryPeer.lifetime.role,'recovery');
+        assert.equal(mediaRecoveryPeer.lifetime.startsFreshCapture,false); assert.equal(mediaRecoveryPeer.lifetime.onInputEof,'retain-admitted-finite-work');
         const captureHandshake=await client.handshake(5000); assert.equal(captureHandshake.implementation,'native');
-        const mediaHandshake=await mediaClient.handshake(5000); assert.equal(mediaHandshake.implementation,'native');
+        const mediaHandshake=await mediaRecoveryPeer.client.handshake(5000); assert.equal(mediaHandshake.implementation,'native');
         mappings=new SqliteCaptureMappingStore(control); const destinations=new AbsentDestinationAllocator(control,bundles);
         const options={audio:'none',localOnly:true}, invocation={kind:'explicit',invocationId:'a'.repeat(32),observedAtMs:Date.now()};
         const requestId='packed-standard-native-'+Date.now();
@@ -403,14 +480,15 @@ try {
           assert.ok(source,'fresh discovery must contain the owned 683x480 synthetic display');
           const digest=createHash('sha256').update(id,'utf8').digest('hex');
           return {source,options,invocation:{...invocation,observedAtMs:Date.now()},destinationPath:path.join(bundles,'record-'+digest+'.apparent')};};
-        const coordinatorOptions={captureClient:client,mediaClient,mappings,destinations,privateControlRoot:control,createStartIntent,
+        const coordinatorOptions={captureClient:client,publicationClient:publicationRecoveryPeer.client,mediaClient:mediaRecoveryPeer.client,mappings,destinations,privateControlRoot:control,createStartIntent,
           trustedMaterialsRoot:mapping=>capture2MaterialsRoot(runtime,mapping.captureId),preflight:preflightCapturePublication,
           pollIntervalMs:200,operationTimeoutMs:10000,standardProcessing:{requestVideoProof:true}};
         coordinator=await createStandardRecordCaptureCoordinator(coordinatorOptions);
+        if(shutdownRequest) { await cooperativeShutdown(shutdownRequest); throw new Error('qualification stopped after cooperative supervisor request'); }
         const createProvider=providerEpoch=>coordinator.createProvider({providerEpoch,native:{readFacts:async()=>({version:1,providerEpoch:providerEpoch+'-facts',revision:1,readiness:[],shortcut:{effective:null,label:null,registration:'unknown',externallyManaged:false,draft:null}})}});
         recordClient=createProvider('packed-standard-native-provider');
         if(sceneSpawnError) throw sceneSpawnError;
-        const deadline=Date.now()+150000, waitFor=async(fn,label)=>{while(Date.now()<deadline){const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,250));}throw new Error('qualification deadline waiting for '+label);};
+        const deadline=Date.now()+150000, waitFor=async(fn,label)=>{while(Date.now()<deadline){if(shutdownRequested)throw new Error('qualification shutdown requested; original capture and authority retained while shutdown report is reconciled');const value=await fn();if(value)return value;await new Promise(r=>setTimeout(r,250));}throw new Error('qualification deadline waiting for '+label);};
         const before=recordClient.current();
         const localOnly=await recordClient.execute({type:'start-capture',delivery:'local-only',requestId:'packed-local-only-'+Date.now(),expected:{providerEpoch:before.providerEpoch,revision:before.revision}});
         assert.equal(localOnly.status,'refused','native delivery prohibition is not proof of whole-pipeline local-only enforcement');
@@ -422,7 +500,7 @@ try {
         const mapping=await mappings.getByRequestId(requestId); assert.ok(mapping?.capture2Intent);
         assert.equal(mapping.bundlePath,path.join(bundles,path.basename(mapping.bundlePath)));
         await assert.rejects(lstat(mapping.bundlePath),error=>error.code==='ENOENT','destination stays absent before authenticated publication');
-        const recordingPill=await pillHost.read(); assert.equal(recordingPill.phase,'recording'); await pillHost.act(recordingPill.revision,'finish');
+        const recordingPill=await pillHost.read(); assert.equal(recordingPill.phase,'recording'); finishRequested=true; await pillHost.act(recordingPill.revision,'finish');
         const saved=await waitFor(async()=>{await coordinator.reconcile();const facts=await coordinator.captureFacts.readFacts();return facts.captures.find(fact=>fact.captureId===requestId&&fact.phase==='saved');},'authenticated Record Saved output');
         assert.equal(saved.delivery,'unknown','nativeRemoteDelivery forbidden does not imply local-only delivery'); assert.equal(saved.artifactId,mapping.bundleId);
         const originalHandoff=await coordinator.resolveHandoff({captureId:requestId,artifactId:saved.artifactId});
@@ -450,15 +528,12 @@ try {
         console.log('packed Record standard coordinator native Xvfb qualification completed');
       } catch(error) { qualificationError=error; }
       finally {
+        try { await cooperativeShutdown(shutdownRequest??{requestId:null,reason:'runner-finally'}); }
+        catch(error) { cleanupErrors.push(error instanceof Error ? error : new Error(String(error))); }
         const cleanupSteps=[];
-        if(pillHost) cleanupSteps.push({label:'pill host disposal',run:()=>disposeWorkflowPillHost(pillHost)});
-        if(recordClient) cleanupSteps.push({label:'Record client detach',run:()=>recordClient.detach()});
-        if(coordinator) cleanupSteps.push({label:'coordinator drain and disposal',run:async()=>{const report=await coordinator.shutdown();await recordLog('coordinator shutdown report',report);await coordinator.dispose();owningClientsClear=report.scope==='record-coordinator'&&report.admission==='closed'&&report.localDrain==='complete'&&report.runtimeClearance==='clear';coordinator=undefined;if(!owningClientsClear)throw new Error('Owning clients must remain retained: coordinator clearance is unresolved');}});
-        if(mediaClient) cleanupSteps.push({label:'media/2 client close',run:async()=>{if(!owningClientsClear)throw new Error('Media owning close refused without positive clearance');await mediaClient.close();mediaClient=undefined;}});
-        if(client) cleanupSteps.push({label:'capture client close',run:async()=>{if(!owningClientsClear)throw new Error('Capture owning close refused without positive clearance');await client.close();}});
         if(scene) cleanupSteps.push({label:'synthetic scene exit',run:()=>waitForExit(scene,1000)});
         if(xvfb) cleanupSteps.push({label:'owned Xvfb exit',run:()=>waitForExit(xvfb,1000)});
-        cleanupErrors=await runCleanupSteps(cleanupSteps); for(const failure of cleanupErrors) console.error(failure.stack);
+        const displayCleanupErrors=await runCleanupSteps(cleanupSteps); cleanupErrors.push(...displayCleanupErrors); for(const failure of cleanupErrors) console.error(failure.stack);
         if(previousDisplay===undefined)delete process.env.DISPLAY;else process.env.DISPLAY=previousDisplay;
         if(previousWayland===undefined)delete process.env.WAYLAND_DISPLAY;else process.env.WAYLAND_DISPLAY=previousWayland;
         console.error('private standard qualification evidence retained: '+root);
@@ -470,6 +545,7 @@ try {
     const qualificationPacket = path.join(scratch,'qualification-script');
     await mkdir(qualificationPacket,{mode:0o700});
     const qualificationScript = path.join(qualificationPacket,'qualification.mjs');
+    const qualificationHelper = path.join(root,'test/native-qualification/native-qualification.ts');
     await writeFile(qualificationScript,nativeScript,{mode:0o600});
     await checkGeneratedNodeScript(nativeScript);
     console.log('private generated native script packet: '+qualificationScript);
@@ -478,31 +554,45 @@ try {
       assert.ok(output && path.isAbsolute(output), 'APPARENT_CAPTURE2_PREPARATION_DIR must name an absolute private preparation directory');
       await mkdir(output,{recursive:true,mode:0o700}); await chmod(output,0o700);
       const frozenScript=path.join(output,'qualification.mjs');
+      const frozenHelper=path.join(output,'native-qualification.ts');
       await copyFile(qualificationScript,frozenScript); await chmod(frozenScript,0o600);
+      await copyFile(qualificationHelper,frozenHelper); await chmod(frozenHelper,0o600);
       const base=(await run('git',['merge-base','HEAD','origin/main'],{cwd:root})).stdout.trim();
       const candidateHead=(await run('git',['rev-parse','HEAD'],{cwd:root})).stdout.trim();
-      const packet={schema:1,mode:'offline-preparation-only',base,candidateHead,
+      const runnerSha256=createHash('sha256').update(nativeScript).digest('hex');
+      const helperSha256=createHash('sha256').update(await readFile(qualificationHelper)).digest('hex');
+      const packet={schema:1,mode:'offline-preparation-only',base,candidateHead,archiveAdmissionPerformed:false,
         preparedAt:new Date().toISOString(),sdk:{path:qualificationSdk,version:'0.4.4',sha256:'62e188a118261b73097372000d5ae4fe0f0e72ca2ad710f0714002f276856172',
           acceptedPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk-accepted.json',receiptPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk/receipt.json',attestationPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk/attestation.json'},
-        capture:{path:archive,acceptedPath:path.join(path.dirname(path.dirname(archive)),'capture-accepted.json'),receiptPath:path.join(path.dirname(archive),'receipt.json'),attestationPath:path.join(path.dirname(archive),'attestation.json'),inventoryPath:path.join(path.dirname(path.dirname(archive)),'inventory-verification.json'),sourceSha:'c18340f1886d0b796717bee91333fc1c8533b993',runId:42319740724,artifactId:13552701819,sha256:'00577928145323f8c964dda8cc1e47668d1f58b7d571ec9f7fb896aadc277708',runtimeFiles:54},
+        record:{path:qualificationRecordTarball,sha256:qualificationRecordSha256,acceptedPath:'/home/simon/.local/share/apparent-evidence/record-publication-peer-main-c43a7182/admission.json',receiptPath:'/home/simon/.local/share/apparent-evidence/record-publication-peer-main-c43a7182/admitted/receipt.json',componentSha256:'960d63e217770266468e5b03a1309b5bec3e3243a1c7c1801319deffee1582a7',sourceCommit:'c43a7182ef5021e7994ab19caa5a74dcdf2e7228'},
+        capture:{path:archive,acceptedPath:path.join(path.dirname(path.dirname(archive)),'capture-accepted.json'),receiptPath:path.join(path.dirname(archive),'receipt.json'),attestationPath:path.join(path.dirname(archive),'attestation.json'),inventoryPath:path.join(path.dirname(path.dirname(archive)),'inventory-verification.json'),sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',runId:42314800490,artifactId:13549358880,sha256:'741bf093eb85c598cc92bb6da6287cb03b8d454836de83783e1a90c3d450c335',runtimeFiles:54,recoveryChannel:'capture/2'},
         media:{path:mediaArchive,acceptedPath:path.join(path.dirname(path.dirname(mediaArchive)),'linux-accepted.json'),receiptPath:path.join(path.dirname(mediaArchive),'receipt.json'),attestationPath:path.join(path.dirname(mediaArchive),'attestation.json'),inventoryPath:path.join(path.dirname(path.dirname(mediaArchive)),'inventory-verification.json'),sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',manifestSourceSha:'cf8356eb869038f6737a8e83c1cb4ab655fa0237',runId:42314800490,artifactId:13550580801,sha256:'cd7346951646f440c0d67e1fe10a8bc44dfde4329e3a9a3cc7d6f0d4297604f4',runtimeFiles:186},
-        runner:frozenScript,runnerSha256:createHash('sha256').update(nativeScript).digest('hex'),syntaxChecked:true,nativeExecuted:false,resourcesAllocated:false,
+        runner:frozenScript,runnerSha256,helper:frozenHelper,helperSha256,syntaxChecked:true,nativeExecuted:false,resourcesAllocated:false,
         nextRun:{explicitOptIn:'APPARENT_CAPTURE2_QUALIFY=1',attempts:1,deadlineMs:240000,deadlineSemantics:'observation budget only; it is not capture cancel/end intent and does not guarantee bounded cleanup of an unresolved owning peer',
-          executionBlockedUntil:'a child-to-parent coordinator shutdown/drain and positive-clearance protocol plus safe SDK owning-handle release are available',
+          executionBlockedUntil:'exact SDK 0.4.5 owning-capture normal-close lifetime input, consumer-reviewed protocol, and a separate explicit native attempt/resource admission',
           display:'inspect existing process inventory, then owned synthetic Xvfb only',runtime:'one canonical private 0700 capture/media runtime',
           flow:'public Record pill start/finish -> standard coordinator -> authenticated Saved -> same-binding restart resolver',copy:'not exercised',
-          preflight:'verify current Xvfb/process inventory and all frozen artifacts before a separately authorized run',
-          cleanup:'request coordinator admission closure and local drain; close owning clients only after closed admission, complete drain, clear runtime ownership and disposal; if unresolved, preserve private authority/runtime and peers without process-group signals',
+          preflight:'verify exact frozen runner/helper hashes and archive admission metadata before any separately authorized run',
+          cleanup:'private IPC requests coordinator admission closure/local drain without cancel intent; after successful shutdown/dispose release only the separately owned recovery clients even when runtime clearance is unknown; retain the capture owner unless explicit finish intent and the admitted SDK 0.4.5 close contract permit closure; never signal a peer process group',
           stopOn:'archive or attestation mismatch, non-native handshake, unknown media/publication result, cleanup error; retain the private root'}};
       await writeFile(path.join(output,'preparation.json'),JSON.stringify(packet,null,2)+'\n',{mode:0o600});
       console.log('offline qualification preparation retained: '+output+' (native execution skipped)');
     } else {
-      // SDK 0.4.4 exposes recovery release, not safe release of an unresolved
-      // owning capture/media handle. Do not start native peers until the
-      // supervisor can request coordinator admission closure/drain and observe
-      // positive clearance before any process-group cleanup.
+      const output=process.env.APPARENT_CAPTURE2_PREPARATION_DIR;
+      assert.ok(output&&path.isAbsolute(output),'APPARENT_CAPTURE2_PREPARATION_DIR must identify the frozen qualification packet');
+      const frozenScript=path.join(output,'qualification.mjs'), frozenHelper=path.join(output,'native-qualification.ts');
+      const packet=JSON.parse(await readFile(path.join(output,'preparation.json'),'utf8'));
+      assert.equal(packet.mode,'offline-preparation-only');
+      assert.equal(createHash('sha256').update(await readFile(frozenScript)).digest('hex'),packet.runnerSha256,'frozen qualification runner changed');
+      assert.equal(createHash('sha256').update(await readFile(frozenHelper)).digest('hex'),packet.helperSha256,'frozen supervisor helper changed');
+      assert.equal(createHash('sha256').update(nativeScript).digest('hex'),packet.runnerSha256,'generated qualification source differs from frozen runner; prepare a new packet');
+      assert.equal(createHash('sha256').update(await readFile(qualificationHelper)).digest('hex'),packet.helperSha256,'repository supervisor helper differs from frozen helper; prepare a new packet');
+      const executionScript=path.join(capture2,'qualification.mjs');
+      await copyFile(frozenScript,executionScript); await chmod(executionScript,0o600);
+      // IPC and recovery-peer roles are wired, but ordinary CaptureClient
+      // close still needs the exact SDK 0.4.5 lifetime contract.
       assertQualificationShutdownProtocol(false);
-      const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', nativeScript], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_MEDIA2_ARCHIVE: mediaArchive, APPARENT_CAPTURE2_SDK_TARBALL: qualificationSdk, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts'), APPARENT_QUALIFICATION_SCRIPT_PATH: qualificationScript } });
+      const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', executionScript], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_MEDIA2_ARCHIVE: mediaArchive, APPARENT_CAPTURE2_SDK_TARBALL: qualificationSdk, APPARENT_QUALIFICATION_HELPERS: frozenHelper, APPARENT_QUALIFICATION_SCRIPT_PATH: executionScript } });
       process.stdout.write(capture2Result.stdout);
     }
   }
