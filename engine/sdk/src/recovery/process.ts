@@ -1,6 +1,7 @@
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
+import { releaseProcessReferences } from "./local.ts";
 
 export const RECOVERY_STARTUP_MS = 4000;
 export const RECOVERY_RELEASE_MS = 2000;
@@ -118,12 +119,7 @@ class RecoveryConnection {
     this.child.off("exit", this.onExit);
     // Native Ready is the safety prerequisite, not unref itself. These only
     // release Node's local references after native lifetime responsibility moved.
-    for (const stream of [this.child.stdin, this.child.stdout, this.child.stderr]) {
-      stream.on("error", () => {});
-      stream.destroy();
-    }
-    this.child.on("error", () => {});
-    this.child.unref();
+    releaseProcessReferences(this.child);
     this.bytes = Buffer.alloc(0);
   }
   release(): Promise<RecoveryPeerRelease> {
