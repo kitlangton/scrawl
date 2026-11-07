@@ -29,6 +29,7 @@ import { openCommittedEncryptedSpool, EncryptedSpoolReadError } from "../../src/
 import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-transport.ts";
 import { sealCapture } from "../../src/sender/seal.ts";
 import { publishEncryptedSpool } from "../../src/sender/spool-publication.ts";
+import { commitEncryptedSpool } from "../../src/sender/spool-commit.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
 const artifactPath = process.env.APPARENT_RESOURCE_ARTIFACT;
@@ -105,13 +106,13 @@ test("native spool publication feeds the committed reader and sender under the s
     const seed = Uint8Array.from({ length: 32 }, (_, i) => i + 1), reader = await generateAgeIdentity();
     const self = await generateAgeIdentity(), signingKey = await ed25519.getPublicKeyAsync(seed);
     const ownPublicKey = { version: 1 as const, recipient: self.recipient, signing: Buffer.from(signingKey).toString("hex") };
-    const sealed = await sealCapture({ server: origin, captureId: id, ownPublicKey, signingSeed: seed, profile: "root",
-      authority: { server: origin, accountId: "account", grantId: "sender", scope: "upload", devices: [
-        { grantId: "sender", scope: "upload", key: ownPublicKey },
-        { grantId: "reader", scope: "read", key: { ...ownPublicKey, recipient: reader.recipient } }] },
+    const authority = { server: origin, accountId: "account", grantId: "sender", scope: "upload" as const, devices: [
+      { grantId: "sender", scope: "upload" as const, key: ownPublicKey },
+      { grantId: "reader", scope: "read" as const, key: { ...ownPublicKey, recipient: reader.recipient } }] };
+    const sealed = await sealCapture({ server: origin, captureId: id, ownPublicKey, signingSeed: seed, profile: "root", authority,
       files: capture().files, active: () => true });
     const pending = decodeJob(Buffer.from(JSON.stringify({ id, bundle: "/synthetic.apparent", server: origin, generation,
-      created: 1, attempts: 0, nextAttempt: 0, status: "pending", encrypted: true })));
+      created: 1, attempts: 0, nextAttempt: 0, status: "pending", encrypted: true, futurePrivateField: { preserve: true } })));
     const credential = { server: origin, scope: "upload", generation, token: "synthetic-upload", refreshToken: "synthetic-refresh",
       expiresAt: Math.floor(Date.now() / 1000) + 1000, refreshExpiresAt: Math.floor(Date.now() / 1000) + 2000,
       grantId: "sender", encryption_identity: "f".repeat(32) };
@@ -119,6 +120,7 @@ test("native spool publication feeds the committed reader and sender under the s
     await writeFile(path.join(root, "upload.credential"), JSON.stringify(credential), { mode: 0o600 });
     const credentialsBefore = await readFile(path.join(root, "upload.credential"));
     const pendingBefore = await readFile(path.join(root, `${id}.job`));
+    await link(path.join(root, `${id}.job`), path.join(root, "legacy-pending-job-alias"));
     const credentialSnapshot = await readCredentialSnapshot(root, { scope: "upload", approvedServer: origin }, resources);
     const publicationResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
       async publish(parent: import("node:fs/promises").FileHandle, stage: string, destination: string, options?: { signal?: AbortSignal }) {
@@ -137,9 +139,26 @@ test("native spool publication feeds the committed reader and sender under the s
     const envelope = sealed.assets.find(asset => asset.path === "envelope.json")!.bytes;
     const chunkAssets = assets.filter(asset => asset.path.startsWith("sealed/"));
     for (const asset of sealed.assets) assert.deepEqual(new Uint8Array(await readFile(path.join(spool, asset.path))), asset.bytes);
-    // A fixture-only authoritative job commit joins the existing committed reader.
-    const job = { ...pending, files: assets, encryption: receipt.metadata };
-    await writeFile(path.join(root, `${id}.job`), JSON.stringify(job), { mode: 0o600 });
+    // Only this isolated fixture invokes the internal writer capability.
+    let replacements = 0;
+    const commitResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+      async replaceFile(...args: Parameters<StateReplacementResources["replaceFile"]>) {
+        try {
+          const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+          if (contender.state === "acquired") await contender.lease.release();
+          assert.equal(contender.state, "busy", "job replacement must hold the native queue lease");
+        } catch (error) { await args[0].close().catch(() => {}); throw error; }
+        replacements++; return resources.replaceFile(...args);
+      } };
+    const recovered = await commitEncryptedSpool(root, pending, credentialSnapshot, authority, ownPublicKey, commitResources, { active: () => true });
+    assert.equal(recovered.state, "committed"); if (recovered.state === "uncertain") return;
+    const job = recovered.job;
+    assert.deepEqual(job.futurePrivateField, { preserve: true });
+    assert.deepEqual(JSON.parse(await readFile(path.join(root, `${id}.job`), "utf8")), job);
+    assert.deepEqual(await readFile(path.join(root, "legacy-pending-job-alias")), pendingBefore);
+    assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialsBefore);
+    assert.equal((await commitEncryptedSpool(root, job, credentialSnapshot, authority, ownPublicKey, commitResources, { active: () => true })).state, "unchanged");
+    assert.equal(replacements, 1);
     const before = await readFile(path.join(spool, "spool-state.json"));
     const snapshot = await openCommittedEncryptedSpool(root, job, resources, { lockTimeoutMs: 0 });
     const lock = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });

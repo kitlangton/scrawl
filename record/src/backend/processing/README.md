@@ -90,7 +90,7 @@ Cancellation is an explicit caller action. A complete result is accepted only
 after SDK derivative validation and original request/layout binding checks; it
 is a processing result, not a Saved or publication result. Synthetic offline
 tests cover the client seam and consistency contract only. SDK validation does
-not prove derivative origin, and no native media/2 worker is currently available.
+not prove derivative origin, and do not replace the separately admitted Linux native Media/2 evidence.
 
 Terminal results are immutable: later inspections cannot replace a failure code
 or validated derivative, even when the reported state name is unchanged.
