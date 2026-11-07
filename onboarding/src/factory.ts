@@ -132,6 +132,10 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
             await waitForProgress();
             const loaded = controller.state;
             if (loaded.publication === "unknown") throw new Error("Onboarding progress could not be loaded");
+            if (reason === "firstLaunch" && loaded.progress.setupCompleted && deps.openRecordingEntry) {
+              await returnToRecording();
+              return;
+            }
             if (reason === "firstLaunch" && (loaded.progress.setupCompleted || loaded.progress.status === "deferred")) {
               await hideCoach();
               setSurface({ kind: "hidden" }); closeError = null; notify();
@@ -154,7 +158,8 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
             if (surface.kind === "repair") throw new Error("Generic onboarding activation is unavailable during permission repair");
             await waitForProgress(); await controller.load(); await waitForProgress();
             if (controller.state.publication === "unknown") throw new Error("Onboarding progress could not be loaded");
-            await controller.dispatch("replay");
+            const replayed = await controller.dispatch("replay");
+            if (replayed.publication !== "confirmed" || replayed.error || replayed.progress.stage !== "welcome") throw new Error("Onboarding replay could not be saved safely");
             setSurface({ kind: "tour" }); closeError = null; notify();
           });
         },

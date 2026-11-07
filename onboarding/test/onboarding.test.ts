@@ -58,7 +58,7 @@ test("normalizes legacy aliases and keeps defer distinct from completion", async
   assert.equal(normalizeProgress({ seen: true }).status, "completed");
   const f = fixture(); await f.controller.load(); await f.controller.dispatch("defer"); assert.equal(f.controller.state.progress.status, "deferred"); f.controller.dispose();
   const resumed = fixture(); resumed.progress.value = { ...initialProgress(), status: "deferred", stage: "screen-ink", attemptId: "unfinished", manualPasteConfirmed: true }; await resumed.controller.load(); await resumed.controller.dispatch("reopen"); assert.equal(resumed.controller.state.progress.stage, "screen-ink"); assert.equal(resumed.controller.state.progress.attemptId, "unfinished"); resumed.controller.dispose();
-  const replay = fixture(); replay.progress.value = { ...initialProgress(), status: "completed", stage: "complete", attemptId: "old", manualPasteConfirmed: true }; await replay.controller.load(); await replay.controller.dispatch("reopen"); assert.equal(replay.controller.state.progress.stage, "welcome"); assert.equal(replay.controller.state.progress.attemptId, null); assert.equal(replay.controller.state.progress.manualPasteConfirmed, false); replay.controller.dispose();
+  const replay = fixture(); replay.progress.value = { ...initialProgress(), status: "completed", stage: "complete", attemptId: "old", manualPasteConfirmed: true }; await replay.controller.load(); await replay.controller.dispatch("reopen"); assert.equal(replay.controller.state.progress.stage, "complete"); await replay.controller.dispatch("replay"); assert.equal(replay.controller.state.progress.stage, "welcome"); assert.equal(replay.controller.state.progress.attemptId, null); assert.equal(replay.controller.state.progress.manualPasteConfirmed, false); replay.controller.dispose();
 });
 
 test("host progress codec preserves owner metadata and rejects future schema", () => {
@@ -624,9 +624,13 @@ test("complete mounted branded lesson follows one local-only admitted capture to
   assert.equal(f.controller.state.progress.stage, "board-ink");
   title("Draw on the whiteboard.");
   await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard"), outcome("accepted-stroke")], undefined, "local-only", admissionId)] }));
+  assert.equal(f.controller.state.progress.stage, "note");
+  title("Add a note.");
+  const noteFact: CaptureOutcome = { kind: "note-save", ok: true, at: "2026-11-07T10:00:00Z", noteId: "lesson-note", receiptId: "lesson-receipt", screenStrokeBarrier: { historyId: "lesson-history", sequence: 4 } };
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("accepted-stroke"), noteFact], undefined, "local-only", admissionId)] }));
   assert.equal(f.controller.state.progress.stage, "screen-ink");
   title("Draw on your screen.");
-  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard"), outcome("accepted-stroke"), outcome("accepted-stroke", "screen")], undefined, "local-only", admissionId)] }));
+  await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "recording", [outcome("accepted-stroke"), noteFact, { kind: "accepted-stroke", ok: true, at: "2026-11-07T10:00:01Z", surface: "screen", strokeId: "post-note", cursor: { historyId: "lesson-history", sequence: 5 } }], undefined, "local-only", admissionId)] }));
   assert.equal(f.controller.state.progress.stage, "stop");
   await publishSnapshot(s => ({ ...s, captures: [capture("lesson-capture", "processing", [outcome("shortcut"), outcome("picker"), outcome("first-frame-start"), outcome("whiteboard"), outcome("accepted-stroke"), outcome("accepted-stroke", "screen"), outcome("processing")], undefined, "local-only", admissionId)] }));
   assert.equal(f.controller.state.progress.stage, "preparing");
@@ -979,4 +983,41 @@ test('the hidden tour keeps factual practice progress without stopping the assoc
   await act(async () => [...dom.window.document.querySelectorAll('button')].find(b => b.textContent === 'Later')!.click());
   assert.equal(dom.window.document.querySelector('main[data-stage=copied]')?.parentElement?.hasAttribute('hidden'), false);
   await act(async () => root.unmount()); await hosted.activation.dispose(); f.controller.dispose(); dom.window.close();
+});
+
+
+test("note lesson rejects empty notes and earlier or foreign-history screen marks", async () => {
+  const f = fixture(); f.progress.value = { ...initialProgress(), status: "in-progress", stage: "note", attemptId: "noted" }; await f.controller.load();
+  const note: CaptureOutcome = { kind: "note-save", ok: true, at: "2026-11-07T10:00:00Z", noteId: "note", receiptId: "receipt", screenStrokeBarrier: { historyId: "history", sequence: 4 } };
+  const mark = (historyId: string, sequence: number): CaptureOutcome => ({ kind: "accepted-stroke", ok: true, at: "2026-11-07T10:00:01Z", surface: "screen", strokeId: `stroke-${historyId}-${sequence}`, cursor: { historyId, sequence } });
+  publish(f.driver, [capture("noted", "recording", [{kind:"note-save",ok:false,at:"2026-11-07T10:00:00Z",reason:"empty"},mark("history",9)])]);
+  await new Promise(r=>setImmediate(r)); assert.equal(f.controller.state.progress.stage,"note");
+  publish(f.driver,[capture("noted","recording",[note,mark("history",4),mark("other",99)])]);
+  await new Promise(r=>setImmediate(r)); assert.equal(f.controller.state.progress.stage,"screen-ink");
+  publish(f.driver,[capture("noted","recording",[note,mark("history",5)])]);
+  await new Promise(r=>setImmediate(r)); assert.equal(f.controller.state.progress.stage,"stop"); f.controller.dispose();
+});
+
+test("late observed trial cannot complete setup after navigation", async () => {
+  const f=fixture("shortcut-trial-idle");f.progress.value={...initialProgress(),status:"in-progress",stage:"shortcut"};await f.controller.load();await f.controller.beginShortcutTrial();
+  const cmd=f.driver.commands().find(c=>c.type==="begin-shortcut-trial");assert.ok(cmd&&cmd.type==="begin-shortcut-trial");
+  await f.controller.dispatch("back");
+  const current=f.driver.current();f.driver.publish({...current,revision:current.revision+1,shortcutTrial:{state:"observed",reservationId:cmd.reservationId,sourceEpoch:cmd.sourceEpoch,sourceRevision:cmd.sourceRevision,bindingId:cmd.bindingId,effectiveBinding:cmd.effectiveBinding,pressId:"late",pressedAt:"2026-11-07T10:00:00Z",releasedAt:"2026-11-07T10:00:01Z"}});
+  await new Promise(r=>setImmediate(r));assert.equal(f.controller.state.progress.setupCompleted,false);f.controller.dispose();
+});
+
+test("replay with unknown persistence cannot publish a tour surface", async () => {
+ const f=fixture();f.progress.value={...initialProgress(),status:"completed",stage:"complete",setupCompleted:true};const kinds:string[]=[];
+ const hosted=await onboardingContributionFactory.create({progress:f.progress,record:f.client,id:()=>"replay-unknown",Button:TestButton,close(){},onSurfaceChange:s=>kinds.push(s.kind)});
+ f.progress.unknown=true;await assert.rejects(hosted.activation.replayTour(),/could not be saved/);assert.deepEqual(kinds,["hidden"]);await hosted.activation.dispose();
+});
+
+
+test("restart and repeated return use the existing recording entry without onboarding writes or commands", async () => {
+ const f=fixture();f.progress.value={...initialProgress(),status:"in-progress",stage:"shortcut",setupCompleted:true};let entries=0;const revision=f.progress.revision;
+ for (const reason of ["firstLaunch","resume","resume"] as const) {
+  const hosted=await onboardingContributionFactory.create({progress:f.progress,record:f.client,id:()=>"restart",Button:TestButton,close(){},openRecordingEntry:async()=>{entries++;return true;}});
+  await hosted.activation.activate({reason});await hosted.activation.dispose();
+ }
+ assert.equal(entries,3);assert.equal(f.progress.revision,revision);assert.equal(f.progress.value.stage,"shortcut");assert.deepEqual(f.driver.commands(),[]);f.controller.dispose();
 });

@@ -4,7 +4,7 @@ import { initialProgress, normalizeProgress, nextStage, type OnboardingProgress,
 export type ControllerState = { progress: OnboardingProgress; revision: Revision; snapshot: CapabilitySnapshot | null; error: string | null; saving: boolean; publication: "confirmed" | "unknown"; command: "idle" | "accepted" | "applied" | "unknown" | "refused" };
 export type Command = "continue" | "back" | "defer" | "reopen" | "replay" | "refresh" | "manual-paste-confirm" | "retry";
 export type OnboardingDependencies = { progress: ProgressStore; record: RecordClient; id(): string };
-const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
+const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "note", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
 type Payload = RecordCommand extends infer C ? C extends RecordCommand ? Omit<C, "requestId" | "expected"> : never : never;
 const successful = (snapshot: CapabilitySnapshot | null, captureId: string | null, kind: string, detail?: string) => {
   const capture = captureId ? snapshot?.captures.find(c => c.captureId === captureId) : undefined;
@@ -27,6 +27,7 @@ export class OnboardingController {
   #reserving = false;
   #trialIntent: ShortcutTrialReservationIdentity | null = null;
   #trialProviderEpoch: string | null = null;
+  #trialStarting = false;
   constructor(private readonly deps: OnboardingDependencies) {
     this.#unsubscribe = deps.record.observe(snapshot => this.observe(snapshot));
   }
@@ -84,8 +85,12 @@ export class OnboardingController {
   async openDesktopShortcutConfig(): Promise<CommandResult | null> { return this.execute({ type: "shortcut-open-desktop-config" }); }
   /** Reserve a non-recording trial for the exact current binding. Setup completes only on its matching observed press and release. */
   async beginShortcutTrial(): Promise<CommandResult | null> {
+    if (this.#trialStarting) return null;
+    this.#trialStarting = true;
+    try {
     if (this.#state.progress.stage !== "shortcut" || this.#state.progress.setupCompleted) { this.fail("The physical shortcut check is only available during unfinished setup."); return null; }
     const s = this.#state.snapshot, binding = s?.shortcutTrialBeginBinding, old = s?.shortcutTrial;
+    if (this.readiness(s) !== "ready") { this.fail("Required recording access is not ready. Review access before testing the shortcut."); return null; }
     if (!s || s.connection !== "connected" || !binding || !s.shortcut.effective || !s.shortcut.bindingId || s.shortcut.registration !== "registered" || s.shortcut.draft) { this.fail("A physical shortcut trial is not available yet. Confirm the shortcut and try again."); return null; }
     if (binding.bindingId !== s.shortcut.bindingId || binding.effectiveBinding !== s.shortcut.effective) { this.fail("The shortcut changed. Check its current status before trying the physical test."); return null; }
     if (old?.state === "idle" && (old.sourceEpoch !== binding.sourceEpoch || old.sourceRevision !== binding.sourceRevision || old.bindingId !== binding.bindingId || old.effectiveBinding !== binding.effectiveBinding)) { this.fail("The physical test reservation changed. Refresh setup before trying again."); return null; }
@@ -99,13 +104,15 @@ export class OnboardingController {
     const fact = this.#state.snapshot?.shortcutTrial;
     if (result?.status === "refused" || result?.status === "cancelled" || result?.status === "outcome-unknown" || fact?.state === "unavailable" || !fact || fact.state === "unknown") { this.#trialIntent = null; this.#trialProviderEpoch = null; }
     return result;
+    } finally { this.#trialStarting = false; }
   }
   async cancelShortcutTrial(): Promise<CommandResult | null> {
     const fact = this.#state.snapshot?.shortcutTrial;
     if (!fact || (fact.state !== "reserved" && fact.state !== "pressing")) return null;
     const result = await this.execute({ type: "cancel-shortcut-trial", reservationId: fact.reservationId });
     if (result?.status === "outcome-unknown" || result?.status === "refused") return result;
-    this.#trialIntent = null; this.#trialProviderEpoch = null;
+    const current = this.#state.snapshot?.shortcutTrial;
+    if (current && (current.state === "cancelled" || current.state === "expired" || current.state === "observed") && current.reservationId === fact.reservationId) { this.#trialIntent = null; this.#trialProviderEpoch = null; }
     return result;
   }
   private async reservePractice(): Promise<ControllerState> {
@@ -158,6 +165,11 @@ export class OnboardingController {
     if (this.#state.command === "unknown" && command !== "refresh") return this.#state;
     const p = this.#state.progress, snapshot = this.#state.snapshot;
     if (command === "refresh") { await this.refresh(); return this.#state; }
+    if (["back", "defer", "reopen", "replay"].includes(command)) {
+      const trial = snapshot?.shortcutTrial;
+      if (this.#trialIntent && trial && (trial.state === "reserved" || trial.state === "pressing") && trial.reservationId === this.#trialIntent.reservationId) return this.fail("Cancel the pending shortcut test before leaving setup.");
+      this.#trialIntent = null; this.#trialProviderEpoch = null;
+    }
     if (command === "defer") {
       if (this.#reserving) return this.fail("Finishing your practice setup. Try closing it again in a moment.");
       const admission = snapshot?.nextShortcutAdmission;
@@ -169,7 +181,9 @@ export class OnboardingController {
       }
       return this.persist({ ...this.#state.progress, status: "deferred" });
     }
+    if (command === "reopen" && p.setupCompleted) return this.#state;
     if (command === "reopen") return this.persist({ ...p, status: "in-progress", stage: p.status === "completed" ? "welcome" : p.stage, setupCompleted: p.setupCompleted, attemptId: p.status === "completed" ? null : p.attemptId, practiceBaselineIds: p.status === "completed" ? [] : p.practiceBaselineIds, manualPasteConfirmed: p.status === "completed" ? false : p.manualPasteConfirmed });
+    if (command === "replay" && p.admissionId && !(snapshot?.nextShortcutAdmission && "admissionId" in snapshot.nextShortcutAdmission && snapshot.nextShortcutAdmission.admissionId === p.admissionId && ["consumed", "cancelled", "expired"].includes(snapshot.nextShortcutAdmission.state))) return this.fail("Finish or release the current practice reservation before replaying setup.");
     if (command === "replay") return this.persist({ ...p, status: "in-progress", stage: "welcome", setupCompleted: p.setupCompleted, attemptId: null, admissionId: null, practiceBaselineIds: [], manualPasteConfirmed: false });
     if (p.status === "deferred" || p.status === "completed") return this.#state;
     if (command === "manual-paste-confirm") { if (p.stage !== "paste") return this.#state; return this.persist({ ...p, manualPasteConfirmed: true, stage: "locate" }); }
@@ -183,7 +197,7 @@ export class OnboardingController {
     if (p.stage === "pen") return this.fail("Choose a pen and select Use this pen to continue.");
     if (p.stage === "permissions" && this.readiness(snapshot) !== "ready") return this.fail("Some required access is not ready yet. Allow it, then check access again.");
     if (p.stage === "practice-start") return p.admissionId ? this.fail("Waiting for your reserved shortcut to start a new local-only capture.") : this.reservePractice();
-    if (["screen", "whiteboard", "board-ink", "screen-ink"].includes(p.stage)) return this.fail("Follow the guide; confirmed capture actions advance this step automatically.");
+    if (["screen", "whiteboard", "board-ink", "note", "screen-ink"].includes(p.stage)) return this.fail("Follow the guide; confirmed capture actions advance this step automatically.");
     if (p.stage === "stop" && !(successful(snapshot, p.attemptId, "processing") && ["processing", "saved"].includes(snapshot?.captures.find(c => c.captureId === p.attemptId)?.phase ?? ""))) return this.fail("Waiting for the capture to finish.");
     if (p.stage === "preparing") {
       const saved = successful(snapshot, p.attemptId, "save") && snapshot?.captures.find(c => c.captureId === p.attemptId)?.phase === "saved";
@@ -225,7 +239,7 @@ export class OnboardingController {
   private advanceObservedFacts(snapshot: CapabilitySnapshot): void {
     const p = this.#state.progress;
     const trial = snapshot.shortcutTrial, intent = this.#trialIntent;
-    if (intent && trial?.state === "observed" && trial.reservationId === intent.reservationId && trial.sourceEpoch === intent.sourceEpoch && trial.sourceRevision === intent.sourceRevision && trial.bindingId === intent.bindingId && trial.effectiveBinding === intent.effectiveBinding && Number.isFinite(Date.parse(trial.pressedAt)) && Number.isFinite(Date.parse(trial.releasedAt)) && Date.parse(trial.releasedAt) >= Date.parse(trial.pressedAt) && snapshot.providerEpoch === this.#trialProviderEpoch && snapshot.connection === "connected" && snapshot.shortcut.bindingId === intent.bindingId && snapshot.shortcut.effective === intent.effectiveBinding && !p.setupCompleted && this.#loaded && this.#state.publication === "confirmed" && !this.#state.saving && this.#state.command !== "unknown") {
+    if (!this.#disposed && this.readiness(snapshot) === "ready" && p.stage === "shortcut" && p.status === "in-progress" && this.shortcutConfirmed(snapshot) && intent && trial?.state === "observed" && trial.reservationId === intent.reservationId && trial.sourceEpoch === intent.sourceEpoch && trial.sourceRevision === intent.sourceRevision && trial.bindingId === intent.bindingId && trial.effectiveBinding === intent.effectiveBinding && Number.isFinite(Date.parse(trial.pressedAt)) && Number.isFinite(Date.parse(trial.releasedAt)) && Date.parse(trial.releasedAt) >= Date.parse(trial.pressedAt) && snapshot.providerEpoch === this.#trialProviderEpoch && snapshot.connection === "connected" && snapshot.shortcut.bindingId === intent.bindingId && snapshot.shortcut.effective === intent.effectiveBinding && !p.setupCompleted && this.#loaded && this.#state.publication === "confirmed" && !this.#state.saving && this.#state.command !== "unknown") {
       this.#trialIntent = null; this.#trialProviderEpoch = null;
       void this.persist({ ...p, setupCompleted: true });
     }
@@ -256,10 +270,12 @@ export class OnboardingController {
     const firstFrame = successful(snapshot, this.#state.progress.attemptId, "first-frame-start");
     const whiteboard = successful(snapshot, this.#state.progress.attemptId, "whiteboard");
     const boardStroke = outcomes.some(o => o.kind === "accepted-stroke" && o.ok && o.surface === "whiteboard");
-    const screenStroke = outcomes.some(o => o.kind === "accepted-stroke" && o.ok && o.surface === "screen");
+    const note = outcomes.find(o => o.kind === "note-save" && o.ok);
+    const screenStroke = note?.kind === "note-save" && note.ok && outcomes.some(o => o.kind === "accepted-stroke" && o.ok && o.surface === "screen" && o.cursor && o.cursor.historyId === note.screenStrokeBarrier.historyId && o.cursor.sequence > note.screenStrokeBarrier.sequence);
     if (stage === "screen" && pickedScreen && firstFrame) stage = "whiteboard";
     if (stage === "whiteboard" && whiteboard) stage = "board-ink";
-    if (stage === "board-ink" && boardStroke) stage = "screen-ink";
+    if (stage === "board-ink" && boardStroke) stage = "note";
+    if (stage === "note" && note) stage = "screen-ink";
     if (stage === "screen-ink" && screenStroke) stage = "stop";
     const associatedId = this.#state.progress.attemptId;
     const associated = associatedId ? snapshot.captures.find(c => c.captureId === associatedId) : undefined;

@@ -1,6 +1,6 @@
 import type { JsonValue, ProgressCodec } from "@apparent/app-contracts/host";
 
-export type Stage = "welcome" | "pen" | "permissions" | "shortcut" | "practice-start" | "screen" | "whiteboard" | "board-ink" | "screen-ink" | "stop" | "preparing" | "copied" | "paste" | "locate" | "complete";
+export type Stage = "welcome" | "pen" | "permissions" | "shortcut" | "practice-start" | "screen" | "whiteboard" | "board-ink" | "note" | "screen-ink" | "stop" | "preparing" | "copied" | "paste" | "locate" | "complete";
 export type LegacyMetadata = { tutorial: "skipped" | "watched" | "practiced" | null; relaunchedAt: number | null; reopenFix: boolean; shortcutChosen: boolean; firstCaptureCompleted: boolean; granted?: string[] };
 export type OnboardingProgress = { schema: 2; /** Optional tutorial progress; independent of first-run setup completion. */ status: "new" | "in-progress" | "deferred" | "completed"; stage: Stage; attemptId: string | null; admissionId: string | null; practiceBaselineIds: string[]; legacy: LegacyMetadata; manualPasteConfirmed: boolean; setupCompleted: boolean };
 export type Revision = string | number;
@@ -16,7 +16,7 @@ export function normalizeProgress(value: unknown): OnboardingProgress {
   const legacyLocation = v.resume ?? v.page ?? v.step ?? v.currentStep ?? v.stage;
   const aliases: Record<string, Stage> = { tutorial: "welcome", howItWorks: "welcome", "how-it-works": "welcome", resume: "welcome", record: "welcome", draw: "welcome", finish: "welcome", done: "complete", "try-it": "practice-start", TryIt: "practice-start", Permissions: "permissions", Shortcut: "shortcut", Done: "complete", Welcome: "welcome", HowItWorks: "welcome", "screen-recording": "permissions", microphone: "permissions", "input-monitoring": "permissions", accessibility: "permissions", camera: "permissions" };
   const stage = (aliases[String(legacyLocation)] ?? legacyLocation) as Stage;
-  const valid: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
+  const valid: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "note", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
   const parsedStage = v.reopenFix === true ? "permissions" : valid.includes(stage) ? stage : "welcome";
   const completed = v.status === "completed" || v.seen === true || v.completed === true || v.finished === true;
   const deferred = v.status === "deferred" || v.deferred === true;
@@ -59,7 +59,7 @@ export const onboardingProgressCodec: ProgressCodec<OnboardingProgress> = {
       const m = v.legacy as Record<string, unknown> | null;
       const fields = ["schema", "status", "stage", "attemptId", "admissionId", "practiceBaselineIds", "legacy", "manualPasteConfirmed", ...(v.schema === 2 ? ["setupCompleted"] : [])];
       if (Object.keys(v).some(key => !fields.includes(key)) || (v.status === "completed") !== (v.stage === "complete")) throw new TypeError("Invalid onboarding progress state");
-      const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
+      const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "note", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
       if (!(v.status === "new" || v.status === "in-progress" || v.status === "deferred" || v.status === "completed")
         || typeof v.stage !== "string" || !stages.includes(v.stage as Stage)
         || !(v.attemptId === null || typeof v.attemptId === "string") || !(v.admissionId === null || typeof v.admissionId === "string")
@@ -79,5 +79,5 @@ export const onboardingProgressCodec: ProgressCodec<OnboardingProgress> = {
     return onboardingProgressCodec.decode(progressJson(value));
   },
 };
-const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
+const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "note", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
 export function nextStage(stage: Stage): Stage { return stages[Math.min(stages.indexOf(stage) + 1, stages.length - 1)]; }
