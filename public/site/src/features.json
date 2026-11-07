@@ -1301,11 +1301,11 @@
       "id": "cli-copy",
       "group": "cli",
       "name": "copy",
-      "says": "Copy a saved capture to the clipboard without contacting an agent session. The local handoff honors the configured agentContext preference and remains text-only; the user checks the unsent draft for an image.",
+      "says": "Copy a saved capture to the clipboard without contacting an agent session, or use apparent-agent copy --preview to print the same local handoff text without GUI or clipboard access. Preview clearly labels local evidence-only bundles whose video/audio was not downloaded; the handoff remains text-only and does not authenticate native Saved publication or deliver a link.",
       "status": "main",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],
-      "docs": ["capture/agent/skills/apparent/SKILL.md", "README.md#usage"]
+      "docs": ["agent/README.md", "agent/skills/apparent/SKILL.md", "agent/docs/cli-parity.md", "capture/agent/skills/apparent/SKILL.md", "README.md#usage"]
     },
     {
       "id": "cli-reprocess",

@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHash} from 'node:crypto';
-import {mkdtemp,mkdir,writeFile,readFile,rm} from 'node:fs/promises';
+import {mkdtemp,mkdir,writeFile,readFile,rm,readdir,chmod} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {writeCopyText,localCopyText} from '../../dist/handoff/copy.js';
@@ -58,6 +58,31 @@ test('compiled CLI uses the public Host port; lost reply stays unknown with a si
   try{const applied=await run(process.execPath,[cli,'copy',bundle],{env:{...process.env,HOME:root},timeout:10000});assert.match(applied.stdout,/Copied bundle text/);assert.match(applied.stdout,/Images were not copied/);assert.equal(writes,1);lose=true;
     await assert.rejects(run(process.execPath,[cli,'copy',bundle],{env:{...process.env,HOME:root},timeout:10000}),(error:any)=>{assert.equal(error.code,3);assert.equal(error.stdout,'');assert.match(error.stderr,/outcome is unknown/);return true;});assert.equal(writes,2);
   }finally{for(const socket of sockets)socket.destroy();await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(root,{recursive:true,force:true});}
+});
+
+test('copy --preview prints exact local handoff text without Host access or input mutation',async()=>{
+  const {createServer}=await import('node:net');const {once}=await import('node:events');const {execFile}=await import('node:child_process');const {promisify}=await import('node:util');
+  const root=await mkdtemp(join(tmpdir(),'agent-copy-preview-'));const bundle=join(root,'-Evidence with spaces 👋');await mkdir(bundle,{mode:0o700});
+  const manifest=JSON.parse(await readFile(new URL('../fixtures/semantic.json',import.meta.url),'utf8'));manifest.note='Long local note '.repeat(1800);
+  const manifestBytes=Buffer.from(JSON.stringify(manifest));await writeFile(join(bundle,'apparent.json'),manifestBytes);
+  const receipt=Buffer.from(JSON.stringify({version:1,captureId:'c'.repeat(32),server:'https://connect.example',media:'not downloaded',guidance:'Use apparent fetch <id> --media --out <new-directory> for the complete recording'}));await writeFile(join(bundle,'.evidence-only.json'),receipt);
+  const configDir=join(root,'.config','apparent');await mkdir(configDir,{recursive:true,mode:0o700});await chmod(join(root,'.config'),0o700);await chmod(configDir,0o700);
+  const configPath=join(configDir,'config.json');const configBytes=Buffer.from(JSON.stringify({secret:'must remain untouched',experiments:{agentContext:true,agentDemoVideo:true}}));await writeFile(configPath,configBytes);
+  const control=join(configDir,'agent-control');await mkdir(control,{mode:0o700});const socketPath=join(control,'capture.sock');let connections=0;const server=createServer(socket=>{connections++;socket.destroy();});server.listen(socketPath);await once(server,'listening');await chmod(socketPath,0o600);
+  const originalHome=process.env.HOME;process.env.HOME=root;const cli=new URL('../../dist/cli.js',import.meta.url).pathname;const run=promisify(execFile);
+  try{
+    const expected=await localCopyText(bundle);assert(Buffer.byteLength(expected)>21800);const before=await readdir(bundle);
+    const preview=await run(process.execPath,[cli,'copy',bundle,'--preview'],{env:{...process.env,HOME:root,PATH:'/nonexistent',APPARENT_ENGINE_FRAMES_EXECUTABLE:'/missing/provider',APPARENT_ENGINE_RUNTIME:'/missing/runtime'},timeout:15000});
+    assert.equal(preview.stdout,expected);assert.match(preview.stderr,/Preview only; clipboard unchanged/);assert.match(preview.stderr,/video\/audio not downloaded/);assert.equal(connections,0);
+    assert.deepEqual(await readdir(bundle),before);assert.deepEqual(await readFile(join(bundle,'apparent.json')),manifestBytes);assert.deepEqual(await readFile(join(bundle,'.evidence-only.json')),receipt);assert.deepEqual(await readFile(configPath),configBytes);
+    const plainPreview=await run(process.execPath,[cli,'copy','--preview','--','-Evidence with spaces 👋'],{env:{...process.env,HOME:root,PATH:'/nonexistent'},cwd:root,timeout:15000});assert.equal(plainPreview.stdout,expected);assert.equal(connections,0);
+    await writeFile(join(bundle,'.media-pending'),'pending');
+    const pending=await run(process.execPath,[cli,'copy',bundle,'--preview'],{env:{...process.env,HOME:root},timeout:10000}).then(()=>null,(error:any)=>error);assert.equal(pending?.code,2);assert.equal(pending?.stdout,'');assert.match(pending?.stderr??'',/media is pending/);assert.equal(connections,0);
+    await rm(join(bundle,'.media-pending'));
+    const badArgs=[['/does/not/exist','--preview','--preview'],['/does/not/exist','--unknown'],['--'],['/does/not/exist','--',bundle,'extra'],['/does/not/exist','another']];
+    for(const args of badArgs){const result=await run(process.execPath,[cli,'copy',...args],{env:{...process.env,HOME:root},timeout:10000}).then(()=>null,(error:any)=>error);assert.equal(result?.code,2);assert.equal(result?.stdout,'');assert.doesNotMatch(result?.stderr??'',/Local bundle directory not found/);}
+    assert.equal(connections,0);assert.deepEqual(await readFile(configPath),configBytes);
+  }finally{if(originalHome===undefined)delete process.env.HOME;else process.env.HOME=originalHome;await new Promise<void>(resolve=>server.close(()=>resolve()));await rm(root,{recursive:true,force:true});}
 });
 
 test('copy refuses unfinished bundles and preserves canonical uncropped references',async()=>{

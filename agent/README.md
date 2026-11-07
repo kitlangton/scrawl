@@ -136,8 +136,15 @@ consumer proof, not native recording, authenticated bundle publication or Saved.
 Later artifact reuse still requires normal input admission.
 
 `apparent-agent copy [BUNDLE|latest]` copies local bundle handoff text through
-the published Host clipboard port. It requires Node 22.18+ and a compatible
-already-running Apparent GUI; it never starts the GUI. Record formats the semantic
+the published Host clipboard port. `copy [BUNDLE|latest] --preview` instead
+prints the exact same Record-formatted text to stdout and leaves the clipboard
+unchanged; it does not open Host, validate clipboard limits, or truncate output.
+Use `-- BUNDLE` to pass a path beginning with a dash. Preview labels
+itself on stderr, and an evidence-only receipt additionally reports that
+video/audio were not downloaded. These messages describe the local artifact;
+they do not authenticate native Saved publication or deliver a link. Preview
+requires no GUI; normal copy still requires Node 22.18+ and a compatible
+already-running Apparent GUI, and never starts it. Record formats the semantic
 prompt, with `apparent-agent inspect` as the inspection command. Existing
 `experiments.agentDemoVideo` config is read without writing it: video-proof
 guidance is included by default and an explicit false opts out. Destination/session
