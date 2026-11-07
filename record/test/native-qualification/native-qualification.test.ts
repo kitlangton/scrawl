@@ -2,7 +2,13 @@ import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
 import { execPath } from 'node:process';
 import { test } from 'node:test';
-import { assertQualificationShutdownProtocol, checkGeneratedNodeScript, reconcileAndCancel, runBounded, runCleanupSteps, terminateQualificationGroupAfterClearance, trackChild, waitForExit } from './native-qualification.ts';
+import { QUALIFICATION_IPC_SCHEMA, assertQualificationShutdownProtocol, checkGeneratedNodeScript, reconcileAndCancel, runBounded, runCleanupSteps, runQualification, trackChild, waitForExit } from './native-qualification.ts';
+
+function terminateOwnedFixtureGroup(pid: number, authorization: 'explicit-test-fixture-cleanup' | undefined): void {
+  if (authorization !== 'explicit-test-fixture-cleanup') throw new Error('fixture process group cleanup requires explicit test authorization');
+  try { process.kill(-pid, 'SIGKILL'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+}
 
 test('generated module syntax is checked before any supervisor or descendant code can run', async () => {
   const { mkdtemp, readFile, rm } = await import('node:fs/promises');
@@ -72,7 +78,7 @@ test('native qualification launch is refused before spawn without a local shutdo
   const root = await mkdtemp(join(tmpdir(), 'record-shutdown-protocol-'));
   const marker = join(root, 'spawned');
   try {
-    assert.throws(() => assertQualificationShutdownProtocol(false), /launch refused.*shutdown and clearance protocol/);
+    assert.throws(() => assertQualificationShutdownProtocol(false), /SDK 0\.4\.5 normal-close local-resource contract/);
     await assert.rejects(readFile(marker), { code: 'ENOENT' });
   } finally { await rm(root, { recursive: true, force: true }); }
 });
@@ -82,56 +88,79 @@ test('qualification timeout retains an unresolved owner until explicit fixture c
   const { mkdtemp, readFile, rm } = await import('node:fs/promises');
   const { tmpdir } = await import('node:os');
   const { join } = await import('node:path');
-  const { runQualification } = await import('./native-qualification.ts');
   const root = await mkdtemp(join(tmpdir(), 'record-deadline-'));
   const pidFile = join(root, 'child.pid');
   let retainedGroupPid: number | undefined;
   try {
-    const descendant = 'require("node:fs").writeFileSync(process.argv[1], String(process.pid));process.on("SIGTERM",()=>{});setInterval(()=>{},1000)';
-    const supervisor = 'require("node:child_process").spawn(process.execPath,["-e",process.argv[1],process.argv[2]],{stdio:"ignore"});process.on("SIGTERM",()=>{});setInterval(()=>{},1000)';
-    await assert.rejects(runQualification(execPath, ['-e', supervisor, descendant, pidFile], { cwd: root, env: process.env, timeout: 150 }), error => {
+    const report = { coordinatorShutdown: { scope: 'record-coordinator', admission: 'closed', localDrain: 'complete', runtimeClearance: 'unknown', work: [{ owner: 'media', state: 'unknown', reason: 'retained-job-outcome-unknown' }] },
+      coordinatorDisposed: true, recoveryPeerReleases: [{ connection: 'released', runtimeClearance: 'not-established' }], captureOwner: 'retained', status: 3, authorityRoot: '/private/fixture-root' };
+    const fixture = `
+      const fs=require('node:fs'); fs.writeFileSync(${JSON.stringify(pidFile)},String(process.pid));
+      process.on('message',message=>{ if(message?.schema===${JSON.stringify(QUALIFICATION_IPC_SCHEMA)}&&message.kind==='shutdown-request') process.send({schema:${JSON.stringify(QUALIFICATION_IPC_SCHEMA)},kind:'shutdown-report',requestId:message.requestId,report:${JSON.stringify(report)}}); });
+      setInterval(()=>{},1000);
+    `;
+    await assert.rejects(runQualification(execPath, ['-e', fixture], { cwd: root, env: process.env, timeout: 150, shutdownReportTimeout: 300 }), error => {
+      retainedGroupPid = error.ownedProcessGroupPid;
       assert.match(error.message, /deadline exceeded/);
       assert.equal(error.processGroupRetained, true);
-      retainedGroupPid = error.ownedProcessGroupPid;
+      assert.equal(error.exitCode, null, 'Node reports no exit code while the child remains alive');
+      assert.equal(error.shutdownRequestId.length > 0, true);
+      assert.deepEqual(error.shutdownReport, report, 'raw work, unknown state, status and authority-root evidence survive IPC');
       assert.ok(Number.isInteger(retainedGroupPid));
       return true;
     });
     const pid = Number(await readFile(pidFile, 'utf8'));
-    const status = await readFile('/proc/' + pid + '/stat', 'utf8').catch(error => {
-      if (error.code === 'ENOENT') return undefined;
-      throw error;
-    });
+    const status = await readFile('/proc/' + pid + '/stat', 'utf8');
     assert.ok(status && !status.slice(status.lastIndexOf(')') + 2).startsWith('Z'), 'ambiguous owner remains alive and retained after supervisor timeout');
-    await assert.rejects(terminateQualificationGroupAfterClearance(retainedGroupPid!, {
-      scope: 'record-coordinator', admission: 'closed', localDrain: 'complete', runtimeClearance: 'unknown',
-      disposed: false, owningClientsClosed: false,
-    }), /process group retained/);
+    assert.throws(() => terminateOwnedFixtureGroup(retainedGroupPid!, undefined), /explicit test authorization/);
     const stillRetained = await readFile('/proc/' + pid + '/stat', 'utf8');
     assert.ok(!stillRetained.slice(stillRetained.lastIndexOf(')') + 2).startsWith('Z'), 'unresolved clearance cannot terminate the owner');
   } finally {
-    if (retainedGroupPid) {
-      try { process.kill(-retainedGroupPid, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-    }
+    if (retainedGroupPid) terminateOwnedFixtureGroup(retainedGroupPid, 'explicit-test-fixture-cleanup');
     await rm(root, { recursive: true, force: true });
   }
 });
 
-test('positive disposed coordinator clearance permits terminating an owned qualification group', async t => {
+test('output limit sends a cooperative IPC request and preserves its shutdown report', async t => {
+  if (process.platform !== 'linux') { t.skip('Linux isolated process-group IPC fixture'); return; }
+  const { mkdtemp, rm } = await import('node:fs/promises');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const root = await mkdtemp(join(tmpdir(), 'record-output-limit-'));
+  let ownedPid: number | undefined;
+  const report = { coordinatorShutdown: { admission: 'closed', localDrain: 'complete', runtimeClearance: 'unresolved', work: [{ owner: 'publication', state: 'active', reason: 'same-binding-publish-still-running' }] },
+    coordinatorDisposed: true, recoveryPeerRelease: { connection: 'released', runtimeClearance: 'not-established' }, captureOwner: 'retained', authorityRoot: '/private/output-fixture' };
+  const fixture = `
+    process.on('message',message=>{ if(message?.schema===${JSON.stringify(QUALIFICATION_IPC_SCHEMA)}&&message.kind==='shutdown-request') process.send({schema:${JSON.stringify(QUALIFICATION_IPC_SCHEMA)},kind:'shutdown-report',requestId:message.requestId,report:${JSON.stringify(report)}}); });
+    const timer=setInterval(()=>{},1000); process.stdout.write('x'.repeat(256));
+  `;
+  try {
+    await assert.rejects(runQualification(execPath, ['-e', fixture], { cwd: root, env: process.env, timeout: 2000, shutdownReportTimeout: 300, outputLimitBytes: 64 }), error => {
+      assert.match(error.message, /output limit/);
+      assert.equal(error.processGroupRetained, true);
+      assert.deepEqual(error.shutdownReport, report);
+      ownedPid = error.ownedProcessGroupPid;
+      return true;
+    });
+  } finally {
+    if (ownedPid) terminateOwnedFixtureGroup(ownedPid, 'explicit-test-fixture-cleanup');
+    await rm(root, { recursive: true, force: true });
+  }
+});
+
+test('positive explicit fixture cleanup terminates only the owned test group', async t => {
   if (process.platform !== 'linux') { t.skip('Linux process-group clearance check'); return; }
   const { spawn } = await import('node:child_process');
-  const { waitForExit } = await import('./native-qualification.ts');
   const child = trackChild(spawn(execPath, ['-e', 'setInterval(()=>{},1000)'], { detached: true, stdio: 'ignore' }));
   try {
-    await terminateQualificationGroupAfterClearance(child.pid!, {
-      scope: 'record-coordinator', admission: 'closed', localDrain: 'complete', runtimeClearance: 'clear',
-      disposed: true, owningClientsClosed: true,
-    }, 50);
-    await waitForExit(child, 250);
+    await new Promise(resolve => setTimeout(resolve, 30));
+    assert.throws(() => terminateOwnedFixtureGroup(child.pid!, undefined), /explicit test authorization/);
+    terminateOwnedFixtureGroup(child.pid!, 'explicit-test-fixture-cleanup');
+    await new Promise<void>((resolve, reject) => { child.once('close', () => resolve()); child.once('error', reject); });
     assert.ok(child.exitCode !== null || child.signalCode !== null);
   } finally {
     if (child.exitCode === null && child.signalCode === null) {
-      try { process.kill(-child.pid!, 'SIGKILL'); } catch (error) { if (error.code !== 'ESRCH') throw error; }
-      await waitForExit(child, 250);
+      terminateOwnedFixtureGroup(child.pid!, 'explicit-test-fixture-cleanup');
     }
   }
 });
