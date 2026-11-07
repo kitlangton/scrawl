@@ -240,7 +240,7 @@ through SDK 0.4.2 observations, then freezes one final selection in the same
 publication database before deriving the publication images and sheet. Restart
 reuses those jobs and decisions. Missing observation profiles are observable
 unavailable outcomes; uncertain jobs inspect only their original request. The
-standard path requires interaction, transcript and accepted-stroke collections to
+standard path requires interaction and accepted-stroke collections to
 be unavailable; collected rich facts need the explicit policy path rather than
 being silently discarded. Context and collection availability remain in the bundle.
 Source selection, permission/consent, trusted runtime roots and client ownership
@@ -460,3 +460,18 @@ This is a structural consumer of Platform's assessed additive contract. It does
 not install a fallback producer or establish native availability. Its committed
 public port/package and real Omarchy effect evidence remain producer gates;
 rendered/installed first-path acceptance and activation remain separate.
+
+The standard coordinator also accepts an original SDK-sealed transcript fact.
+It reuses Record's transcript association after visual selection, without adding
+speech cuts, and retains provider/model/text and bundle-clock segment timing in
+canonical output. Missing segment ends use the persisted estimated policy of
+next-segment start or original capture end; explicit ends are preserved. Empty
+collected text remains distinct from unavailable. Original audio uses material
+references, not copied or re-timestamped bytes. Canonical v1 has no independent
+audio-offset field: standard audio must be originally aligned to bundle time
+(`audioOffsetMs: 0`); nonzero offsets fail closed rather than desynchronize playback.
+This is offline consumer support, not native microphone/transcription readiness.
+Engine must return original authenticated audio/transcript seals and verified
+sample-clock mapping before real voice acceptance. Accepted-stroke collections
+still require explicit richer policy and a native collector/surface transform;
+no annotation authority or render availability is inferred from DTOs or RGB.
