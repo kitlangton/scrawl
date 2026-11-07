@@ -257,11 +257,116 @@ impl Drop for Writer {
         let _ = self.join();
     }
 }
+
+/// The same bounded disk writer for a caller-owned, exclusively created file.
+/// The capture owner must journal its identity and retain the directory/owner
+/// permit; this type neither discovers paths nor creates a second lease.
+pub struct DescriptorWriter {
+    stop: Option<std::sync::mpsc::Sender<()>>,
+    worker: Option<std::thread::JoinHandle<Result<File>>>,
+}
+impl DescriptorWriter {
+    pub fn start(
+        mut file: File,
+        samples: Arc<Mutex<Samples>>,
+        error: Arc<Mutex<Option<String>>>,
+        initial_gap_ms: u64,
+    ) -> Result<Self> {
+        use std::os::unix::fs::MetadataExt;
+        ensure!(
+            initial_gap_ms <= super::timeline::MAX_INITIAL_GAP_MS,
+            "Narration initial gap exceeds limit"
+        );
+        let metadata = file.metadata()?;
+        ensure!(
+            metadata.is_file()
+                && metadata.len() == 0
+                && metadata.nlink() == 1
+                && metadata.mode() & 0o777 == 0o600
+                && metadata.uid() == unsafe { libc::geteuid() },
+            "Unsafe narration descriptor"
+        );
+        let initial_gap_samples = usize::try_from(initial_gap_ms)
+            .ok()
+            .and_then(|ms| ms.checked_mul(RATE / 1000))
+            .context("Narration prefix overflow")?;
+        ensure!(
+            initial_gap_samples <= (u32::MAX as usize - 36) / 2,
+            "Narration exceeds WAV size limit"
+        );
+        file.seek(SeekFrom::Start(0))?;
+        file.write_all(&header(0))?;
+        file.sync_all()?;
+        let (stop, receiver) = std::sync::mpsc::channel();
+        let worker = std::thread::Builder::new()
+            .name("apparent-narration".into())
+            .spawn(move || {
+                let result =
+                    write_stream_aligned(&mut file, &samples, receiver, initial_gap_samples);
+                if let Err(ref failure) = result {
+                    if let Ok(mut error) = error.lock() {
+                        *error = Some(format!("Narration save failed: {failure:#}"));
+                    }
+                }
+                result?;
+                Ok(file)
+            })?;
+        Ok(Self {
+            stop: Some(stop),
+            worker: Some(worker),
+        })
+    }
+
+    /// Input must be stopped/drained before this call. No whole-WAV allocation
+    /// or path reopening occurs; return the original descriptor for sealing.
+    pub fn finish(mut self) -> Result<File> {
+        self.stop.take();
+        self.worker
+            .take()
+            .context("Narration writer already finished")?
+            .join()
+            .map_err(|_| anyhow!("Narration writer panicked"))?
+    }
+}
+impl Drop for DescriptorWriter {
+    fn drop(&mut self) {
+        self.stop.take();
+        if let Some(worker) = self.worker.take() {
+            let _ = worker.join();
+        }
+    }
+}
+
 fn write_stream(
     file: &mut File,
     samples: &Mutex<Samples>,
     receiver: std::sync::mpsc::Receiver<()>,
 ) -> Result<()> {
+    write_stream_aligned(file, samples, receiver, 0)
+}
+
+fn write_stream_aligned(
+    file: &mut File,
+    samples: &Mutex<Samples>,
+    receiver: std::sync::mpsc::Receiver<()>,
+    initial_gap_samples: usize,
+) -> Result<()> {
+    let prefix_bytes = initial_gap_samples
+        .checked_mul(2)
+        .context("Narration prefix overflow")?;
+    ensure!(
+        prefix_bytes <= u32::MAX as usize - 36,
+        "Narration exceeds WAV size limit"
+    );
+    // This runs on the disk worker, never the input callback. Do not put a long
+    // admission gap into the bounded live history or count it as captured PCM.
+    let zeroes = [0u8; 8192];
+    let mut remaining = prefix_bytes;
+    while remaining != 0 {
+        let count = remaining.min(zeroes.len());
+        file.write_all(&zeroes[..count])?;
+        remaining -= count;
+    }
     let mut written = 0;
     let mut synced = Instant::now();
     loop {
@@ -284,7 +389,9 @@ fn write_stream(
                 .flat_map(|&s| super::pcm16(s).to_le_bytes())
                 .collect()
         };
-        let data_len = written
+        let data_len = initial_gap_samples
+            .checked_add(written)
+            .context("Narration length overflow")?
             .checked_mul(2)
             .and_then(|n| n.checked_add(bytes.len()))
             .context("Narration length overflow")?;
@@ -296,7 +403,7 @@ fn write_stream(
         written += bytes.len() / 2;
         // File is unbuffered: every batch reaches the kernel, independent of header updates.
         if stopping || synced.elapsed() >= SYNC {
-            checkpoint(file, (written * 2) as u32)?;
+            checkpoint(file, data_len as u32)?;
             synced = Instant::now();
         }
         if stopping {
@@ -351,6 +458,38 @@ pub fn repair(dir: &Path, _lease: &Lease) -> Result<usize> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn descriptor_writer_keeps_inode_and_prefix_outside_live_history() {
+        use std::os::unix::fs::{MetadataExt, PermissionsExt};
+        let path = std::env::temp_dir().join(format!(
+            "apparent-pinned-audio-{}",
+            crate::new_id().unwrap()
+        ));
+        std::fs::create_dir(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let store = crate::SecureStore::open(&path).unwrap();
+        let file = store.file("audio.wav", true).unwrap();
+        let before = file.metadata().unwrap();
+        let samples = Arc::new(Mutex::new(Samples::from(vec![0.5, -0.5, 1.0])));
+        let error = Arc::new(Mutex::new(None));
+        // More than the live history/backlog: prefix must be streamed to disk.
+        let writer = DescriptorWriter::start(file, samples.clone(), error.clone(), 61_000).unwrap();
+        let mut file = writer.finish().unwrap();
+        assert_eq!(file.metadata().unwrap().ino(), before.ino());
+        assert_eq!(samples.lock().unwrap().len(), 3);
+        assert!(error.lock().unwrap().is_none());
+        file.seek(SeekFrom::Start(0)).unwrap();
+        let mut bytes = Vec::new();
+        file.read_to_end(&mut bytes).unwrap();
+        let decoded = super::super::decode_wav_pcm16(&bytes).unwrap();
+        assert_eq!(decoded.len(), 61_000 * 16 + 3);
+        assert!(decoded[..61_000 * 16].iter().all(|v| *v == 0));
+        assert_eq!(&decoded[61_000 * 16..], &[16384, -16384, 32767]);
+        drop(file);
+        drop(store);
+        std::fs::remove_dir_all(path).unwrap();
+    }
     struct Scratch(PathBuf);
     impl Scratch {
         fn new(name: &str) -> Self {

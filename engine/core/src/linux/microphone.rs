@@ -59,6 +59,15 @@ impl Stream {
             .map(|_| "microphone_input_stopped")
     }
 
+    /// Stop native input before draining the file writer. A failed transition
+    /// is not permission to seal a successful microphone recording.
+    pub fn stop(&self) -> Result<()> {
+        self.0
+            .set_state(gst::State::Null)
+            .context("Microphone input did not stop")?;
+        Ok(())
+    }
+
     fn start_inner(
         name: &str,
         admission: Option<std::time::Instant>,
@@ -82,6 +91,7 @@ impl Stream {
         let on_samples = Arc::new(on_samples);
         let (ready, first_sample) = std::sync::mpsc::sync_channel(1);
         let weak_pipeline = pipeline.downgrade();
+        let timing_anchor = std::sync::Mutex::new(None::<(gst::Clock, gst::ClockTime)>);
         sink.set_callbacks(
             gst_app::AppSinkCallbacks::builder()
                 .new_sample(move |sink| {
@@ -100,6 +110,14 @@ impl Stream {
                         let pipeline = weak_pipeline.upgrade().ok_or(gst::FlowError::Error)?;
                         let clock = pipeline.clock().ok_or(gst::FlowError::Error)?;
                         let base = pipeline.base_time().ok_or(gst::FlowError::Error)?;
+                        let mut anchor = timing_anchor.lock().map_err(|_| gst::FlowError::Error)?;
+                        if let Some((initial_clock, initial_base)) = anchor.as_ref() {
+                            if initial_clock != &clock || *initial_base != base {
+                                return Err(gst::FlowError::Error);
+                            }
+                        } else {
+                            *anchor = Some((clock.clone(), base));
+                        }
                         let pts = buffer.pts().ok_or(gst::FlowError::Error)?;
                         let segment = sample
                             .segment()
