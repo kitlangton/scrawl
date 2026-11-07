@@ -205,6 +205,8 @@ final class SegmentedVideoWriter {
       throw SegmentedVideoWriterError.invalidConfiguration
     }
     let writer = AVAssetWriter(contentType: contentType)
+    // The URL-free segmented route needs an explicit fragmented-MP4 file profile.
+    writer.outputFileTypeProfile = .mpeg4AppleHLS
     let (input, adaptor) = configuration.makeInput()
     guard writer.canAdd(input) else {
       throw SegmentedVideoWriterError.writerFailed("AVAssetWriter refused video input")
