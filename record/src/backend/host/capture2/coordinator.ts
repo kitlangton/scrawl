@@ -372,7 +372,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
           materialsLimits: { maxFileBytes: 8 * 1024 * 1024, maxAggregateBytes: 20 * 1024 * 1024 },
           artifactLimits: { maxFileBytes: 64 * 1024 * 1024, maxAggregateBytes: 128 * 1024 * 1024 }, contactSheetPath: "contact-sheet.png", admission,
           marks: [], requestVideoProof: selection.requestVideoProof, publicationId: id(), stagingRoot: join(options.privateControlRoot, "publication-staging") };
-        const standard = planStandardVisual(materialsRead.materials, base, options.privateControlRoot);
+        const standard = planStandardVisual(materialsRead.materials, base, options.privateControlRoot, materialsRead.assemblyFacts.transcript);
         for (const request of standard.samples) preflightMedia2Dispatch({ ownerToken: mapping.ownerToken, request, materials: materialsRead.materials }, operationTimeoutMs);
         planRecord = await store.reserveProcessing({ schema: 1, captureId: mapping.captureId, requestId, materials: structuredClone(currentManifest.key),
           leaseId: currentManifest.leaseId, bundleId: mapping.bundleId, bundlePath: mapping.bundlePath, plan: standard });
@@ -422,7 +422,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
             height: observation.pixels.height, thumbnail: [...observation.thumbnail.cells] });
         }
       }
-      const selected = finishStandardVisual(stored, materialsRead.materials, samples);
+      const selected = finishStandardVisual(stored, materialsRead.materials, samples, materialsRead.assemblyFacts.transcript);
       validateSelection(selected, selected.request);
       preflightMedia2Dispatch({ ownerToken: mapping.ownerToken, request: selected.request, materials: materialsRead.materials }, operationTimeoutMs);
       if (admissionClosed) { pending.add(requestId); return; }

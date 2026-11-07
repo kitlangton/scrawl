@@ -1,5 +1,8 @@
 import { randomUUID } from "node:crypto";
-import { join } from "node:path";
+import { join, resolve } from "node:path";
+import { validateFactFile, type TranscriptFacts } from "@apparent/engine-sdk/capture";
+import type { CaptureFactInput } from "../materials.js";
+import { associateTranscriptWithSelectedFrames } from "../../selection/transcript-association.js";
 import type { MaterialsDocument } from "@apparent/engine-sdk/capture";
 import type { Media2JobRequest } from "@apparent/engine-sdk/media2";
 import type { VisualSelectionSample } from "../../selection/visual-keyframes.js";
@@ -24,9 +27,10 @@ export interface StandardVisualPlan {
 const id = () => randomUUID().replaceAll("-", "");
 
 /** Pure Record planning: all job identities and sampling times are stored before dispatch. */
-export function planStandardVisual(materials: MaterialsDocument, base: StandardVisualPlan["base"], privateRoot: string): StandardVisualPlan {
-  if (["interactions", "transcript", "acceptedStrokes"].some(key => materials.payload.collection[key as "interactions"] !== "unavailable"))
-    throw new Error("Standard visual processing requires unavailable interaction, transcript and stroke collections; use explicit richer policy for collected facts");
+export function planStandardVisual(materials: MaterialsDocument, base: StandardVisualPlan["base"], privateRoot: string, transcriptFact?: CaptureFactInput): StandardVisualPlan {
+  if (["interactions", "acceptedStrokes"].some(key => materials.payload.collection[key as "interactions"] !== "unavailable"))
+    throw new Error("Standard visual processing requires unavailable interaction and stroke collections; use explicit richer policy for collected facts");
+  const transcript = sealedTranscript(materials, transcriptFact);
   const { clock, video } = materials.payload;
   const span = Math.min(video.durationMs, clock.durationMs - clock.videoOffsetMs);
   if (!Number.isSafeInteger(span) || span < 0) throw new Error("Standard visual processing requires a valid retained video clock");
@@ -41,12 +45,13 @@ export function planStandardVisual(materials: MaterialsDocument, base: StandardV
       limits: { maxFrames: 48, maxEdge: 640, maxTotalPixels: 48 * 640 * 640, deadlineMs: 60_000 }, contactSheet: null });
   }
   const jobId = id();
-  return { schema: 2, kind: "standard-visual", policy: "record-visual/1", base: structuredClone(base), samples,
+  return { schema: 2, kind: "standard-visual", policy: "record-visual/1", base: { ...structuredClone(base), ...(transcript?.segments.some(segment => segment.endMs === undefined) ? { transcriptBounds: { policy: "estimated" as const, basis: "record-transcript-bounds/1: next segment start or original capture end" } } : {}) }, samples,
     finalJob: { jobId, outputDirectory: join(privateRoot, `visual-frames-${jobId}`) } };
 }
 
 /** Final pixels retain whole-frame aspect; semantic captions stay outside the sheet. */
-export function finishStandardVisual(plan: StandardVisualPlan, materials: MaterialsDocument, samples: readonly VisualSelectionSample[]): StoredPlan {
+export function finishStandardVisual(plan: StandardVisualPlan, materials: MaterialsDocument, samples: readonly VisualSelectionSample[], transcriptFact?: CaptureFactInput): StoredPlan {
+  const transcript = sealedTranscript(materials, transcriptFact);
   const expected = plan.samples.flatMap(request => request.requestedBundleMs.map((timeMs, index) => ({ id: `${request.jobId}:${index + 1}`, timeMs })));
   if (samples.length !== expected.length || samples.some((sample, index) => sample.id !== expected[index]?.id || sample.timeMs !== expected[index]?.timeMs))
     throw new Error("Measured samples differ from the original standard sampling plan");
@@ -70,8 +75,24 @@ export function finishStandardVisual(plan: StandardVisualPlan, materials: Materi
   if (plan.samples.flatMap(sample => sample.requestedBundleMs).some((time, index, times) => index > 0 && time - times[index - 1]! > 220))
     warnings.push({ kind: "imageQuality", message: "Visual sampling was coarsened to the 480-frame processing bound." });
   if (scale < 1) warnings.push({ kind: "imageQuality", message: "Selected whole frames were downscaled to the bounded image budget; the original video is retained." });
+  const frames = selected.map((frame, index) => ({ requestIndex: index + 1, index: index + 1, timeMs: frame.timeMs,
+    bundlePath: `frames/frame-${String(index + 1).padStart(2, "0")}.png`, canonicalReason: frame.reason, event: frame.event }));
+  const speech = transcript && associateTranscriptWithSelectedFrames(frames.map(frame => ({ id: String(frame.index), timeMs: frame.timeMs, absolutePath: resolve(plan.base.admission.bundlePath, frame.bundlePath) })), {
+    text: transcript.text, segments: transcript.segments.map((segment, index) => ({ startMs: segment.startMs,
+      endMs: segment.endMs ?? transcript.segments[index + 1]?.startMs ?? materials.payload.clock.durationMs, text: segment.text })) });
   return { ...structuredClone(plan.base), schema: 1, request,
-    frames: selected.map((frame, index) => ({ requestIndex: index + 1, index: index + 1, timeMs: frame.timeMs,
-      bundlePath: `frames/frame-${String(index + 1).padStart(2, "0")}.png`, canonicalReason: frame.reason, event: frame.event })),
+    frames: frames.map((frame, index) => ({ ...frame, ...(speech?.[index]?.said ? { text: speech[index]!.said } : {}) })),
     ...(warnings.length ? { processingWarnings: warnings } : {}) };
+}
+
+/** Only original SDK-sealed material facts; detached inference is not an ingress. */
+function sealedTranscript(materials: MaterialsDocument, fact?: CaptureFactInput): TranscriptFacts | undefined {
+  if (materials.payload.audio && materials.payload.clock.audioOffsetMs !== 0)
+    throw new Error("Standard canonical v1 requires original audio aligned to the bundle clock; nonzero audio offset is unsupported");
+  if (materials.payload.collection.transcript === "unavailable") {
+    if (fact) throw new Error("Unavailable transcript cannot accept supplied facts");
+    return undefined;
+  }
+  if (!fact) throw new Error("Collected transcript requires its original sealed material fact");
+  return validateFactFile(fact.file, fact.bytes, materials, "transcript") as TranscriptFacts;
 }
