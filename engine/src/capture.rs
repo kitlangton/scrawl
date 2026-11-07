@@ -19,6 +19,8 @@ use std::time::{Duration, Instant};
 
 #[path = "capture/audio.rs"]
 mod audio;
+#[path = "capture/ink.rs"]
+mod ink;
 #[path = "capture/linux.rs"]
 mod linux;
 #[path = "materials_media/mod.rs"]
