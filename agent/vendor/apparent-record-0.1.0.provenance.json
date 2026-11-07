@@ -1,14 +1,14 @@
 {
-  "sourceSha": "35b9c76287b2a775c8c0ea114f9c36f0853b2d8e",
-  "runId": 42272226233,
-  "artifactId": 13529856801,
-  "componentSha256": "dcae1e2d7d2d394f67e248477a854fec926769be8fad76cb35cd93d7d7dbbe90",
-  "recordTarSha256": "01a19ce301a8327b429bdf8fbf99f1761acf65b2a0548da50d6640463fefa5ed",
+  "sourceSha": "830e5c1a25050ae2465ec88278dcb4e51e48b6c3",
+  "runId": 42293597462,
+  "artifactId": 13540074333,
+  "componentSha256": "6cb63d2330c829a789534f6b090752fc8f0cae7e82adadfd5710ce31fdd28fe6",
+  "recordTarSha256": "ef594f7f4dbb2f2a8094ced7be9467e4fb0a84afed8f57533a2e06691b9082c5",
   "attestationVerified": true,
   "sourceWorkflowSubjectChecked": true,
   "limits": [
     "No native effects",
-    "Automatic coordinator not included",
-    "No installed/rendered route"
+    "Recovery uses existing persisted decisions only",
+    "Unresolved shutdown retains SDK transport ownership"
   ]
 }
