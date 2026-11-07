@@ -1,3 +1,8 @@
+export { CAPTURE_INK_VERSION, CAPTURE_INK_LIMITS } from "./ink/contracts.ts";
+export type { InkMonotonicNs, InkId, InkRectangle, InkSurface, InkSourceObservation,
+  RegisterInkProducerInput, InkRegistrationReceipt, InkPoint, InkEvent,
+  SubmitInkEventsInput, InkBatchReceipt, FinishInkProducerInput, InkFinishReceipt,
+  CaptureInkPort } from "./ink/contracts.ts";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
