@@ -13,10 +13,12 @@ import sys
 ENTRY = 'engine/native/tests/live-transcribe.py'
 LIVE_FIXTURE = 'engine/native/tests/live-transcribe.swift'
 INK_FIXTURE = 'engine/native/tests/ink-rgb.swift'
+WRITER_FIXTURE = 'engine/native/tests/segmented-writer.swift'
 HELPER_SOURCES = (
     'engine/native/Export.swift',
     'engine/native/LiveTranscribe.swift',
     'engine/native/Media.swift',
+    'engine/native/Writer.swift',
     'capture/engine/native/Mirror.swift',
     'capture/desktop/native/Onboarding.swift',
     'capture/desktop/native/OnboardingDemo.swift',
@@ -28,7 +30,7 @@ HELPER_SOURCES = (
     'shared/native/main.swift',
 )
 PLIST = 'shared/native/Info.plist'
-INPUTS = (ENTRY, LIVE_FIXTURE, INK_FIXTURE, 'Cargo.toml', 'build.rs',
+INPUTS = (ENTRY, LIVE_FIXTURE, INK_FIXTURE, WRITER_FIXTURE, 'Cargo.toml', 'build.rs',
           *HELPER_SOURCES, PLIST)
 
 
@@ -66,7 +68,7 @@ def prepare(root, candidate):
             'tree': git(root, 'rev-parse', 'HEAD^{tree}').decode().strip(),
             'scenario': 'engine-native-swift-closure', 'inputs': inputs,
             'command': ['python3', ENTRY], 'working_directory': '.',
-            'fixture': 'sibling Swift test source; PCM generated in memory',
+            'fixture': 'sibling Swift tests; PCM and timestamped BGRA frames generated in memory',
             'request_ids': 'not applicable: no capture-control requests',
             'guest_requirements': ['Darwin', 'Python 3', 'xcrun with Swift 6.2+',
                                    'macOS SDK: Speech, AVFoundation, CoreGraphics',
