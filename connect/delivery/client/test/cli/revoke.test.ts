@@ -48,6 +48,8 @@ test("stored tuple and approved server are validated before one request", async 
     await assert.rejects(revokeDeviceGrant(credential(`${origin}/connect`), { approvedServer: origin }), failure("invalid_request"));
     await assert.rejects(revokeDeviceGrant(credential(origin, { scope: "admin" as never }), { approvedServer: origin }), failure("invalid_request"));
     await assert.rejects(revokeDeviceGrant(credential(origin), { approvedServer: `${origin}/other` }), failure("invalid_server"));
+    await assert.rejects(revokeDeviceGrant(credential(origin, { refreshToken: null }), { approvedServer: origin }), failure("invalid_request"));
+    await assert.rejects(revokeDeviceGrant(credential(origin, { token: "private invalid token" }), { approvedServer: origin }), failure("invalid_request"));
   });
   assert.equal(calls, 0);
 });

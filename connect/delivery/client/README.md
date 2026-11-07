@@ -659,3 +659,24 @@ of those facts. The transport creates no keys and writes no credential or config
 state. Its actual local Worker checks cover both scopes and API mounts, while
 installed Settings/CLI HTTP and durable mutation still belong to Rust. Adoption
 and the coordinated sole-writer transition remain separate acceptance gates.
+
+
+## Device grant revocation
+
+`./grant-revocation` exposes `revokeDeviceGrant` for one stored grant and its
+caller-approved server. It revalidates and snapshots the credential, then sends
+one bounded revoke POST. Renewable grants use only the refresh credential;
+legacy records use their bearer and omit the optional refresh field. Expired or
+`authRequired` local facts do not prevent this cleanup request. There is no
+refresh, sibling-credential fallback or retry, and errors contain fixed categories.
+Only the service's exact `{ok:true}` acknowledgement produces a frozen success.
+
+The shared internal POST code keeps device start/poll anonymous; only the fixed
+revocation route can send a bearer. Local Worker tests revoke a read device while
+checking its upload sibling remains usable, then revoke that upload device through
+the legacy bearer path on both API bases. These are synthetic service checks.
+The API does not settle logout, clear credentials or intents, or disable uploads.
+The existing writer must commit durable cancellation and local logout first,
+release its locks, and bound subsequent remote cleanup. A failed request may have
+revoked the remote grant; it authorizes neither blind repetition nor local
+settlement. Installed adoption and the coordinated writer cutover remain open.

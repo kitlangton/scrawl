@@ -13,12 +13,14 @@ export async function revokeDeviceGrant(credentialInput: StoredCredential, optio
   const signal = optionsInput?.signal;
   const active = optionsInput?.active;
   const normalized = normalizeRecipientServer(approvedServer);
-  if (credential.server !== approvedServer || credential.scope !== "read" && credential.scope !== "upload")
+  if (!credential || typeof credential !== "object" || credential.server !== approvedServer || credential.scope !== "read" && credential.scope !== "upload")
     throw new RecipientTransportError("invalid_request");
-  const bytes = new TextEncoder().encode(JSON.stringify(credential));
-  let validated: StoredCredential;
-  try { validated = decodeStoredCredential(bytes, credential.scope, approvedServer); }
-  finally { bytes.fill(0); }
+  let bytes: Uint8Array | undefined, validated: StoredCredential;
+  try {
+    bytes = new TextEncoder().encode(JSON.stringify(credential));
+    validated = decodeStoredCredential(bytes, credential.scope, approvedServer);
+  } catch { throw new RecipientTransportError("invalid_request"); }
+  finally { bytes?.fill(0); }
 
   // Renewable grants revoke by refresh credential without an access bearer. Legacy grants use
   // the current bearer and omit refreshToken entirely (the service rejects explicit null).

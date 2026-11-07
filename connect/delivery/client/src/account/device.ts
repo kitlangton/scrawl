@@ -24,8 +24,6 @@ const validDeviceCode = (value: unknown): value is string => typeof value === "s
  * cancellation, issue time, durable facts and commit. It must bind poll codes to
  * its started transaction and enforce consent before calling this transport.
  */
-
-/** One anonymous POST to the exact approved service base. */
 export function requestDeviceStart(options: DeviceStartOptions): Promise<unknown> {
   // Snapshot primitive values and validate/copy public key before asynchronous work.
   const approvedServer = options?.approvedServer;
