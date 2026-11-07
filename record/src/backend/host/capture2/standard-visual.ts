@@ -1,5 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { join, resolve } from "node:path";
+import { isDeepStrictEqual } from "node:util";
+import { projectOriginalAcceptedStrokes } from "../../processing/bundle/index.js";
 import { validateFactFile, type TranscriptFacts } from "@apparent/engine-sdk/capture";
 import type { CaptureFactInput } from "../materials.js";
 import { associateTranscriptWithSelectedFrames } from "../../selection/transcript-association.js";
@@ -27,9 +29,10 @@ export interface StandardVisualPlan {
 const id = () => randomUUID().replaceAll("-", "");
 
 /** Pure Record planning: all job identities and sampling times are stored before dispatch. */
-export function planStandardVisual(materials: MaterialsDocument, base: StandardVisualPlan["base"], privateRoot: string, transcriptFact?: CaptureFactInput): StandardVisualPlan {
-  if (["interactions", "acceptedStrokes"].some(key => materials.payload.collection[key as "interactions"] !== "unavailable"))
-    throw new Error("Standard visual processing requires unavailable interaction and stroke collections; use explicit richer policy for collected facts");
+export function planStandardVisual(materials: MaterialsDocument, base: StandardVisualPlan["base"], privateRoot: string, transcriptFact?: CaptureFactInput, strokeFact?: CaptureFactInput): StandardVisualPlan {
+  if (materials.payload.collection.interactions !== "unavailable")
+    throw new Error("Standard visual processing requires unavailable interaction collections; use explicit richer policy for collected facts");
+  const strokes = projectOriginalAcceptedStrokes(materials, strokeFact);
   const transcript = sealedTranscript(materials, transcriptFact);
   const { clock, video } = materials.payload;
   const span = Math.min(video.durationMs, clock.durationMs - clock.videoOffsetMs);
@@ -45,12 +48,15 @@ export function planStandardVisual(materials: MaterialsDocument, base: StandardV
       limits: { maxFrames: 48, maxEdge: 640, maxTotalPixels: 48 * 640 * 640, deadlineMs: 60_000 }, contactSheet: null });
   }
   const jobId = id();
-  return { schema: 2, kind: "standard-visual", policy: "record-visual/1", base: { ...structuredClone(base), ...(transcript?.segments.some(segment => segment.endMs === undefined) ? { transcriptBounds: { policy: "estimated" as const, basis: "record-transcript-bounds/1: next segment start or original capture end" } } : {}) }, samples,
+  return { schema: 2, kind: "standard-visual", policy: "record-visual/1", base: { ...structuredClone(base), ...(strokes ? { additionalCanonicalFacts: { strokes } } : {}), ...(transcript?.segments.some(segment => segment.endMs === undefined) ? { transcriptBounds: { policy: "estimated" as const, basis: "record-transcript-bounds/1: next segment start or original capture end" } } : {}) }, samples,
     finalJob: { jobId, outputDirectory: join(privateRoot, `visual-frames-${jobId}`) } };
 }
 
 /** Final pixels retain whole-frame aspect; semantic captions stay outside the sheet. */
-export function finishStandardVisual(plan: StandardVisualPlan, materials: MaterialsDocument, samples: readonly VisualSelectionSample[], transcriptFact?: CaptureFactInput): StoredPlan {
+export function finishStandardVisual(plan: StandardVisualPlan, materials: MaterialsDocument, samples: readonly VisualSelectionSample[], transcriptFact?: CaptureFactInput, strokeFact?: CaptureFactInput): StoredPlan {
+  const strokes = projectOriginalAcceptedStrokes(materials, strokeFact);
+  if (strokes !== undefined && !isDeepStrictEqual(strokes, plan.base.additionalCanonicalFacts?.strokes))
+    throw new Error("Original accepted strokes differ from the persisted standard projection");
   const transcript = sealedTranscript(materials, transcriptFact);
   const expected = plan.samples.flatMap(request => request.requestedBundleMs.map((timeMs, index) => ({ id: `${request.jobId}:${index + 1}`, timeMs })));
   if (samples.length !== expected.length || samples.some((sample, index) => sample.id !== expected[index]?.id || sample.timeMs !== expected[index]?.timeMs))

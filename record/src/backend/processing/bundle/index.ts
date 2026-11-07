@@ -15,6 +15,21 @@ export interface FactBytes { file: SealedFile; bytes: Uint8Array }
 /** Images remain caller-attested; matching metadata is not native provenance. */
 export interface SealedArtifact { materials: MaterialsDocument["manifest"]["key"]; relativePath: string; bytes: Uint8Array; sha256: string; byteLength: number; identity:{device:string;inode:string;size:number;modifiedNs:string}; role: "frame" | "contact-sheet" | "video" | "audio" }
 export interface CanonicalStroke { id:string;t0:number;t1:number;fw:number;fh:number;on?:string;pin?:number;laser?:boolean;rgb?:[number,number,number];pts:number[] }
+/** Project only original sealed accepted strokes; no shape or history inference. */
+export function projectOriginalAcceptedStrokes(materials: MaterialsDocument, fact?: FactBytes): CanonicalStroke[] | undefined {
+  if (materials.payload.collection.acceptedStrokes === "unavailable") {
+    if (fact) fail("unavailable accepted strokes cannot accept supplied facts");
+    return undefined;
+  }
+  if (!fact) fail("collected accepted strokes require their original sealed fact");
+  const document = validateFactFile(fact.file, fact.bytes, materials, "acceptedStrokes") as StrokeFacts;
+  return document.strokes.map(stroke => {
+    const surface = document.surfaces.find(surface => surface.surfaceId === stroke.surfaceId && surface.transformId === stroke.transformId);
+    if (!surface) fail("accepted stroke surface/transform is unavailable");
+    return { id: stroke.id, t0: stroke.startMs, t1: stroke.endMs, fw: surface.width, fh: surface.height,
+      pts: stroke.points.flatMap(point => [point.x, point.y, point.timeMs - stroke.startMs]) };
+  });
+}
 export interface CanonicalMark { id:string;strokes:number[];t0:number;t1:number;boxNorm:[number,number,number,number];shape:"circle"|"underline"|"line"|"arrow"|"tap"|"pin"|"mark"|"flag";from?:[number,number];to?:[number,number];pin?:number;on?:string;description:string;frame?:string }
 export type CanonicalKeyframeReason="mark"|"click"|"laser"|"scene_change"|"speech"|"initial"|"whiteboard";
 export interface RecordAdmission {
@@ -173,9 +188,17 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
     fail("initial audio gap requires aligned original audio and an explicit first sample time within capture duration");
   const processingWarnings: ProcessingWarning[] = [...(input.processingWarnings ?? []), ...(gap ? [{ kind: "audioInitialGap" as const, atMs: gap.atMs! }] : [])];
   const processing: ProcessingInput={durationMs:m.payload.clock.durationMs,bundlePath:input.admission.bundlePath,target:{app:target.app,windowTitle:target.windowTitle},transcript:{text:transcript.text,segments:transcript.segments.map(s=>({startMs:s.t0,text:s.text}))},frames:frameFacts.map(f=>({...f,absolutePath:resolve(input.admission.bundlePath,f.file)})),marks:input.marks as ProcessingInput["marks"],context:context?.values,contextChanges:context?.changes.map(c=>({timeMs:c.timeMs,key:c.key,value:c.value??undefined})),contactSheetPath:resolve(input.admission.bundlePath,sheet.relativePath),videoPath:resolve(input.admission.bundlePath,m.payload.video.file),destination:input.admission.destination,events:events.map(e=>({kind:e.kind,timeMs:e.t,...(e.kind==="note"?{pin:e.pin,text:e.text}:e.kind==="app_event"?{label:e.label}:{})} as never)),warnings:processingWarnings.length ? processingWarnings : input.processingWarnings};
+  const strokeFact = strokesDoc ? input.facts.acceptedStrokes! : undefined;
+  if (strokeFact) processing.acceptedStrokeDocument = { path: resolve(input.admission.bundlePath, artifactPath(strokeFact.file.relativePath)), strokeCount: strokesDoc!.strokes.length };
   const summary=utf8(assembleProcessingOutput(processing).summaryMarkdown), apparentJson=utf8(`${JSON.stringify(document,null,2)}\n`);
   const entries=[{path:"apparent.json",role:"manifest",bytes:apparentJson,provenance:"record-generated" as const},{path:"summary.md",role:"summary",bytes:summary,provenance:"record-generated" as const},...input.artifacts.map(a=>({path:artifactPath(a.relativePath),role:a.role,bytes:a.bytes,identity:a.identity,provenance:(a.role==="video"||a.role==="audio"?"material-reference":"caller-attested") as "material-reference"|"caller-attested"}))].map(e=>({path:e.path,role:e.role,sha256:hash(e.bytes),byteLength:e.bytes.byteLength,provenance:e.provenance,...("identity" in e?{identity:e.identity}:{})}));
   for (const [path, reference] of materialReferences) entries.push({path,role:reference.role,sha256:reference.file.sha256,byteLength:reference.file.identity.size,provenance:"material-reference",identity:reference.file.identity});
+  if (strokeFact) {
+    const path = artifactPath(strokeFact.file.relativePath);
+    if (entries.some(entry => entry.path === path)) fail("original stroke document collides with bundle output");
+    entries.push({ path, role: "companion", sha256: strokeFact.file.sha256, byteLength: strokeFact.bytes.byteLength,
+      provenance: "material-reference", identity: strokeFact.file.identity });
+  }
   entries.sort((a,b)=>a.path<b.path?-1:a.path>b.path?1:0);
   const inventory:PublicationInventory={schema:"apparent.record-bundle-inventory/1",materials:{...m.manifest.key},retainedFacts:{confirmedSource:structuredClone(m.payload.confirmedSource),invocation:structuredClone(m.payload.invocation),references:structuredClone(m.payload.facts)},collection:{...m.payload.collection},observations:{context:contextDoc?.context.state??"unavailable",session:contextDoc?.session.state??"unavailable",windows:contextDoc?.windows.state??"unavailable",cursor:contextDoc?.cursor.state??"unavailable",interactions:m.payload.collection.interactions,transcript:m.payload.collection.transcript,acceptedStrokes:m.payload.collection.acceptedStrokes},warnings:m.payload.warnings.map(w=>({...w})),entries};
   return {bundlePath:input.admission.bundlePath,apparentJson,summaryMd:summary,processing:structuredClone(processing),inventory,materials:m,validatedFacts:{...(contextDoc?{context:contextDoc}:{}),...(interactionDoc?{interactions:interactionDoc}:{}),...(transcriptDoc?{transcript:transcriptDoc}:{}),...(strokesDoc?{acceptedStrokes:strokesDoc}:{})}};

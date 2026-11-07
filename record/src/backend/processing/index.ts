@@ -95,6 +95,8 @@ export interface ProcessingInput {
   autocrop?: { label: string; fullFramesDirectory: string };
   contactSheetPath?: string;
   videoPath?: string;
+  /** Original sealed accepted-stroke document; canonical v1 arrays omit source IDs. */
+  acceptedStrokeDocument?: { path: string; strokeCount: number };
 }
 
 export interface ProcessingOutput {
@@ -396,6 +398,13 @@ export function assembleProcessingOutput(
     if (!isAbsolute(input.videoPath) || resolve(input.videoPath) !== input.videoPath)
       throw new TypeError("videoPath must be absolute and normalized");
     if (!clipboard) lines.push(`Video: ${input.videoPath}`);
+  }
+  if (input.acceptedStrokeDocument) {
+    const annotation = input.acceptedStrokeDocument;
+    if (!Number.isSafeInteger(annotation.strokeCount) || annotation.strokeCount < 0 || !isAbsolute(annotation.path)
+      || relative(input.bundlePath, annotation.path).split(sep).includes("..") || /[\r\n\0]/u.test(annotation.path))
+      throw new TypeError("Invalid original accepted-stroke document reference");
+    lines.push(`Accepted strokes: ${annotation.strokeCount}. Original annotation data: ${annotation.path}`);
   }
   if (!clipboard && input.contactSheetPath) lines.push(`Contact sheet: ${input.contactSheetPath}`);
   if (!clipboard) lines.push(`Bundle: ${input.bundlePath}`);
