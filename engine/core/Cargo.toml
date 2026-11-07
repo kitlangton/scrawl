@@ -9,6 +9,7 @@ description = "Shared capture admission, bundle leases, and optional Linux recor
 [features]
 default = []
 audio-codec = ["dep:anyhow", "dep:hound"]
+local-speech = ["audio-codec", "dep:transcribe-cpp"]
 linux-media = ["dep:flume", "dep:anyhow", "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
 linux-portal = ["linux-media", "dep:ashpd", "dep:futures-lite", "dep:zbus"]
 publication = ["dep:anyhow", "dep:sha2", "dep:png"]
@@ -17,6 +18,7 @@ recording-notes = ["dep:anyhow"]
 macos-capture = ["dep:screencapturekit"]
 
 [dependencies]
+transcribe-cpp = { version = "=0.2.4", default-features = false, features = ["dynamic-backends"], optional = true }
 hound = { version = "=3.5.1", optional = true }
 libc = "=0.2.189"
 anyhow = { version = "=1.0.104", optional = true }
