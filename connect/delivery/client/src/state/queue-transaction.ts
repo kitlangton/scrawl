@@ -76,8 +76,13 @@ export function withStateQueue<T>(directoryPath: string, context: StateContext, 
 export function withRenewalScope<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: StateBody<T>): Promise<T> {
   return withStateLock(directoryPath, context, resources, options, body, "renewal");
 }
+/** Holds the internal upload worker lease across one complete runner callback. */
+export function withStateWorker<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: StateBody<T>): Promise<T> {
+  if (context?.scope !== "upload") fail("invalid_credential");
+  return withStateLock(directoryPath, context, resources, { ...options, lockTimeoutMs: options.lockTimeoutMs ?? 0 }, body, "worker");
+}
 async function withStateLock<T>(directoryPath: string, context: StateContext, resources: NamespaceResources,
-  options: StateOptions, body: StateBody<T>, kind: "queue" | "renewal"): Promise<T> {
+  options: StateOptions, body: StateBody<T>, kind: "queue" | "renewal" | "worker"): Promise<T> {
   const signal = options.signal, lockTimeoutMs = options.lockTimeoutMs, scope = context?.scope, approvedServer = context?.approvedServer;
   if ((scope !== "read" && scope !== "upload") || typeof approvedServer !== "string") fail("invalid_credential");
   checkSignal(signal);
@@ -85,7 +90,8 @@ async function withStateLock<T>(directoryPath: string, context: StateContext, re
   try { directory = await admitTrustedDirectory(directoryPath, resources, "private-state", signal); }
   catch (e) { if (e instanceof DirectoryAdmissionFailure) return fail(e.category); return fail("unsafe_directory"); }
   try {
-    const lock = await lockFile(directory!, resources, lockTimeoutMs ?? 1000, signal, kind === "queue" ? "queue.lock" : `${scope}.renewal.lock`);
+    const lockName = kind === "queue" ? "queue.lock" : kind === "worker" ? "worker.lock" : `${scope}.renewal.lock`;
+    const lock = await lockFile(directory!, resources, lockTimeoutMs ?? 1000, signal, lockName);
     try {
       const lease = lock.lease;
       checkSignal(signal, lease.signal);
