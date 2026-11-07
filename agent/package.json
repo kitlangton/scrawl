@@ -19,7 +19,7 @@
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "dependencies": {
-    "@apparent/engine-sdk": "file:vendor/apparent-engine-sdk-0.4.3.tgz",
+    "@apparent/engine-sdk": "file:vendor/apparent-engine-sdk-0.4.5.tgz",
     "@apparent/record": "file:vendor/apparent-record-0.1.0.tgz",
     "@types/node": "22.19.0",
     "pngjs": "^7.0.0",

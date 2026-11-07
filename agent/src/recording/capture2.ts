@@ -4,7 +4,7 @@ import { lstat, mkdir, open, realpath } from 'node:fs/promises';
 import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
-import { CaptureClient, launchCaptureEngine, preflightCapturePublication, type CaptureTransport } from '@apparent/engine-sdk/capture';
+import { CaptureClient, capture2MaterialsRoot, launchCaptureEngine, preflightCapturePublication, type CaptureTransport } from '@apparent/engine-sdk/capture';
 import { Media2Client } from '@apparent/engine-sdk/media2';
 import { launchCaptureRecoveryPeer, launchMedia2RecoveryPeer, type RecoveryPeerRelease } from '@apparent/engine-sdk/recovery';
 import { DEFAULT_RECORD_DURATION_SECONDS } from '../recording.js';
@@ -20,12 +20,55 @@ export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot
   allocateDestination(requestId: string, exactPath?: string): Promise<string>;
   close(): Promise<string>;
   publicationOutput?: Capture2PublicOutput;
+  mappingForRequest?(requestId: string): Promise<{ requestId: string; captureId: string; bundleId: string; bundlePath: string } | undefined>;
 }>;
 
 export type RecoveryCoordinatorFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; captureExecutable: string; mediaExecutable: string }) => Promise<{
   coordinator: RecordCaptureCoordinator;
   release(): Promise<[RecoveryPeerRelease, RecoveryPeerRelease]>;
 }>;
+
+export type StandardCoordinatorFactory = (paths: { createdAtMs: number; controlRoot: string; destinationRoot: string; runtime: string; captureExecutable: string; mediaExecutable: string }) => Promise<{
+  coordinator: RecordCaptureCoordinator;
+  mappingForRequest(requestId: string): Promise<{ requestId: string; captureId: string; bundleId: string; bundlePath: string } | undefined>;
+  release(): Promise<[RecoveryPeerRelease, RecoveryPeerRelease]>;
+}>;
+
+async function defaultStandardCoordinatorFactory(paths: Parameters<StandardCoordinatorFactory>[0]) {
+  const storeRoot = await ensurePrivateStoreRoot(paths.controlRoot);
+  await verifyCaptureRuntime(paths.runtime);
+  await verifyCaptureExecutable(paths.captureExecutable);
+  await verifyCaptureExecutable(paths.mediaExecutable);
+  const requestVideoProof = await import('../bundle.js').then(({ configuredExperiment }) => configuredExperiment('agentDemoVideo'));
+  const [{ createStandardRecordCaptureCoordinator }, { SqliteCaptureMappingStore, AbsentDestinationAllocator }] = await Promise.all([
+    import('@apparent/record/host/capture2-coordinator'), import('@apparent/record/host'),
+  ]);
+  const capturePeer = await launchCaptureRecoveryPeer(paths.captureExecutable, paths.runtime);
+  let mediaPeer: Awaited<ReturnType<typeof launchMedia2RecoveryPeer>> | undefined;
+  let injected = false;
+  try {
+    mediaPeer = await launchMedia2RecoveryPeer(paths.mediaExecutable, paths.runtime);
+    await capturePeer.client.handshake();
+    await mediaPeer.client.handshake();
+    const mappings = new SqliteCaptureMappingStore(storeRoot);
+    injected = true;
+    const coordinator = await createStandardRecordCaptureCoordinator({
+      captureClient: capturePeer.client, mediaClient: mediaPeer.client, privateControlRoot: storeRoot,
+      mappings, destinations: new AbsentDestinationAllocator(storeRoot, paths.destinationRoot),
+      createStartIntent() { throw new Error('Standard processing cannot start a fresh capture'); },
+      trustedMaterialsRoot(mapping) { return capture2MaterialsRoot(paths.runtime, mapping.captureId); },
+      standardProcessing: { requestVideoProof, createdAtMs: paths.createdAtMs }, preflight: preflightCapturePublication,
+    });
+    return { coordinator, mappingForRequest: (requestId: string) => mappings.getByRequestId(requestId), async release() {
+      const settled = await Promise.allSettled([capturePeer.release(), mediaPeer!.release()]);
+      if (settled.some(result => result.status === 'rejected')) throw new AggregateError(settled.filter(result => result.status === 'rejected').map(result => result.reason), 'Standard processing peer release failed');
+      return settled.map(result => (result as PromiseFulfilledResult<RecoveryPeerRelease>).value) as [RecoveryPeerRelease, RecoveryPeerRelease];
+    } };
+  } catch (error) {
+    if (!injected) await Promise.allSettled([capturePeer.release(), ...(mediaPeer ? [mediaPeer.release()] : [])]);
+    throw error;
+  }
+}
 
 async function defaultRecoveryCoordinatorFactory(paths: Parameters<RecoveryCoordinatorFactory>[0]) {
   const storeRoot = await ensurePrivateStoreRoot(paths.controlRoot);
@@ -218,15 +261,20 @@ async function defaultHostFactory(paths: Parameters<Capture2HostFactory>[0]) {
   const client = new CaptureClient(launchCaptureEngine(paths.executable, paths.runtime, 40_000));
   try {
     const destinations = new AbsentDestinationAllocator(storeRoot, paths.destinationRoot);
-    const host = createCapture2Host({ client, mappings: new SqliteCaptureMappingStore(storeRoot), destinations });
+    const mappings = new SqliteCaptureMappingStore(storeRoot);
+    const host = createCapture2Host({ client, mappings, destinations });
     const publicationOutput = createRecordPublicationOutput(client, storeRoot, preflightCapturePublication);
     return { host, publicationOutput, allocateDestination: async (requestId: string, exactPath?: string) => exactPath
       ? (await destinations.reserveExact(requestId, exactPath)).bundlePath
-      : (await destinations.allocate(requestId)).bundlePath, close: () => client.close() };
+      : (await destinations.allocate(requestId)).bundlePath, mappingForRequest: (requestId: string) => mappings.getByRequestId(requestId), close: () => client.close() };
   } catch (error) { await client.close(); throw error; }
 }
 
 async function loadPublicIdentity(controlRoot: string, requestId: string): Promise<string> {
+  return (await loadPublicRequest(controlRoot, requestId)).destinationPath;
+}
+
+async function loadPublicRequest(controlRoot: string, requestId: string): Promise<{ destinationPath: string; createdAtMs: number }> {
   if (!/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(requestId)) throw new Error('Expected an Agent capture/2 request ID');
   if (await realpath(controlRoot).catch(() => '') !== controlRoot) throw new Error('Agent capture/2 control directory is unavailable');
   const directory = resolve(controlRoot, 'capture2-requests-v1');
@@ -256,7 +304,7 @@ async function loadPublicIdentity(controlRoot: string, requestId: string): Promi
       throw new Error('Agent capture/2 identity metadata changed while reading');
     const entry = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(buffer.subarray(0, bytesRead)));
     if (Object.keys(entry).some(key => !['schema', 'requestId', 'destinationPath', 'createdAtMs'].includes(key)) || entry.schema !== 'apparent.agent-capture2-request/1' || entry.requestId !== requestId || !Number.isSafeInteger(entry.createdAtMs) || typeof entry.destinationPath !== 'string' || !isAbsolute(entry.destinationPath) || resolve(entry.destinationPath) !== entry.destinationPath || !entry.destinationPath.endsWith('.apparent')) throw new Error('Invalid Agent capture/2 identity metadata');
-    return entry.destinationPath as string;
+    return { destinationPath: entry.destinationPath as string, createdAtMs: entry.createdAtMs as number };
   } finally { await file.close(); }
 }
 
@@ -312,15 +360,18 @@ export function parseCapture2RecordArgs(args: string[]): { durationSeconds: numb
 
 export async function recordWithCapture2(
   args: string[],
-  config: { executable?: string; runtime?: string; controlRoot?: string; factory?: Capture2HostFactory; clock?: Capture2Clock; interrupted?: () => boolean; persistIdentity?: typeof retainPublicIdentity } = {},
+  config: { executable?: string; mediaExecutable?: string; runtime?: string; controlRoot?: string; factory?: Capture2HostFactory; standardFactory?: StandardCoordinatorFactory; clock?: Capture2Clock; interrupted?: () => boolean; persistIdentity?: typeof retainPublicIdentity } = {},
 ): Promise<number> {
   const parsed = parseCapture2RecordArgs(args);
   const executable = config.executable ?? process.env.APPARENT_ENGINE_CAPTURE_EXECUTABLE;
+  const mediaExecutable = config.mediaExecutable ?? process.env.APPARENT_ENGINE_MEDIA2_BIN;
   const runtime = config.runtime ?? process.env.APPARENT_ENGINE_RUNTIME;
   const controlRoot = config.controlRoot ?? process.env.APPARENT_AGENT_CONTROL_ROOT ?? resolve(homedir(), '.local/share/apparent/agent');
   const destinationRoot = parsed.out ? resolve(parsed.out, '..') : await import('../bundle.js').then(({ resolveCaptures }) => resolveCaptures());
   if (!executable || !runtime || !isAbsolute(executable) || resolve(executable) !== executable || !isAbsolute(runtime) || resolve(runtime) !== runtime)
     throw new Error('Capture/2 requires APPARENT_ENGINE_CAPTURE_EXECUTABLE and APPARENT_ENGINE_RUNTIME as normalized absolute paths; no protocol fallback is attempted');
+  if ((config.standardFactory || !config.factory) && (!mediaExecutable || !isAbsolute(mediaExecutable) || resolve(mediaExecutable) !== mediaExecutable))
+    throw new Error('Capture/2 standard processing requires APPARENT_ENGINE_MEDIA2_BIN as a normalized absolute path');
   if (!isAbsolute(controlRoot) || resolve(controlRoot) !== controlRoot || (parsed.out && (controlRoot === parsed.out || parsed.out.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${parsed.out}/`))))
     throw new Error('Agent capture/2 control root must be normalized, absolute, and separate from the output destination');
   if (!parsed.out && (destinationRoot === controlRoot || destinationRoot.startsWith(`${controlRoot}/`) || controlRoot.startsWith(`${destinationRoot}/`)))
@@ -336,6 +387,9 @@ export async function recordWithCapture2(
   const interrupted = () => signalRequested || config.interrupted?.() === true;
   process.on('SIGINT', signal); process.on('SIGTERM', signal);
   let confirmedClose = false;
+  let closeAttempted = false;
+  let startDispatched = false;
+  let explicitEndIntent = false;
   let finalPhase: Capture2Receipt['phase'] = 'unknown';
   let requestId: string | undefined;
   try {
@@ -350,12 +404,15 @@ export async function recordWithCapture2(
     await (config.persistIdentity ?? retainPublicIdentity)(controlRoot, requestId, destinationPath);
     if (interrupted()) throw new Error(`Interrupted after retaining capture/2 request ${requestId}; no start was dispatched`);
     process.stderr.write(`Capture/2 request ID: ${requestId}\n`);
+    startDispatched = true;
     let receipt = await composed.host.start({ requestId, source: matches[0], options: { audio: 'none', localOnly: true }, invocation: { invocationId: randomBytes(16).toString('hex'), observedAtMs: Date.now(), kind: 'explicit' }, ...(parsed.out ? { destinationPath } : {}) });
     const startupBy = clock.now() + 30_000;
     while (receipt.phase === 'starting' && clock.now() < startupBy && !interrupted()) {
       await clock.sleep(200); receipt = await composed.host.inspect(requestId);
     }
-    if (receipt.phase === 'starting' && !interrupted()) receipt = await composed.host.cancel(requestId);
+    // A readiness deadline is not user cancel/discard intent. Retain the
+    // original request when startup remains unresolved; only explicit
+    // interruption below may request cancellation before recording.
     if (receipt.phase === 'recording') {
       const stopAt = clock.now() + parsed.durationSeconds * 1000;
       while (clock.now() < stopAt && !interrupted()) {
@@ -363,8 +420,15 @@ export async function recordWithCapture2(
         receipt = await composed.host.inspect(requestId);
         if (receipt.phase !== 'recording') break;
       }
-      if (receipt.phase === 'recording') receipt = await composed.host.stop(requestId);
+      const finishReached = clock.now() >= stopAt;
+      const explicitInterrupt = interrupted();
+      if (finishReached || explicitInterrupt) {
+        explicitEndIntent = true;
+        if (!['materials-ready', 'processing', 'failed', 'cancelled'].includes(receipt.phase))
+          receipt = await composed.host.stop(requestId);
+      }
     } else if (interrupted() && ['starting', 'submitted-unknown', 'unknown'].includes(receipt.phase)) {
+      explicitEndIntent = true;
       receipt = await composed.host.cancel(requestId);
     }
     const finishBy = clock.now() + 60_000;
@@ -373,16 +437,105 @@ export async function recordWithCapture2(
       await clock.sleep(200); receipt = await composed.host.inspect(requestId);
     }
     finalPhase = receipt.phase;
+  } catch (error) {
+    if (!startDispatched) throw error;
+    if (interrupted()) explicitEndIntent = true;
+    finalPhase = 'unknown';
+    process.stderr.write(`Capture/2 request ${requestId ?? 'unknown'} has an ambiguous native outcome; retain its identity and inspect before retrying.\n`);
   } finally {
     process.removeListener('SIGINT', signal); process.removeListener('SIGTERM', signal);
     composed.host.dispose();
-    const closed = await composed.close();
-    confirmedClose = ['already-exited', 'eof-exited', 'exit-observed'].includes(closed);
-    if (!['already-exited', 'eof-exited', 'exit-observed'].includes(closed)) process.stderr.write(`Capture/2 transport close is uncertain (${closed}); retain the request identity for reconciliation.\n`);
+    const terminalCapture = ['materials-ready', 'cancelled', 'failed'].includes(finalPhase);
+    // This foreground owner has not dispatched media/publication work or been
+    // shared. After explicit finish/interrupt, awaited host calls have settled
+    // and the host is disposed, so SDK 0.4.5 may release local process refs
+    // even if Stop remains unknown. Close is not phase, runtime-clearance, or
+    // Saved evidence.
+    if (!startDispatched || terminalCapture || explicitEndIntent) {
+      closeAttempted = true;
+      const closed = await composed.close();
+      confirmedClose = ['already-exited', 'eof-exited', 'exit-observed'].includes(closed);
+      if (!confirmedClose) process.stderr.write(`Capture/2 transport close is uncertain (${closed}); retain the request identity for reconciliation.\n`);
+    } else {
+      process.stderr.write(`Capture/2 capture ownership is ${finalPhase}; the ordinary owning client remains open until a terminal capture phase is observed. Retain request ${requestId ?? 'unknown'} and inspect it before retrying.\n`);
+    }
   }
-  const outcome = !confirmedClose ? 'close-unverified' : finalPhase === 'failed' ? 'failed' : finalPhase === 'cancelled' ? 'cancelled' : finalPhase === 'unknown' ? 'uncertain' : finalPhase === 'processing' || finalPhase === 'materials-ready' ? 'pending-saved-capability-unavailable' : 'pending';
+  if (requestId && finalPhase === 'materials-ready' && confirmedClose && mediaExecutable && (config.standardFactory || !config.factory)) {
+    try {
+      const identity = await loadPublicRequest(controlRoot, requestId);
+      const standard = await reconcileStandardCapture(requestId, identity.destinationPath, {
+        createdAtMs: identity.createdAtMs,
+        controlRoot, destinationRoot, runtime, captureExecutable: executable, mediaExecutable,
+        factory: config.standardFactory ?? defaultStandardCoordinatorFactory, clock,
+      });
+      process.stdout.write(`${JSON.stringify({ requestId, state: standard.state, outcome: standard.outcome, ...(standard.bundlePath ? { bundlePath: standard.bundlePath } : {}), ...(standard.processingIssues?.length ? { processingIssues: standard.processingIssues } : {}), ...(standard.shutdown ? { shutdown: standard.shutdown } : {}), ...(standard.peerRelease ? { peerRelease: standard.peerRelease } : {}) })}\n`);
+      return standard.exitCode;
+    } catch {
+      process.stderr.write(`Record standard processing for ${requestId} could not be composed or completed; retain the original request and inspect it before retrying.\n`);
+      process.stdout.write(`${JSON.stringify({ requestId, state: 'unknown', outcome: 'standard-processing-uncertain' })}\n`);
+      return 3;
+    }
+  }
+  const outcome = !closeAttempted ? 'ownership-retained' : !confirmedClose ? 'close-unverified' : finalPhase === 'failed' ? 'failed' : finalPhase === 'cancelled' ? 'cancelled' : finalPhase === 'unknown' ? 'uncertain' : finalPhase === 'processing' || finalPhase === 'materials-ready' ? 'pending-standard-processing-unavailable' : 'pending';
   process.stdout.write(`${JSON.stringify({ ...(requestId ? { requestId } : {}), state: finalPhase, outcome })}\n`);
   return ['failed', 'cancelled'].includes(finalPhase) ? 1 : 3;
+}
+
+async function reconcileStandardCapture(requestId: string, expectedPath: string, options: {
+  createdAtMs: number; controlRoot: string; destinationRoot: string; runtime: string; captureExecutable: string; mediaExecutable: string;
+  factory: StandardCoordinatorFactory; clock: Capture2Clock;
+}): Promise<{ state: string; outcome: string; bundlePath?: string; exitCode: number; processingIssues?: readonly unknown[]; shutdown?: unknown; peerRelease?: readonly unknown[] }> {
+  const composed = await options.factory({ createdAtMs: options.createdAtMs, controlRoot: options.controlRoot, destinationRoot: options.destinationRoot, runtime: options.runtime, captureExecutable: options.captureExecutable, mediaExecutable: options.mediaExecutable });
+  let state = 'unknown';
+  let bundlePath: string | undefined;
+  let processingIssues: readonly unknown[] = [];
+  let shutdown: Awaited<ReturnType<RecordCaptureCoordinator['shutdown']>> | undefined;
+  let peerRelease: readonly RecoveryPeerRelease[] | undefined;
+  let drained = false;
+  try {
+    const mapping = await composed.mappingForRequest(requestId);
+    if (!mapping || mapping.requestId !== requestId || mapping.bundlePath !== expectedPath) {
+      state = 'unknown';
+    } else {
+      const deadline = options.clock.now() + 60_000;
+      while (options.clock.now() < deadline) {
+        try { await composed.coordinator.reconcile(); } catch { /* durable Record state remains authoritative */ }
+        const facts = await composed.coordinator.captureFacts.readFacts().catch(() => undefined);
+        const matching = facts?.captures.filter(fact => fact.captureId === requestId) ?? [];
+        if (matching.length === 1) {
+          const fact = matching[0];
+          state = fact.phase;
+          if (fact.phase === 'saved' && fact.artifactId === mapping.bundleId) {
+            const resolved = await composed.coordinator.resolveHandoff({ captureId: requestId, artifactId: fact.artifactId }).catch(() => undefined);
+            const saved = resolved?.handoff?.savedBundle;
+            if (resolved?.captureId === requestId && resolved.artifactId === mapping.bundleId && saved?.status === 'saved' && saved.bundlePath === expectedPath && await realpath(saved.bundlePath).catch(() => '') === expectedPath)
+              bundlePath = expectedPath;
+          }
+          if (['saved', 'failed', 'cancelled', 'unknown'].includes(fact.phase) && (!bundlePath || fact.phase !== 'saved')) break;
+          if (bundlePath) break;
+        }
+        await options.clock.sleep(200);
+      }
+    }
+    processingIssues = composed.coordinator.processingIssues();
+  } finally {
+    try {
+      shutdown = await composed.coordinator.shutdown();
+      if (shutdown.scope === 'record-coordinator' && shutdown.admission === 'closed' && shutdown.localDrain === 'complete') {
+        await composed.coordinator.dispose();
+        drained = true;
+      }
+    } catch { /* rejection is not a positive drain */ }
+    if (drained) {
+      try { peerRelease = await composed.release(); }
+      catch { /* release uncertainty is reflected in status */ }
+    }
+  }
+  const releaseConfirmed = peerRelease?.length === 2 && peerRelease.every(item => item.connection === 'released' && item.inputClosure === 'confirmed');
+  const cleared = shutdown?.runtimeClearance === 'clear';
+  const saved = bundlePath !== undefined;
+  const exitCode = saved && cleared && releaseConfirmed ? 0 : ['failed', 'cancelled'].includes(state) && drained && releaseConfirmed ? 1 : 3;
+  return { state: saved ? 'saved' : state, outcome: saved ? exitCode === 0 ? 'saved' : 'saved-with-lifecycle-uncertainty' : shutdown && !cleared ? 'pending-runtime-uncertain' : state === 'failed' || state === 'cancelled' ? state : 'pending', ...(saved ? { bundlePath } : {}), exitCode, ...(processingIssues.length ? { processingIssues } : {}), ...(shutdown ? { shutdown } : {}), ...(peerRelease ? { peerRelease } : {}) };
 }
 
 export function parseCapture2SourcesArgs(args: string[]): { json: boolean } {
@@ -443,7 +596,7 @@ export async function controlCapture2(args: string[], config: { executable?: str
     if (!closeVerified) process.stderr.write(`Capture/2 transport close is uncertain (${closed}); retain the request identity for reconciliation.\n`);
   }
   const savedBundlePath = method === 'inspect' && closeVerified && composed.publicationOutput
-    ? await authenticatedSavedBundlePath(composed.publicationOutput, requestId, destinationPath)
+    ? await authenticatedSavedBundlePath(composed.publicationOutput, requestId, destinationPath, await composed.mappingForRequest?.(requestId))
     : undefined;
   const outcome = savedBundlePath !== undefined ? 'saved' : !closeVerified ? 'close-unverified' : receipt.phase === 'unknown' ? 'uncertain' : receipt.phase === 'failed' ? 'failed' : receipt.phase === 'cancelled' ? 'cancelled' : receipt.phase === 'processing' || receipt.phase === 'materials-ready' ? 'pending-saved-capability-unavailable' : 'pending';
   process.stdout.write(`${JSON.stringify({ requestId, state: savedBundlePath === undefined ? receipt.phase : 'saved', outcome, ...(savedBundlePath === undefined ? {} : { bundlePath: savedBundlePath }) })}\n`);
@@ -451,15 +604,18 @@ export async function controlCapture2(args: string[], config: { executable?: str
   return ['failed', 'cancelled'].includes(receipt.phase) ? (receipt.phase === 'cancelled' && method === 'cancel' && closeVerified ? 0 : 1) : 3;
 }
 
-async function authenticatedSavedBundlePath(output: Capture2PublicOutput, requestId: string, expectedPath: string): Promise<string | undefined> {
+async function authenticatedSavedBundlePath(output: Capture2PublicOutput, requestId: string, expectedPath: string, mapping?: { requestId: string; captureId: string; bundleId: string; bundlePath: string }): Promise<string | undefined> {
   try {
+    if (mapping && (mapping.requestId !== requestId || mapping.bundlePath !== expectedPath)) return undefined;
+    const captureId = requestId;
     const facts = await output.captureFacts.readFacts();
-    const matches = facts.captures.filter(capture => capture.captureId === requestId);
+    const matches = facts.captures.filter(capture => capture.captureId === captureId);
     if (matches.length !== 1 || matches[0].phase !== 'saved' || typeof matches[0].artifactId !== 'string' || !matches[0].artifactId) return undefined;
     const artifactId = matches[0].artifactId;
-    const resolution = await output.resolveHandoff({ captureId: requestId, artifactId });
+    if (mapping && artifactId !== mapping.bundleId) return undefined;
+    const resolution = await output.resolveHandoff({ captureId, artifactId });
     const bundle = resolution?.handoff?.savedBundle;
-    if (resolution?.captureId !== requestId || resolution.artifactId !== artifactId || bundle?.status !== 'saved' || bundle.bundlePath !== expectedPath) return undefined;
+    if (resolution?.captureId !== captureId || resolution.artifactId !== artifactId || bundle?.status !== 'saved' || bundle.bundlePath !== expectedPath) return undefined;
     if (await realpath(bundle.bundlePath).catch(() => '') !== expectedPath) return undefined;
     return expectedPath;
   } catch {

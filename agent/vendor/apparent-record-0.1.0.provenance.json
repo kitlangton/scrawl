@@ -1,14 +1,14 @@
 {
-  "sourceSha": "830e5c1a25050ae2465ec88278dcb4e51e48b6c3",
-  "runId": 42293597462,
-  "artifactId": 13540074333,
-  "componentSha256": "6cb63d2330c829a789534f6b090752fc8f0cae7e82adadfd5710ce31fdd28fe6",
-  "recordTarSha256": "ef594f7f4dbb2f2a8094ced7be9467e4fb0a84afed8f57533a2e06691b9082c5",
+  "sourceSha": "62010646fe954d72e2502a2403e6e3ad2fbe2017",
+  "runId": 42315302146,
+  "artifactId": 13550173286,
+  "componentSha256": "b4d20fa79ba334f806a994e10420b6f9c9b4b3f1b1533da892a6c4a41f8b655e",
+  "recordTarSha256": "1addc6531bd3cc827eb700edaeb6fd23df4e01dbe3abfbd76ee0ddda172e5349",
   "attestationVerified": true,
   "sourceWorkflowSubjectChecked": true,
   "limits": [
-    "No native effects",
-    "Recovery uses existing persisted decisions only",
-    "Unresolved shutdown retains SDK transport ownership"
+    "Standard visual selection is Record-owned and bounded",
+    "Saved requires exact public facts and handoff resolution",
+    "No fresh native standard-path proof"
   ]
 }
