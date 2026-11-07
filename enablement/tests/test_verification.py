@@ -107,7 +107,7 @@ class SelectionTests(unittest.TestCase):
                     verification.run_onboarding_package_check()
                 run.assert_not_called()
                 (package / 'node_modules/.package-lock.json').write_text(json.dumps(lock))
-                artifact = package / 'vendor/record-0.1.0-afd73fb.tgz'
+                artifact = package / 'vendor/record-0.1.0-a2e7628.tgz'
                 original_artifact = artifact.read_bytes()
                 artifact.write_bytes(b'changed public artifact')
                 with self.assertRaisesRegex(RuntimeError, 'stale or missing'):

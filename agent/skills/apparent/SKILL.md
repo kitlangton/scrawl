@@ -15,12 +15,15 @@ apparent-agent inspect /path/to/capture.apparent --marks
 apparent-agent inspect /path/to/capture.apparent --transcript
 apparent-agent inspect /path/to/capture.apparent --images
 apparent-agent inspect /path/to/capture.apparent --json
+apparent-agent copy /path/to/capture.apparent --preview
 apparent-agent zoom /path/to/capture.apparent --at 'width changes'
 apparent-agent zoom /path/to/capture.apparent --mark m2 --frame 2 --full
 apparent-agent demo --out '/tmp/synthetic demo.apparent'
 ```
 
 Quote paths containing spaces. `inspect` accepts a local bundle directory, its `apparent.json` manifest, or `latest`. It does not accept URLs. Use `--json` to print the original manifest bytes, `--marks` for semantic mark lines (`--marks --json` for structured mark fields), `--transcript` for transcript text, and `--images` to list validated relative image references. `--images` does not open or inspect pixels; open the referenced files yourself. `zoom` creates a contact sheet PNG and semantic `zoom.json` companion in a fresh private output directory. It accepts a clock time or narration phrase with `--at`, or a mark number/id with `--mark`; use `--frame` when a number is shared by multiple keyframes. `--full` requests uncropped retained frames when available, and `--out` names a fresh absolute directory. The default is a new folder under `~/.cache/apparent/agent/zoom`.
+
+`copy BUNDLE --preview` prints the exact local Record handoff text to stdout without opening the GUI or changing the clipboard. Its stderr label marks it as preview-only; evidence-only bundles also report that video/audio were not downloaded. This text is caller-attested local artifact content, not proof of native Saved publication or link delivery. Normal `copy` still writes to the clipboard through a compatible running GUI. Use `copy --preview -- PATH` when the bundle path begins with a dash. Preview output is not subject to the clipboard byte limit and is never truncated.
 
 `apparent-agent frames BUNDLE --from 0:04 --to 0:06 --fps 4` returns saved keyframe paths without a decoder when no provider is configured or source video is missing. Equal start/end times select a nearby saved frame. Saved mode preserves manifest timestamps, never changes the bundle, and identifies itself on stderr and in `--json`; those images are existing keyframes, not newly decoded samples. Open them with your image viewer. No matching saved images produces an error.
 

@@ -14,7 +14,7 @@ test('packed factory declarations resolve using public packages without sibling 
     const reactTypes = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory, './node_modules/@types/react'], { cwd: owner, encoding: 'utf8' }))[0].filename;
     const csstype = JSON.parse(execFileSync('npm', ['pack', '--ignore-scripts', '--json', '--pack-destination', directory, './node_modules/csstype'], { cwd: owner, encoding: 'utf8' }))[0].filename;
     writeFileSync(join(directory, 'package.json'), JSON.stringify({ private: true, type: 'module' }));
-    execFileSync('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', join(directory, packed), join(owner, 'vendor/apparent-app-contracts-0.1.0.tgz'), join(owner, 'vendor/record-0.1.0-afd73fb.tgz'), join(directory, react), join(directory, reactTypes), join(directory, csstype)], { cwd: directory, stdio: 'pipe' });
+    execFileSync('npm', ['install', '--offline', '--ignore-scripts', '--no-audit', '--no-fund', join(directory, packed), join(owner, 'vendor/apparent-app-contracts-0.1.0.tgz'), join(owner, 'vendor/record-0.1.0-a2e7628.tgz'), join(directory, react), join(directory, reactTypes), join(directory, csstype)], { cwd: directory, stdio: 'pipe' });
     writeFileSync(join(directory, 'consumer.ts'), `import { onboardingContributionFactory, onboardingProgressCodec, adoptOnboardingProgress, type OnboardingAdoptionResult, type OnboardingFactoryDependencies, type OnboardingProgress } from '@apparent/onboarding';
 import type { ContributionFactory, ProgressCodec, LegacyAdoptionBackend } from '@apparent/app-contracts/host';
 const factory: ContributionFactory<OnboardingFactoryDependencies> = onboardingContributionFactory;

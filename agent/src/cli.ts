@@ -15,7 +15,7 @@ import { localCopyText, writeCopyText } from './handoff/copy.js';
 import { createNativeHostPort } from '@apparent/native-host';
 
 const VERSION = '0.1.0';
-function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection, synthetic demo generation, and Engine foreground recording/frame selection.\n\nUsage: apparent-agent copy [BUNDLE|latest]\n       apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n       apparent-agent skill\n       apparent-agent record [--duration <seconds>] --out <absolute.apparent-path>\n       apparent-agent record --protocol capture2 [--duration <seconds>] [--out <absolute.apparent-path>] --source <discovered-id>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent capture --protocol capture2 <inspect|stop|cancel> <request-id>\n       apparent-agent capture --protocol capture2 sources [--json]\n       apparent-agent recover\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nRecord duration defaults to 5 seconds; capture timing begins after native readiness.\nDemo creates illustrative synthetic local data only; it does not record a screen or audio.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nCapture/2 record requires explicit --protocol capture2, APPARENT_ENGINE_CAPTURE_EXECUTABLE and APPARENT_ENGINE_MEDIA2_BIN; it never falls back to V1. capture --protocol capture2 sources [--json] is read-only public SDK discovery.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
+function help() { process.stdout.write(`apparent-agent ${VERSION}\nLocal Apparent bundle inspection, synthetic demo generation, and Engine foreground recording/frame selection.\n\nUsage: apparent-agent copy [BUNDLE|latest] [--preview]\n       apparent-agent inspect [BUNDLE|latest] [--json|--marks|--transcript|--images]\n       apparent-agent inspect [BUNDLE|latest] [--experiment agentContext] [--stored-summary]\n       apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\n       apparent-agent frames BUNDLE --from TIME --to TIME [--fps 4] [--json]\n       apparent-agent zoom [BUNDLE|latest] (--at TIME_OR_PHRASE | --mark NUMBER_OR_ID) [--frame N] [--span S] [--frames N] [--full] [--out DIR] [--json]\n       apparent-agent skill\n       apparent-agent record [--duration <seconds>] --out <absolute.apparent-path>\n       apparent-agent record --protocol capture2 [--duration <seconds>] [--out <absolute.apparent-path>] --source <discovered-id>\n       apparent-agent capture <inspect|stop|cancel> <capture-id>\n       apparent-agent capture --protocol capture2 <inspect|stop|cancel> <request-id>\n       apparent-agent capture --protocol capture2 sources [--json]\n       apparent-agent recover\n       apparent-agent issue --title <TEXT> (--body <TEXT> | --body-file <PATH>) [--submit]\n       apparent-agent --version\n\nBUNDLE may be a local .apparent directory or apparent.json. URLs are never fetched.\ncopy --preview prints the local handoff text to stdout only; clipboard is unchanged. Use -- before a BUNDLE beginning with a dash.\nDefault inspect output is generated from the manifest; --stored-summary prints producer text.\nRecord duration defaults to 5 seconds; capture timing begins after native readiness.\nDemo creates illustrative synthetic local data only; it does not record a screen or audio.\nStorage lookup: APPARENT_CAPTURES_DIR, then capturesDir in ~/.config/apparent/config.json.\nRecording requires APPARENT_ENGINE_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nCapture/2 record requires explicit --protocol capture2, APPARENT_ENGINE_CAPTURE_EXECUTABLE and APPARENT_ENGINE_MEDIA2_BIN; it never falls back to V1. capture --protocol capture2 sources [--json] is read-only public SDK discovery.\nFrames require APPARENT_ENGINE_FRAMES_EXECUTABLE and APPARENT_ENGINE_RUNTIME absolute paths.\nIssue previews are offline by default; --submit publishes approved text to tryapparent/apparent.\n`); }
 async function main(args: string[]) {
   if (args[0] === 'recover' && args.length === 2 && ['--help', '-h'].includes(args[1])) { process.stdout.write('Usage: apparent-agent recover\nReconcile existing Record-owned capture/2 jobs; no new capture or processing selection is created.\n'); return 0; }
   if(args[0]==='demo'&&args.length===2&&['--help','-h'].includes(args[1])) { process.stdout.write('Usage: apparent-agent demo [--out FRESH.apparent] [--json] [--clipboard]\nGeneration uses no capture, Engine, Desktop, provider, or network. --clipboard requires a compatible running Apparent GUI; it copies only text and keeps the generated bundle if the clipboard result is refused or unknown.\n'); return 0; }
@@ -26,8 +26,36 @@ async function main(args: string[]) {
   if (args[0] !== 'demo' && args[0] !== 'skill' && args[0] !== 'issue' && (args.length === 0 || args.includes('--help') || args.includes('-h'))) { help(); return 0; }
   if (args.length === 1 && ['--version', '-V'].includes(args[0])) { console.log(VERSION); return 0; }
   if (args[0] === 'copy') {
-    if (args.length > 2 || args[1]?.startsWith('-')) throw new Error('Usage: apparent-agent copy [BUNDLE|latest]');
-    const result = await writeCopyText(await localCopyText(args[1]));
+    let input: string | undefined, preview = false, delimiter = false;
+    for (let i = 1; i < args.length; i++) {
+      const arg = args[i];
+      if (delimiter) {
+        if (input !== undefined || i !== args.length - 1) throw new Error('Usage: apparent-agent copy [BUNDLE|latest] [--preview] [-- BUNDLE]');
+        input = arg;
+      } else if (arg === '--preview') {
+        if (preview) throw new Error('Duplicate --preview');
+        preview = true;
+      } else if (arg === '--') {
+        if (delimiter || input !== undefined || i === args.length - 1) throw new Error('-- requires one bundle path and must precede it');
+        delimiter = true;
+      } else if (arg.startsWith('-')) throw new Error(`Unknown copy option: ${arg}`);
+      else if (input === undefined) input = arg;
+      else throw new Error('Only one bundle path is allowed');
+    }
+    if (preview) {
+      const text = await localCopyText(input);
+      const bundlePath = await resolveBundle(input);
+      const evidence = await lstat(`${bundlePath}/.evidence-only.json`).catch((error: NodeJS.ErrnoException) => {
+        if (error.code !== 'ENOENT') throw error;
+        return null;
+      });
+      process.stderr.write('Preview only; clipboard unchanged. No Host or clipboard write was attempted.\n');
+      if (evidence?.isFile() && !evidence.isSymbolicLink())
+        process.stderr.write('Evidence snapshot: video/audio not downloaded. This local preview does not fetch media.\n');
+      process.stdout.write(text);
+      return 0;
+    }
+    const result = await writeCopyText(await localCopyText(input));
     return reportCopyOutcome(result,{success:()=>'Copied bundle text to clipboard. Images were not copied.\n',refusalSubject:'this handoff'});
   }
   if (args[0] === 'skill') {
@@ -102,10 +130,13 @@ async function main(args: string[]) {
     const refs = [bundle.contactSheet, ...(bundle.autocrop ? [bundle.autocrop.fullContactSheet] : []),
       ...bundle.keyframes.flatMap((frame: any) => [frame.file, ...(bundle.autocrop && frame.file.startsWith('frames/') ? [`${bundle.autocrop.fullFrames}/${frame.file.slice('frames/'.length)}`] : [])])]
       .filter((x) => typeof x === 'string');
-    for (const ref of refs) {
-      await checkImageReference(path, ref);
+    const references = [...new Set(refs)];
+    const paths: string[] = [], missingReferences: string[] = [];
+    for (const ref of references) {
+      if (await checkImageReference(path, ref)) paths.push(resolve(path, ref));
+      else missingReferences.push(ref);
     }
-    process.stdout.write(`${JSON.stringify({ bundle: path, references: [...new Set(refs)] }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ bundle: path, references, paths, missingReferences }, null, 2)}\n`);
     return 0;
   }
   if (storedSummary) {

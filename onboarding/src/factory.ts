@@ -11,6 +11,8 @@ import { PermissionRepairContribution } from "./permissions/react.js";
 export type OnboardingHostedContribution = HostedContribution & {
   activation: HostedContribution["activation"] & {
     permissionRepair: { activate(requestedIds: readonly string[]): Promise<void> };
+    /** Explicitly replay onboarding while preserving remembered setup completion. */
+    replayTour(): Promise<void>;
   };
 };
 export interface OnboardingContributionFactory {
@@ -18,13 +20,15 @@ export interface OnboardingContributionFactory {
   create(dependencies: OnboardingFactoryDependencies): Promise<OnboardingHostedContribution>;
 }
 
-export type OnboardingFactoryDependencies = Omit<OnboardingContributionProps, "controller"> & {
+export type OnboardingFactoryDependencies = Omit<OnboardingContributionProps, "controller" | "onReturnToRecording"> & {
   progress: ProgressStore;
   record: RecordClient;
   id(): string;
   coaching?: CoachingHost<"onboarding-progress">;
   /** Narrow seam for owner tests; production uses the controller's default timer. */
   repairTimer?: RepairTimer;
+  /** Existing recording entry point. This opens the host's recording surface; it never starts a capture. */
+  openRecordingEntry?(): Promise<boolean>;
   /** Reports the owner's current visible surface. This never opens or closes a host surface. */
   onSurfaceChange?(snapshot: OnboardingSurfaceSnapshot): void;
 };
@@ -87,7 +91,7 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
         };
       }, []);
       const tour = createElement("div", { hidden: view.surface.kind !== "tour", "aria-hidden": view.surface.kind !== "tour" },
-        createElement(OnboardingContribution, { controller, Button: deps.Button, close: () => { void closeTour().catch(failedClose); }, onManualPasteInstructions: deps.onManualPasteInstructions, loadOnMount: false }));
+        createElement(OnboardingContribution, { controller, Button: deps.Button, close: () => { void closeTour().catch(failedClose); }, onManualPasteInstructions: deps.onManualPasteInstructions, ...(deps.openRecordingEntry ? { onReturnToRecording: () => { void contribution.activation.activate({ reason: "resume" }).catch(failedClose); } } : {}), loadOnMount: false }));
       const repair = view.surface.kind === "repair"
         ? createElement(PermissionRepairContribution, { controller: permissionRepair, requestedIds: permissionRepair.state.requestedIds, Button: deps.Button, close() {}, manageLifecycle: false })
         : null;
@@ -100,15 +104,20 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
       const [busy, setBusy] = useState(false);
       const [error, setError] = useState<string | null>(null);
       const [status, setStatus] = useState(controller.state.progress.status);
-      useEffect(() => controller.subscribe(state => setStatus(state.progress.status)), []);
+      const [setupCompleted, setSetupCompleted] = useState(controller.state.progress.setupCompleted);
+      useEffect(() => controller.subscribe(state => { setStatus(state.progress.status); setSetupCompleted(state.progress.setupCompleted); }), []);
       return createElement("section", { "aria-label": "Onboarding settings" },
         createElement("h2", null, "Setup"),
         createElement(deps.Button, { disabled: busy, onClick: () => {
           setBusy(true); setError(null);
-          void contribution.activation.activate({ reason: "resume" }).catch(() => {
+          void (setupCompleted || status === "completed" ? contribution.activation.replayTour() : contribution.activation.activate({ reason: "resume" })).catch(() => {
             setError("Setup could not be opened. Please try again.");
           }).finally(() => setBusy(false));
-        } }, status === "completed" ? "Replay welcome tour" : "Resume setup"),
+        } }, setupCompleted || status === "completed" ? "Replay welcome tour" : "Resume setup"),
+        setupCompleted && deps.openRecordingEntry && createElement(deps.Button, { disabled: busy, onClick: () => {
+          setBusy(true); setError(null);
+          void contribution.activation.activate({ reason: "resume" }).catch(() => setError("Recording could not be opened. Please try again.")).finally(() => setBusy(false));
+        } }, "Return to recording"),
         error ? createElement("p", { role: "alert" }, error) : null);
     };
     const contribution: OnboardingHostedContribution = {
@@ -123,15 +132,34 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
             await waitForProgress();
             const loaded = controller.state;
             if (loaded.publication === "unknown") throw new Error("Onboarding progress could not be loaded");
-            if (reason === "firstLaunch" && (loaded.progress.status === "completed" || loaded.progress.status === "deferred")) {
+            if (reason === "firstLaunch" && loaded.progress.setupCompleted && deps.openRecordingEntry) {
+              await returnToRecording();
+              return;
+            }
+            if (reason === "firstLaunch" && (loaded.progress.setupCompleted || loaded.progress.status === "deferred")) {
               await hideCoach();
               setSurface({ kind: "hidden" }); closeError = null; notify();
+              return;
+            }
+            if ((reason === "settings" || reason === "resume") && loaded.progress.setupCompleted) {
+              await returnToRecording();
               return;
             }
             if ((reason === "settings" || reason === "resume") && loaded.progress.status !== "in-progress") {
               const reopened = await controller.dispatch("reopen");
               if (reopened.publication !== "confirmed" || reopened.progress.status !== "in-progress") throw new Error("Onboarding could not be resumed safely");
             }
+            setSurface({ kind: "tour" }); closeError = null; notify();
+          });
+        },
+        async replayTour() {
+          return serialize(async () => {
+            if (phase !== "ready") throw new Error("Disposed onboarding contribution cannot be activated");
+            if (surface.kind === "repair") throw new Error("Generic onboarding activation is unavailable during permission repair");
+            await waitForProgress(); await controller.load(); await waitForProgress();
+            if (controller.state.publication === "unknown") throw new Error("Onboarding progress could not be loaded");
+            const replayed = await controller.dispatch("replay");
+            if (replayed.publication !== "confirmed" || replayed.error || replayed.progress.stage !== "welcome") throw new Error("Onboarding replay could not be saved safely");
             setSurface({ kind: "tour" }); closeError = null; notify();
           });
         },
@@ -184,6 +212,12 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
         deps.close();
         setSurface({ kind: "hidden" }); closeError = null; notify();
       });
+    }
+    async function returnToRecording() {
+      if (!deps.openRecordingEntry) throw new Error("Recording entry is not available from this host yet");
+      await hideCoach();
+      if (!(await deps.openRecordingEntry())) throw new Error("Recording entry was not opened");
+      setSurface({ kind: "hidden" }); closeError = null; notify();
     }
     async function restoreAfterRepair(session: number) {
       return serialize(async () => {

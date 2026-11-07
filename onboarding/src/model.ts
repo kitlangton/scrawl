@@ -1,30 +1,34 @@
 import type { JsonValue, ProgressCodec } from "@apparent/app-contracts/host";
 
-export type Stage = "welcome" | "pen" | "permissions" | "shortcut" | "practice-start" | "screen" | "whiteboard" | "board-ink" | "screen-ink" | "stop" | "preparing" | "copied" | "paste" | "locate" | "complete";
+export type Stage = "welcome" | "pen" | "permissions" | "shortcut" | "practice-start" | "screen" | "whiteboard" | "board-ink" | "note" | "screen-ink" | "stop" | "preparing" | "copied" | "paste" | "locate" | "complete";
 export type LegacyMetadata = { tutorial: "skipped" | "watched" | "practiced" | null; relaunchedAt: number | null; reopenFix: boolean; shortcutChosen: boolean; firstCaptureCompleted: boolean; granted?: string[] };
-export type OnboardingProgress = { schema: 1; status: "new" | "in-progress" | "deferred" | "completed"; stage: Stage; attemptId: string | null; admissionId: string | null; practiceBaselineIds: string[]; legacy: LegacyMetadata; manualPasteConfirmed: boolean };
+export type OnboardingProgress = { schema: 2; /** Optional tutorial progress; independent of first-run setup completion. */ status: "new" | "in-progress" | "deferred" | "completed"; stage: Stage; attemptId: string | null; admissionId: string | null; practiceBaselineIds: string[]; legacy: LegacyMetadata; manualPasteConfirmed: boolean; setupCompleted: boolean };
 export type Revision = string | number;
 export type SaveResult = { status: "saved"; revision: Revision } | { status: "conflict"; revision: Revision; current: OnboardingProgress } | { status: "unknown"; message: string };
 export interface ProgressStore { read(): Promise<{ revision: Revision; value: OnboardingProgress }>; compareAndSwap(expected: Revision, value: OnboardingProgress): Promise<SaveResult> }
-export const initialProgress = (): OnboardingProgress => ({ schema: 1, status: "new", stage: "welcome", attemptId: null, admissionId: null, practiceBaselineIds: [], legacy: { tutorial: null, relaunchedAt: null, reopenFix: false, shortcutChosen: false, firstCaptureCompleted: false }, manualPasteConfirmed: false });
+export const initialProgress = (): OnboardingProgress => ({ schema: 2, status: "new", stage: "welcome", attemptId: null, admissionId: null, practiceBaselineIds: [], legacy: { tutorial: null, relaunchedAt: null, reopenFix: false, shortcutChosen: false, firstCaptureCompleted: false }, manualPasteConfirmed: false, setupCompleted: false });
 export function normalizeProgress(value: unknown): OnboardingProgress {
   if (!value || typeof value !== "object") return initialProgress();
   const v = value as Record<string, unknown>;
-  if (Object.hasOwn(v, "schema") && v.schema !== 1) throw new TypeError("Unsupported onboarding progress schema");
+  if (Object.hasOwn(v, "schema") && v.schema !== 1 && v.schema !== 2) throw new TypeError("Unsupported onboarding progress schema");
   // Re-reading our normalized schema must preserve the migrated metadata too.
   const metadata = v.legacy && typeof v.legacy === "object" ? v.legacy as Record<string, unknown> : v;
   const legacyLocation = v.resume ?? v.page ?? v.step ?? v.currentStep ?? v.stage;
   const aliases: Record<string, Stage> = { tutorial: "welcome", howItWorks: "welcome", "how-it-works": "welcome", resume: "welcome", record: "welcome", draw: "welcome", finish: "welcome", done: "complete", "try-it": "practice-start", TryIt: "practice-start", Permissions: "permissions", Shortcut: "shortcut", Done: "complete", Welcome: "welcome", HowItWorks: "welcome", "screen-recording": "permissions", microphone: "permissions", "input-monitoring": "permissions", accessibility: "permissions", camera: "permissions" };
   const stage = (aliases[String(legacyLocation)] ?? legacyLocation) as Stage;
-  const valid: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
+  const valid: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "note", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
   const parsedStage = v.reopenFix === true ? "permissions" : valid.includes(stage) ? stage : "welcome";
   const completed = v.status === "completed" || v.seen === true || v.completed === true || v.finished === true;
   const deferred = v.status === "deferred" || v.deferred === true;
   const malformedCurrentComplete = parsedStage === "complete" && !completed;
   const safeStage = malformedCurrentComplete ? "welcome" : parsedStage;
   const status = completed ? "completed" : deferred ? "deferred" : v.status === "in-progress" || v.seen === false || malformedCurrentComplete ? "in-progress" : "new";
+  const legacyTrialCompleted = !Object.hasOwn(v, "schema") && metadata.shortcutChosen === true
+    && typeof metadata.shortcutTestedFor === "string" && metadata.shortcutTestedFor.trim().length > 0
+    && (v.tourRevision === undefined || (Number.isInteger(v.tourRevision) && Number(v.tourRevision) >= 0 && Number(v.tourRevision) <= 1))
+    && (safeStage === "shortcut" || safeStage === "practice-start");
   const tutorial = metadata.tutorial === "skipped" || metadata.tutorial === "watched" || metadata.tutorial === "practiced" ? metadata.tutorial : null;
-  return { schema: 1, status, stage: completed ? "complete" : safeStage, attemptId: typeof v.attemptId === "string" ? v.attemptId : null, admissionId: typeof v.admissionId === "string" ? v.admissionId : null, practiceBaselineIds: Array.isArray(v.practiceBaselineIds) ? v.practiceBaselineIds.filter((x): x is string => typeof x === "string") : [], legacy: { tutorial, relaunchedAt: typeof metadata.relaunchedAt === "number" && Number.isFinite(metadata.relaunchedAt) ? metadata.relaunchedAt : null, reopenFix: metadata.reopenFix === true, shortcutChosen: metadata.shortcutChosen === true, firstCaptureCompleted: metadata.firstCaptureCompleted === true, ...(Array.isArray(metadata.granted) ? { granted: metadata.granted.filter((x): x is string => typeof x === "string") } : {}) }, manualPasteConfirmed: v.manualPasteConfirmed === true };
+  return { schema: 2, status, stage: completed ? "complete" : safeStage, attemptId: typeof v.attemptId === "string" ? v.attemptId : null, admissionId: typeof v.admissionId === "string" ? v.admissionId : null, practiceBaselineIds: Array.isArray(v.practiceBaselineIds) ? v.practiceBaselineIds.filter((x): x is string => typeof x === "string") : [], legacy: { tutorial, relaunchedAt: typeof metadata.relaunchedAt === "number" && Number.isFinite(metadata.relaunchedAt) ? metadata.relaunchedAt : null, reopenFix: metadata.reopenFix === true, shortcutChosen: metadata.shortcutChosen === true, firstCaptureCompleted: metadata.firstCaptureCompleted === true, ...(Array.isArray(metadata.granted) ? { granted: metadata.granted.filter((x): x is string => typeof x === "string") } : {}) }, manualPasteConfirmed: v.manualPasteConfirmed === true, setupCompleted: v.schema === 1 ? completed : v.schema === 2 ? v.setupCompleted === true || completed : completed || legacyTrialCompleted };
 }
 /** Inspect descriptors before reading values, including array indices. */
 function progressJson(value: unknown, ancestors = new Set<object>(), depth = 0): JsonValue {
@@ -55,16 +59,16 @@ export const onboardingProgressCodec: ProgressCodec<OnboardingProgress> = {
     if (!value || typeof value !== "object" || Array.isArray(value)) throw new TypeError("Invalid onboarding progress object");
     if (typeof value === "object" && value !== null && !Array.isArray(value) && Object.hasOwn(value, "schema")) {
       const v = value as Record<string, unknown>;
-      if (v.schema !== 1) throw new TypeError("Unsupported onboarding progress schema");
+      if (v.schema !== 1 && v.schema !== 2) throw new TypeError("Unsupported onboarding progress schema");
       const m = v.legacy as Record<string, unknown> | null;
-      const fields = ["schema", "status", "stage", "attemptId", "admissionId", "practiceBaselineIds", "legacy", "manualPasteConfirmed"];
+      const fields = ["schema", "status", "stage", "attemptId", "admissionId", "practiceBaselineIds", "legacy", "manualPasteConfirmed", ...(v.schema === 2 ? ["setupCompleted"] : [])];
       if (Object.keys(v).some(key => !fields.includes(key)) || (v.status === "completed") !== (v.stage === "complete")) throw new TypeError("Invalid onboarding progress state");
-      const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
+      const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "note", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
       if (!(v.status === "new" || v.status === "in-progress" || v.status === "deferred" || v.status === "completed")
         || typeof v.stage !== "string" || !stages.includes(v.stage as Stage)
         || !(v.attemptId === null || typeof v.attemptId === "string") || !(v.admissionId === null || typeof v.admissionId === "string")
         || !Array.isArray(v.practiceBaselineIds) || !v.practiceBaselineIds.every(id => typeof id === "string")
-        || typeof v.manualPasteConfirmed !== "boolean" || !m || typeof m !== "object"
+        || typeof v.manualPasteConfirmed !== "boolean" || (v.schema === 2 && typeof v.setupCompleted !== "boolean") || !m || typeof m !== "object"
         || !([null, "skipped", "watched", "practiced"].includes(m.tutorial as never)
           && (m.relaunchedAt === null || (typeof m.relaunchedAt === "number" && Number.isFinite(m.relaunchedAt)))
           && typeof m.reopenFix === "boolean" && typeof m.shortcutChosen === "boolean" && typeof m.firstCaptureCompleted === "boolean"
@@ -79,5 +83,5 @@ export const onboardingProgressCodec: ProgressCodec<OnboardingProgress> = {
     return onboardingProgressCodec.decode(progressJson(value));
   },
 };
-const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
+const stages: Stage[] = ["welcome", "pen", "permissions", "shortcut", "practice-start", "screen", "whiteboard", "board-ink", "note", "screen-ink", "stop", "preparing", "copied", "paste", "locate", "complete"];
 export function nextStage(stage: Stage): Stage { return stages[Math.min(stages.indexOf(stage) + 1, stages.length - 1)]; }
