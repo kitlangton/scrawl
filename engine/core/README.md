@@ -197,3 +197,12 @@ Tests that construct finalizer proofs need a synthetic `TMPDIR` with trusted
 ancestors under the output contract above. A group-writable cache ancestor is
 correctly rejected even when the individual fixture is private; do not chmod a
 real cache or capture root just to make a test pass.
+
+The optional Linux module `linux::microphone::Stream` reuses the existing selected
+Pulse/PipeWire-Pulse `pulsesrc` pipeline and returns 16 kHz mono float PCM to its
+caller. It requires actual first samples before start returns. Device discovery,
+consent, hardware/capture clock binding, bounded durable WAV persistence and
+transcription remain caller-owned; stream drop requests the existing Null state.
+This trusted-caller port does not advertise capture/2 microphone availability.
+The capture runtime still needs its audio plugin closure and authenticated audio
+material lifecycle before adopting it. No system-default source is changed.
