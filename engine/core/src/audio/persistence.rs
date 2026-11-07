@@ -462,7 +462,9 @@ mod tests {
     #[test]
     fn descriptor_writer_keeps_inode_and_prefix_outside_live_history() {
         use std::os::unix::fs::{MetadataExt, PermissionsExt};
-        let path = std::env::temp_dir().join(format!(
+        // macOS temp_dir may use /var's alias. Normalize only this owned fixture;
+        // production Store paths must still reject symlink ancestry.
+        let path = std::env::temp_dir().canonicalize().unwrap().join(format!(
             "apparent-pinned-audio-{}",
             crate::new_id().unwrap()
         ));
