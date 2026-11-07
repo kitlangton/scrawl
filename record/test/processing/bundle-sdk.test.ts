@@ -1933,3 +1933,23 @@ test("standard original ink persists exact projection and publishes its sealed s
     }
   } finally { await rm(root, { recursive: true, force: true }); }
 });
+
+test("sealed transcript text and segment count are independent; failures cannot be caller invented", async()=>{
+  for(const mode of ["untimed","segment-only","empty"] as const){
+    const input=await fixture();
+    const payload=JSON.parse(new TextDecoder().decode(input.payloadBytes));
+    const doc=JSON.parse(new TextDecoder().decode(input.facts.transcript!.bytes));
+    if(mode==="untimed") doc.segments=[];
+    else { doc.text=""; if(mode==="empty") doc.segments[0].text=""; }
+    const content=bytes(doc),seal=sealed(input.facts.transcript!.file.relativePath,content,"transcript-status-inode");
+    input.facts.transcript={file:{relativePath:seal.relativePath,identity:seal.identity,sha256:seal.sha256},bytes:content};
+    payload.files=payload.files.map((file:{relativePath:string})=>file.relativePath===seal.relativePath?input.facts.transcript!.file:file);
+    input.payloadBytes=bytes(payload);setSealedWarnings(input,[]);
+    const status=assembleCanonicalBundle(input).processing.transcriptStatus;
+    assert.deepEqual(status,{state:"collected",content:mode==="empty"?"empty":"nonempty",segmentCount:doc.segments.length});
+    input.processingWarnings=[{kind:"transcriptUnavailable"}];
+    assert.throws(()=>assembleCanonicalBundle(input),/original sealed materials/);
+    input.processingWarnings=[];setSealedWarnings(input,[{code:"transcript-unavailable"}]);
+    assert.throws(()=>assembleCanonicalBundle(input),/contradicts collected/);
+  }
+});

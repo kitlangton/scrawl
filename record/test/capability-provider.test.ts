@@ -285,16 +285,16 @@ test("provider preserves cursor-qualified note receipts but refuses malformed cu
 
 test("provider clones typed Saved transcript status and rejects malformed or pre-Saved status", async () => {
   const {runtime}=runtimeFixture();
-  const saved:RecordCaptureFacts={...outputFacts(),captures:[{captureId:"saved-status",artifactId:"bundle-one",delivery:"unknown",phase:"saved",transcriptStatus:{state:"collected",content:"nonempty",segmentCount:2},outcomes:[{kind:"save",ok:true,at:"2026-01-01T00:00:00Z"}]}]};
+  const saved:RecordCaptureFacts={...outputFacts(),captures:[{captureId:"saved-status",artifactId:"bundle-one",delivery:"unknown",phase:"saved",transcriptStatus:{state:"collected",content:"nonempty",segmentCount:0},outcomes:[{kind:"save",ok:true,at:"2026-01-01T00:00:00Z"}]}]};
   const client=createRecordCapabilityProvider({runtime,captureFacts:{readFacts:async()=>structuredClone(saved)},providerEpoch:"provider-transcript-status"});
   await new Promise(resolve=>setImmediate(resolve));
   const projected=client.current().captures[0]!;
-  assert.deepEqual(projected.transcriptStatus,{state:"collected",content:"nonempty",segmentCount:2});
+  assert.deepEqual(projected.transcriptStatus,{state:"collected",content:"nonempty",segmentCount:0});
   (projected.transcriptStatus as {state:"collected";content:"nonempty";segmentCount:number}).segmentCount=99;
-  assert.deepEqual(client.current().captures[0]?.transcriptStatus,{state:"collected",content:"nonempty",segmentCount:2});
+  assert.deepEqual(client.current().captures[0]?.transcriptStatus,{state:"collected",content:"nonempty",segmentCount:0});
   client.detach();
   for(const [index,patch] of [
-    {transcriptStatus:{state:"collected",content:"empty",segmentCount:1}},
+    {transcriptStatus:{state:"collected",content:"empty",segmentCount:-1}},
     {phase:"processing",transcriptStatus:{state:"unavailable"}},
     {transcriptStatus:{state:"unavailable",privatePath:"/private/transcript.json"}},
   ].entries()){

@@ -181,6 +181,7 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
     ...(windows?.length?{windows}:{}),...(input.additionalCanonicalFacts?.screens?.length?{screens:input.additionalCanonicalFacts.screens}:{}),...(cursor?.length?{cursor}:{}),...(input.additionalCanonicalFacts?.autocrop?{autocrop:input.additionalCanonicalFacts.autocrop}:{})};
   if(input.admission.destination&&(!input.admission.destination.session||typeof input.admission.destination.title!=="string"||!input.admission.destination.via))fail("explicit destination metadata is incomplete");
   if (input.processingWarnings?.some(warning => warning.kind === "audioInitialGap")) fail("initial audio gap must derive from the original sealed materials warning");
+  if (input.processingWarnings?.some(warning => warning.kind === "transcriptUnavailable")) fail("transcript unavailability warning must derive from original sealed materials");
   const initialGaps = m.payload.warnings.filter(warning => warning.code === "audio-initial-gap");
   if (initialGaps.length > 1) fail("duplicate initial audio gap warnings");
   const gap = initialGaps[0];
@@ -188,8 +189,9 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
     fail("initial audio gap requires aligned original audio and an explicit first sample time within capture duration");
   const transcriptStatus: ProcessingInput["transcriptStatus"] = m.payload.collection.transcript === "unavailable"
     ? { state: "unavailable" }
-    : { state: "collected", content: transcriptDoc!.text.length > 0 ? "nonempty" : "empty", segmentCount: transcriptDoc!.segments.length };
+    : { state: "collected", content: transcriptDoc!.text.trim().length > 0 || transcriptDoc!.segments.some(segment => segment.text.trim().length > 0) ? "nonempty" : "empty", segmentCount: transcriptDoc!.segments.length };
   const transcriptUnavailable = m.payload.warnings.some(warning => warning.code === "transcript-unavailable");
+  if (transcriptUnavailable && transcriptStatus.state !== "unavailable") fail("transcript failure warning contradicts collected original facts");
   const processingWarnings: ProcessingWarning[] = [...(input.processingWarnings ?? []), ...(gap ? [{ kind: "audioInitialGap" as const, atMs: gap.atMs! }] : []), ...(transcriptUnavailable ? [{ kind: "transcriptUnavailable" as const }] : [])];
   const processing: ProcessingInput={durationMs:m.payload.clock.durationMs,bundlePath:input.admission.bundlePath,target:{app:target.app,windowTitle:target.windowTitle},transcript:{text:transcript.text,segments:transcript.segments.map(s=>({startMs:s.t0,text:s.text}))},transcriptStatus,frames:frameFacts.map(f=>({...f,absolutePath:resolve(input.admission.bundlePath,f.file)})),marks:input.marks as ProcessingInput["marks"],context:context?.values,contextChanges:context?.changes.map(c=>({timeMs:c.timeMs,key:c.key,value:c.value??undefined})),contactSheetPath:resolve(input.admission.bundlePath,sheet.relativePath),videoPath:resolve(input.admission.bundlePath,m.payload.video.file),destination:input.admission.destination,events:events.map(e=>({kind:e.kind,timeMs:e.t,...(e.kind==="note"?{pin:e.pin,text:e.text}:e.kind==="app_event"?{label:e.label}:{})} as never)),warnings:processingWarnings.length ? processingWarnings : input.processingWarnings};
   const strokeFact = strokesDoc ? input.facts.acceptedStrokes! : undefined;

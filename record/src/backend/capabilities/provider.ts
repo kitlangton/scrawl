@@ -235,7 +235,7 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
       const status = item.transcriptStatus as Record<string, unknown>;
       if (!status || typeof status !== "object" || Array.isArray(status) || (status.state === "unavailable"
         ? Object.keys(status).sort().join(",") !== "state"
-        : status.state !== "collected" || !["empty", "nonempty"].includes(String(status.content)) || !Number.isSafeInteger(status.segmentCount) || Number(status.segmentCount) < 0 || Number(status.segmentCount) > 100_000 || Object.keys(status).sort().join(",") !== "content,segmentCount,state" || (status.content === "empty") !== (status.segmentCount === 0))) return false;
+        : status.state !== "collected" || !["empty", "nonempty"].includes(String(status.content)) || !Number.isSafeInteger(status.segmentCount) || Number(status.segmentCount) < 0 || Number(status.segmentCount) > 100_000 || Object.keys(status).sort().join(",") !== "content,segmentCount,state")) return false;
       if (item.phase !== "saved" || typeof item.artifactId !== "string" || !item.artifactId) return false;
     }
     if (item.warnings !== undefined && (!Array.isArray(item.warnings) || item.warnings.length > 2 || item.warnings.some(warning => {

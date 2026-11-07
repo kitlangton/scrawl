@@ -283,7 +283,7 @@ function validate(input: ProcessingInput): void {
       throw new RangeError("Initial audio gap must precede a captured sample within the recording");
   }
   if (input.transcriptStatus?.state === "collected" && (!Number.isSafeInteger(input.transcriptStatus.segmentCount) || input.transcriptStatus.segmentCount < 0 ||
-      (input.transcriptStatus.content === "empty") !== (input.transcriptStatus.segmentCount === 0))) throw new TypeError("transcript status metadata is invalid");
+      input.transcriptStatus.segmentCount > 100_000 || !["empty", "nonempty"].includes(input.transcriptStatus.content))) throw new TypeError("transcript status metadata is invalid");
   for (const segment of input.transcript.segments) {
     if (!Number.isSafeInteger(segment.startMs) || segment.startMs < 0 || segment.startMs > input.durationMs)
       throw new RangeError("transcript time must be within the recording duration");
