@@ -37,6 +37,9 @@ const needsAdmission = existsSync(admission) && !process.env.T3_BUILD_JOBS
 function runCargo(args: string[], environment: NodeJS.ProcessEnv = process.env) {
   execFileSync(needsAdmission ? admission : 'cargo', needsAdmission ? ['--jobs', '3', '--min-jobs', '3', '--', 'cargo', ...args] : args, { cwd: root, stdio: 'inherit', env: { ...environment, CARGO_BUILD_JOBS: process.env.T3_BUILD_JOBS ?? '2' } })
 }
+// Compile the extracted portal donor in the existing Linux job with GStreamer installed.
+// This check does not enable portal code in the packaged media worker.
+runCargo(['check', '--manifest-path', resolve(root, 'engine/core/Cargo.toml'), '--features', 'linux-portal', '--locked', '--target-dir', cargoTarget, ...(process.env.APPARENT_CARGO_OFFLINE === '1' ? ['--offline'] : [])])
 // Optional Linux Media2 tests belong to this producer, not the default v1 lane.
 runCargo(['test', ...common, '--test', 'materials_media', '--test', 'media2_worker', '--', '--test-threads=1'], {
   ...process.env, GST_PLUGIN_PATH: stagePlugins, GST_PLUGIN_PATH_1_0: stagePlugins,

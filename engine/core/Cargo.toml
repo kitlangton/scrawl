@@ -9,6 +9,7 @@ description = "Shared capture admission, bundle leases, and optional Linux recor
 [features]
 default = []
 linux-media = ["dep:flume", "dep:anyhow", "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
+linux-portal = ["linux-media", "dep:ashpd", "dep:futures-lite", "dep:zbus"]
 publication = ["dep:anyhow", "dep:sha2", "dep:png"]
 materials-media = ["dep:anyhow", "dep:sha2", "dep:png"]
 macos-capture = ["dep:screencapturekit"]
@@ -22,6 +23,9 @@ sha2 = { version = "=0.10.9", optional = true }
 png = { version = "=0.18.1", optional = true }
 
 [target.'cfg(target_os = "linux")'.dependencies]
+ashpd = { version = "=0.11.1", default-features = false, features = ["async-std"], optional = true }
+futures-lite = { version = "=2.6.1", optional = true }
+zbus = { version = "=5.19.0", default-features = false, features = ["async-io", "blocking-api"], optional = true }
 flume = { version = "=0.12.0", optional = true }
 gstreamer = { version = "=0.25.4", optional = true }
 gstreamer-app = { version = "=0.25.2", optional = true }

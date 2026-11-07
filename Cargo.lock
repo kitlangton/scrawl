@@ -273,7 +273,9 @@ name = "apparent-capture-engine"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "ashpd 0.11.1",
  "flume 0.12.0",
+ "futures-lite 2.6.1",
  "gstreamer",
  "gstreamer-app",
  "gstreamer-video",
@@ -283,6 +285,7 @@ dependencies = [
  "serde",
  "serde_json",
  "sha2 0.10.9",
+ "zbus",
 ]
 
 [[package]]

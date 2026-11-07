@@ -166,10 +166,15 @@ cargo tree --manifest-path engine/core/Cargo.toml --offline
 The package pins cached libc/serde/serde_json dependencies and keeps its own
 Cargo-generated lockfile. The optional `linux-media` feature pins the existing
 GStreamer versions and requires Rust 1.96 or newer; the default core retains its
-Rust 1.89 minimum. It is enabled only by the root Linux Desktop caller; macOS
-does not select it. The standalone `engine/` provider does not enable this core
-feature, so its default and `media` dependency closures remain separate. The
-default core build has no Agent, GPUI or recorder dependencies. Applicable
+Rust 1.89 minimum. The optional `linux-portal` feature additionally reuses the
+existing ashpd/zbus ScreenCast execution and requires `linux-media`. The root
+Linux Desktop caller enables both; standalone capture/media workers select
+`linux-media` without portal dependencies. macOS selects neither Linux feature.
+The caller supplies restore tokens and retains token persistence, source choice,
+GNOME fallback, crop validation and shortcut/paste policy. Core owns the
+PipeWire session/FD and its existing shutdown lifetime; this extraction does not
+advertise Wayland Capture/2. The default core build has no Agent, GPUI, portal
+or recorder dependencies. Applicable
 native-producer checks verify the moved package on Linux and macOS before merge;
 the legacy Linux recorder also needs its focused guest capture proof.
 File-decoder fixture tests (`linux::media::tests`) require working H.264/AAC
