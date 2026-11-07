@@ -5,7 +5,8 @@ import { isAbsolute, join, parse, resolve, sep } from 'node:path';
 import { homedir } from 'node:os';
 import { performance } from 'node:perf_hooks';
 import { CaptureClient, launchCaptureEngine, preflightCapturePublication, type CaptureTransport } from '@apparent/engine-sdk/capture';
-import { Media2Client, launchMedia2Worker } from '@apparent/engine-sdk/media2';
+import { Media2Client } from '@apparent/engine-sdk/media2';
+import { launchCaptureRecoveryPeer, launchMedia2RecoveryPeer, type RecoveryPeerRelease } from '@apparent/engine-sdk/recovery';
 import { DEFAULT_RECORD_DURATION_SECONDS } from '../recording.js';
 import type { Capture2Host, Capture2Receipt } from '@apparent/record/host/capture2';
 import type { RecordPublicationOutput } from '@apparent/record/publication';
@@ -23,7 +24,7 @@ export type Capture2HostFactory = (paths: { controlRoot: string; destinationRoot
 
 export type RecoveryCoordinatorFactory = (paths: { controlRoot: string; destinationRoot: string; runtime: string; captureExecutable: string; mediaExecutable: string }) => Promise<{
   coordinator: RecordCaptureCoordinator;
-  close(): Promise<unknown>;
+  release(): Promise<[RecoveryPeerRelease, RecoveryPeerRelease]>;
 }>;
 
 async function defaultRecoveryCoordinatorFactory(paths: Parameters<RecoveryCoordinatorFactory>[0]) {
@@ -34,11 +35,21 @@ async function defaultRecoveryCoordinatorFactory(paths: Parameters<RecoveryCoord
   const [{ createRecordCaptureCoordinator }, { SqliteCaptureMappingStore, AbsentDestinationAllocator }] = await Promise.all([
     import('@apparent/record/host/capture2-coordinator'), import('@apparent/record/host'),
   ]);
-  const captureClient = new CaptureClient(launchCaptureEngine(paths.captureExecutable, paths.runtime, 40_000));
-  const mediaClient = new Media2Client(launchMedia2Worker(paths.mediaExecutable, paths.runtime, 5_000));
+  const capturePeer = await launchCaptureRecoveryPeer(paths.captureExecutable, paths.runtime);
+  let mediaPeer: Awaited<ReturnType<typeof launchMedia2RecoveryPeer>> | undefined;
+  let injected = false;
   try {
+    mediaPeer = await launchMedia2RecoveryPeer(paths.mediaExecutable, paths.runtime);
+    // Validate the ordinary SDK client contracts while both recovery peers
+    // are still caller-owned and have not been handed to Record.
+    await capturePeer.client.handshake();
+    await mediaPeer.client.handshake();
+    // Passing either client to Record transfers use to a borrower. If its
+    // asynchronous construction rejects, no public coordinator handle exists
+    // from which this caller can prove a drain, so these peers stay owned.
+    injected = true;
     const coordinator = await createRecordCaptureCoordinator({
-      captureClient, mediaClient, privateControlRoot: storeRoot,
+      captureClient: capturePeer.client, mediaClient: mediaPeer.client, privateControlRoot: storeRoot,
       mappings: new SqliteCaptureMappingStore(storeRoot),
       destinations: new AbsentDestinationAllocator(storeRoot, paths.destinationRoot),
       createStartIntent() { throw new Error('Recovery cannot start a fresh capture'); },
@@ -46,9 +57,14 @@ async function defaultRecoveryCoordinatorFactory(paths: Parameters<RecoveryCoord
       selectProcessing() { throw new Error('Recovery cannot make a new processing selection'); },
       preflight: preflightCapturePublication,
     });
-    return { coordinator, async close() { return Promise.allSettled([captureClient.close(), mediaClient.close()]); } };
+    return { coordinator, async release() {
+      const settled = await Promise.allSettled([capturePeer.release(), mediaPeer!.release()]);
+      if (settled.some(result => result.status === 'rejected')) throw new AggregateError(settled.filter(result => result.status === 'rejected').map(result => result.reason), 'Recovery peer release failed');
+      return settled.map(result => (result as PromiseFulfilledResult<RecoveryPeerRelease>).value) as [RecoveryPeerRelease, RecoveryPeerRelease];
+    } };
   } catch (error) {
-    await Promise.allSettled([captureClient.close(), mediaClient.close()]);
+    // A second launch failure leaves the first peer genuinely un-injected.
+    if (!injected) await Promise.allSettled([capturePeer.release(), ...(mediaPeer ? [mediaPeer.release()] : [])]);
     throw error;
   }
 }
@@ -76,10 +92,11 @@ export async function recoverRecordCaptures(args: string[], config: {
     throw new Error('Agent capture/2 control root must be private and owned by the current user');
   const composed = await (config.factory ?? defaultRecoveryCoordinatorFactory)({ controlRoot, destinationRoot, runtime, captureExecutable, mediaExecutable });
   let reconciliationFailed = false;
-  let closeVerified = false;
+  let peerRelease: [RecoveryPeerRelease, RecoveryPeerRelease] | undefined;
   let results: unknown[] = [];
   let issues: readonly unknown[] = [];
   let shutdownReport: Awaited<ReturnType<RecordCaptureCoordinator['shutdown']>> | undefined;
+  let disposed = false;
   try {
     try { await composed.coordinator.reconcile(); }
     catch { reconciliationFailed = true; }
@@ -120,22 +137,29 @@ export async function recoverRecordCaptures(args: string[], config: {
   } finally {
     try { shutdownReport = await composed.coordinator.shutdown(); }
     catch { reconciliationFailed = true; }
-    await composed.coordinator.dispose().catch(() => { reconciliationFailed = true; });
-    if (!shutdownReport || shutdownReport.scope !== 'record-coordinator' || shutdownReport.admission !== 'closed' || shutdownReport.localDrain !== 'complete' ||
-        shutdownReport.runtimeClearance !== 'clear' || shutdownReport.work.length !== 0 || shutdownReport.nextShortcutAdmission.state !== 'unsupported') {
+    if (!shutdownReport || shutdownReport.scope !== 'record-coordinator' || shutdownReport.admission !== 'closed' || shutdownReport.localDrain !== 'complete') {
       reconciliationFailed = true;
     } else {
-      const closed = await composed.close().catch(() => undefined);
-      closeVerified = Array.isArray(closed) && closed.length === 2 && closed.every(item => item.status === 'fulfilled' && ['already-exited', 'eof-exited', 'exit-observed'].includes(String(item.value)));
+      try { await composed.coordinator.dispose(); disposed = true; }
+      catch { reconciliationFailed = true; }
+      if (disposed) {
+        peerRelease = await composed.release().catch(() => undefined);
+        if (!peerRelease || peerRelease.length !== 2 || peerRelease.some(item => item.scope !== 'client-connection' || item.connection !== 'released' ||
+            item.runtimeClearance !== 'not-established')) reconciliationFailed = true;
+      }
     }
   }
-  if (!closeVerified) process.stderr.write(shutdownReport?.runtimeClearance === 'clear'
-    ? 'Recovery SDK transport close is uncertain; no completion is claimed.\n'
-    : 'Record shutdown retained unresolved or unknown SDK ownership; transports remain open and recovery is incomplete.\n');
+  const shutdownValid = shutdownReport?.scope === 'record-coordinator' && shutdownReport.admission === 'closed' && shutdownReport.localDrain === 'complete';
+  const releaseConfirmed = !!peerRelease && peerRelease.length === 2 && peerRelease.every(item => item.scope === 'client-connection' && item.connection === 'released');
+  const closureConfirmed = !!peerRelease && peerRelease.length === 2 && peerRelease.every(item => ['confirmed', 'peer-exit-observed'].includes(item.inputClosure));
+  if (!releaseConfirmed || !closureConfirmed) process.stderr.write('Recovery peer connection release or input closure is unconfirmed; no completion is claimed.\n');
   process.stdout.write(`${JSON.stringify({ captures: results, processingIssues: issues, reconciliation: reconciliationFailed ? 'unknown' : 'complete',
-    shutdown: shutdownReport ? { runtimeClearance: shutdownReport.runtimeClearance, work: shutdownReport.work } : 'unknown',
-    transportClose: closeVerified ? 'confirmed' : shutdownReport?.runtimeClearance === 'clear' ? 'uncertain' : 'retained-open' })}\n`);
-  if (reconciliationFailed || !closeVerified || issues.length || results.some((result: any) => ['checking', 'starting', 'recording', 'stopping', 'cancelling', 'stop-failed', 'uncertain', 'processing', 'unknown'].includes(result.state))) return 3;
+    shutdown: shutdownReport ? { scope: shutdownReport.scope, admission: shutdownReport.admission, localDrain: shutdownReport.localDrain,
+      runtimeClearance: shutdownReport.runtimeClearance, work: shutdownReport.work } : 'unknown',
+    peerRelease: peerRelease ?? 'unknown', peerInputClosure: closureConfirmed ? 'confirmed' : 'unconfirmed' })}\n`);
+  if (reconciliationFailed || !shutdownValid || !disposed || !releaseConfirmed || !closureConfirmed || shutdownReport?.runtimeClearance !== 'clear' ||
+      shutdownReport.work.length !== 0 || shutdownReport.nextShortcutAdmission.state !== 'unsupported' || issues.length ||
+      results.some((result: any) => ['checking', 'starting', 'recording', 'stopping', 'cancelling', 'stop-failed', 'uncertain', 'processing', 'unknown'].includes(result.state))) return 3;
   return results.some((result: any) => ['failed', 'cancelled'].includes(result.state)) ? 1 : 0;
 }
 

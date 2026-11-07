@@ -111,24 +111,25 @@ test('recover uses coordinator reconciliation and reports pending/unknown withou
       processingIssues: () => [{ requestId: 'public-id', state: 'outcome-unknown', code: 'media-outcome-unknown', at: '2026-01-01T00:00:00.000Z' }],
       resolveHandoff: async () => { throw new Error('pending captures have no handoff'); },
     } as unknown as import('@apparent/record/host/capture2-coordinator').RecordCaptureCoordinator,
-    close: async () => { calls.push('close'); return [{ status: 'fulfilled', value: 'eof-exited' }, { status: 'fulfilled', value: 'already-exited' }]; },
+    release: async () => { calls.push('release'); return [recoveryRelease('capture', 'unconfirmed'), recoveryRelease('media')]; },
   });
   const output: string[] = [], originalWrite = process.stdout.write;
   process.stdout.write = ((chunk: string | Uint8Array) => { output.push(typeof chunk === 'string' ? chunk : Buffer.from(chunk).toString()); return true; }) as typeof process.stdout.write;
   try {
     const code = await recoverRecordCaptures([], { captureExecutable: '/opt/capture', mediaExecutable: '/opt/media', runtime: join(root, 'runtime'), controlRoot: join(root, 'control'), destinationRoot: join(root, 'bundles'), factory });
     assert.equal(code, 3);
-    assert.deepEqual(calls, ['reconcile', 'shutdown', 'dispose']);
+    assert.deepEqual(calls, ['reconcile', 'shutdown', 'dispose', 'release']);
     const result = JSON.parse(output.join(''));
     assert.equal(result.captures[0].state, 'processing');
     assert.equal('bundlePath' in result.captures[0], false);
     assert.equal(result.processingIssues[0].code, 'media-outcome-unknown');
-    assert.equal(result.transportClose, 'retained-open');
+    assert.equal(result.peerRelease[0].connection, 'released');
+    assert.equal(result.peerInputClosure, 'unconfirmed');
     assert.equal(result.shutdown.runtimeClearance, 'unknown');
   } finally { process.stdout.write = originalWrite; await rm(root, { recursive: true, force: true }); }
 });
 
-test('recover drains and disposes coordinator before closing caller-owned SDKs after clear shutdown', async () => {
+test('recover drains and disposes coordinator before releasing both recovery peers after clear shutdown', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-recover-clear-'));
   const calls: string[] = [];
   const factory: RecoveryCoordinatorFactory = async () => ({
@@ -139,17 +140,17 @@ test('recover drains and disposes coordinator before closing caller-owned SDKs a
       runtime: { captures: () => [], unresolvedOwnership: () => ({ requestIds: [], storageUnavailable: false, reconciliation: 'complete' }) },
       captureFacts: { readFacts: async () => ({ captures: [] }) }, processingIssues: () => [], resolveHandoff: async () => null,
     } as unknown as import('@apparent/record/host/capture2-coordinator').RecordCaptureCoordinator,
-    close: async () => { calls.push('close'); return [{ status: 'fulfilled', value: 'eof-exited' }, { status: 'fulfilled', value: 'already-exited' }]; },
+    release: async () => { calls.push('release'); return [recoveryRelease('capture'), recoveryRelease('media')]; },
   });
   const originalWrite = process.stdout.write; process.stdout.write = (() => true) as typeof process.stdout.write;
   try {
     const code = await recoverRecordCaptures([], { captureExecutable: '/opt/capture', mediaExecutable: '/opt/media', runtime: join(root, 'runtime'), controlRoot: join(root, 'control'), destinationRoot: join(root, 'bundles'), factory });
     assert.equal(code, 0);
-    assert.deepEqual(calls, ['reconcile', 'shutdown', 'dispose', 'close']);
+    assert.deepEqual(calls, ['reconcile', 'shutdown', 'dispose', 'release']);
   } finally { process.stdout.write = originalWrite; await rm(root, { recursive: true, force: true }); }
 });
 
-test('recover returns exit 3 when a clear shutdown is followed by unverified SDK close', async () => {
+test('recover returns exit 3 when released peer input closure is unconfirmed', async () => {
   const root = await mkdtemp(join(tmpdir(), 'agent-recover-close-'));
   const factory: RecoveryCoordinatorFactory = async () => ({
     coordinator: {
@@ -159,7 +160,7 @@ test('recover returns exit 3 when a clear shutdown is followed by unverified SDK
       runtime: { captures: () => [], unresolvedOwnership: () => ({ requestIds: [], storageUnavailable: false, reconciliation: 'complete' }) },
       captureFacts: { readFacts: async () => ({ captures: [] }) }, processingIssues: () => [], resolveHandoff: async () => null,
     } as unknown as import('@apparent/record/host/capture2-coordinator').RecordCaptureCoordinator,
-    close: async () => [{ status: 'fulfilled', value: 'kill-requested-after-timeout' }, { status: 'fulfilled', value: 'already-exited' }],
+    release: async () => [recoveryRelease('capture', 'unconfirmed'), recoveryRelease('media')],
   });
   const originalWrite = process.stdout.write, originalError = process.stderr.write;
   process.stdout.write = (() => true) as typeof process.stdout.write; process.stderr.write = (() => true) as typeof process.stderr.write;
@@ -167,6 +168,36 @@ test('recover returns exit 3 when a clear shutdown is followed by unverified SDK
     const code = await recoverRecordCaptures([], { captureExecutable: '/opt/capture', mediaExecutable: '/opt/media', runtime: join(root, 'runtime'), controlRoot: join(root, 'control'), destinationRoot: join(root, 'bundles'), factory });
     assert.equal(code, 3);
   } finally { process.stdout.write = originalWrite; process.stderr.write = originalError; await rm(root, { recursive: true, force: true }); }
+});
+
+function recoveryRelease(peerId: string, inputClosure: 'confirmed' | 'unconfirmed' = 'confirmed') {
+  return { scope: 'client-connection' as const, peerId, connection: 'released' as const, inputClosure,
+    runtimeClearance: 'not-established' as const, reconcile: 'original-capture-materials-job-publication-bindings' as const };
+}
+
+test('recover never releases injected peers when Record shutdown or disposal fails', async () => {
+  const root = await mkdtemp(join(tmpdir(), 'agent-recover-drain-failure-'));
+  for (const failAt of ['shutdown', 'dispose'] as const) {
+    const calls: string[] = [];
+    const factory: RecoveryCoordinatorFactory = async () => ({
+      coordinator: {
+        reconcile: async () => undefined,
+        shutdown: async () => { calls.push('shutdown'); if (failAt === 'shutdown') throw new Error('synthetic drain rejection'); return { scope: 'record-coordinator', admission: 'closed', localDrain: 'complete', runtimeClearance: 'unknown', nextShortcutAdmission: { state: 'unsupported', reason: 'synthetic' }, work: [] }; },
+        dispose: async () => { calls.push('dispose'); if (failAt === 'dispose') throw new Error('synthetic dispose rejection'); },
+        runtime: { captures: () => [], unresolvedOwnership: () => ({ requestIds: [], storageUnavailable: false, reconciliation: 'complete' }) },
+        captureFacts: { readFacts: async () => ({ captures: [] }) }, processingIssues: () => [], resolveHandoff: async () => null,
+      } as unknown as import('@apparent/record/host/capture2-coordinator').RecordCaptureCoordinator,
+      release: async () => { calls.push('release'); return [recoveryRelease('capture'), recoveryRelease('media')]; },
+    });
+    const originalWrite = process.stdout.write, originalError = process.stderr.write;
+    process.stdout.write = (() => true) as typeof process.stdout.write; process.stderr.write = (() => true) as typeof process.stderr.write;
+    try {
+      const code = await recoverRecordCaptures([], { captureExecutable: '/opt/capture', mediaExecutable: '/opt/media', runtime: join(root, 'runtime'), controlRoot: join(root, `control-${failAt}`), destinationRoot: join(root, 'bundles'), factory });
+      assert.equal(code, 3);
+      assert.equal(calls.includes('release'), false, `${failAt} failure must keep injected recovery peers owned`);
+    } finally { process.stdout.write = originalWrite; process.stderr.write = originalError; }
+  }
+  await rm(root, { recursive: true, force: true });
 });
 
 test('capture/2 omitted destination uses read-only configured capturesDir and lets Record create a private missing root', async () => {

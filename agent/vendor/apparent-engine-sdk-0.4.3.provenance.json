@@ -1,0 +1,16 @@
+{
+  "package": "@apparent/engine-sdk",
+  "version": "0.4.3",
+  "sourceSha": "9915e8d343a4feafbeb31b4cea6bed43f2cb93a1",
+  "runId": 42314800490,
+  "runAttempt": 1,
+  "artifactId": 13548814854,
+  "componentSha256": "debf35eeab447748424734b900d63576c332791b57ce03f01f8a53800dd8f61b",
+  "packageTarballSha256": "8484be413d1749523715446c0604ff6f09a598c526dc22458ee648f3e16775a8",
+  "reusedBuild": {
+    "sourceSha": "cf8356eb869038f6737a8e83c1cb4ab655fa0237",
+    "runId": 42311580289,
+    "runAttempt": 1
+  },
+  "attestationVerified": true
+}
