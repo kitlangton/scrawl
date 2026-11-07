@@ -10,10 +10,18 @@ import { createMediaJobId, MediaClient, launchMediaWorker } from '../../../sdk/s
 test('packaged entry decodes real H.264 with ambient plugin and loader paths closed', async t => {
   const entry = process.env.APPARENT_ENGINE_FRAMES_BIN
   if (!entry) { t.skip('requires the built package entry'); return }
+  const diagnostics = process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS === '1' || process.env.CI === 'true'
   const root = await mkdtemp(join(await realpath(tmpdir()), 'apparent-media-h264-'))
   await chmod(root, 0o700)
   const runtime = join(root, 'runtime'); const bundle = join(root, 'synthetic.apparent')
   await mkdir(runtime, { mode: 0o700 }); await mkdir(bundle, { mode: 0o700 })
+  const diagnosticFile = join(runtime, 'media-diagnostics.log')
+  const oldDiagnosticSwitch = process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS
+  const oldDiagnosticFile = process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS_FILE
+  if (diagnostics) {
+    process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS = '1'
+    process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS_FILE = diagnosticFile
+  }
   const video = join(bundle, 'recording.mp4')
   if (process.env.APPARENT_MEDIA_FIXTURE) await copyFile(resolve(process.env.APPARENT_MEDIA_FIXTURE), video)
   else {
@@ -30,6 +38,7 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
   const old = Object.fromEntries(['LD_LIBRARY_PATH', 'GST_PLUGIN_PATH', 'GST_PLUGIN_PATH_1_0', 'GST_PLUGIN_SYSTEM_PATH', 'GST_PLUGIN_SYSTEM_PATH_1_0'].map(k => [k, process.env[k]]))
   for (const k of Object.keys(old)) process.env[k] = '/nonexistent/host-runtime'
   let client: MediaClient | undefined
+  let completed = false
   try {
     client = new MediaClient(launchMediaWorker(resolve(entry), runtime))
     assert.equal((await client.handshake()).capabilities.decodeFrames, true)
@@ -55,8 +64,23 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
       for (const [index, frame] of result.frames.entries()) await copyFile(frame.path, join(evidence, `frame-${index + 1}.png`))
       await writeFile(join(evidence, 'packaged-h264-result.json'), JSON.stringify({ result, sourceSha256: createHash('sha256').update(await readFile(video)).digest('hex') }, null, 2), { mode: 0o600 })
     }
+    completed = true
   } finally {
     for (const [k, v] of Object.entries(old)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
-    await client?.close(); await rm(root, { recursive: true, force: true })
+    if (oldDiagnosticSwitch === undefined) delete process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS
+    else process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS = oldDiagnosticSwitch
+    if (oldDiagnosticFile === undefined) delete process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS_FILE
+    else process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS_FILE = oldDiagnosticFile
+    try {
+      await client?.close()
+    } finally {
+      if (completed || !diagnostics) {
+        await rm(root, { recursive: true, force: true })
+      } else {
+        const details = await readFile(diagnosticFile, 'utf8').catch(() => '')
+        if (details) process.stderr.write(details)
+        console.error(`packaged-h264 synthetic runtime retained: ${root}`)
+      }
+    }
   }
 })
