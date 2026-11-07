@@ -130,6 +130,12 @@ test('startup delay does not consume requested duration and request persistence 
   await assert.rejects(recordWithEngine(broken,'/tmp/fixture.apparent',1,()=>false,async()=>{calls.push('persist');}),/ambiguous start/);
 });
 
+// Preserve original Rust fixtures; only this origin inference is deliberately corrected.
+const originNeutralTelemetry = (text: string) => text.replace(
+  "Interaction context: timed CLI video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes. Use the app's recording shortcut for interaction context.",
+  "Interaction context: video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes.",
+);
+
 test('existing Rust inspection fixtures preserve current/legacy raw JSON, summaries and mark semantics',async()=>{
   const {readFile,copyFile}=await import('node:fs/promises');
   const root=await mkdtemp(join(tmpdir(),'agent-compatibility-'));
@@ -142,13 +148,13 @@ test('existing Rust inspection fixtures preserve current/legacy raw JSON, summar
       const run=(args:string[])=>spawnSync(process.execPath,[cli,'inspect',bundle,...args],{encoding:'utf8'});
       const raw=run(['--json']);assert.equal(raw.status,0,raw.stderr);assert.equal(raw.stdout,await readFile(fixture(`${name}.json`),'utf8'));
       const text=run([]);assert.equal(text.status,0,text.stderr);
-      assert.equal(text.stdout,(await readFile(fixture(`${name}.md`),'utf8')).replace('@BUNDLE@',bundle));
+      assert.equal(text.stdout,originNeutralTelemetry((await readFile(fixture(`${name}.md`),'utf8')).replace('@BUNDLE@',bundle)));
       assert.equal(run(['--stored-summary']).stdout,await readFile(fixture(`${name}.md`),'utf8'));
       if(name==='current') {
         const rich=run(['--experiment','agentContext']);assert.equal(rich.status,0,rich.stderr);
         assert.match(rich.stdout,/repository: \/work\/synthetic/);
         const expected=(await readFile(fixture('current.agent.md'),'utf8')).replace('@BUNDLE@',bundle);
-        assert.equal(rich.stdout,expected);
+        assert.equal(rich.stdout,originNeutralTelemetry(expected));
         assert.match(rich.stdout,/0:03 clicked button “Save”/);
         assert.match(rich.stdout,/Note: Keep semantic text\./);
         const marks=run(['--marks','--json']);assert.equal(marks.status,0,marks.stderr);
