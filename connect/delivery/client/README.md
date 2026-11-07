@@ -664,6 +664,18 @@ carries the root identity, nonce and cancellation facts required by the identity
 publisher; uncertain outcomes return no usable begun receipt. Native Linux tests
 join both phases and exercise real queue waits across cancellation/revocation.
 
+The internal `assertLoginStateCurrent` consumes that receipt under one queue
+lease, checking the original root, scoped marker, cancellation and pending intent
+without changing JSON state. `createStateBackedDeviceLoginTransport` binds it to
+the private session's request and commit boundaries, along with the host's fresh
+consent/settings check outside the queue lease. The published identity result
+must name the receipt's login. Native Linux tests join real marker/identity
+publication with compiled device HTTP and a memory-only commit sink, including
+supersession, cancellation, intent, root replacement and late commit fences.
+Queue access remains available during HTTP. This does not grant a durable write
+lease: the eventual host commit must repeat its checks inside the sole-writer
+transaction, and config publication and installed adoption remain outstanding.
+
 The internal `publishLoginIdentity` seam privately publishes a supplied record
 only when its original root, scope/login marker, cancellation epoch and current
 queue lease still match and no revocation intent is pending. It uses expected-absent replacement,
