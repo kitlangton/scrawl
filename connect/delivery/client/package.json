@@ -21,6 +21,7 @@
     "./sender-spool": "./dist/sender/spool-reader.js",
     "./recipient-command/renewal": "./dist/state/renewal-owner.js",
     "./recipient-command": "./dist/cli/recipient.js",
+    "./endpoint-identity": "./dist/credentials/recipient-identity.js",
     "./credentials": "./dist/credentials/index.js",
     "./state": "./dist/state/namespace.js",
     "./queue": "./dist/queue/index.js",

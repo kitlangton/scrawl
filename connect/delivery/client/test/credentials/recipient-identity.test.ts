@@ -1,7 +1,10 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { decodeStoredIdentityRecord, validateStoredIdentityRecord, StoredIdentityError } from "../../src/credentials/recipient-identity.ts";
-import { generateAgeIdentity } from "../../src/recipient/crypto.ts";
+import { decodeStoredIdentityRecord, validateStoredIdentityRecord, generateStoredIdentityRecord, StoredIdentityError } from "../../src/credentials/recipient-identity.ts";
+import { decryptAge, encryptAge, generateAgeIdentity, signEnvelope, verifyEnvelope, type Signed } from "../../src/recipient/crypto.ts";
+import * as ed25519 from "@noble/ed25519";
+import { identityToRecipient } from "age-encryption";
+import { validatePeerAuthorityKey } from "../../src/recipient/peer-authority.ts";
 
 const seed = "01".repeat(32);
 const encoder = new TextEncoder();
@@ -81,4 +84,51 @@ test("snapshots mutable fields before validation awaits", async () => {
   assert.equal(await validateStoredIdentityRecord(record(f.age, "00".repeat(32))).then(v => v.signing.every(b => b === 0)), true);
   const redacted = await validateStoredIdentityRecord(record("private-marker" )).catch(e => e as Error);
   assert.equal(redacted.message.includes("private-marker"), false);
+});
+
+test("generates a canonical private record and matching validated public authority", async () => {
+  const generated = await generateStoredIdentityRecord();
+  try {
+    assert.equal(Object.isFrozen(generated), true);
+    assert.equal(Object.isFrozen(generated.publicKey), true);
+    const decoded = decodeStoredIdentityRecord(generated.privateRecord);
+    const validated = await validateStoredIdentityRecord(decoded);
+    try {
+      const expectedRecipient = await identityToRecipient(validated.age);
+      const expectedSigning = Buffer.from(await ed25519.getPublicKeyAsync(validated.signing)).toString("hex");
+      assert.deepEqual(generated.publicKey, validatePeerAuthorityKey({ version: 1, recipient: expectedRecipient, signing: expectedSigning }));
+      assert.deepEqual(JSON.parse(new TextDecoder().decode(generated.privateRecord)), {
+        version: 1, age: decoded.age, signing: decoded.signing,
+      });
+      const message = new TextEncoder().encode("synthetic recipient identity check");
+      const ciphertext = await encryptAge(message, [generated.publicKey.recipient]);
+      assert.deepEqual(await decryptAge(ciphertext, decoded.age), message);
+      const signed: Signed = { version: 1, context: { origin: "https://example.invalid", accountId: "account", captureId: "0".repeat(32), senderGrantId: "device" }, chunks: [] };
+      const signature = await signEnvelope(validated.signing, signed);
+      assert.equal(await verifyEnvelope(Buffer.from(generated.publicKey.signing, "hex"), signed, signature), true);
+    } finally { validated.signing.fill(0); }
+  } finally { generated.privateRecord.fill(0); }
+});
+
+test("independent generation has detached caller-owned bytes and no cache", async () => {
+  const first = await generateStoredIdentityRecord();
+  const second = await generateStoredIdentityRecord();
+  try {
+    assert.notEqual(first.privateRecord, second.privateRecord);
+    assert.notDeepEqual(first.privateRecord, second.privateRecord);
+    assert.notDeepEqual(first.publicKey, second.publicKey);
+    const before = first.privateRecord.slice();
+    second.privateRecord.fill(0);
+    assert.deepEqual(first.privateRecord, before);
+    assert.ok(first.privateRecord.some(byte => byte !== 0));
+  } finally { first.privateRecord.fill(0); second.privateRecord.fill(0); }
+});
+
+test("generation cancellation is categorized and does not expose private material", async () => {
+  const pre = new AbortController(); pre.abort();
+  category(await generateStoredIdentityRecord({ signal: pre.signal }).catch(error => error), "cancelled");
+  const controller = new AbortController();
+  const pending = generateStoredIdentityRecord({ signal: controller.signal });
+  controller.abort();
+  category(await pending.catch(error => error), "cancelled");
 });
