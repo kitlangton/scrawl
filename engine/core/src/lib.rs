@@ -2,6 +2,8 @@
 #![forbid(unsafe_op_in_unsafe_fn)]
 #[cfg(not(any(target_os = "linux", target_os = "macos")))]
 compile_error!("capture-engine supports Linux and macOS only");
+#[cfg(feature = "audio-codec")]
+pub mod audio;
 mod finalizer;
 mod identity;
 mod lease;
