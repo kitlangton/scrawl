@@ -1,29 +1,8 @@
 //! Capture-local typed explanations. Rust owns persistence and click-time anchors.
 use anyhow::{Result, ensure};
-use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
-pub const MAX_TEXT_BYTES: usize = 8_192;
-const MAX_NOTES: usize = 100;
-// JSON can escape one input byte as six bytes (e.g. a control character).
-const MAX_SAVED_BYTES: usize = MAX_NOTES * MAX_TEXT_BYTES * 6 + 65_536;
-
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase", deny_unknown_fields)]
-pub struct Note {
-    pub pin: u32,
-    pub t: u64,
-    pub x: f32,
-    pub y: f32,
-    pub text: String,
-}
-
-#[derive(Default, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct Saved {
-    version: u32,
-    notes: Vec<Note>,
-}
+pub use apparent_capture_engine::recording::notes::{MAX_NOTES, MAX_TEXT_BYTES, Note};
 
 /// Unsubmitted drafts stay local to the running capture, never in exported media/text.
 pub struct Store {
@@ -115,31 +94,9 @@ impl Store {
         Ok(())
     }
     fn commit(&mut self, next: Vec<Note>) -> Result<()> {
-        use std::io::Write;
-        use std::os::unix::fs::OpenOptionsExt;
-        let temp = self.path.with_file_name(format!(
-            ".notes-{}.tmp",
-            crate::shared::ids::make_bundle_id()
-        ));
-        let result = (|| {
-            let mut f = std::fs::OpenOptions::new()
-                .write(true)
-                .create_new(true)
-                .mode(0o600)
-                .open(&temp)?;
-            f.write_all(&serde_json::to_vec(&Saved {
-                version: 1,
-                notes: next.clone(),
-            })?)?;
-            f.sync_all()?;
-            std::fs::rename(&temp, &self.path)?;
-            std::fs::File::open(self.path.parent().unwrap())?.sync_all()?;
-            Ok::<_, anyhow::Error>(())
-        })();
-        if result.is_err() {
-            let _ = std::fs::remove_file(temp);
-        }
-        result?;
+        let directory = self.path.parent().unwrap();
+        let nonce = crate::shared::ids::make_bundle_id();
+        apparent_capture_engine::recording::notes::commit(directory, &nonce, &next)?;
         self.saved = next;
         Ok(())
     }
@@ -152,46 +109,7 @@ impl Store {
 }
 
 pub fn read(directory: &Path) -> Result<Vec<Note>> {
-    let path = directory.join("notes.json");
-    use std::io::Read;
-    use std::os::unix::fs::OpenOptionsExt;
-    let data = match std::fs::OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW | libc::O_NONBLOCK)
-        .open(&path)
-    {
-        Ok(file) => {
-            ensure!(file.metadata()?.is_file(), "Notes must be a regular file");
-            let mut data = Vec::new();
-            file.take((MAX_SAVED_BYTES + 1) as u64)
-                .read_to_end(&mut data)?;
-            data
-        }
-        Err(e) if e.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
-        Err(e) => return Err(e.into()),
-    };
-    ensure!(data.len() <= MAX_SAVED_BYTES, "Notes file is too large");
-    let saved: Saved = serde_json::from_slice(&data)?;
-    ensure!(
-        saved.version == 1 && saved.notes.len() <= MAX_NOTES,
-        "Unsupported notes file"
-    );
-    let mut pins = std::collections::BTreeSet::new();
-    for n in &saved.notes {
-        ensure!(
-            n.pin > 0
-                && pins.insert(n.pin)
-                && n.x.is_finite()
-                && n.y.is_finite()
-                && (0.0..=1.0).contains(&n.x)
-                && (0.0..=1.0).contains(&n.y)
-                && n.text.len() <= MAX_TEXT_BYTES
-                && !n.text.contains('\0')
-                && !n.text.trim().is_empty(),
-            "Invalid saved note"
-        );
-    }
-    Ok(saved.notes)
+    apparent_capture_engine::recording::notes::read(directory)
 }
 
 #[cfg(test)]

@@ -8,6 +8,8 @@ mod lease;
 #[cfg(all(target_os = "linux", feature = "linux-media"))]
 pub mod linux;
 mod locking;
+#[cfg(feature = "recording-notes")]
+pub mod recording;
 pub mod observations;
 #[cfg(all(target_os = "macos", feature = "macos-capture"))]
 pub mod macos;
