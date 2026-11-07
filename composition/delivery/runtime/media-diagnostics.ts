@@ -1,7 +1,6 @@
 import { createHash } from 'node:crypto'
 import { constants, lstatSync, mkdirSync, openSync, closeSync, fstatSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import { pathToFileURL } from 'node:url'
 
 // Public artifacts: emit only finite signatures, numbers and validated hashes.
 // A matching signature is an observation, never a diagnosis or native proof.
@@ -69,7 +68,9 @@ export function stagePublicSummary(input: string, output: string, artifact: stri
   writeFileSync(join(output, 'summary.json'), JSON.stringify(safe) + '\n', { mode: 0o600, flag: 'wx' })
   return true
 }
-if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+// The action invokes this fixed repository-relative entry from the checkout root.
+// Keep import.meta out of this module: NodeNext consumers also typecheck it as CJS.
+if (process.argv[1] && resolve(process.argv[1]) === resolve('composition/delivery/runtime/media-diagnostics.ts')) {
   try {
     const [input, output, artifact] = process.argv.slice(2)
     if (!input || !output || !artifact || process.argv.length !== 5) throw new Error('invalid invocation')
