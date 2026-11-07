@@ -609,3 +609,21 @@ The joined Linux host fixture uses the public installed-resource factory and the
 hash-pinned existing Rust writer against synthetic state and loopback HTTP. It
 does not admit that writer for installation or supply the production Agent
 inspection adapter. Joined host proof on Mac and installed routing remain open.
+
+
+## CLI share-management transport
+
+`./share-management` lists every share page and returns only the known, frozen
+service fields. The caller selects read or upload scope from approved local state
+and pins its login generation; every request obtains fresh bearer authority for
+that same server, scope and generation. The API performs no credential writes,
+refresh, scope fallback or installed routing. Lists fail without a partial result
+above 1,000 pages, 10,000 rows or 16 MB of raw response bytes.
+
+`revokeShare` requires upload scope and a 32-character management ID, sends DELETE
+once, then checks the complete list. An absent, revoked or expired row confirms;
+an acknowledged DELETE without valid readback raises `ShareRevocationError` with
+`effect: "acknowledged_unverified"`. Other failures have an unknown effect; neither
+case authorizes an automatic repeat. Share secrets are never management IDs.
+The service remains authoritative. Installed command and renewal-owner adoption
+remain separate; root and `/connect` loopback Worker tests do not prove live auth.
