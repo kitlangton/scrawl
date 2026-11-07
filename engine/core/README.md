@@ -204,5 +204,29 @@ caller. It requires actual first samples before start returns. Device discovery,
 consent, hardware/capture clock binding, bounded durable WAV persistence and
 transcription remain caller-owned; stream drop requests the existing Null state.
 This trusted-caller port does not advertise capture/2 microphone availability.
+
+The timed microphone entry retains native running PTS and maps it through one
+pinned GStreamer clock/base into the caller's original admission `Instant`;
+missing timing or clock replacement fails. `audio::timeline::Timeline` checks
+16 kHz sample continuity before buffering. Its one-time origin quantization is
+ceil-to-integer-millisecond (<1 ms), with no later timestamp shifts, inserted
+internal silence or dropped samples. Initial padding is bounded to 180 seconds
+and is explicitly unobserved time, never recorded silence. A caller must retain
+the exact source origin and seal `audio-initial-gap` at the quantized first-real-
+sample time when nonzero. Empty or poisoned timelines cannot finish.
+
+`audio::persistence::DescriptorWriter` reuses the donor's bounded disk loop with
+a Store-created empty 0600 single-link descriptor and streams the initial zero
+prefix outside the live ring. Input must stop/drain before finish returns that
+same descriptor for identity checks and sealing. The caller retains its existing
+capture journal and owner permit; no second lease or path writer is introduced.
+These are source-level prerequisites, not audio clock, consent or package proof.
 The capture runtime still needs its audio plugin closure and authenticated audio
 material lifecycle before adopting it. No system-default source is changed.
+
+`Stream::start_with_clock` additionally accepts the original capture-admission
+Instant and reports each buffer segment running-time mapped through its active
+GStreamer clock. Missing/invalid timing refuses the buffer; callback arrival is
+not an audio offset. This is source pipeline timing, not hardware timestamp proof.
+Callers must also observe `error()` after first-sample readiness and retain WAV
+sample-clock continuity, durable failure and journal/seal authority themselves.

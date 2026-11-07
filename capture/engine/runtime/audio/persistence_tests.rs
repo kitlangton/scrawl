@@ -315,56 +315,6 @@ fn graceful_sigterm_drains_every_accepted_sample() {
 }
 
 #[test]
-fn long_recording_saves_expired_history_without_growing_callback_memory() {
-    let dir = Scratch::new("long");
-    let samples = Arc::new(Mutex::new(Samples::default()));
-    let allocation = samples.lock().unwrap().data.as_ptr();
-    let mut writer = Writer::start(&dir.0, samples.clone(), Arc::default()).unwrap();
-    let mut produced = 0;
-    for _ in 0..65 {
-        samples
-            .lock()
-            .unwrap()
-            .extend((produced..produced + RATE).map(tone));
-        produced += RATE;
-        wait_for(|| {
-            std::fs::metadata(dir.0.join("audio.wav")).unwrap().len() == (44 + produced * 2) as u64
-        });
-    }
-    let (wav, lease) = writer.finish().unwrap();
-    assert!(
-        Lease::acquire(&dir.0).is_err(),
-        "Stop must keep ownership through bundle finalization"
-    );
-    assert_eq!(samples.lock().unwrap().data.as_ptr(), allocation);
-    assert_eq!(samples.lock().unwrap().recent().len(), HISTORY);
-    let decoded = super::super::audio::decode_wav_16k(&wav).unwrap();
-    assert_eq!(decoded.len(), produced);
-    for (at, sample) in decoded.iter().enumerate() {
-        assert!((sample - tone(at)).abs() < 0.0001);
-    }
-    drop((writer, lease));
-    assert!(Lease::acquire(&dir.0).is_ok());
-}
-
-#[cfg(target_os = "linux")]
-#[test]
-fn kernel_enospc_is_a_save_failure_not_successful_silence() {
-    let mut full = OpenOptions::new().write(true).open("/dev/full").unwrap();
-    let samples = Mutex::new(Samples::from(vec![0.2; 160]));
-    let (sender, receiver) = std::sync::mpsc::channel();
-    drop(sender);
-    let error = write_stream(&mut full, &samples, receiver).unwrap_err();
-    assert_eq!(
-        error
-            .downcast_ref::<std::io::Error>()
-            .unwrap()
-            .raw_os_error(),
-        Some(libc::ENOSPC)
-    );
-}
-
-#[test]
 fn normal_stop_keeps_every_sample_and_holds_lease_until_consumed() {
     let dir = Scratch::new("normal");
     let mut child = spawn(&dir.0, "normal");
@@ -424,26 +374,6 @@ fn truncated_sample_repair_refuses_unknown_files_and_preserves_healthy_bytes() {
     std::fs::write(dir.0.join("audio.wav"), other).unwrap();
     assert!(repair(&dir.0, &lease).is_err());
     assert_eq!(std::fs::read(dir.0.join("audio.wav")).unwrap(), other);
-}
-
-#[test]
-fn long_history_is_bounded_and_absolute_ranges_do_not_shift() {
-    let mut samples = Samples::default();
-    let allocation = samples.data.as_ptr();
-    for at in 0..(3 * HISTORY + 137) {
-        samples.push(at as f32);
-    }
-    assert_eq!(samples.data.as_ptr(), allocation);
-    assert_eq!(samples.data.len(), 2 * HISTORY);
-    assert_eq!(samples.len(), 3 * HISTORY + 137);
-    assert!(samples.get(0..160).is_none());
-    assert_eq!(
-        samples.get(samples.len() - 160..).unwrap(),
-        (samples.len() - 160..samples.len())
-            .map(|at| at as f32)
-            .collect::<Vec<_>>()
-    );
-    assert_eq!(samples.recent().len(), HISTORY);
 }
 
 #[test]

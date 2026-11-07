@@ -1,5 +1,5 @@
 //! The existing 16 kHz mono PCM16 WAV codec.
-//! No microphone, recording lifecycle, filesystem writer or speech-selection policy.
+//! No microphone selection, recording policy or speech-selection policy.
 
 use anyhow::{Result, ensure};
 use std::io::Cursor;
@@ -101,3 +101,9 @@ mod tests {
         );
     }
 }
+
+/// Existing trusted-caller bounded WAV writer, lease and recovery mechanics.
+pub mod persistence;
+
+/// Admission-aligned PCM timing checks; no capture or file ownership.
+pub mod timeline;
