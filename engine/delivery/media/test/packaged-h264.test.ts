@@ -5,6 +5,7 @@ import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, s
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
+import { writePublicSummary } from '../../../../composition/delivery/runtime/media-diagnostics.ts'
 import { createMediaJobId, MediaClient, MediaChildProcessTransport, launchMediaWorker } from '../../../sdk/src/media.ts'
 
 // This is synthetic-test evidence only; raw bytes never enter public diagnostics.
@@ -43,7 +44,7 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
   let client: MediaClient | undefined
   let completed = false
   let diagnosticStderr: Buffer = Buffer.alloc(0)
-  const diagnosticIdentity: Record<string, unknown> = { synthetic: true, buildSourceSha: process.env.GITHUB_SHA ?? null, entry: resolve(entry), sourceIdentity: { device: String(m.dev), inode: String(m.ino), size: Number(m.size), modifiedNs: String(m.mtimeNs) } }
+  const diagnosticIdentity: Record<string, unknown> = { synthetic: true, generated: !process.env.APPARENT_MEDIA_FIXTURE, buildSourceSha: process.env.GITHUB_SHA ?? null, entry: resolve(entry), sourceIdentity: { device: String(m.dev), inode: String(m.ino), size: Number(m.size), modifiedNs: String(m.mtimeNs) } }
   const observeDiagnostic = (chunk: Buffer) => { diagnosticStderr = Buffer.concat([diagnosticStderr, chunk]).subarray(-8192) }
   let stopObserving = () => {}
   try {
@@ -98,6 +99,9 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
         await rm(root, { recursive: true, force: true })
       } else {
         diagnosticIdentity.testCompleted = completed; diagnosticIdentity.clientCloseReturned = closed
+        if (process.env.CI === 'true' && process.env.APPARENT_SYNTHETIC_DIAGNOSTICS_DIR && !process.env.APPARENT_MEDIA_FIXTURE) {
+          try { writePublicSummary(process.env.APPARENT_SYNTHETIC_DIAGNOSTICS_DIR, diagnosticStderr, diagnosticIdentity, process.env) } catch { process.stderr.write('packaged-h264 public summary unavailable\n') }
+        }
         try { await retainSyntheticFailure(root, diagnosticStderr, diagnosticIdentity) } catch { process.stderr.write('packaged-h264 private evidence retention failed\n') }
         const details = diagnosticStderr.toString('utf8').split('\n').filter(line => line.startsWith('apparent-media-diagnostic ') && line.length <= 256).join('\n').slice(0, 4096)
         await writeFile(join(root, 'media-diagnostics.log'), details, { mode: 0o600 })

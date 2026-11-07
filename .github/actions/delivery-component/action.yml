@@ -126,9 +126,25 @@ runs:
       with:
         bun-version: '1.3.10'
     - name: Independently install, verify and build the owner artifact
+      id: owner-build
+      env:
+        APPARENT_SYNTHETIC_DIAGNOSTICS_DIR: ${{ runner.temp }}/media-failure-summary
       if: inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success'
       shell: bash
       run: node --experimental-strip-types composition/delivery/cli.ts build "$OWNER_ID" "$OWNER_TARGET" "$RUNNER_TEMP/stream-payload"
+    - name: Stage allowlisted generated media failure summary
+      id: media-failure-summary
+      if: failure() && steps.owner-build.outcome == 'failure' && inputs.id == 'engine-media-native' && inputs.target == 'linux-x64'
+      shell: bash
+      run: node --experimental-strip-types composition/delivery/runtime/media-diagnostics.ts "$RUNNER_TEMP/media-failure-summary" "$RUNNER_TEMP/media-failure-public" "$GITHUB_WORKSPACE/engine/delivery/media/dist"
+    - name: Retain sanitized synthetic media failure evidence
+      if: failure() && steps.media-failure-summary.outputs.found == 'true'
+      uses: actions/upload-artifact@v4
+      with:
+        name: synthetic-media-failure-${{ github.run_id }}-${{ github.run_attempt }}-${{ github.sha }}
+        path: ${{ runner.temp }}/media-failure-public/summary.json
+        retention-days: 3
+        if-no-files-found: error
     - name: Verify staged capture inventory and public SDK launch
       if: (inputs.publish != 'true' || steps.admit.outputs.reuse != 'true' || steps.reuse.outcome != 'success') && inputs.id == 'engine-capture-native'
       shell: bash
