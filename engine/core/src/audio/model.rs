@@ -30,17 +30,19 @@ impl Identity {
     }
 }
 
-/// A read-only descriptor whose declared bytes were verified, with unchanged file metadata.
-/// The caller owns model selection and the independently trusted expected size/hash.
-/// Holding this FD defeats pathname replacement; it does NOT make writable bytes immutable.
-/// Revalidate after native use, before using its result in original material sealing.
+/// An immutable Linux memfd snapshot of explicitly declared local model bytes.
+/// The original source is never chmodded or rewritten. Its owner may mutate it:
+/// native loading uses only the copied, expected-hash-verified, write-sealed snapshot.
+/// The caller must admit model-size snapshot memory PLUS native working memory.
 pub struct ModelFile {
     file: File,
     identity: Identity,
     sha256: String,
 }
 impl ModelFile {
-    pub fn verify(file: File, bytes: u64, sha256: &str, deadline: Instant) -> Result<Self> {
+    pub fn verify(source: File, bytes: u64, sha256: &str, deadline: Instant) -> Result<Self> {
+        use std::os::fd::FromRawFd;
+        ensure!(Instant::now() < deadline, "model verification deadline");
         ensure!(bytes > 0 && bytes <= MAX_BYTES, "model byte bound");
         ensure!(
             sha256.len() == 64
@@ -49,11 +51,11 @@ impl ModelFile {
                     .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
             "model digest must be lowercase SHA256"
         );
-        let m = file.metadata()?;
-        let mode = unsafe { libc::fcntl(file.as_raw_fd(), libc::F_GETFL) };
+        let m = source.metadata()?;
+        let mode = unsafe { libc::fcntl(source.as_raw_fd(), libc::F_GETFL) };
         ensure!(
             mode >= 0 && mode & libc::O_ACCMODE == libc::O_RDONLY,
-            "model descriptor must be read-only"
+            "model source descriptor must be read-only"
         );
         ensure!(
             m.is_file()
@@ -61,60 +63,91 @@ impl ModelFile {
                 && m.len() == bytes
                 && (m.uid() == unsafe { libc::geteuid() } || m.uid() == 0)
                 && m.mode() & 0o022 == 0,
-            "model file identity/mode/size mismatch"
+            "model source identity/mode/size mismatch"
+        );
+        let source_identity = Identity::read(&m);
+        let fd = unsafe {
+            libc::memfd_create(
+                c"apparent-speech-model".as_ptr(),
+                libc::MFD_CLOEXEC | libc::MFD_ALLOW_SEALING,
+            )
+        };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let file = unsafe { File::from_raw_fd(fd) };
+        let mut offset = 0;
+        let mut chunk = [0u8; 64 * 1024];
+        while offset < bytes {
+            ensure!(Instant::now() < deadline, "model snapshot deadline");
+            let size = chunk.len().min((bytes - offset) as usize);
+            let n = source.read_at(&mut chunk[..size], offset)?;
+            ensure!(n > 0, "model source truncated");
+            file.write_all_at(&chunk[..n], offset)?;
+            offset += n as u64;
+            ensure!(Instant::now() < deadline, "model snapshot deadline");
+        }
+        ensure!(
+            Identity::read(&source.metadata()?) == source_identity,
+            "model source changed during snapshot"
+        );
+        if unsafe { libc::fchmod(fd, 0o400) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        if unsafe { libc::fcntl(fd, libc::F_ADD_SEALS, required_seals()) } != 0 {
+            return Err(std::io::Error::last_os_error().into());
+        }
+        let mut digest = Sha256::new();
+        let mut offset = 0;
+        // Verify the actual already-sealed bytes, not a claim about the mutable source.
+        while offset < bytes {
+            ensure!(Instant::now() < deadline, "model verification deadline");
+            let size = chunk.len().min((bytes - offset) as usize);
+            let n = file.read_at(&mut chunk[..size], offset)?;
+            ensure!(n > 0, "model snapshot truncated");
+            digest.update(&chunk[..n]);
+            offset += n as u64;
+            ensure!(Instant::now() < deadline, "model verification deadline");
+        }
+        ensure!(
+            format!("{:x}", digest.finalize()) == sha256,
+            "model checksum mismatch"
         );
         let pin = Self {
+            identity: Identity::read(&file.metadata()?),
             file,
-            identity: Identity::read(&m),
             sha256: sha256.to_owned(),
         };
         pin.revalidate(deadline)?;
         Ok(pin)
     }
 
-    /// Bounded-memory byte verification; preserves the caller's descriptor offset.
-    /// A late/blocking filesystem read cannot yield success. Hard interruption still belongs
-    /// to the caller's existing supervised process deadline, not this synchronous file API.
+    /// Check kernel immutability and identity without rehashing immutable bytes each run.
+    /// This detects a late return; hard interruption remains the supervised child's job.
     pub fn revalidate(&self, deadline: Instant) -> Result<()> {
         ensure!(Instant::now() < deadline, "model verification deadline");
-        let before = self.file.metadata()?;
+        let seals = unsafe { libc::fcntl(self.file.as_raw_fd(), libc::F_GET_SEALS) };
         ensure!(
-            before.nlink() == 1
-                && before.mode() & 0o022 == 0
-                && (before.uid() == unsafe { libc::geteuid() } || before.uid() == 0),
-            "model ownership/mode changed"
+            seals >= 0 && seals & required_seals() == required_seals(),
+            "model snapshot seals missing"
         );
-        ensure!(Identity::read(&before) == self.identity, "model changed");
-        let mut digest = Sha256::new();
-        let mut offset = 0u64;
-        let mut chunk = [0u8; 64 * 1024];
-        while offset < self.identity.size {
-            ensure!(Instant::now() < deadline, "model verification deadline");
-            let size = chunk.len().min((self.identity.size - offset) as usize);
-            let n = self.file.read_at(&mut chunk[..size], offset)?;
-            ensure!(Instant::now() < deadline, "model verification deadline");
-            ensure!(n > 0, "model truncated");
-            digest.update(&chunk[..n]);
-            offset += n as u64;
-        }
-        let after = self.file.metadata()?;
+        let meta = self.file.metadata()?;
         ensure!(
-            after.nlink() == 1
-                && after.mode() & 0o022 == 0
-                && (after.uid() == unsafe { libc::geteuid() } || after.uid() == 0),
-            "model ownership/mode changed during verification"
-        );
-        ensure!(
-            Identity::read(&after) == self.identity,
-            "model changed during verification"
-        );
-        ensure!(
-            format!("{:x}", digest.finalize()) == self.sha256,
-            "model checksum mismatch"
+            meta.is_file() && meta.mode() & 0o222 == 0 && Identity::read(&meta) == self.identity,
+            "model snapshot changed"
         );
         ensure!(Instant::now() < deadline, "model verification deadline");
         Ok(())
     }
+    pub fn sha256(&self) -> &str {
+        &self.sha256
+    }
+    pub fn byte_len(&self) -> u64 {
+        self.identity.size
+    }
+}
+fn required_seals() -> libc::c_int {
+    libc::F_SEAL_WRITE | libc::F_SEAL_GROW | libc::F_SEAL_SHRINK | libc::F_SEAL_SEAL
 }
 impl AsRawFd for ModelFile {
     fn as_raw_fd(&self) -> RawFd {
@@ -163,8 +196,12 @@ mod tests {
         let f = Fixture::new();
         let mut file = f.file();
         file.seek(SeekFrom::Start(3)).unwrap();
+        let mut original_cursor = file.try_clone().unwrap();
         let pin = ModelFile::verify(file, 5, HASH, deadline()).unwrap();
-        assert_eq!((&pin.file).stream_position().unwrap(), 3);
+        assert_eq!(original_cursor.stream_position().unwrap(), 3);
+        // Snapshot has its own offset; the original descriptor's cursor is untouched.
+        assert_eq!(pin.byte_len(), 5);
+        assert_eq!(pin.sha256(), HASH);
         std::fs::rename(f.path(), f.0.join("original")).unwrap();
         std::fs::write(f.path(), b"other").unwrap();
         // The original held FD remains authoritative; rename ctime behavior differs by FS.
@@ -175,7 +212,7 @@ mod tests {
         assert_eq!(&bytes, b"hello");
     }
     #[test]
-    fn changed_same_length_bytes_never_revalidate() {
+    fn mutable_source_changes_cannot_change_the_verified_native_snapshot() {
         let f = Fixture::new();
         let pin = ModelFile::verify(f.file(), 5, HASH, deadline()).unwrap();
         std::fs::OpenOptions::new()
@@ -184,7 +221,16 @@ mod tests {
             .unwrap()
             .write_all(b"world")
             .unwrap();
-        assert!(pin.revalidate(deadline()).is_err());
+        pin.revalidate(deadline()).unwrap();
+        let mut observed = [0; 5];
+        pin.file.read_exact_at(&mut observed, 0).unwrap();
+        assert_eq!(&observed, b"hello");
+        assert!(pin.file.write_all_at(b"world", 0).is_err());
+        assert_eq!(unsafe { libc::ftruncate(pin.as_raw_fd(), 0) }, -1);
+        assert_eq!(
+            unsafe { libc::fcntl(pin.as_raw_fd(), libc::F_ADD_SEALS, 0) },
+            -1
+        );
     }
     #[test]
     fn malformed_missing_and_untrusted_model_bytes_refuse() {

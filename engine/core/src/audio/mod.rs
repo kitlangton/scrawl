@@ -1,7 +1,7 @@
 //! The existing 16 kHz mono PCM16 WAV codec.
 //! No microphone selection, recording policy or speech-selection policy.
 
-#[cfg(feature = "local-speech")]
+#[cfg(all(target_os = "linux", feature = "local-speech"))]
 pub mod model;
 #[cfg(feature = "local-speech")]
 pub mod speech;

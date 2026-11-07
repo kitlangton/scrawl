@@ -60,7 +60,7 @@ impl PinnedRecognizer {
     pub fn load(model: super::model::ModelFile, deadline: std::time::Instant) -> Result<Self> {
         use std::os::fd::AsRawFd;
         model.revalidate(deadline)?;
-        // Native fopen follows this held descriptor, never the original mutable pathname.
+        // Native fopen follows only this write-sealed snapshot, never mutable source bytes.
         let path = std::path::PathBuf::from(format!("/proc/self/fd/{}", model.as_raw_fd()));
         let recognizer = Recognizer::load(&path)?;
         model.revalidate(deadline)?;
@@ -75,7 +75,7 @@ impl PinnedRecognizer {
         );
         self.model.revalidate(deadline)?;
         let result = self.recognizer.run(samples)?;
-        // No result may acquire original-fact authority after source mutation or late return.
+        // No result may acquire original-fact authority after lost seals or late return.
         self.model.revalidate(deadline)?;
         Ok(result)
     }
