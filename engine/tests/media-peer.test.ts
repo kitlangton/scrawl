@@ -41,7 +41,9 @@ test('fixture cleanup requires observed process exit rather than a terminal rece
     assert.equal(await fixturePeerExited(child.pid!, 0), true);
   } finally {
     if (child.exitCode === null && child.signalCode === null) child.kill();
-    await done;
+    // The main path already checks success. Await cleanup without replacing a
+    // failed assertion/readiness error with the expected signal-exit rejection.
+    await done.catch(() => {});
   }
 });
 type Input = Omit<DecodeRequest, 'channel' | 'protocolVersion' | 'clientId' | 'rpcId' | 'method'>;
