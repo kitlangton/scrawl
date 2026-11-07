@@ -81,6 +81,11 @@ test("synthetic CaptureClient exercises strict native ink ingress receipts and e
  const finish=await client.finishInkProducer({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),finalSequence:null,seal:{state:"sealed-and-drained",observedAtNs:"9007199254740994",nativeRevision:2}});assert.equal(finish.state,"complete");
  await assert.rejects(client.registerInkProducer({...input,source:{id:"",generation:"g"}}),/source/);
  await assert.rejects(client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:raw,batchSha256:"0".repeat(64)}),/digest/);
+ const board=structuredClone(input);board.observation.surfaces=[{surfaceId:"board",transformId:"b1",nativeIncarnation:"window1",target:"whiteboard-canvas",pointSpace:"paper-logical",contentRectangle:{x:4,y:30,width:720,height:476},plane:{width:1600,height:1100}}];assert.equal((await client.registerInkProducer(board)).captureId,captureId);
+ await assert.rejects(client.registerInkProducer({...input,observation:{...input.observation,surfaces:[{...input.observation.surfaces[0],pointSpace:"paper-logical"}]}}),/target\/point-space/);
+ await assert.rejects(client.registerInkProducer({...input,observation:{...input.observation,surfaces:[{...input.observation.surfaces[0],plane:{width:-1,height:360}}]}}),/ink plane/);
+ const malformed='[{"kind":"begin","gestureId":"0123456789abcdef0123456789abcdef","surfaceId":"screen","transformId":"t1","nativeIncarnation":"inc","timeNs":"9007199254740993","x":1,"y":2,"surprise":1}]';await assert.rejects(client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:malformed,batchSha256:createHash("sha256").update(malformed).digest("hex")}),/fields/);
+ await assert.rejects(client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:raw.replace("9007199254740993","9007199254740993.0"),batchSha256:createHash("sha256").update(raw.replace("9007199254740993","9007199254740993.0")).digest("hex")}),/canonical|invalid ink/);
 });
 
 test("timeouts and late or wrong-version replies cannot resolve a new RPC", async () => {
