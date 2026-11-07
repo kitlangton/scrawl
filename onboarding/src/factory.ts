@@ -20,7 +20,7 @@ export interface OnboardingContributionFactory {
   create(dependencies: OnboardingFactoryDependencies): Promise<OnboardingHostedContribution>;
 }
 
-export type OnboardingFactoryDependencies = Omit<OnboardingContributionProps, "controller"> & {
+export type OnboardingFactoryDependencies = Omit<OnboardingContributionProps, "controller" | "onReturnToRecording"> & {
   progress: ProgressStore;
   record: RecordClient;
   id(): string;
@@ -215,9 +215,8 @@ export const onboardingContributionFactory: OnboardingContributionFactory = {
     }
     async function returnToRecording() {
       if (!deps.openRecordingEntry) throw new Error("Recording entry is not available from this host yet");
-      if (!(await deps.openRecordingEntry())) throw new Error("Recording entry was not opened");
       await hideCoach();
-      deps.close();
+      if (!(await deps.openRecordingEntry())) throw new Error("Recording entry was not opened");
       setSurface({ kind: "hidden" }); closeError = null; notify();
     }
     async function restoreAfterRepair(session: number) {

@@ -1016,7 +1016,7 @@ test("replay with unknown persistence cannot publish a tour surface", async () =
 test("restart and repeated return use the existing recording entry without onboarding writes or commands", async () => {
  const f=fixture();f.progress.value={...initialProgress(),status:"in-progress",stage:"shortcut",setupCompleted:true};let entries=0;const revision=f.progress.revision;
  for (const reason of ["firstLaunch","resume","resume"] as const) {
-  const hosted=await onboardingContributionFactory.create({progress:f.progress,record:f.client,id:()=>"restart",Button:TestButton,close(){},openRecordingEntry:async()=>{entries++;return true;}});
+  const hosted=await onboardingContributionFactory.create({progress:f.progress,record:f.client,id:()=>"restart",Button:TestButton,close(){throw new Error("recording entry must not be closed");},openRecordingEntry:async()=>{entries++;return true;}});
   await hosted.activation.activate({reason});await hosted.activation.dispose();
  }
  assert.equal(entries,3);assert.equal(f.progress.revision,revision);assert.equal(f.progress.value.stage,"shortcut");assert.deepEqual(f.driver.commands(),[]);f.controller.dispose();
