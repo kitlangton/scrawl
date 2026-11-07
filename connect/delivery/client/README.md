@@ -214,6 +214,18 @@ committed-spool reader and uploader; that is not a live writer transition.
 Namespace cleanup assumes cooperating same-UID writers; identity checks do not
 make pathname unlink atomic against a process bypassing that protocol.
 
+The internal `sender/spool-commit` capability recovers a published immutable spool
+whose job metadata commit was interrupted. It validates current caller-admitted
+peer facts against the local endpoint public key, verifies signatures and every
+asset outside the queue lease, then rechecks consumed stamps and local incarnation
+fences before one descriptor-bound job replacement. It preserves unrelated job
+fields and returns unchanged only for identical committed metadata. A revoked
+selected recipient requires a fresh capture; unrelated new peers are harmless.
+Missing or corrupt spools fail without regeneration. It retains uncertain effects
+without retry or evidence cleanup. This has no public writer export or production
+caller: the isolated native fixture invokes it, while live adoption still requires
+coordinated sole-writer authority, installed routing and applicable platform proof.
+
 `./sender-seal` seals an already admitted, stable and consented in-memory snapshot
 for a fresh capture. It reuses the legacy archive, AGE encryption and signed
 envelope format, selecting current read grants plus the sender's own upload grant.
