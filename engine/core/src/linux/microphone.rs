@@ -31,9 +31,40 @@ fn mapped_timing(elapsed: u128, clock: u64, base: u64, pts: Option<u64>) -> Opti
     })
 }
 
+/// Explicit local server selection prevents libpulse default-server discovery and
+/// autospawn fallback. Never start a daemon, select a network server or edit settings.
+fn local_pulse_server(runtime: &std::path::Path) -> Result<String> {
+    use std::os::unix::fs::{FileTypeExt, MetadataExt};
+    anyhow::ensure!(
+        runtime.is_absolute() && runtime.canonicalize()? == runtime,
+        "Invalid Pulse runtime"
+    );
+    for directory in [runtime.to_path_buf(), runtime.join("pulse")] {
+        let metadata = std::fs::symlink_metadata(directory)?;
+        anyhow::ensure!(
+            metadata.is_dir()
+                && metadata.uid() == unsafe { libc::geteuid() }
+                && metadata.mode() & 0o077 == 0,
+            "Untrusted Pulse directory"
+        );
+    }
+    let socket = runtime.join("pulse/native");
+    let metadata = std::fs::symlink_metadata(&socket)?;
+    anyhow::ensure!(
+        metadata.file_type().is_socket() && metadata.uid() == unsafe { libc::geteuid() },
+        "No owned local Pulse server"
+    );
+    Ok(format!(
+        "unix:{}",
+        socket.to_str().context("Invalid Pulse socket path")?
+    ))
+}
+
 impl Stream {
     pub fn start(name: &str, on_samples: impl Fn(&[f32]) + Send + Sync + 'static) -> Result<Self> {
-        Self::start_inner(Some(name), None, move |samples, _| on_samples(samples))
+        Self::start_inner(Some(name), None, None, move |samples, _| {
+            on_samples(samples)
+        })
     }
 
     /// Timestamped input for a caller retaining the SAME admission Instant.
@@ -43,7 +74,7 @@ impl Stream {
         admission: std::time::Instant,
         on_samples: impl Fn(&[f32], PcmTiming) + Send + Sync + 'static,
     ) -> Result<Self> {
-        Self::start_inner(Some(name), Some(admission), move |samples, timing| {
+        Self::start_inner(Some(name), Some(admission), None, move |samples, timing| {
             // start_inner refuses a timed buffer without a valid mapping.
             if let Some(timing) = timing {
                 on_samples(samples, timing);
@@ -57,11 +88,21 @@ impl Stream {
         admission: std::time::Instant,
         on_samples: impl Fn(&[f32], PcmTiming) + Send + Sync + 'static,
     ) -> Result<Self> {
-        Self::start_inner(None, Some(admission), move |samples, timing| {
-            if let Some(timing) = timing {
-                on_samples(samples, timing);
-            }
-        })
+        let server = local_pulse_server(
+            &std::env::var_os("XDG_RUNTIME_DIR")
+                .map(std::path::PathBuf::from)
+                .context("No owned local Pulse runtime")?,
+        )?;
+        Self::start_inner(
+            None,
+            Some(admission),
+            Some(&server),
+            move |samples, timing| {
+                if let Some(timing) = timing {
+                    on_samples(samples, timing);
+                }
+            },
+        )
     }
 
     /// Callers must observe failures after initial readiness as well.
@@ -84,6 +125,7 @@ impl Stream {
     fn start_inner(
         name: Option<&str>,
         admission: Option<std::time::Instant>,
+        server: Option<&str>,
         on_samples: impl Fn(&[f32], Option<PcmTiming>) + Send + Sync + 'static,
     ) -> Result<Self> {
         gst::init()?;
@@ -91,6 +133,9 @@ impl Stream {
         let pipeline = gst::parse::launch("audioconvert name=convert ! audioresample ! audio/x-raw,format=F32LE,rate=16000,channels=1 ! appsink name=input max-buffers=4 drop=true sync=false")?
             .downcast::<gst::Pipeline>().map_err(|_| anyhow::anyhow!("Not an audio pipeline"))?;
         let mut builder = gst::ElementFactory::make("pulsesrc");
+        if let Some(server) = server {
+            builder = builder.property("server", server);
+        }
         if let Some(name) = name {
             builder = builder.property("device", name);
         }
@@ -188,5 +233,40 @@ mod clock_tests {
         assert_eq!(mapped_timing(0, 10, 0, Some(1)), None);
         assert_eq!(mapped_timing(0, 0, u64::MAX, Some(1)), None);
         assert_eq!(mapped_timing(u128::MAX, 0, 0, Some(0)), None);
+    }
+}
+
+#[cfg(test)]
+mod local_server_tests {
+    use super::*;
+    use std::os::unix::{
+        fs::{PermissionsExt, symlink},
+        net::UnixListener,
+    };
+    #[test]
+    fn local_server_requires_existing_owned_private_socket_without_fallback() {
+        let root = std::env::temp_dir().join(format!("pulse-local-{}", crate::new_id().unwrap()));
+        std::fs::create_dir(&root).unwrap();
+        std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let pulse = root.join("pulse");
+        std::fs::create_dir(&pulse).unwrap();
+        std::fs::set_permissions(&pulse, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(local_pulse_server(&root).is_err());
+        std::fs::write(pulse.join("native"), b"not a socket").unwrap();
+        assert!(local_pulse_server(&root).is_err());
+        std::fs::remove_file(pulse.join("native")).unwrap();
+        let socket = UnixListener::bind(pulse.join("native")).unwrap();
+        assert_eq!(
+            local_pulse_server(&root).unwrap(),
+            format!("unix:{}", pulse.join("native").display())
+        );
+        std::fs::set_permissions(&pulse, std::fs::Permissions::from_mode(0o777)).unwrap();
+        assert!(local_pulse_server(&root).is_err());
+        std::fs::set_permissions(&pulse, std::fs::Permissions::from_mode(0o700)).unwrap();
+        std::fs::rename(pulse.join("native"), pulse.join("held")).unwrap();
+        symlink(pulse.join("held"), pulse.join("native")).unwrap();
+        assert!(local_pulse_server(&root).is_err());
+        drop(socket);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

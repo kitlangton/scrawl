@@ -257,3 +257,21 @@ consumer/audio package acceptance remain required before enabling that contract.
 Transcript and accepted strokes remain unavailable. Record keeps formatting and
 selection policy; original-ingress transcript sealing must precede the immutable
 material revision and is not implemented by this audio-only slice.
+
+### Local default microphone transport (qualification pending)
+
+The timed default-input adapter now requires the existing owned
+`$XDG_RUNTIME_DIR/pulse/native` Unix socket under private owned directories and
+passes that explicit `unix:` server to `pulsesrc`. Missing, non-socket, symlinked
+or untrusted state fails before starting the pipeline. Explicit server selection
+has no default-server/autospawn fallback; no daemon, network server or user
+settings are created or changed. The legacy selected-device entry is unchanged.
+This is socket/transport admission, not microphone consent or sample readiness.
+Actual first PCM, stable PTS and aligned WAV sealing remain required.
+
+The capture producer includes Pulse, audio conversion and resampling plugins
+and their recursive shared-library closure. Public microphone/transcript
+capabilities remain unavailable pending native qualification. No model is loaded
+or downloaded by these changes. Original transcript facts still require bounded
+inference from the finalized aligned original WAV before immutable materials
+sealing; a detached inference validator does not grant that authority.
