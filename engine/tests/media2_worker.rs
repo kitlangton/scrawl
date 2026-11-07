@@ -1,6 +1,8 @@
 #![cfg(feature = "media")]
 #![allow(dead_code, unused_imports)]
 
+#[path = "../src/execution.rs"]
+mod execution;
 #[path = "../src/media/files.rs"]
 mod files;
 #[path = "../src/media/job.rs"]

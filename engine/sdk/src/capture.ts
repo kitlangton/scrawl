@@ -1,3 +1,8 @@
+export { CAPTURE_INK_VERSION, CAPTURE_INK_LIMITS } from "./ink/contracts.ts";
+export type { InkMonotonicNs, InkId, InkRectangle, InkSurface, InkSourceObservation,
+  RegisterInkProducerInput, InkRegistrationReceipt, InkPoint, InkEvent,
+  SubmitInkEventsInput, InkBatchReceipt, FinishInkProducerInput, InkFinishReceipt,
+  CaptureInkPort } from "./ink/contracts.ts";
 import { spawn, type ChildProcessWithoutNullStreams } from "node:child_process";
 import { randomBytes } from "node:crypto";
 import { dirname, isAbsolute, resolve } from "node:path";
@@ -13,6 +18,8 @@ import type {
 import { validatePublicationPlan } from "./capture-documents/publication.ts";
 import type { DerivativeDocumentInput } from "./capture-documents/types.ts";
 import type { Derivative2DocumentInput } from "./media2/types.ts";
+import type { CaptureInkPort, RegisterInkProducerInput, SubmitInkEventsInput, FinishInkProducerInput } from "./ink/contracts.ts";
+import { validateRegisterInkInput, validateSubmitInkInput, validateFinishInkInput, validateInkRegistrationReceipt, validateInkBatchReceipt, validateInkFinishReceipt } from "./ink/validation.ts";
 import { MAX_DOCUMENT_BYTES, relativePath, validateSealedFile, validateMaterialEnvelopeIdentity } from "./capture-documents/common.ts";
 export { validatePublicationPlan } from "./capture-documents/publication.ts";
 export {
@@ -219,6 +226,9 @@ export type CaptureRequest = Base &
   (
     | { method: "handshake" }
     | { method: "discoverSources" }
+    | ({ method: "registerInkProducer" } & RegisterInkProducerInput)
+    | ({ method: "submitInkEvents" } & SubmitInkEventsInput)
+    | ({ method: "finishInkProducer" } & FinishInkProducerInput)
     | {
         method: "start";
         ownerToken: string;
@@ -346,6 +356,9 @@ export function validateCaptureRequest(
       "rpcId",
       "method",
     ],
+    registerInkProducer: ["channel","protocolVersion","clientId","rpcId","method","ingressVersion","ownerToken","captureId","source","observation"],
+    submitInkEvents: ["channel","protocolVersion","clientId","rpcId","method","ingressVersion","ownerToken","captureId","registrationId","producerToken","sequence","eventsJson","batchSha256"],
+    finishInkProducer: ["channel","protocolVersion","clientId","rpcId","method","ingressVersion","ownerToken","captureId","registrationId","producerToken","finalSequence","seal"],
     start: [
       "channel",
       "protocolVersion",
@@ -428,6 +441,9 @@ export function validateCaptureRequest(
   if (typeof method !== "string" || !fields[method])
     throw new Error("unknown capture/2 method");
   exact(x, fields[method]);
+  if(method==="registerInkProducer") validateRegisterInkInput(x);
+  else if(method==="submitInkEvents") validateSubmitInkInput(x);
+  else if(method==="finishInkProducer") validateFinishInkInput(x);
   if (method === "start") {
     if (!id(x.captureId) || !hex(64).test(String(x.ownerToken)))
       throw new Error("invalid start authority");
@@ -446,7 +462,7 @@ export function validateCaptureRequest(
       ["id", "generation", "kind", "displayId", "bounds"],
     );
     text(s.id, "source id");
-    if (!id(s.generation) || !["display", "area"].includes(String(s.kind)))
+    if (typeof s.generation !== "string" || !s.generation || !["display", "area"].includes(String(s.kind)))
       throw new Error("invalid source identity");
     const o = object(x.options, "options");
     exact(o, ["audio", "localOnly"]);
@@ -497,7 +513,7 @@ export function validateCaptureRequest(
   }
 }
 
-export class CaptureClient {
+export class CaptureClient implements CaptureInkPort {
   readonly clientId = randomBytes(16).toString("hex");
   private readonly transport: CaptureTransport;
   private allowTestDouble: boolean;
@@ -770,6 +786,21 @@ export class CaptureClient {
       throw new Error("release result identity mismatch");
     return x as { released: boolean; captureId: string; materialsId: string };
   }
+  async registerInkProducer(input:RegisterInkProducerInput, timeoutMs=5000) {
+    this.requireHandshake(); const safe=validateRegisterInkInput(input);
+    const receipt=await this.rpc("registerInkProducer",safe as unknown as Record<string,unknown>,timeoutMs);
+    return validateInkRegistrationReceipt(receipt,safe);
+  }
+  async submitInkEvents(input:SubmitInkEventsInput, timeoutMs=5000) {
+    this.requireHandshake(); const safe=validateSubmitInkInput(input);
+    const receipt=await this.rpc("submitInkEvents",safe as unknown as Record<string,unknown>,timeoutMs);
+    return validateInkBatchReceipt(receipt,safe);
+  }
+  async finishInkProducer(input:FinishInkProducerInput, timeoutMs=5000) {
+    this.requireHandshake(); const safe=validateFinishInkInput(input);
+    const receipt=await this.rpc("finishInkProducer",safe as unknown as Record<string,unknown>,timeoutMs);
+    return validateInkFinishReceipt(receipt,safe);
+  }
   close() {
     return this.transport.close();
   }
@@ -804,7 +835,7 @@ function validateSource(v: unknown): SourceDescriptor {
   );
   text(x.id, "source id");
   if (
-    !id(x.generation) ||
+    typeof x.generation !== "string" || !x.generation ||
     !["display", "area"].includes(String(x.kind)) ||
     !Number.isSafeInteger(x.displayId) ||
     Number(x.displayId) < 0
@@ -971,15 +1002,29 @@ function validateStatus(
   return x as unknown as CaptureStatus;
 }
 
-/** Existing engine-native does not implement these capture/2 flags yet. */
+/** Explicit locally provisioned speech asset; never discovers/fetches a model.
+ * This launch input does not advertise audio/transcript capability or native proof. */
+export interface CaptureExecutionOptions {
+  localSpeech?: { profile: "parakeet-unified-en-0.6b-Q8_0"; modelFile: string };
+}
 export function launchCaptureEngine(
   executablePath: string,
   runtimeDirectory: string,
   shutdownTimeoutMs = 3000,
+  execution: CaptureExecutionOptions = {},
 ): ChildProcessCaptureTransport {
   abs(executablePath, "executablePath");
   abs(runtimeDirectory, "runtimeDirectory");
   timeout(shutdownTimeoutMs);
+  const env = { ...process.env };
+  delete env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1;
+  delete env.APPARENT_CAPTURE_SPEECH_PROFILE_V1;
+  if (execution.localSpeech) {
+    if (execution.localSpeech.profile !== "parakeet-unified-en-0.6b-Q8_0") throw new Error("unsupported local speech profile");
+    abs(execution.localSpeech.modelFile, "local speech modelFile");
+    env.APPARENT_CAPTURE_SPEECH_PROFILE_V1 = execution.localSpeech.profile;
+    env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1 = execution.localSpeech.modelFile;
+  }
   return new ChildProcessCaptureTransport(
     spawn(
       executablePath,
@@ -993,6 +1038,7 @@ export function launchCaptureEngine(
       ],
       {
         cwd: dirname(executablePath),
+        env,
         stdio: ["pipe", "pipe", "pipe"],
         shell: false,
       },

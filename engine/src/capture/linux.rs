@@ -339,6 +339,7 @@ pub(super) fn worker(
             persist(&shared).map_err(|_| "internal")?;
             return Ok(());
         }
+        super::ink_control::close_input(&shared)?;
         let capture_duration = shared
             .epoch
             .elapsed()
@@ -353,6 +354,7 @@ pub(super) fn worker(
                 thread::sleep(Duration::from_millis(ms.min(5_000)));
             }
         }
+        super::ink_control::drain(&shared)?;
         movie.sync_all().map_err(|_| "invalid_materials")?;
         let manifest = finalize(
             &shared,

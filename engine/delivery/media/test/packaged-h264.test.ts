@@ -1,11 +1,55 @@
 import assert from 'node:assert/strict'
 import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
+import { chmod, copyFile, lstat, mkdir, mkdtemp, readFile, realpath, rm, stat, symlink, unlink, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
 import { createMediaJobId, MediaClient, MediaChildProcessTransport, launchMediaWorker } from '../../../sdk/src/media.ts'
+
+// Test-only producer. Composition independently validates this finite wire summary
+// against the current run and artifact before allowing public upload.
+async function writePublicSummary(directory: string, stderr: Buffer, identity: Record<string, unknown>, env: NodeJS.ProcessEnv) {
+  const sha = /^[a-f0-9]{40}$/; const digest = /^[a-f0-9]{64}$/
+  if (env.APPARENT_MEDIA_FIXTURE || identity.generated !== true ||
+    !sha.test(env.GITHUB_SHA ?? '') || !sha.test(env.GITHUB_WORKFLOW_SHA ?? '') ||
+    !/^[1-9][0-9]{0,19}$/.test(env.GITHUB_RUN_ID ?? '') || !/^[1-9][0-9]{0,5}$/.test(env.GITHUB_RUN_ATTEMPT ?? '') ||
+    !['verify-pr', 'stream'].includes(env.GITHUB_JOB ?? '') || env.OWNER_ID !== 'engine-media-native' || env.OWNER_TARGET !== 'linux-x64' ||
+    !digest.test(String(identity.entrySha256)) || !digest.test(String(identity.manifestSha256)) || identity.artifactSourceSha !== env.GITHUB_SHA) throw new Error('invalid generated diagnostic binding')
+  const signatures = [
+    ['allocation-failure', /cannot allocate memory|out of memory|failed to allocate|bad_alloc/i],
+    ['allocator-corruption', /double free|corrupted (?:size|double-linked)|malloc\(\):|free\(\):/i],
+    ['thread-creation-failure', /pthread_create.*(?:failed|error)|(?:failed|unable) to create (?:a )?thread|resource temporarily unavailable/i],
+    ['assertion-failure', /assertion .*failed|assertion failed|assertion.*should not be reached/i],
+    ['plugin-failure', /failed to load plugin|no (?:such )?(?:element|plugin)|missing plugin/i],
+    ['loader-failure', /error while loading shared libraries|cannot open shared object file|undefined symbol/i],
+  ] as const
+  const tail = stderr.subarray(-8192).toString('utf8')
+  const categories = signatures.filter(([, pattern]) => pattern.test(tail)).map(([name]) => name)
+  const exit = [...tail.matchAll(/^apparent-media-diagnostic stage=worker-exit exit-code=(none|[0-9]{1,3}) signal=(none|[0-9]{1,2})$/gm)].at(-1)
+  const summary = { schema: 'apparent.synthetic-media-public/1', sourceSha: env.GITHUB_SHA, workflowSha: env.GITHUB_WORKFLOW_SHA,
+    runId: env.GITHUB_RUN_ID, attempt: env.GITHUB_RUN_ATTEMPT, job: env.GITHUB_JOB, owner: 'engine-media-native', target: 'linux-x64',
+    entrySha256: identity.entrySha256, manifestSha256: identity.manifestSha256, stderrBytes: Math.min(stderr.length, 8192),
+    categories: categories.length ? categories : ['unclassified'],
+    workerExitCode: exit && exit[1] !== 'none' && Number(exit[1]) <= 255 ? Number(exit[1]) : null,
+    workerSignal: exit && exit[2] !== 'none' && Number(exit[2]) <= 64 ? Number(exit[2]) : null,
+    requestLimits: { maxFrames: 48, maxEdge: 320, maxTotalPixels: 64000000, deadlineMs: 30000 },
+    testCompleted: identity.testCompleted === true, clientCloseReturned: identity.clientCloseReturned === true }
+  await mkdir(directory, { mode: 0o700 })
+  const s = await lstat(directory)
+  if (!s.isDirectory() || s.isSymbolicLink() || s.uid !== process.getuid?.() || (s.mode & 0o777) !== 0o700) throw new Error('unsafe diagnostic directory')
+  await writeFile(join(directory, 'summary.json'), JSON.stringify(summary) + '\n', { mode: 0o600, flag: 'wx' })
+}
+
+// This is synthetic-test evidence only; raw bytes never enter public diagnostics.
+export async function retainSyntheticFailure(root: string, stderr: Buffer, identity: Record<string, unknown>) {
+  const directory = await lstat(root)
+  if (!directory.isDirectory() || directory.isSymbolicLink() || (directory.mode & 0o777) !== 0o700 || directory.uid !== process.getuid?.()) throw new Error('synthetic evidence root is not private and owned')
+  const receipt = JSON.stringify({ schema: 'apparent.synthetic-media-failure/1', ...identity, stderrBytes: Math.min(stderr.length, 8192) }, null, 2)
+  if (Buffer.byteLength(receipt) > 8192) throw new Error('synthetic identity receipt exceeds bound')
+  await writeFile(join(root, 'media-stderr.raw'), stderr.subarray(-8192), { mode: 0o600, flag: 'wx' })
+  await writeFile(join(root, 'media-failure-identity.json'), receipt, { mode: 0o600, flag: 'wx' })
+}
 
 test('packaged entry decodes real H.264 with ambient plugin and loader paths closed', async t => {
   const entry = process.env.APPARENT_ENGINE_FRAMES_BIN
@@ -32,16 +76,21 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
   for (const k of Object.keys(old)) process.env[k] = '/nonexistent/host-runtime'
   let client: MediaClient | undefined
   let completed = false
-  let diagnosticStderr = ''
-  const observeDiagnostic = (chunk: Buffer) => { diagnosticStderr = (diagnosticStderr + chunk.toString('utf8')).slice(-8192) }
+  let diagnosticStderr: Buffer = Buffer.alloc(0)
+  const diagnosticIdentity: Record<string, unknown> = { synthetic: true, generated: !process.env.APPARENT_MEDIA_FIXTURE, buildSourceSha: process.env.GITHUB_SHA ?? null, entry: resolve(entry), sourceIdentity: { device: String(m.dev), inode: String(m.ino), size: Number(m.size), modifiedNs: String(m.mtimeNs) } }
+  const observeDiagnostic = (chunk: Buffer) => { diagnosticStderr = Buffer.concat([diagnosticStderr, chunk]).subarray(-8192) }
   let stopObserving = () => {}
   try {
     if (diagnostics) {
       const absoluteEntry = resolve(entry)
+      diagnosticIdentity.entrySha256 = createHash('sha256').update(await readFile(absoluteEntry)).digest('hex')
+      try { const bytes = await readFile(join(dirname(absoluteEntry), 'manifest.json')); diagnosticIdentity.manifestSha256 = createHash('sha256').update(bytes).digest('hex'); diagnosticIdentity.artifactSourceSha = JSON.parse(bytes.toString('utf8')).sourceSha ?? null } catch { diagnosticIdentity.manifestSha256 = null }
       const child = spawn(absoluteEntry, ['--media-runtime-directory', runtime, '--media-channel', 'media', '--media-protocol-version', '1'], {
         cwd: dirname(absoluteEntry), stdio: ['pipe', 'pipe', 'pipe'], shell: false,
         env: { ...process.env, APPARENT_MEDIA_TEST_DIAGNOSTICS: '1' },
       })
+      diagnosticIdentity.pid = child.pid
+      child.once('exit', (code, signal) => { diagnosticIdentity.exitCode = code; diagnosticIdentity.signal = signal })
       child.stderr.on('data', observeDiagnostic)
       stopObserving = () => child.stderr.off('data', observeDiagnostic)
       client = new MediaClient(new MediaChildProcessTransport(child))
@@ -49,6 +98,7 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
     assert.equal((await client.handshake()).capabilities.decodeFrames, true)
     const outputDirectory = join(root, 'frames'); await mkdir(outputDirectory, { mode: 0o700 })
     const input = { jobId: createMediaJobId(), source: { bundleId: 'synthetic', bundlePath: bundle, videoPath: video, videoOffsetMs: 250, identity: { device: String(m.dev), inode: String(m.ino), size: Number(m.size), modifiedNs: String(m.mtimeNs) } }, requestedBundleMs: [1250, 0, 5000, 1250], outputDirectory, limits: { maxFrames: 48, maxEdge: 320, maxTotalPixels: 64000000, deadlineMs: 30000 } }
+    diagnosticIdentity.request = input
     const result = await client.decode(input)
     assert.deepEqual(result.frames.map(f => f.effectiveVideoMs), [1000, 0, 4750, 1000])
     assert.deepEqual(result.frames.map(f => f.clampedToStart), [false, true, false, false])
@@ -81,7 +131,12 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
       if ((completed && closed) || !diagnostics) {
         await rm(root, { recursive: true, force: true })
       } else {
-        const details = diagnosticStderr.split('\n').filter(line => line.startsWith('apparent-media-diagnostic ') && line.length <= 256).join('\n').slice(0, 4096)
+        diagnosticIdentity.testCompleted = completed; diagnosticIdentity.clientCloseReturned = closed
+        if (process.env.CI === 'true' && process.env.APPARENT_SYNTHETIC_DIAGNOSTICS_DIR && !process.env.APPARENT_MEDIA_FIXTURE) {
+          try { await writePublicSummary(process.env.APPARENT_SYNTHETIC_DIAGNOSTICS_DIR, diagnosticStderr, diagnosticIdentity, process.env) } catch { process.stderr.write('packaged-h264 public summary unavailable\n') }
+        }
+        try { await retainSyntheticFailure(root, diagnosticStderr, diagnosticIdentity) } catch { process.stderr.write('packaged-h264 private evidence retention failed\n') }
+        const details = diagnosticStderr.toString('utf8').split('\n').filter(line => line.startsWith('apparent-media-diagnostic ') && line.length <= 256).join('\n').slice(0, 4096)
         await writeFile(join(root, 'media-diagnostics.log'), details, { mode: 0o600 })
         if (details) process.stderr.write(details + '\n')
         console.error(`packaged-h264 synthetic runtime retained: ${root}`)
@@ -89,3 +144,7 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
     }
   }
 })
+
+test('synthetic stderr retention preserves bounded raw abort bytes and source/request identity privately',async t=>{const root=await mkdtemp(join(tmpdir(),'synthetic-retention-'));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));const raw=Buffer.concat([Buffer.alloc(16000,120),Buffer.from('allocator: synthetic failure\n\xc3\xa9','latin1')]);const identity={entrySha256:'a'.repeat(64),manifestSha256:'b'.repeat(64),artifactSourceSha:'synthetic',pid:123,exitCode:null,signal:'SIGABRT',request:{jobId:'synthetic'}};await retainSyntheticFailure(root,raw,identity);assert.deepEqual(await readFile(join(root,'media-stderr.raw')),raw.subarray(-8192));for(const f of ['media-stderr.raw','media-failure-identity.json'])assert.equal((await stat(join(root,f))).mode&0o777,0o600);const receipt=JSON.parse(await readFile(join(root,'media-failure-identity.json'),'utf8'));assert.equal(receipt.signal,'SIGABRT');assert.deepEqual(receipt.request,identity.request);assert.equal(receipt.stderrBytes,8192)})
+test('synthetic stderr retention rejects nonprivate and symlink roots without writing',async t=>{const root=await mkdtemp(join(tmpdir(),'synthetic-retention-'));t.after(()=>rm(root,{recursive:true,force:true}));await chmod(root,0o755);await assert.rejects(retainSyntheticFailure(root,Buffer.from('x'),{}),/not private/);await chmod(root,0o700);const link=root+'-link';await symlink(root,link);t.after(()=>unlink(link));await assert.rejects(retainSyntheticFailure(link,Buffer.from('x'),{}),/not private/);await assert.rejects(stat(join(root,'media-stderr.raw')),{code:'ENOENT'})})
+test('synthetic stderr retention never replaces prior failure evidence',async t=>{const root=await mkdtemp(join(tmpdir(),'synthetic-retention-'));await chmod(root,0o700);t.after(()=>rm(root,{recursive:true,force:true}));await retainSyntheticFailure(root,Buffer.from('first'),{});await assert.rejects(retainSyntheticFailure(root,Buffer.from('second'),{}),{code:'EEXIST'});assert.equal(await readFile(join(root,'media-stderr.raw'),'utf8'),'first')})

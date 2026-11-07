@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { EventEmitter } from "node:events";
+import { createHash } from "node:crypto";
 import { PassThrough } from "node:stream";
 import type { ChildProcessWithoutNullStreams } from "node:child_process";
 import { spawnSync } from "node:child_process";
@@ -10,17 +11,19 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import {
   CaptureClient,
+  launchCaptureEngine,
   encodeCaptureRequest,
   validateCaptureRequest,
 } from "../src/capture.ts";
 import type {
+  MaterialsDocument,
   CaptureRequest,
   CaptureResponse,
   CaptureTransport,
 } from "../src/capture.ts";
 import { ChildProcessCaptureTransport } from "../src/capture.ts";
 import { ReferenceCapturePeer } from "../src/capture-testing.ts";
-import { validateInteractionFacts } from "../src/capture-documents/facts.ts";
+import { validateFactFile, validateInteractionFacts } from "../src/capture-documents/facts.ts";
 
 // Scripted wire claims exercise SDK validation only; they are not a native peer
 // or capture/readiness evidence and are never exposed by the testing export.
@@ -68,6 +71,24 @@ test("capture/2 is a separate strict channel and reference peer cannot claim nat
   );
   assert.equal((await client.discoverSources()).state, "unavailable");
   await client.close();
+});
+
+test("synthetic CaptureClient exercises strict native ink ingress receipts and exact UTF8 digest", async()=>{
+ const host={processEpoch:"epoch",revision:1,pid:2,startTicks:"9007199254740993"};
+ const input={ingressVersion:1 as const,...authority,source:{id:"display:1",generation:"source-gen"},observation:{host,producerId:"c".repeat(32),generation:1,bootId:"boot",clock:"linux-clock-monotonic-observation" as const,output:{name:"DP-1",physical:{x:0,y:0,width:640,height:360},compositor:{x:0,y:0,width:640,height:360,scale:1 as const}},surfaces:[{surfaceId:"screen",transformId:"t1",nativeIncarnation:"inc",target:"capture-rectangle" as const,pointSpace:"desktop-physical" as const,contentRectangle:{x:0,y:0,width:640,height:360},plane:{width:640,height:360}}]}};
+ const raw='[{"kind":"begin","gestureId":"0123456789abcdef0123456789abcdef","surfaceId":"screen","transformId":"t1","nativeIncarnation":"inc","timeNs":"9007199254740993","x":1.0,"y":2}]';const digest=createHash("sha256").update(Buffer.from(raw,"utf8")).digest("hex");
+ const client=new CaptureClient(scripted(req=>req.method==="registerInkProducer"?{ingressVersion:1,captureId,producerId:input.observation.producerId,generation:1,registrationId:"d".repeat(32),producerToken:"e".repeat(64),nextSequence:0,clock:{kind:input.observation.clock,bootId:"boot",admissionMonotonicNs:"9007199254740993"},limits:{maxWireBytes:65536,maxBatchJsonBytes:16384,maxPointsPerBatch:256,maxPointsPerGesture:2400,maxBatches:4096,maxSurfaces:8,maxGestures:4096,maxTotalPoints:65536,maxFactBytes:4194304,finishGraceMs:2000}}:req.method==="submitInkEvents"?{ingressVersion:1,captureId,registrationId:"d".repeat(32),sequence:req.sequence,batchSha256:req.batchSha256,nextSequence:Number(req.sequence)+1,outcome:"accepted"}: {ingressVersion:1,captureId,registrationId:"d".repeat(32),finalSequence:null,state:"complete"})); await client.handshake();
+ const registration=await client.registerInkProducer(input);assert.equal(registration.clock.admissionMonotonicNs,"9007199254740993");
+ const batch=await client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:raw,batchSha256:digest});assert.equal(batch.outcome,"accepted");
+ const finish=await client.finishInkProducer({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),finalSequence:null,seal:{state:"sealed-and-drained",observedAtNs:"9007199254740994",nativeRevision:2}});assert.equal(finish.state,"complete");
+ await assert.rejects(client.registerInkProducer({...input,source:{id:"",generation:"g"}}),/source/);
+ await assert.rejects(client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:raw,batchSha256:"0".repeat(64)}),/digest/);
+ const board=structuredClone(input);board.observation.surfaces=[{surfaceId:"board",transformId:"b1",nativeIncarnation:"window1",target:"whiteboard-canvas",pointSpace:"paper-logical",contentRectangle:{x:4,y:30,width:720,height:476},plane:{width:1600,height:1100}}];assert.equal((await client.registerInkProducer(board)).captureId,captureId);
+ await assert.rejects(client.registerInkProducer({...input,observation:{...input.observation,surfaces:[{...input.observation.surfaces[0],pointSpace:"paper-logical"}]}}),/target\/point-space/);
+ await assert.rejects(client.registerInkProducer({...input,observation:{...input.observation,surfaces:[{...input.observation.surfaces[0],plane:{width:-1,height:360}}]}}),/ink plane/);
+ const malformed='[{"kind":"begin","gestureId":"0123456789abcdef0123456789abcdef","surfaceId":"screen","transformId":"t1","nativeIncarnation":"inc","timeNs":"9007199254740993","x":1,"y":2,"surprise":1}]';await assert.rejects(client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:malformed,batchSha256:createHash("sha256").update(malformed).digest("hex")}),/fields/);
+ await assert.rejects(client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence:0,eventsJson:raw.replace("9007199254740993","9007199254740993.0"),batchSha256:createHash("sha256").update(raw.replace("9007199254740993","9007199254740993.0")).digest("hex")}),/canonical|invalid ink/);
+ const gesture="0123456789abcdef0123456789abcdef";for(const [sequence,event] of [[0,{kind:"begin",gestureId:gesture,surfaceId:"screen",transformId:"t1",nativeIncarnation:"inc",timeNs:"9007199254740993",x:1,y:2}],[1,{kind:"points",gestureId:gesture,points:[{timeNs:"9007199254740994",x:3,y:4}]}],[2,{kind:"commit",gestureId:gesture,acceptedAtNs:"9007199254740995"}]] as const){const eventsJson=JSON.stringify([event]);const batchSha256=createHash("sha256").update(Buffer.from(eventsJson,"utf8")).digest("hex");assert.equal((await client.submitInkEvents({ingressVersion:1,...authority,registrationId:"d".repeat(32),producerToken:"e".repeat(64),sequence,eventsJson,batchSha256})).sequence,sequence)}
 });
 
 test("timeouts and late or wrong-version replies cannot resolve a new RPC", async () => {
@@ -335,5 +356,52 @@ test("a Saved start replay must name the originally requested bundle", async () 
     await client.handshake(); await client.discoverSources();
     if (Object.keys(changed).length) await assert.rejects(client.start(start), /original bundle identity/);
     else assert.equal((await client.start(start)).state, "saved");
+  }
+});
+
+// The fixture is emitted by the actual Rust owner/journal/seal test. No native
+// capture is simulated and a missing executable proof is an explicit skip.
+test("Rust original ink seal round-trips through the public SDK reader", { skip: !process.env.APPARENT_TEST_INK_READER_FIXTURE }, async () => {
+  const fixture = JSON.parse(await readFile(process.env.APPARENT_TEST_INK_READER_FIXTURE!, "utf8"));
+  const bytes = Buffer.from(fixture.bytes, "utf8");
+  const fact = JSON.parse(fixture.bytes);
+  const materials = {
+    payload: {
+      identity: fact.identity,
+      clock: { durationMs: 100 },
+      files: [fixture.seal],
+      collection: { acceptedStrokes: "collected" },
+      facts: { acceptedStrokes: { file: fixture.seal.relativePath, schema: fact.schema } },
+    },
+  } as unknown as MaterialsDocument;
+  const result = validateFactFile(fixture.seal, bytes, materials, "acceptedStrokes");
+  assert.deepEqual(result, fact);
+  assert.equal(fact.strokes.length, 1);
+  assert.deepEqual(fact.strokes[0].rgb, [12, 34, 56]);
+  const tampered = Buffer.from(bytes); tampered[tampered.length - 2] ^= 1;
+  assert.throws(() => validateFactFile(fixture.seal, tampered, materials, "acceptedStrokes"));
+});
+
+// Generated executable fixture proves only exact child launch/environment input.
+// It does not open a model, runtime, microphone or native capture.
+test("speech launch requires explicit local input and clears inherited model approval", async () => {
+  const root = await mkdtemp(join(tmpdir(), "engine-speech-launch-"));
+  const executable = join(root, "fixture-engine");
+  const output = join(root, "environment.json");
+  const before = { model: process.env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1, profile: process.env.APPARENT_CAPTURE_SPEECH_PROFILE_V1, output: process.env.APPARENT_TEST_ENV_OUTPUT };
+  try {
+    await writeFile(executable, '#!' + process.execPath + '\nconst fs=require("node:fs");fs.writeFileSync(process.env.APPARENT_TEST_ENV_OUTPUT,JSON.stringify({model:process.env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1,profile:process.env.APPARENT_CAPTURE_SPEECH_PROFILE_V1}),{flag:"w"});\n', { mode: 0o755 });
+    process.env.APPARENT_TEST_ENV_OUTPUT = output;
+    process.env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1 = "/unapproved/ambient-model";
+    process.env.APPARENT_CAPTURE_SPEECH_PROFILE_V1 = "parakeet-unified-en-0.6b-Q8_0";
+    await launchCaptureEngine(executable, join(root, "runtime"), 5000).close();
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), {});
+    const localSpeech = { profile: "parakeet-unified-en-0.6b-Q8_0" as const, modelFile: join(root, "explicit-model.gguf") };
+    await launchCaptureEngine(executable, join(root, "runtime"), 5000, { localSpeech }).close();
+    assert.deepEqual(JSON.parse(await readFile(output, "utf8")), { model: localSpeech.modelFile, profile: localSpeech.profile });
+    assert.throws(() => launchCaptureEngine(executable, join(root, "runtime"), 5000, { localSpeech: { ...localSpeech, modelFile: "relative.gguf" } }));
+  } finally {
+    for (const [key, value] of [["APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1",before.model],["APPARENT_CAPTURE_SPEECH_PROFILE_V1",before.profile],["APPARENT_TEST_ENV_OUTPUT",before.output]] as const) { if (value === undefined) delete process.env[key]; else process.env[key]=value; }
+    await rm(root, { recursive: true, force: true });
   }
 });

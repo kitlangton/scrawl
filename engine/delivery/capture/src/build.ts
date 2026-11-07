@@ -59,18 +59,29 @@ if (existsSync(admission) && !process.env.T3_BUILD_JOBS) execFileSync(admission,
 else execFileSync('cargo', cargo, { cwd: root, stdio: 'inherit', env: { ...process.env, CARGO_BUILD_JOBS: process.env.T3_BUILD_JOBS ?? '3' } })
 if (worktreeHash() !== worktreeDigest) throw new Error('source tree changed during capture build')
 const worker = resolve(target, 'release/apparent-engine-capture')
+const speechReceiptPath = resolve(target, 'release/apparent-engine-speech-runtime.json')
+const speechReceipt = JSON.parse(readFileSync(speechReceiptPath, 'utf8')) as { schema: number; libraries: string[] }
+if (speechReceipt.schema !== 1 || !Array.isArray(speechReceipt.libraries) || !speechReceipt.libraries.length || speechReceipt.libraries.some(name => typeof name !== 'string' || !/^[-A-Za-z0-9_.+]+\.so(?:\.[0-9.]+)?$/.test(name)) || JSON.stringify(speechReceipt.libraries) !== JSON.stringify([...new Set(speechReceipt.libraries)].sort())) throw new Error('invalid staged speech runtime receipt')
+for (const name of speechReceipt.libraries) {
+  const source = resolve(target, 'release', name)
+  if (!existsSync(source) || lstatSync(source).isSymbolicLink() || !statSync(source).isFile()) throw new Error(`staged speech runtime missing: ${name}`)
+  const destination = resolve(libOut, name)
+  if (!existsSync(destination)) copyFileSync(source, destination, 0)
+}
 copyFileSync(worker, resolve(workerOut, 'apparent-engine-capture'), 0); chmodSync(resolve(workerOut, 'apparent-engine-capture'), 0o755)
 copyFileSync(worker, resolve(output, 'apparent-engine-capture'), 0); chmodSync(resolve(output, 'apparent-engine-capture'), 0o755)
 copyFileSync(resolve(pkg, 'src/launch.sh'), resolve(output, 'apparent-engine-capture-launch'), 0); chmodSync(resolve(output, 'apparent-engine-capture-launch'), 0o755)
 
 const baseline = new Set(['ld-linux-x86-64.so.2', 'libc.so.6', 'libdl.so.2', 'libgcc_s.so.1', 'libm.so.6', 'libpthread.so.0', 'librt.so.1'])
-const pending = [resolve(workerOut, 'apparent-engine-capture'), ...plugins.map(name => resolve(pluginOut, name)), ...pipewireInputs.filter(input => input.path.endsWith('.so')).map(input => resolve(output, input.path))]
+const pending = [resolve(workerOut, 'apparent-engine-capture'), ...plugins.map(name => resolve(pluginOut, name)), ...pipewireInputs.filter(input => input.path.endsWith('.so')).map(input => resolve(output, input.path)), ...speechReceipt.libraries.map(name => resolve(libOut, name))]
 const seen = new Set<string>()
 while (pending.length) {
   const file = pending.pop()!
   if (seen.has(file)) continue
   seen.add(file)
-  const output = run('ldd', [file])
+  // Match the launcher's closed search path while resolving newly staged
+  // transcribe/ggml dependencies; never borrow an ambient LD_LIBRARY_PATH.
+  const output = execFileSync('ldd', [file], { cwd: root, encoding: 'utf8', env: { ...process.env, LD_LIBRARY_PATH: libOut } }).trim()
   if (/=>\s+not found(?:\s|$)/m.test(output)) throw new Error(`unresolved runtime dependency: ${file}`)
   for (const line of output.split('\n')) {
     const match = line.match(/^\s*(\S+)\s+=>\s+(\/\S+)/)
@@ -90,7 +101,7 @@ function inventory(dir: string): Array<{ path: string; mode: number; sha256: str
 const entries = inventory(output).filter(item => !item.path.endsWith('manifest.json'))
 const expected = ['apparent-engine-capture', 'apparent-engine-capture-launch', 'libexec/apparent-engine-capture', ...plugins.map(name => `plugins/${name}`), ...pipewireInputs.map(input => input.path), ...entries.filter(item => item.path.startsWith('lib/')).map(item => item.path)].sort()
 if (JSON.stringify(entries.map(item => item.path).sort()) !== JSON.stringify([...new Set(expected)].sort())) throw new Error('unexpected capture runtime inventory')
-const manifest = { schema: 1, sourceSha, recoveryLaunch: recoveryLaunch('capture/2'), ...(worktreeDigest ? { worktreeDigest, eligibleForReuse: false } : { eligibleForReuse: true }), target: 'linux-x64', rustTriple: 'x86_64-unknown-linux-gnu', capabilities: ['capture/2', 'x11-display', 'x11-area', 'hyprland-single-display', 'retained-materials', 'authenticated-publication'], launch: { entry: 'apparent-engine-capture-launch', argv: ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2'], worker: 'libexec/apparent-engine-capture', pathLookup: false, runtimeBuilds: false, shutdownTimeoutMs: 40_000 }, environment: { architecture: 'x86_64', osRelease: readFileSync('/etc/os-release', 'utf8').split('\n').find(x => x.startsWith('PRETTY_NAME='))?.slice(12).replace(/^"|"$/g, '') ?? 'unknown', kernel: run('uname', ['-r']), rustc: run('rustc', ['--version']), cargo: run('cargo', ['--version']), gstreamer: run('pkg-config', ['--modversion', 'gstreamer-1.0']), pluginSource: `pkg-config:${pluginDir}`, plugins, baseline: [...baseline].sort() }, runtimeFiles: entries }
+const manifest = { schema: 1, sourceSha, recoveryLaunch: recoveryLaunch('capture/2'), ...(worktreeDigest ? { worktreeDigest, eligibleForReuse: false } : { eligibleForReuse: true }), target: 'linux-x64', rustTriple: 'x86_64-unknown-linux-gnu', capabilities: ['capture/2', 'x11-display', 'x11-area', 'hyprland-single-display', 'retained-materials', 'authenticated-publication'], speechRuntimeLibraries: speechReceipt.libraries, launch: { entry: 'apparent-engine-capture-launch', argv: ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2'], worker: 'libexec/apparent-engine-capture', pathLookup: false, runtimeBuilds: false, shutdownTimeoutMs: 40_000 }, environment: { architecture: 'x86_64', osRelease: readFileSync('/etc/os-release', 'utf8').split('\n').find(x => x.startsWith('PRETTY_NAME='))?.slice(12).replace(/^"|"$/g, '') ?? 'unknown', kernel: run('uname', ['-r']), rustc: run('rustc', ['--version']), cargo: run('cargo', ['--version']), gstreamer: run('pkg-config', ['--modversion', 'gstreamer-1.0']), pluginSource: `pkg-config:${pluginDir}`, plugins, baseline: [...baseline].sort() }, runtimeFiles: entries }
 writeFileSync(resolve(output, 'manifest.json'), `${JSON.stringify(manifest, null, 2)}\n`, { flag: 'wx', mode: 0o644 })
 if (worktreeHash() !== worktreeDigest) throw new Error('source tree changed during artifact staging')
 // Check publication through the closed release entry, without capture/display

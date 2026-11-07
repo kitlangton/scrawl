@@ -19,6 +19,11 @@ use std::time::{Duration, Instant};
 
 #[path = "capture/audio.rs"]
 mod audio;
+mod execution;
+#[path = "capture/ink.rs"]
+mod ink;
+#[path = "capture/ink_control.rs"]
+mod ink_control;
 #[path = "capture/linux.rs"]
 mod linux;
 #[path = "materials_media/mod.rs"]
@@ -30,6 +35,8 @@ mod publication;
 mod recovery;
 #[path = "retained.rs"]
 mod retained;
+#[path = "capture/speech.rs"]
+mod speech;
 use linux::{Source, available_sources, native_ready, video_dimensions};
 
 const LIMIT: usize = 65_536;
@@ -67,6 +74,12 @@ struct Journal {
     audio_clock: Option<Value>,
     #[serde(default)]
     payload_digest: Option<String>,
+    #[serde(default)]
+    ink_registration: Option<ink::Registration>,
+    #[serde(default)]
+    ink_cutoff_ns: Option<u64>,
+    #[serde(default)]
+    fact_files: std::collections::BTreeMap<String, Value>,
     #[serde(default)]
     admitted_monotonic_ns: Option<u64>,
     #[serde(default)]
@@ -207,6 +220,21 @@ fn persist_journal(shared: &Shared, journal: &Journal) -> io::Result<()> {
     let current = read_journal(&shared.directory, &journal.capture_id, &journal.owner_token)
         .map_err(|_| io::Error::other("capture journal changed"))?;
     let mut merged = journal.clone();
+    if current.ink_registration.as_ref().is_some_and(|r| {
+        merged
+            .ink_registration
+            .as_ref()
+            .is_none_or(|m| r.revision > m.revision)
+    }) {
+        merged.ink_registration = current.ink_registration.clone();
+    }
+    merged.ink_cutoff_ns = current.ink_cutoff_ns.or(merged.ink_cutoff_ns);
+    for (name, fact) in &current.fact_files {
+        merged
+            .fact_files
+            .entry(name.clone())
+            .or_insert_with(|| fact.clone());
+    }
     let active = |state: &str| ["starting", "recording", "stopping"].contains(&state);
     let terminal = ["materials-ready", "cancelled", "failed"].contains(&current.state.as_str());
     if terminal && active(&merged.state) {
@@ -289,7 +317,9 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
     {
         let entry = entry.map_err(|_| "internal")?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !["recording.mp4", "materials.json", "audio.wav"].contains(&name.as_str()) {
+        if !["recording.mp4", "materials.json", "audio.wav"].contains(&name.as_str())
+            && !journal.fact_files.contains_key(&name)
+        {
             return Err("source_mismatch");
         }
         let file = dir.file(&name, false).map_err(|_| "source_mismatch")?;
@@ -305,18 +335,28 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
                 .partial_audio
                 .as_ref()
                 .or(journal.release_audio.as_ref())
+        } else if let Some(fact) = journal.fact_files.get(&name) {
+            fact.get("identity")
         } else {
             journal.release_payload.as_ref()
         };
-        let payload_matches = if name == "materials.json" && identity.is_none() {
+        let payload_matches = if identity.is_none()
+            && (name == "materials.json" || journal.fact_files.contains_key(&name))
+        {
             let bytes = dir
                 .read(&name)
                 .map_err(|_| "source_mismatch")?
                 .ok_or("source_mismatch")?;
-            journal
-                .payload_digest
-                .as_deref()
-                .is_some_and(|expected| sha(&bytes) == expected)
+            if let Some(fact) = journal.fact_files.get(&name) {
+                fact["sha256"]
+                    .as_str()
+                    .is_some_and(|expected| sha(&bytes) == expected)
+            } else {
+                journal
+                    .payload_digest
+                    .as_deref()
+                    .is_some_and(|expected| sha(&bytes) == expected)
+            }
         } else {
             false
         };
@@ -451,9 +491,43 @@ fn finalize(
         if audio.initial_gap_ms != 0 {
             payload["warnings"] = json!([{"code":"audio-initial-gap","atMs":audio.initial_gap_ms}]);
         }
-        let mut j = shared.journal.lock().map_err(|_| "internal")?;
-        j.release_audio = Some(file["identity"].clone());
-        j.audio_clock = Some(audio.clock.clone());
+        {
+            let mut j = shared.journal.lock().map_err(|_| "internal")?;
+            j.release_audio = Some(file["identity"].clone());
+            j.audio_clock = Some(audio.clock.clone());
+        }
+        // Only this original owning finalizer can adopt child inference. A
+        // standalone model/validator has no material or publication authority.
+        match speech::transcribe(shared, audio, &file, duration) {
+            Ok(mut transcript) => {
+                transcript["schema"] = json!("apparent.capture-transcript/1");
+                transcript["identity"] =
+                    json!({"captureId":j.capture_id,"materialsId":materials_id});
+                let file = seal_fact(shared, "transcript.json", &transcript)?;
+                payload["files"]
+                    .as_array_mut()
+                    .ok_or("internal")?
+                    .push(file);
+                payload["facts"]["transcript"] =
+                    json!({"file":"transcript.json","schema":"apparent.capture-transcript/1"});
+                payload["collection"]["transcript"] = json!("collected");
+            }
+            Err(_) => payload["warnings"]
+                .as_array_mut()
+                .ok_or("internal")?
+                .push(json!({"code":"transcript-unavailable"})),
+        }
+    }
+    let ink_facts = ink_control::freeze(shared, &materials_id)?;
+    if let Some(facts) = ink_facts {
+        let file = seal_fact(shared, "accepted-strokes.json", &facts)?;
+        payload["files"]
+            .as_array_mut()
+            .ok_or("internal")?
+            .push(file);
+        payload["facts"]["acceptedStrokes"] =
+            json!({"file":"accepted-strokes.json","schema":"apparent.capture-strokes/1"});
+        payload["collection"]["acceptedStrokes"] = json!("collected");
     }
     let payload_bytes = serde_json::to_vec(&payload).map_err(|_| "internal")?;
     {
@@ -477,6 +551,35 @@ fn finalize(
     drop(j);
     persist(shared).map_err(|_| "internal")?;
     Ok(manifest)
+}
+
+fn seal_fact(shared: &Shared, name: &str, value: &Value) -> Result<Value, &'static str> {
+    if !["accepted-strokes.json", "transcript.json"].contains(&name) {
+        return Err("internal");
+    }
+    let bytes = serde_json::to_vec(value).map_err(|_| "internal")?;
+    if bytes.len() > 4 * 1024 * 1024 {
+        return Err("invalid_materials");
+    }
+    let digest = sha(&bytes);
+    {
+        let mut j = shared.journal.lock().map_err(|_| "internal")?;
+        j.fact_files.insert(name.into(), json!({"sha256":digest}));
+        persist_journal(shared, &j).map_err(|_| "internal")?;
+    }
+    let store = operation_dir(shared)?;
+    store.write_new(name, &bytes).map_err(|_| "internal")?;
+    let file = store.file(name, false).map_err(|_| "source_mismatch")?;
+    store.validate(&file).map_err(|_| "source_mismatch")?;
+    file.sync_all().map_err(|_| "internal")?;
+    let m = file.metadata().map_err(|_| "internal")?;
+    let seal = json!({"relativePath":name,"identity":{"device":m.dev().to_string(),"inode":m.ino().to_string(),"size":m.len(),"modifiedNs":(m.mtime() as i128 * 1_000_000_000 + m.mtime_nsec() as i128).to_string()},"sha256":digest});
+    {
+        let mut j = shared.journal.lock().map_err(|_| "internal")?;
+        j.fact_files.insert(name.into(), seal.clone());
+        persist_journal(shared, &j).map_err(|_| "internal")?;
+    }
+    Ok(seal)
 }
 
 fn string<'a>(v: &'a Value, key: &str) -> Result<&'a str, &'static str> {
@@ -530,7 +633,8 @@ fn validate_start(v: &Value) -> Result<(), &'static str> {
         return Err("malformed_request");
     }
     let options = v.get("options").ok_or("malformed_request")?;
-    if options.get("audio").and_then(Value::as_str) != Some("none")
+    let audio = options.get("audio").and_then(Value::as_str);
+    if !(audio == Some("none") || (audio == Some("microphone") && speech::configured()))
         || options.get("localOnly").and_then(Value::as_bool) != Some(true)
         || options.as_object().is_none_or(|o| o.len() != 2)
     {
@@ -628,6 +732,13 @@ fn process_request(
             ))
         }
         "publish" | "inspectPublication" => publication::handle(&req, runtime, root, all),
+        "registerInkProducer" | "submitInkEvents" | "finishInkProducer" => {
+            if recovery_role {
+                return Err("permission_denied");
+            }
+            let shared = all.get(capture).ok_or("unavailable")?;
+            ink_control::handle(&req, shared, active.contains_key(capture))
+        }
         "discoverSources" => {
             if recovery_role {
                 return Ok(
@@ -794,6 +905,9 @@ fn process_request(
                 release_audio: None,
                 audio_clock: None,
                 payload_digest: None,
+                ink_registration: None,
+                ink_cutoff_ns: None,
+                fact_files: Default::default(),
                 admitted_monotonic_ns: Some(admitted_ns),
                 confirmed_at_ms: Some(confirmed_at_ms),
                 cancel_requested: false,
@@ -944,6 +1058,8 @@ fn process_request(
                     }
                     if j.state == "starting" || j.state == "recording" {
                         j.state = "stopping".into();
+                        j.ink_cutoff_ns
+                            .get_or_insert(monotonic_ns().map_err(|_| "internal")?);
                         drop(j);
                         persist(&shared).map_err(|_| "internal")?;
                         shared.stop.store(true, Ordering::Release);
@@ -1043,6 +1159,7 @@ fn process_request(
                     if jnow.release_audio.is_some() {
                         expected.push("audio.wav");
                     }
+                    expected.extend(jnow.fact_files.keys().map(String::as_str));
                     let mut seen = Vec::new();
                     for entry in fs::read_dir(format!("/proc/self/fd/{}/", pinned.as_raw_fd()))
                         .map_err(|_| "internal")?
@@ -1063,6 +1180,9 @@ fn process_request(
                             &jnow.release_movie
                         } else if name == "audio.wav" {
                             &jnow.release_audio
+                        } else if let Some(fact) = jnow.fact_files.get(&name) {
+                            // Keep the Option shape shared with the original media bindings.
+                            &Some(fact["identity"].clone())
                         } else {
                             &jnow.release_payload
                         };
@@ -1124,6 +1244,9 @@ fn process_request(
                             let binding = match name {
                                 "recording.mp4" => &jnow.release_movie,
                                 "audio.wav" => &jnow.release_audio,
+                                _ if jnow.fact_files.contains_key(name) => {
+                                    &Some(jnow.fact_files[name]["identity"].clone())
+                                }
                                 _ => &jnow.release_payload,
                             };
                             let binding = binding.as_ref().ok_or("source_mismatch")?;
@@ -1199,6 +1322,32 @@ fn parse_line(bytes: &[u8]) -> Result<Value, &'static str> {
             "options",
             "invocation",
         ]),
+        "registerInkProducer" => fields.extend([
+            "ingressVersion",
+            "ownerToken",
+            "captureId",
+            "source",
+            "observation",
+        ]),
+        "submitInkEvents" => fields.extend([
+            "ingressVersion",
+            "ownerToken",
+            "captureId",
+            "registrationId",
+            "producerToken",
+            "sequence",
+            "eventsJson",
+            "batchSha256",
+        ]),
+        "finishInkProducer" => fields.extend([
+            "ingressVersion",
+            "ownerToken",
+            "captureId",
+            "registrationId",
+            "producerToken",
+            "finalSequence",
+            "seal",
+        ]),
         "inspect" | "stop" | "cancel" => fields.extend(["ownerToken", "captureId"]),
         "releaseMaterials" => fields.extend(["ownerToken", "captureId", "materialsId", "leaseId"]),
         "publish" => fields.extend([
@@ -1239,6 +1388,9 @@ fn main() {
         eprintln!("capture startup: argument validation started");
     }
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && args[1] == "--capture-speech-job-v1" {
+        std::process::exit(if speech::child().is_ok() { 0 } else { 1 });
+    }
     let recovery_role =
         if args.len() == 9 && args[7] == "--recovery-peer-v1" && recovery::nonce(&args[8]) {
             Some(recovery::Role {
@@ -1534,7 +1686,7 @@ mod unsealed_cleanup_tests {
     use super::*;
     use std::os::unix::fs::PermissionsExt;
 
-    fn fixture() -> (PathBuf, PathBuf, PathBuf, Journal) {
+    pub(super) fn fixture() -> (PathBuf, PathBuf, PathBuf, Journal) {
         let capture_id = new_id().unwrap();
         let base = std::env::temp_dir().join(format!("apparent-cleanup-{capture_id}"));
         let capture_root = base.join("capture-v2");
@@ -1576,6 +1728,9 @@ mod unsealed_cleanup_tests {
             release_audio: None,
             audio_clock: None,
             payload_digest: None,
+            ink_registration: None,
+            ink_cutoff_ns: None,
+            fact_files: Default::default(),
             admitted_monotonic_ns: None,
             confirmed_at_ms: None,
             cancel_requested: true,
