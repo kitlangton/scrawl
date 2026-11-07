@@ -2,7 +2,7 @@
 import { constants as C, type BigIntStats } from "node:fs";
 import { lstat, open, readdir, unlink, type FileHandle } from "node:fs/promises";
 import path from "node:path";
-import { cleanupPrivateDirectoryStage, type PrivateDirectoryResources } from "../recipient/private-directory.ts";
+import { cleanupPrivateDirectoryStage } from "../recipient/private-directory.ts";
 import { admitTrustedDirectory, directoryIdentity } from "../state/directory.ts";
 import { readStateEvidence, stateFileStamp } from "../state/credential-files.ts";
 import { checkSignal, samePathFd, type CurrentNamespaceLease, type NamespaceResources, type StateDirectory } from "../state/queue-transaction.ts";
@@ -12,7 +12,7 @@ import type { Context } from "../recipient/crypto.ts";
 
 export type QueueRetirementState = "retired" | "refused" | "uncertain";
 export type QueueRetirementResult = Readonly<{ state: QueueRetirementState }>;
-export type QueueRetirementResources = NamespaceResources & PrivateDirectoryResources;
+export type QueueRetirementResources = NamespaceResources;
 export type QueueRetirementInput = Readonly<{ job: Readonly<Job>; expectedStamp: string; assertFresh(): Promise<void> }>;
 const ident = (s: BigIntStats) => directoryIdentity(s);
 const result = (state: QueueRetirementState): QueueRetirementResult => Object.freeze({ state });
@@ -36,17 +36,17 @@ async function listExact(dir: string, expected: Set<string>): Promise<void> {
   if (names.length !== expected.size || names.some(name => !expected.has(name))) throw new Error();
 }
 
-async function inventorySpool(state: StateDirectory, job: Job, resources: QueueRetirementResources) {
+async function inventorySpool(state: StateDirectory, job: Job, resources: QueueRetirementResources, signal: AbortSignal) {
   const rootPath = path.join(state.path, `${job.id}.sealed`);
   try { await lstat(rootPath); }
   catch (error) { if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error; }
   let root: Awaited<ReturnType<typeof admitTrustedDirectory>>;
-  root = await admitTrustedDirectory(rootPath, resources, "private-state");
+  root = await admitTrustedDirectory(rootPath, resources, "private-state", signal);
   try {
     const grouped = job.grouped === true, profile: StoredSpoolProfile = grouped ? "evidence-first-v1" : "root";
     if (!job.encrypted || !job.encryption || job.encryption.context.captureId !== job.id
       || job.encryption.context.origin !== job.server || job.encryption.context.group !== undefined) throw new Error();
-    const receipt = await readStateEvidence(root, "spool-state.json", 2_000_000, resources, new AbortController().signal,
+    const receipt = await readStateEvidence(root, "spool-state.json", 2_000_000, resources, signal,
       bytes => decodeStoredEncryptedSpool(bytes, { context: { ...job.encryption!.context } as Context, profile }));
     if (!receipt) throw new Error();
     const context = receipt.value.metadata.context;
@@ -65,13 +65,13 @@ async function inventorySpool(state: StateDirectory, job: Job, resources: QueueR
       const prefix = group ? `${group}/` : "", names = [...expected.keys()].filter(name => name.startsWith(prefix)).map(name => name.slice(prefix.length));
       const dirPath = group ? path.join(rootPath, group) : rootPath;
       if (group) {
-        const admitted = await admitTrustedDirectory(dirPath, resources, "private-state");
+        const admitted = await admitTrustedDirectory(dirPath, resources, "private-state", signal);
         dirs.set(group, admitted.identity); await admitted.handle.close();
         await listExact(dirPath, new Set(names.map(name => name.split("/")[0]!)));
       }
       const chunks = names.filter(name => name.startsWith("sealed/"));
       if (chunks.length) {
-        const chunkPath = path.join(dirPath, "sealed"), admitted = await admitTrustedDirectory(chunkPath, resources, "private-state");
+        const chunkPath = path.join(dirPath, "sealed"), admitted = await admitTrustedDirectory(chunkPath, resources, "private-state", signal);
         dirs.set(`${group ? `${group}/` : ""}sealed`, admitted.identity); await admitted.handle.close();
         await listExact(chunkPath, new Set(chunks.map(name => name.slice("sealed/".length))));
       }
@@ -90,16 +90,18 @@ async function inventorySpool(state: StateDirectory, job: Job, resources: QueueR
 /** Removes only the validated ID's .sealed subtree and .job record. */
 export async function retireQueuedJob(state: StateDirectory, lease: CurrentNamespaceLease,
   resources: QueueRetirementResources, input: QueueRetirementInput): Promise<QueueRetirementResult> {
-  let effects = false, spoolHandle: FileHandle | undefined;
+  let effects = false, spoolHandle: FileHandle | undefined, expectedBytes: Uint8Array | undefined;
   try {
-    const expected = decodeJob(encodeJob(input.job as Job)), id = expected.id;
-    if (!/^[0-9a-f]{32}$/.test(id) || typeof input.expectedStamp !== "string" || !input.expectedStamp
-      || typeof input.assertFresh !== "function") return result("refused");
+    const expectedStamp = input.expectedStamp, assertFresh = input.assertFresh;
+    expectedBytes = encodeJob(input.job as Job);
+    const expected = decodeJob(expectedBytes), id = expected.id;
+    if (!/^[0-9a-f]{32}$/.test(id) || typeof expectedStamp !== "string" || !expectedStamp
+      || typeof assertFresh !== "function") return result("refused");
     const jobPath = path.join(state.path, `${id}.job`), spoolPath = path.join(state.path, `${id}.sealed`);
     const fence = async () => {
       await lease.assertCurrent();
       if (!await samePathFd(state)) throw new Error();
-      await input.assertFresh();
+      await assertFresh();
       await lease.assertCurrent();
       if (!await samePathFd(state)) throw new Error();
     };
@@ -110,14 +112,16 @@ export async function retireQueuedJob(state: StateDirectory, lease: CurrentNames
     };
     const verifyJob = async () => {
       const named = await lstat(jobPath, { bigint: true });
-      if (!named.isFile() || named.isSymbolicLink() || stateFileStamp(named) !== input.expectedStamp) throw new Error();
+      if (!named.isFile() || named.isSymbolicLink() || stateFileStamp(named) !== expectedStamp) throw new Error();
       const current = await readStateEvidence(state, `${id}.job`, 2_000_000, resources, lease.signal, decodeJob);
-      if (!current || current.expectedStamp !== input.expectedStamp
-        || Buffer.from(encodeJob(current.value)).compare(Buffer.from(encodeJob(expected))) !== 0) throw new Error();
+      if (!current || current.expectedStamp !== expectedStamp) throw new Error();
+      const observed = encodeJob(current.value);
+      try { if (!Buffer.from(observed.buffer, observed.byteOffset, observed.byteLength).equals(expectedBytes!)) throw new Error(); }
+      finally { observed.fill(0); }
     };
     await fence(); checkSignal(undefined, lease.signal); await verifyJob();
     let spool: Awaited<ReturnType<typeof inventorySpool>>;
-    try { spool = await inventorySpool(state, expected, resources); } catch { return result("refused"); }
+    try { spool = await inventorySpool(state, expected, resources, lease.signal); } catch { return result("refused"); }
     if (spool) {
       spoolHandle = spool.handle;
       const authorizedMissingFiles = new Set<string>(), authorizedMissingDirs = new Set<string>();
@@ -149,11 +153,11 @@ export async function retireQueuedJob(state: StateDirectory, lease: CurrentNames
     }
     await fence(); await verifyJob();
     const final = await lstat(jobPath, { bigint: true });
-    if (!final.isFile() || final.isSymbolicLink() || stateFileStamp(final) !== input.expectedStamp) return result(effects ? "uncertain" : "refused");
+    if (!final.isFile() || final.isSymbolicLink() || stateFileStamp(final) !== expectedStamp) return result(effects ? "uncertain" : "refused");
     await fence(); await verifyJob();
     effects = true; await unlink(jobPath); await state.handle.sync(); await verifyRootOnly();
     const remains = await lstat(jobPath, { bigint: true }).catch(error => (error as NodeJS.ErrnoException).code === "ENOENT" ? null : undefined);
     return remains === null ? result("retired") : result("uncertain");
   } catch { return result(effects ? "uncertain" : "refused"); }
-  finally { await spoolHandle?.close().catch(() => {}); }
+  finally { expectedBytes?.fill(0); await spoolHandle?.close().catch(() => {}); }
 }
