@@ -43,7 +43,7 @@ try {
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen, type DurableNoteSaveOutcome, type RecordCommand, type ScreenStrokeCursor, type ShortcutTrialBinding, type ShortcutTrialFact, type ShortcutTrialReservationIdentity } from '@apparent/record/capabilities';
-    import { createRecordNativePort, type NativeHostPortInput } from '@apparent/record/host/native';
+    import { createRecordLocalClipboardTextReadbackPort, type NativeClipboardTextReadbackPortInput, createRecordNativePort, type NativeHostPortInput } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
     declare const cursor: ScreenStrokeCursor;
     declare const trial: ShortcutTrialFact;
@@ -54,6 +54,10 @@ try {
     void [cursor, trial, note, rearm];
     declare const destinations: AbsentDestinationAllocator;
     const exact: Promise<AbsentDestinationBinding> = destinations.reserveExact('request', '/home/user/output/requested.apparent');
+    declare const transientClipboard: NativeClipboardTextReadbackPortInput;
+    declare const resolution: Parameters<typeof createRecordLocalClipboardTextReadbackPort>[0]['resolveHandoff'];
+    const textPort = createRecordLocalClipboardTextReadbackPort({clipboard:transientClipboard,nativeHost:{readSnapshot:async()=>({processEpoch:'host',revision:1})},maximumTextBytes:21800,resolveHandoff:resolution});
+    void textPort;
     declare const nativePort: NativeHostPortInput;
     void createRecordNativePort(nativePort, { requiredPermissionIds: ['screen-recording'] });
     void [RecordWorkflow, createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, decodeSelectedFrames, assembleProcessingOutput, RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory, createRecordCapabilityProvider, createRecordNativePort, hasConfirmedArtifactOpen, exact];
@@ -68,7 +72,8 @@ try {
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
     import { createRecordCapabilityProvider, hasConfirmedArtifactOpen } from '@apparent/record/capabilities';
-    import { createRecordNativePort } from '@apparent/record/host/native';
+    import { createRecordLocalClipboardTextReadbackPort, createRecordNativePort } from '@apparent/record/host/native';
+    assert.equal(typeof createRecordLocalClipboardTextReadbackPort, 'function');
     import { createRecordFixture } from '@apparent/record/fixtures';
     const require = createRequire(import.meta.url);
     for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk', '@apparent/app-contracts']) assert.throws(() => require.resolve(name));

@@ -74,9 +74,9 @@ export type ArtifactOpenOutcome = {
   | { ok: true; evidence: "viewer-ack" | "os-observation" }
   | { ok: false; reason: "refused" | "failed" }
 );
-/** Exact supplied-text receipt from a native write/readback operation, scoped to one immutable artifact. */
+/** Exact supplied-text receipt scoped to one immutable artifact. native-text-readback is transient byte observation only, not clipboard ownership or paste. */
 export type ClipboardCopyOutcome = {
-  kind: "copy"; at: string; ok: true; evidence: "native-write-readback";
+  kind: "copy"; at: string; ok: true; evidence: "native-write-readback" | "native-text-readback";
   artifactId: string; requestId: string; digest: string; byteLength: number;
 };
 export type CaptureOutcome =
@@ -151,6 +151,8 @@ export type RecordCommand = CommandBase & (
 export type CommandResult =
   /** Dispatch accepted; no operation outcome is implied. Observe provider facts. */
   | { status: "accepted"; requestId: string; snapshot: CapabilitySnapshot }
+  /** Transient supplied-text readback; no exclusive/current/enduring clipboard ownership or paste guarantee. */
+  | { status: "written-readback"; requestId: string; snapshot: CapabilitySnapshot }
   | { status: "applied"; requestId: string; snapshot: CapabilitySnapshot; receipt?: { captureId?: string } }
   | { status: "refused"; requestId: string; reason: string; snapshot: CapabilitySnapshot }
   | { status: "cancelled"; requestId: string; snapshot: CapabilitySnapshot }
@@ -172,6 +174,8 @@ export type {
   RecordCapabilityProviderOptions,
   RecordCaptureFacts,
   RecordCaptureFactsPort,
+  RecordClipboardTextReadbackPort,
+  RecordClipboardTextReadbackResult,
   RecordClipboardPort,
   RecordClipboardResult,
   RecordNativeFacts,

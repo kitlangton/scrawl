@@ -340,3 +340,34 @@ test("RecordClient pill never presents accepted, refused or unknown copy as a fr
     disposeWorkflowPillHost(host);
   }
 });
+
+test("RecordClient pill presents transient text readback without claiming ownership", async () => {
+  const fixture = recordClientFixture();
+  let requests = 0;
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => `copy-${++requests}` });
+  fixture.emit({ ...fixture.value(), revision: 4, captures: [
+    { captureId: "saved-visible", artifactId: "artifact-visible", delivery: "unknown", phase: "saved", outcomes: [{ kind: "save", at: "now", ok: true }] },
+    { captureId: "path-only-history", delivery: "unknown", phase: "saved", outcomes: [{ kind: "save", at: "now", ok: true }] },
+  ] });
+  fixture.client.execute = async command => {
+    fixture.commands.push(command);
+    assert.equal(command.type, "copy-local");
+    assert.equal(command.type === "copy-local" && command.captureId, "saved-visible");
+    fixture.emit({ ...fixture.value(), revision: 5, captures: fixture.value().captures.map(capture => capture.captureId === "saved-visible" ? { ...capture, outcomes: [...capture.outcomes,
+      { kind: "copy", at: "now", ok: true, evidence: "native-text-readback", artifactId: "artifact-visible", requestId: command.requestId, digest: "a".repeat(64), byteLength: 42 },
+    ] } : capture) });
+    return { status: "written-readback", requestId: command.requestId, snapshot: fixture.value() };
+  };
+  const before = (await host.read())!;
+  assert.equal(before.actions.find(action => action.id === "copy")?.label, "Copy handoff");
+  assert.equal(before.notice, "Saved locally");
+  await host.act(before.revision, "copy");
+  assert.equal((await host.read())!.notice, "Handoff text written and read back");
+  assert.equal(fixture.commands.length, 1);
+  fixture.emit({ ...fixture.value(), revision: 6, captures: [{ ...fixture.value().captures[0]!, artifactId: "replacement-artifact" }] });
+  assert.equal((await host.read())!.notice, "Saved locally", "prior artifact receipt does not prove replacement copied");
+  await host.act(before.revision, "copy");
+  assert.equal(fixture.commands.length, 1, "stale view cannot dispatch another copy");
+  disposeWorkflowPillHost(host);
+  assert.equal(fixture.isDetached(), false);
+});
