@@ -377,6 +377,17 @@
       "docs": ["capture/desktop/docs/linux/linux.md", "capture/engine/docs/capture.md"]
     },
     {
+      "id": "engine-hyprland-capture2",
+      "group": "start",
+      "name": "Independent one-monitor Hyprland capture",
+      "says": "The independent Engine capture/2 provider can record one Hyprland monitor through the native sharing portal and produce authenticated retained materials.",
+      "status": "main",
+      "added": "2026-11-07",
+      "platforms": ["linux"],
+      "note": "Source-bound package and SDK 0.4.5 proof passed in a disposable Omarchy guest at 1280×800 scale 1: native monitor consent, first-frame readiness, Stop, sealed H.264 readback and cold materials inspection. XWayland is required for source discovery. Other Wayland backends, multiple monitors, regions/windows, audio and fact collectors are unsupported. Exact-main archive admission and desktop Saved/Copy integration remain separate; installed routing is unchanged. No control-surface exclusion or clean initial frames is claimed.",
+      "docs": ["engine/delivery/capture/README.md"]
+    },
+    {
       "id": "recent-area",
       "group": "start",
       "name": "What to record and Recent Area",

@@ -51,8 +51,13 @@ XWayland are available. It keeps the existing protocol and recorder, binds the
 portal output name and dimensions to the advertised display, and retains the
 PipeWire session through finalization. Other Wayland backends, multiple monitors,
 arbitrary areas, windows, macOS, audio and fact collectors remain unsupported.
-Its native portal/packaged Omarchy qualification is still pending. Local checks
-and a manifest capability are not an availability or installed-adoption claim.
+A source-bound closed package passed the public SDK 0.4.5 peer in a disposable
+Omarchy guest: native monitor consent, first-frame recording, Stop, sealed H.264
+readback and cold authenticated materials inspection. That proof used one
+1280×800 output at scale 1. Exact-main CI/archive admission, other scale
+configurations and the desktop Saved/Copy adoption remain separate gates.
+The first movie frames can include the native chooser fading out; no initial
+UI exclusion or clean-frame guarantee is claimed.
 
 Pending portal consent observes authenticated durable Stop/Cancel intent. The
 original backend is retained privately so cold controls do not depend on source
