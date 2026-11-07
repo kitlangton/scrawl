@@ -67,6 +67,29 @@ test('saved zoom composes real PNGs in row-major order and keeps semantic text i
   } finally { await rm(bundle,{recursive:true,force:true}); await rm(join(out,'..'),{recursive:true,force:true}); }
 });
 
+test('evidence snapshot zoom uses retained PNGs despite configured provider and unexpected video',async()=>{
+  const bundle=await bundleFixture(),parent=await mkdtemp(join(tmpdir(),'zoom-evidence-'));
+  const manifestBytes=await readFile(join(bundle,'apparent.json'));
+  const marker={version:1,captureId:'b'.repeat(32),server:'https://connect.example',media:'not downloaded',guidance:'Use apparent fetch <id> --media --out <new-directory> for the complete recording'};
+  await writeFile(join(bundle,'.evidence-only.json'),JSON.stringify(marker));
+  await writeFile(join(bundle,'recording.mov'),'unexpected copied video');
+  const priorExecutable=process.env.APPARENT_ENGINE_FRAMES_EXECUTABLE,priorRuntime=process.env.APPARENT_ENGINE_RUNTIME;
+  process.env.APPARENT_ENGINE_FRAMES_EXECUTABLE='/missing/provider';process.env.APPARENT_ENGINE_RUNTIME='/missing/runtime';
+  try {
+    const result=await runZoom({bundle,at:'width changes',span:2,frames:3,full:false,out:join(parent,'sheet'),json:true});
+    assert.equal(result.sourceKind,'saved-keyframes');assert.equal(result.source,'bundle-manifest');
+    assert.equal(result.cells[0].timestampMs,1000);assert.match(result.cells[0].framePath,/frames\/frame-01\.png$/);
+    assert.equal(result.cells[0].interactions[0].label,'Save');assert.match(result.said,/Width, changes\./);
+    assert.deepEqual(await readFile(join(bundle,'apparent.json')),manifestBytes);
+    assert.deepEqual(JSON.parse(await readFile(join(bundle,'.evidence-only.json'),'utf8')),marker);
+    assert.ok((await readFile(result.sheet)).length>24);
+  } finally {
+    if(priorExecutable===undefined)delete process.env.APPARENT_ENGINE_FRAMES_EXECUTABLE;else process.env.APPARENT_ENGINE_FRAMES_EXECUTABLE=priorExecutable;
+    if(priorRuntime===undefined)delete process.env.APPARENT_ENGINE_RUNTIME;else process.env.APPARENT_ENGINE_RUNTIME=priorRuntime;
+    await rm(bundle,{recursive:true,force:true});await rm(parent,{recursive:true,force:true});
+  }
+});
+
 test('a PNG worker exiting during decode rejects promptly and clears its pending deadline', {timeout:2000}, async()=>{
   const decoder=makeDecoder();
   const pending=assert.rejects(decoder.decode(png([255,0,0,255]),[0,0,1,1],60_000),/PNG worker exited/);
