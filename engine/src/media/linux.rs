@@ -14,6 +14,14 @@ pub struct Decoded {
     pub rgba: Vec<u8>,
 }
 
+fn bus_error_code(error: &anyhow::Error) -> Option<i32> {
+    error.chain().find_map(|cause| {
+        cause
+            .downcast_ref::<gstreamer::glib::Error>()
+            .map(gstreamer::glib::Error::code)
+    })
+}
+
 fn shrink(
     width: u32,
     height: u32,
@@ -83,24 +91,36 @@ pub fn decode(
     if metadata.len() == 0 {
         return Err("source_incomplete");
     }
-    let reader = PinnedVideoReader::open(source).map_err(|error| {
-        if error.is::<IncompleteVideo>() { "source_incomplete" } else { "decode_failed" }
-    })?;
+    let reader = match PinnedVideoReader::open(source) {
+        Ok(reader) => reader,
+        Err(error) => {
+            let code = if error.is::<IncompleteVideo>() {
+                "source_incomplete"
+            } else {
+                "decode_failed"
+            };
+            super::job::diagnostic_failure("reader-open", code, bus_error_code(&error));
+            return Err(code);
+        }
+    };
     let mut total = 0u64;
     for &requested in times {
         let clamped_to_end = requested >= reader.duration_ms();
-        let frame = reader
-            .frame(requested, SOURCE_EDGE_LIMIT, SOURCE_BYTES_LIMIT)
-            .map_err(|error| {
+        let frame = match reader.frame(requested, SOURCE_EDGE_LIMIT, SOURCE_BYTES_LIMIT) {
+            Ok(frame) => frame,
+            Err(error) => {
                 let message = error.to_string();
-                if message.contains("limit") {
+                let code = if message.contains("limit") {
                     "limits_exceeded"
                 } else if message.contains("No frame") || message.contains("frame") {
                     "source_incomplete"
                 } else {
                     "decode_failed"
-                }
-            })?;
+                };
+                super::job::diagnostic_failure("frame-decode", code, bus_error_code(&error));
+                return Err(code);
+            }
+        };
         let (actual_ms, w, h, raw) = (frame.t_ms, frame.width, frame.height, frame.rgba);
         let (width, height, rgba) = shrink(w, h, raw, max_edge)?;
         total = total

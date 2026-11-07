@@ -8,16 +8,67 @@ use super::{
 };
 use apparent_capture_engine::{BundleLease, LeaseKind, Runtime};
 use serde::{Deserialize, Serialize};
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::fs::File;
 use std::io::{Read, Seek, SeekFrom, Write};
 use std::os::fd::RawFd;
 use std::os::fd::{AsRawFd, FromRawFd};
-use std::os::unix::{fs::MetadataExt, net::UnixStream, process::CommandExt};
+use std::os::unix::{
+    fs::MetadataExt,
+    net::UnixStream,
+    process::{CommandExt, ExitStatusExt},
+};
 use std::path::Path;
 use std::process::{Child, Command, Stdio};
 use std::time::Instant;
+
+const DIAGNOSTICS_SWITCH: &str = "APPARENT_MEDIA_TEST_DIAGNOSTICS";
+
+fn diagnostics_enabled() -> bool {
+    std::env::var_os(DIAGNOSTICS_SWITCH).is_some_and(|value| value == "1")
+}
+
+/// Bounded static labels for the opt-in synthetic test. No paths, raw error text or file sink.
+pub(crate) fn diagnostic_failure(stage: &'static str, code: &'static str, bus_code: Option<i32>) {
+    if !diagnostics_enabled() {
+        return;
+    }
+    let record = match bus_code {
+        Some(bus_code) => format!(
+            "apparent-media-diagnostic stage={stage} code={code} bus=glib-error bus-code={bus_code}\n"
+        ),
+        None => {
+            format!("apparent-media-diagnostic stage={stage} code={code} bus=not-in-error-chain\n")
+        }
+    };
+    write_diagnostic(&record);
+}
+
+fn write_diagnostic(record: &str) {
+    if diagnostics_enabled() && record.len() <= 256 {
+        let _ = std::io::stderr().lock().write_all(record.as_bytes());
+    }
+}
+
+fn diagnostic_worker_exit(child: &mut Child) {
+    if !diagnostics_enabled() {
+        return;
+    }
+    let record = match child.try_wait() {
+        Ok(Some(status)) => format!(
+            "apparent-media-diagnostic stage=worker-exit exit-code={} signal={}\n",
+            status
+                .code()
+                .map_or_else(|| "none".to_owned(), |code| code.to_string()),
+            status
+                .signal()
+                .map_or_else(|| "none".to_owned(), |signal| signal.to_string()),
+        ),
+        _ => "apparent-media-diagnostic stage=worker-exit status=unavailable\n".to_owned(),
+    };
+    write_diagnostic(&record);
+}
 
 pub fn decode_available() -> bool {
     #[cfg(target_os = "linux")]
@@ -75,8 +126,15 @@ pub(crate) fn spawn_reexec(
     cmd.args(args)
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
-        .stderr(Stdio::null())
+        .stderr(if diagnostics_enabled() {
+            Stdio::inherit()
+        } else {
+            Stdio::null()
+        })
         .env_clear();
+    if diagnostics_enabled() {
+        cmd.env(DIAGNOSTICS_SWITCH, "1");
+    }
     cmd.env("GST_REGISTRY", "/dev/null")
         .env("GST_REGISTRY_FORK", "no");
     // Preserve the launcher's native runtime closure in the re-exec.
@@ -215,23 +273,34 @@ impl Active {
     }
     pub fn finish(&mut self, success: bool) -> Result<Value> {
         if !success {
+            diagnostic_worker_exit(&mut self.child);
+            diagnostic_failure("supervisor-finish", "decode_failed", None);
             self.output.cleanup();
             return Err("decode_failed");
         }
         let result = (|| {
             let mut bytes = Vec::new();
-            self.child
-                .stdout
-                .take()
-                .ok_or("internal")?
+            let mut stdout = self.child.stdout.take().ok_or("internal")?;
+            stdout
+                .by_ref()
                 .take(65537)
                 .read_to_end(&mut bytes)
                 .map_err(|_| "internal")?;
             if bytes.len() > 65536 {
                 return Err("internal");
             }
-            let raw: Value = serde_json::from_slice(&bytes).map_err(|_| "decode_failed")?;
+            let raw: Value = serde_json::from_slice(&bytes).map_err(|_| {
+                diagnostic_failure("worker-response", "decode_failed", None);
+                "decode_failed"
+            })?;
             if let Some(code) = raw.get("error").and_then(Value::as_str) {
+                let diagnostic_code = match code {
+                    "limits_exceeded" => "limits_exceeded",
+                    "source_incomplete" => "source_incomplete",
+                    "invalid_output" => "invalid_output",
+                    _ => "decode_failed",
+                };
+                diagnostic_failure("worker-result", diagnostic_code, None);
                 return Err(match code {
                     "limits_exceeded" => "limits_exceeded",
                     "source_incomplete" => "source_incomplete",
@@ -284,7 +353,8 @@ impl Active {
             self.output.publish(&result)?;
             Ok(result)
         })();
-        if result.is_err() {
+        if let Err(code) = &result {
+            diagnostic_failure("supervisor-finish", *code, None);
             self.output.cleanup();
         }
         result
@@ -402,11 +472,18 @@ fn decode_child(internal: &Internal, source: &File, dir: &Directory) -> Result<V
                 let mut encoder = png::Encoder::new(&mut file, frame.width, frame.height);
                 encoder.set_color(png::ColorType::Rgba);
                 encoder.set_depth(png::BitDepth::Eight);
-                let mut writer = encoder.write_header().map_err(|_| "decode_failed")?;
-                writer
-                    .write_image_data(&frame.rgba)
-                    .map_err(|_| "decode_failed")?;
-                writer.finish().map_err(|_| "decode_failed")?;
+                let mut writer = encoder.write_header().map_err(|_| {
+                    diagnostic_failure("png-header", "decode_failed", None);
+                    "decode_failed"
+                })?;
+                writer.write_image_data(&frame.rgba).map_err(|_| {
+                    diagnostic_failure("png-image-write", "decode_failed", None);
+                    "decode_failed"
+                })?;
+                writer.finish().map_err(|_| {
+                    diagnostic_failure("png-finish", "decode_failed", None);
+                    "decode_failed"
+                })?;
             }
             file.sync_all().map_err(|_| "invalid_output")?;
             let mut read = dir.read(&name).map_err(|_| "invalid_output")?;

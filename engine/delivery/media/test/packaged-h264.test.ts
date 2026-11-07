@@ -1,15 +1,16 @@
 import assert from 'node:assert/strict'
-import { execFileSync } from 'node:child_process'
+import { execFileSync, spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { chmod, copyFile, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import { test } from 'node:test'
-import { createMediaJobId, MediaClient, launchMediaWorker } from '../../../sdk/src/media.ts'
+import { createMediaJobId, MediaClient, MediaChildProcessTransport, launchMediaWorker } from '../../../sdk/src/media.ts'
 
 test('packaged entry decodes real H.264 with ambient plugin and loader paths closed', async t => {
   const entry = process.env.APPARENT_ENGINE_FRAMES_BIN
   if (!entry) { t.skip('requires the built package entry'); return }
+  const diagnostics = process.env.APPARENT_MEDIA_TEST_DIAGNOSTICS === '1' || process.env.CI === 'true'
   const root = await mkdtemp(join(await realpath(tmpdir()), 'apparent-media-h264-'))
   await chmod(root, 0o700)
   const runtime = join(root, 'runtime'); const bundle = join(root, 'synthetic.apparent')
@@ -30,8 +31,21 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
   const old = Object.fromEntries(['LD_LIBRARY_PATH', 'GST_PLUGIN_PATH', 'GST_PLUGIN_PATH_1_0', 'GST_PLUGIN_SYSTEM_PATH', 'GST_PLUGIN_SYSTEM_PATH_1_0'].map(k => [k, process.env[k]]))
   for (const k of Object.keys(old)) process.env[k] = '/nonexistent/host-runtime'
   let client: MediaClient | undefined
+  let completed = false
+  let diagnosticStderr = ''
+  const observeDiagnostic = (chunk: Buffer) => { diagnosticStderr = (diagnosticStderr + chunk.toString('utf8')).slice(-8192) }
+  let stopObserving = () => {}
   try {
-    client = new MediaClient(launchMediaWorker(resolve(entry), runtime))
+    if (diagnostics) {
+      const absoluteEntry = resolve(entry)
+      const child = spawn(absoluteEntry, ['--media-runtime-directory', runtime, '--media-channel', 'media', '--media-protocol-version', '1'], {
+        cwd: dirname(absoluteEntry), stdio: ['pipe', 'pipe', 'pipe'], shell: false,
+        env: { ...process.env, APPARENT_MEDIA_TEST_DIAGNOSTICS: '1' },
+      })
+      child.stderr.on('data', observeDiagnostic)
+      stopObserving = () => child.stderr.off('data', observeDiagnostic)
+      client = new MediaClient(new MediaChildProcessTransport(child))
+    } else client = new MediaClient(launchMediaWorker(resolve(entry), runtime))
     assert.equal((await client.handshake()).capabilities.decodeFrames, true)
     const outputDirectory = join(root, 'frames'); await mkdir(outputDirectory, { mode: 0o700 })
     const input = { jobId: createMediaJobId(), source: { bundleId: 'synthetic', bundlePath: bundle, videoPath: video, videoOffsetMs: 250, identity: { device: String(m.dev), inode: String(m.ino), size: Number(m.size), modifiedNs: String(m.mtimeNs) } }, requestedBundleMs: [1250, 0, 5000, 1250], outputDirectory, limits: { maxFrames: 48, maxEdge: 320, maxTotalPixels: 64000000, deadlineMs: 30000 } }
@@ -55,8 +69,23 @@ test('packaged entry decodes real H.264 with ambient plugin and loader paths clo
       for (const [index, frame] of result.frames.entries()) await copyFile(frame.path, join(evidence, `frame-${index + 1}.png`))
       await writeFile(join(evidence, 'packaged-h264-result.json'), JSON.stringify({ result, sourceSha256: createHash('sha256').update(await readFile(video)).digest('hex') }, null, 2), { mode: 0o600 })
     }
+    completed = true
   } finally {
     for (const [k, v] of Object.entries(old)) { if (v === undefined) delete process.env[k]; else process.env[k] = v }
-    await client?.close(); await rm(root, { recursive: true, force: true })
+    let closed = false
+    try {
+      await client?.close()
+      closed = true
+    } finally {
+      stopObserving()
+      if ((completed && closed) || !diagnostics) {
+        await rm(root, { recursive: true, force: true })
+      } else {
+        const details = diagnosticStderr.split('\n').filter(line => line.startsWith('apparent-media-diagnostic ') && line.length <= 256).join('\n').slice(0, 4096)
+        await writeFile(join(root, 'media-diagnostics.log'), details, { mode: 0o600 })
+        if (details) process.stderr.write(details + '\n')
+        console.error(`packaged-h264 synthetic runtime retained: ${root}`)
+      }
+    }
   }
 })

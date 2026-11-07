@@ -13,6 +13,7 @@ linux-media = ["dep:flume", "dep:anyhow", "dep:gstreamer", "dep:gstreamer-app", 
 linux-portal = ["linux-media", "dep:ashpd", "dep:futures-lite", "dep:zbus"]
 publication = ["dep:anyhow", "dep:sha2", "dep:png"]
 materials-media = ["dep:anyhow", "dep:sha2", "dep:png"]
+recording-notes = ["dep:anyhow"]
 macos-capture = ["dep:screencapturekit"]
 
 [dependencies]
