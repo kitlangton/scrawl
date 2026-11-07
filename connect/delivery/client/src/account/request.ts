@@ -74,4 +74,3 @@ export async function postAccountJson(path: "/v1/device/start" | "/v1/device/pol
     controller.abort();
   }
 }
-
