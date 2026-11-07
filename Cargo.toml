@@ -11,7 +11,7 @@ path = "main.rs"
 
 [dependencies]
 apparent-capture = { path = "capture/agent/control-client" }
-apparent-capture-engine = { path = "engine/core", features = ["publication", "audio-codec", "recording-notes"] }
+apparent-capture-engine = { path = "engine/core", features = ["publication", "audio-codec", "recording-notes", "local-speech"] }
 apparent-connect-client = { path = "connect/client" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }

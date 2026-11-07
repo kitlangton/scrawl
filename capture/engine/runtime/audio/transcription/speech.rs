@@ -10,7 +10,11 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use transcribe_cpp::{Model, RunOptions, Session, TimestampKind};
+use apparent_capture_engine::audio::speech::Recognizer;
+#[cfg(test)]
+use apparent_capture_engine::audio::speech::init_backends;
+#[cfg(test)]
+use transcribe_cpp::{Model, RunOptions};
 
 use crate::capture::desktop::helper::SpeechModelLine;
 use crate::shared::model::{TranscriptData, TranscriptSegment, WordTiming};
@@ -21,7 +25,7 @@ const CLIP_PAD_MS: u64 = 200;
 
 /// Reuse one Parakeet session across speech chunks discovered during a recording.
 pub struct Incremental {
-    session: Session,
+    session: Recognizer,
     name: String,
 }
 
@@ -32,20 +36,14 @@ impl Incremental {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        init_backends()?;
-        let session = Model::load(path)?.session()?;
+        let session = Recognizer::load(path)?;
         Ok(Self { session, name: model_name(path) })
     }
 
     pub fn transcribe(&mut self, samples: &[f32], offset_ms: u64) -> Result<TranscriptData> {
-        let options = RunOptions {
-            timestamps: TimestampKind::Word,
-            language: Some("en".into()),
-            ..Default::default()
-        };
         // One-shot runs replace native results (including word times); the binding
         // materializes owned output. Do not use a streaming context across captures.
-        let result = self.session.run(samples, &options)?;
+        let result = self.session.run(samples)?;
         let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
         let at = |ms: i64| offset_ms + ms.max(0) as u64;
         let mut transcript = TranscriptData {
@@ -208,14 +206,8 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         return Ok(transcript);
     }
 
-    init_backends()?;
-    let model = Model::load(&path).with_context(|| format!("Could not load {}", path.display()))?;
-    let mut session = model.session()?;
-    let options = RunOptions {
-        timestamps: TimestampKind::Word,
-        language: Some("en".into()),
-        ..Default::default()
-    };
+    let mut session = Recognizer::load(&path)
+        .with_context(|| format!("Could not load {}", path.display()))?;
     let mut texts = Vec::new();
     for (start, end) in clips {
         let from_ms = start.saturating_sub(CLIP_PAD_MS);
@@ -224,7 +216,7 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         if from >= to {
             continue;
         }
-        let result = session.run(&samples[from..to], &options)?;
+        let result = session.run(&samples[from..to])?;
         let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             continue;
@@ -272,18 +264,6 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     }
     transcript.text = texts.join(" ");
     Ok(transcript)
-}
-
-/// Register the runtime-selected CPU backend once, before any thread loads a model.
-/// The native registry cannot be mutated concurrently with model loading.
-fn init_backends() -> Result<()> {
-    static INIT: std::sync::OnceLock<std::result::Result<(), String>> = std::sync::OnceLock::new();
-    INIT.get_or_init(|| {
-        transcribe_cpp::disable_logging();
-        transcribe_cpp::init_backends_default().map_err(|error| format!("{error:#}"))
-    })
-    .clone()
-    .map_err(|error| anyhow::anyhow!("transcribe.cpp backends: {error}"))
 }
 
 /// Makes sure a model is on disk: `installed` when Hex's or Apparent's own is there, else downloads

@@ -275,3 +275,19 @@ capabilities remain unavailable pending native qualification. No model is loaded
 or downloaded by these changes. Original transcript facts still require bounded
 inference from the finalized aligned original WAV before immutable materials
 sealing; a detached inference validator does not grant that authority.
+
+## Explicit local speech execution
+
+Optional `local-speech` exposes `audio::speech::Recognizer::load(path)` and
+`run(pcm16k)`, preserving the existing Parakeet session and English word-timing
+settings. Returned native text/segment/word values are owned; each run replaces
+native results. No model discovery, fetch, VAD/clip policy, offset adjustment or
+estimated fallback lives in this mechanism. The existing legacy caller retains
+those decisions.
+
+This synchronous primitive does not authenticate a model or impose a process
+deadline. Capture/2 must bind an explicitly verified local model and original
+aligned WAV to its existing supervised lifetime, cancellation and drain before
+sealing transcript facts. Neither this API nor a file's presence establishes
+model readiness, original-fact authority or public voice availability. Default
+Core does not depend on the speech runtime.
