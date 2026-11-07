@@ -432,6 +432,7 @@ test('packaged retained media/2 decodes H264 with native seals and cold recovery
     assert.equal((await media.derive(cancelledInput)).state, 'running');
     assert.equal((await media.cancel(cancelledInput)).state, 'cancelled');
     assert.equal((await media.inspect(cancelledInput)).state, 'cancelled');
+    assert.deepEqual(await readdir(cancelledInput.request.outputDirectory), [], 'cancelled native partial outputs are removed after worker reaping; the caller root remains');
     const lostInput = busyInput(id(), join(f.root, 'retained-owner-lost'));
     assert.equal((await media.derive(lostInput)).state, 'running');
     const owned = (media as unknown as { transport: { child: import('node:child_process').ChildProcess } }).transport.child;
@@ -447,6 +448,8 @@ test('packaged retained media/2 decodes H264 with native seals and cold recovery
     assert.equal(lost.state, 'failed');
     if (lost.state !== 'failed') assert.fail('lost job was not reconciled');
     assert.equal(lost.error.code, 'owner_lost');
+    assert.deepEqual(await readdir(lostInput.request.outputDirectory), [], 'cold owner-loss reconciliation removes only native partial output after reaping');
+    assert.equal(createHash('sha256').update(await readFile(join(input.request.outputDirectory, envelope.payload.frames[0].file.relativePath))).digest('hex'), envelope.payload.frames[0].file.sha256, 'cleanup of other jobs preserves completed output');
     assert.equal((await stat(materialRoot)).isDirectory(), true, 'cancel/process loss retains original materials');
     // Record only our fixture-owned exec PID. This transparent wrapper forwards
     // the exact argv to the packaged binary and does not proxy or signal it.
