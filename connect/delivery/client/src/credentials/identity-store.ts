@@ -10,7 +10,7 @@ import { pendingIntent, readCancellation, readStateEvidence, stateFileStamp } fr
 import { samePathFd, withStateQueue, type NamespaceResources } from "../state/queue-transaction.ts";
 import { replacePrivateStateFile, type StateReplacementResources } from "../state/replacement.ts";
 
-export type LoginIdentityContext = Readonly<{ scope: "read" | "upload"; approvedServer: string; loginId: string; cancellation: string | null }>;
+export type LoginIdentityContext = Readonly<{ scope: "read" | "upload"; approvedServer: string; loginId: string; cancellation: string | null; directoryIdentity: string }>;
 export type LoginIdentityResult = Readonly<{ state: "published" | "existing"; identityId: string; publicKey: PeerAuthorityKey }>;
 export type LoginIdentityUncertainty = Readonly<{ state: "uncertain"; identityId: string }>;
 export type LoginIdentityResources = NamespaceResources & StateReplacementResources;
@@ -36,7 +36,7 @@ export function publishLoginIdentity(directory: string, context: LoginIdentityCo
   if (!(proposedPrivateRecord instanceof Uint8Array) || proposedPrivateRecord.length === 0 || proposedPrivateRecord.length > MAX_RECORD)
     return Promise.reject(new StoredIdentityError("encryption_identity_unavailable"));
   const proposal = new Uint8Array(proposedPrivateRecord);
-  const copiedContext = context && Object.freeze({ scope: context.scope, approvedServer: context.approvedServer, loginId: context.loginId, cancellation: context.cancellation });
+  const copiedContext = context && Object.freeze({ scope: context.scope, approvedServer: context.approvedServer, loginId: context.loginId, cancellation: context.cancellation, directoryIdentity: context.directoryIdentity });
   const copiedOptions = Object.freeze({ signal: options.signal, lockTimeoutMs: options.lockTimeoutMs });
   const identityId = typeof copiedContext?.loginId === "string" && /^[0-9a-f]{32}$/.test(copiedContext.loginId) ? copiedContext.loginId : "";
   let possiblyPublished = false;
@@ -44,13 +44,14 @@ export function publishLoginIdentity(directory: string, context: LoginIdentityCo
     const ctx = Object.freeze({ scope: copiedContext?.scope, approvedServer: copiedContext?.approvedServer }) as { scope: "read" | "upload"; approvedServer: string };
     if ((ctx.scope !== "read" && ctx.scope !== "upload") || typeof ctx.approvedServer !== "string"
         || typeof copiedContext?.loginId !== "string" || !/^[0-9a-f]{32}$/.test(copiedContext.loginId)
+        || typeof copiedContext.directoryIdentity !== "string" || !copiedContext.directoryIdentity
         || proposal.length === 0 || proposal.length > MAX_RECORD) return fail();
     await publicBinding(decodeStoredIdentityRecord(proposal), copiedOptions.signal);
     return withStateQueue(directory, ctx, resources, copiedOptions, async (state, lease) => {
       const name = `${identityId}.identity`;
       const fresh = async () => {
         await lease.assertCurrent();
-        if (!await samePathFd(state) || await pendingIntent(state.path)
+        if (state.identity !== copiedContext!.directoryIdentity || !await samePathFd(state) || await pendingIntent(state.path)
             || await readCancellation(state, resources, copiedOptions.signal) !== copiedContext!.cancellation) return false;
         const login = await readStateEvidence(state, `${ctx.scope}.login`, 128, resources, copiedOptions.signal ?? lease.signal,
           bytes => decodeStrictJson(bytes, 128));

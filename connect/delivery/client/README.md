@@ -655,9 +655,18 @@ Actual local Worker fixtures consume the generated public key for device enrollm
 and the decoded private record for encrypted root/grouped transfers on both API
 bases. This is synthetic protocol evidence, not durable or installed identity proof.
 
+The internal `beginLoginState` phase creates a new scope-bound login marker
+under one queue lease. Upload scope requires explicit consent first. It snapshots
+cancellation and pins the root before waiting, then reads the current marker after
+acquisition so a legitimate preceding login can be superseded. It changes no
+config, credentials, identities or other-scope marker. The frozen begun receipt
+carries the root identity, nonce and cancellation facts required by the identity
+publisher; uncertain outcomes return no usable begun receipt. Native Linux tests
+join both phases and exercise real queue waits across cancellation/revocation.
+
 The internal `publishLoginIdentity` seam privately publishes a supplied record
-only when its scope/login marker, cancellation epoch and current queue lease still
-match and no revocation intent is pending. It uses expected-absent replacement,
+only when its original root, scope/login marker, cancellation epoch and current
+queue lease still match and no revocation intent is pending. It uses expected-absent replacement,
 then validates exact readback and the stored public binding before returning a
 key. An existing valid identity wins without rewriting, including supported JSON
 whitespace/order and data-hardlink aliases; damaged or unsafe files fail closed.
