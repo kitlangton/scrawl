@@ -9,11 +9,10 @@
 //! and video sample extents. Its caller holds the applicable pinned bundle lease;
 //! a successful movie check alone is not full-profile validation or Saved proof.
 mod backend;
-mod movie;
 
 pub use backend::{
     FileIdentity, MaterialsKey, PreparedPublication, PublicationBackend, PublicationEvidence,
     PublicationRecoveryBinding, SealedFile, TrustedPublicationContext, TrustedSource,
 };
 /// Validate a movie container and its video sample extents from an already-open file.
-pub use movie::validate_movie;
+pub use crate::movie::validate_movie;

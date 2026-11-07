@@ -3,7 +3,8 @@ import { execFileSync, spawn } from 'node:child_process';
 import { createHash, randomBytes } from 'node:crypto';
 import { chmod, copyFile, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, stat, symlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join, resolve } from 'node:path';
+import { dirname, join, resolve } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { test } from 'node:test';
 import { Media2Client, launchMedia2Worker, validateDerivative2Document, type Media2JobInput } from '../sdk/src/media2/index.ts';
 import { readFrameVisualObservations } from '../sdk/src/observations/index.ts';
@@ -49,7 +50,7 @@ test('fixture cleanup requires observed process exit rather than a terminal rece
 type Input = Omit<DecodeRequest, 'channel' | 'protocolVersion' | 'clientId' | 'rpcId' | 'method'>;
 const pause = (ms: number) => new Promise<void>(r => setTimeout(r, ms));
 
-async function fixture() {
+async function fixture(suppliedMovie?: string) {
   const root = await mkdtemp(join(await realpath(tmpdir()), 'apparent-media-peer-'));
   await chmod(root, 0o700);
   const runtime = join(root, 'runtime');
@@ -57,7 +58,8 @@ async function fixture() {
   await mkdir(runtime, { mode: 0o700 }); await mkdir(bundle, { mode: 0o700 });
   const video = join(bundle, 'recording.mov');
   // Fixture generation only. Production decoding never invokes FFmpeg.
-  if (process.env.APPARENT_MEDIA_FIXTURE) await copyFile(resolve(process.env.APPARENT_MEDIA_FIXTURE), video);
+  if (suppliedMovie) await copyFile(resolve(suppliedMovie), video);
+  else if (process.env.APPARENT_MEDIA_FIXTURE) await copyFile(resolve(process.env.APPARENT_MEDIA_FIXTURE), video);
   else execFileSync('ffmpeg', ['-v', 'error', '-f', 'lavfi', '-i', 'testsrc2=size=640x360:rate=10:duration=2', '-an', '-c:v', 'mjpeg', '-q:v', '3', '-threads', '1', video], { timeout: 10000 });
   await chmod(video, 0o600);
   await writeFile(join(bundle, 'apparent.json'), JSON.stringify({ version: 1, id: 'synthetic', durationMs: 2250, video: 'recording.mov', videoOffsetMs: 250 }), { mode: 0o600 });
@@ -125,6 +127,40 @@ test('native media/1 decodes actual ordered PNGs, offsets, duplicates and end cl
       await writeFile(join(keep, 'native-result.json'), JSON.stringify(result, null, 2), { mode: 0o600 });
     }
   } finally { await f.close(); }
+});
+
+test('native media decodes all native fragmented H264 segments and preserves decoder PTS', { skip: !binary }, async () => {
+  const f = await fixture(resolve(dirname(fileURLToPath(import.meta.url)), '../core/tests/fixtures/fragmented.mp4'));
+  let completed = false;
+  try {
+    const input: Input = { ...f.input, requestedBundleMs: [250, 650, 1050, 5250],
+      limits: { ...f.input.limits, maxEdge: 64 } };
+    const result = await f.client.decode(input);
+    assert.deepEqual(result.frames.map(frame => frame.effectiveVideoMs), [0, 400, 800, 5000]);
+    assert.deepEqual(result.frames.map(frame => frame.clampedToEnd), [false, false, false, true]);
+    assert.equal(new Set(result.frames.slice(0, 3).map(frame => frame.sha256)).size, 3,
+      'the first three selections must reach the red, green and blue fragments');
+    assert.deepEqual(await f.client.inspect(input), result);
+    for (const frame of result.frames) {
+      const png = await readFile(frame.path);
+      assert.equal(png.readUInt32BE(16), 64); assert.equal(png.readUInt32BE(20), 64);
+      assert.equal(createHash('sha256').update(png).digest('hex'), frame.sha256);
+      assert.ok(Number.isFinite(frame.actualVideoMs) && frame.actualVideoMs! >= 0);
+    }
+    // These are decoder observations, not forced container or requested timestamps.
+    // Mac's sample cursor and Linux's clipped preroll may report different PTS.
+    const evidence = process.env.APPARENT_MEDIA_EVIDENCE;
+    if (evidence) {
+      const output = join(evidence, 'fragmented'); await mkdir(output, { recursive: true, mode: 0o700 });
+      await copyFile(f.video, join(output, 'recording.mp4'));
+      for (const [index, frame] of result.frames.entries()) await copyFile(frame.path, join(output, `frame-${index + 1}.png`));
+      await writeFile(join(output, 'native-result.json'), JSON.stringify(result, null, 2), { mode: 0o600 });
+    }
+    completed = true;
+  } finally {
+    await f.close(!completed);
+    if (!completed) console.error(`native fragment peer runtime retained: ${f.root}`);
+  }
 });
 
 test('native media rejects source mismatch, unsafe markers, corrupt sources and output collisions', { skip: !binary }, async () => {

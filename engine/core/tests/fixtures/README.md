@@ -67,3 +67,20 @@ Production publication still checks structure/extents, not codec decoding.
 publication tests own this copy so native producer checks do not import Record
 implementation or depend on its test-input closure. Its SHA-256 is
 `d71f1e8f554e73d8774980d2dc39e1dc589810ad5c14a387ed65db76e9d81467`. Record retains its independently required fixture.
+
+## Native fragmented H.264
+
+`fragmented.mp4` is the 2173-byte output of the device-free segmented writer
+fixture at source `71a911ce130b7142dfc5c819984d6d769f48d1f0`, executed on
+ARM64 macOS26.6.2 with Swift6.4/SDK27.0. It contains 30 synthetic 64×64 frames
+(red, green, then blue), no audio or captured/user content. AVAssetReader
+verified every frame, exact `i/30` presentation times and the color transitions;
+all frames were also decoded and inspected on Linux. SHA-256:
+`e16f0883774629ac35f932e1068c44946ce0c1813985cd82714177bca85a7a38`.
+
+The file uses an H.264 `avc1` initialization segment with empty conventional
+sample tables, then three `moof`/`mdat` pairs. The deliberately narrow validator
+supports this single-video, timescale-600/fixed-20-tick sample profile, including
+bounded H.264 presentation reordering within each fragment. It does not claim
+general fragmented-MP4/CMAF support, variable sample durations or capture/2
+availability. Existing completed MP4/MOV validation remains separate.

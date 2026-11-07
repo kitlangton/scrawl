@@ -10,6 +10,8 @@ mod lease;
 #[cfg(all(target_os = "linux", feature = "linux-media"))]
 pub mod linux;
 mod locking;
+#[cfg(any(feature = "publication", all(target_os = "linux", feature = "linux-media")))]
+mod movie;
 #[cfg(feature = "recording-notes")]
 pub mod recording;
 pub mod ink;

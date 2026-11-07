@@ -40,6 +40,13 @@ function runCargo(args: string[], environment: NodeJS.ProcessEnv = process.env) 
 // Compile the extracted portal donor in the existing Linux job with GStreamer installed.
 // This check does not enable portal code in the packaged media worker.
 runCargo(['check', '--manifest-path', resolve(root, 'engine/core/Cargo.toml'), '--features', 'linux-portal', '--locked', '--target-dir', cargoTarget, ...(process.env.APPARENT_CARGO_OFFLINE === '1' ? ['--offline'] : [])])
+// Exercise the native fragment validator and both pinned/legacy read paths here,
+// where the existing dedicated profile supplies GStreamer and the staged plugins.
+runCargo(['test', '--manifest-path', resolve(root, 'engine/core/Cargo.toml'), '--features', 'publication,linux-media', '--locked', '--target-dir', cargoTarget, ...(process.env.APPARENT_CARGO_OFFLINE === '1' ? ['--offline'] : []), '--test', 'publication', '--', '--test-threads=1'], {
+  ...process.env, GST_PLUGIN_PATH: stagePlugins, GST_PLUGIN_PATH_1_0: stagePlugins,
+  GST_PLUGIN_SYSTEM_PATH: '', GST_PLUGIN_SYSTEM_PATH_1_0: '',
+  GST_REGISTRY: '/dev/null', GST_REGISTRY_1_0: '/dev/null', GST_REGISTRY_FORK: 'no',
+})
 // Optional Linux Media2 tests belong to this producer, not the default v1 lane.
 runCargo(['test', ...common, '--test', 'materials_media', '--test', 'media2_worker', '--', '--test-threads=1'], {
   ...process.env, GST_PLUGIN_PATH: stagePlugins, GST_PLUGIN_PATH_1_0: stagePlugins,

@@ -59,11 +59,13 @@ impl std::error::Error for IncompleteVideo {}
 
 impl PinnedVideoReader {
     pub fn open(file: &File) -> Result<Self> {
-        let reader = VideoReader::open_location(
+        let complete_fragment_duration = crate::movie::native_fragment_duration_ms(file)?;
+        let mut reader = VideoReader::open_location(
             &format!("/proc/self/fd/{}", file.as_raw_fd()),
             0,
             Some(2),
         )?;
+        if let Some(duration) = complete_fragment_duration { reader.duration_ms = duration; }
         if reader.duration_ms == 0 { return Err(IncompleteVideo.into()); }
         Ok(Self(reader))
     }
@@ -114,7 +116,12 @@ struct VideoReader {
 
 impl VideoReader {
     fn open(movie: &Path, max_edge: u32) -> Result<Self> {
-        Self::open_location(&movie.display().to_string(), max_edge, None)
+        // Preserve this legacy caller's path-based authority and decoder settings.
+        // The metadata parser corrects only the supported fragmented format's duration.
+        let duration = crate::movie::native_fragment_duration_ms(&File::open(movie)?)?;
+        let mut reader = Self::open_location(&movie.display().to_string(), max_edge, None)?;
+        if let Some(duration) = duration { reader.duration_ms = duration; }
+        Ok(reader)
     }
 
     fn open_location(location: &str, max_edge: u32, decoder_threads: Option<i32>) -> Result<Self> {
