@@ -21,8 +21,12 @@ const safeName = (s: string) => typeof s === "string" && /^[a-zA-Z0-9][a-zA-Z0-9
 const validIdentity = (s: FileIdentity) => [s.device, s.inode].every(v => typeof v === "string" && /^(0|[1-9][0-9]{0,19})$/.test(v) && BigInt(v) <= 18446744073709551615n);
 
 /** Internal preparation for the coordinated writer cutover; no production caller.
- * Caller must own the sole writer and hold the admitted queue lock for the entire
- * operation. This does not authorize a second writer alongside Rust. It replaces
+ * Caller must own the sole writer and hold the admitted queue lock for mutable
+ * state. The sole pre-queue exception is a new immutable revocation-<id>.intent
+ * with expectedDestination=null: its caller pins the admitted directory and
+ * retains its publication fence throughout the operation. It must never replace
+ * an existing intent or use this exception for another state record.
+ * This does not authorize a second writer alongside Rust. It replaces
  * bytes only; journal ordering, cancellation epochs and state policy are callers'.
  * After dispatch, uncertainty retains all observed files and forbids retry/cleanup.
  */
