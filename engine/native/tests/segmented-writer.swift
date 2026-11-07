@@ -160,11 +160,15 @@ func createOwnedOutput(_ path: String) throws -> Int32 {
   return fd
 }
 
-func appendFrames(to writer: SegmentedVideoWriter, origin: CMTime, count: Int) throws {
+func appendFrames(to writer: SegmentedVideoWriter, origin: CMTime, count: Int) async throws {
   for index in 0..<count {
     let (pixels, pts) = try makeFrame(index: index, origin: origin)
-    guard try writer.append(pixels, at: pts) else {
-      throw WriterFixtureError(description: "synthetic writer input unexpectedly backpressured")
+    let deadline = ProcessInfo.processInfo.systemUptime + 5
+    while try !writer.append(pixels, at: pts) {
+      guard ProcessInfo.processInfo.systemUptime < deadline else {
+        throw WriterFixtureError(description: "synthetic writer readiness exceeded five seconds")
+      }
+      try await Task.sleep(nanoseconds: 1_000_000)
     }
   }
 }
@@ -185,7 +189,7 @@ func runSuccessfulWriter(directory: URL, retain: Bool) async throws -> String {
     maximumBytes: 8 * 1024 * 1024,
     maximumSegments: 32
   ) { data, _ in try writeAll(fd, data: data) }
-  try appendFrames(to: writer, origin: origin, count: 30)
+  try await appendFrames(to: writer, origin: origin, count: 30)
   let completion = try await writer.finish()
   try require(completion.segments >= 2, "writer did not emit initialization and media segments")
   guard fsync(fd) == 0 else { throw WriterFixtureError(description: "output fsync failed: errno \(errno)") }
@@ -231,11 +235,21 @@ func runSinkFailure(byteLimit: Int) async throws {
     sinkCalls += 1
     throw WriterFixtureError(description: "fixture sink refused bytes")
   }
-  try appendFrames(to: writer, origin: origin, count: 30)
+  var appendFailure: SegmentedVideoWriterError?
+  do {
+    try await appendFrames(to: writer, origin: origin, count: 30)
+  } catch let error as SegmentedVideoWriterError {
+    appendFailure = error
+  }
+  // Always finish, including when a callback refused the sink during append. This cancels
+  // incomplete native writing and must preserve the original failure instead of partial success.
   do {
     _ = try await writer.finish()
     throw WriterFixtureError(description: "failed sink was reported as finalized")
   } catch let error as SegmentedVideoWriterError {
+    if let appendFailure {
+      try require(error == appendFailure, "finish changed the earlier sink failure")
+    }
     switch error {
     case .sinkFailed(_) where byteLimit > 1:
       try require(sinkCalls > 0, "sink failure callback was not exercised")
