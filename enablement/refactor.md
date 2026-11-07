@@ -184,8 +184,8 @@ The following exhaustive baseline ledger documents an earlier campaign proposal 
 | `helper/Onboarding.swift` | `capture/desktop/native/Onboarding.swift` | MOVE | desktop |
 | `helper/OnboardingDemo.swift` | `capture/desktop/native/OnboardingDemo.swift` | MOVE | desktop |
 | `helper/PermissionPanel.swift` | `capture/desktop/native/PermissionPanel.swift` | MOVE | desktop |
-| `helper/PlaybackVolume.swift` | `capture/engine/native/PlaybackVolume.swift` | MOVE | capture |
-| `helper/ScreenProbe.swift` | `capture/engine/native/ScreenProbe.swift` | MOVE | capture |
+| `helper/PlaybackVolume.swift` | `engine/native/PlaybackVolume.swift` | MOVE | engine |
+| `helper/ScreenProbe.swift` | `engine/native/ScreenProbe.swift` | MOVE | engine |
 | `helper/Settings.swift` | `capture/desktop/native/Settings.swift` | MOVE | desktop |
 | `helper/ShortcutKeys.swift` | `capture/desktop/native/ShortcutKeys.swift` | MOVE | desktop |
 | `helper/main.swift` | `shared/native/main.swift` | MOVE | shared-infrastructure |
