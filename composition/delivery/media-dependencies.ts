@@ -9,9 +9,11 @@ export const mediaPackages = [
   'gstreamer1.0-plugins-base', 'gstreamer1.0-plugins-good', 'gstreamer1.0-libav',
 ] as const
 
-// Capture/2 additionally ships the X11 source, H264 encoder and parser plugins.
+// Capture/2 ships X11/PipeWire sources, H264 encoding and the standard PipeWire
+// client modules, SPA plugins and client configuration sealed by its producer.
 export const capturePackages = [...mediaPackages, 'xvfb', 'x11-xserver-utils', 'libx11-dev', 'gstreamer1.0-x',
-  'gstreamer1.0-plugins-bad', 'gstreamer1.0-plugins-ugly'] as const
+  'gstreamer1.0-plugins-bad', 'gstreamer1.0-plugins-ugly', 'gstreamer1.0-pipewire',
+  'libpipewire-0.3-modules', 'libspa-0.2-modules', 'pipewire-bin'] as const
 
 export function installCaptureDependencies(setup: UbuntuSetup): void {
   installUbuntuDependencies(setup, capturePackages)

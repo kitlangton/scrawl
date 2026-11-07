@@ -63,7 +63,7 @@ test('rejects unsupported runners before issuing a privileged command', t => {
   }
 })
 
-test('capture dependency profile includes X11 source and H264 encoding without changing media setup', t => {
+test('capture dependency profile includes X11, PipeWire client closure and H264 without changing media setup', t => {
   const directory = mkdtempSync(join(tmpdir(), 'capture-apt-contract-'))
   t.after(() => rmSync(directory, { recursive: true, force: true }))
   const calls: string[][] = []
@@ -72,4 +72,8 @@ test('capture dependency profile includes X11 source and H264 encoding without c
   assert.deepEqual(calls[1].slice(-capturePackages.length), [...capturePackages])
   for (const name of ['gstreamer1.0-x', 'gstreamer1.0-plugins-bad', 'gstreamer1.0-plugins-ugly']) assert(capturePackages.includes(name as typeof capturePackages[number]))
   assert(!mediaPackages.includes('gstreamer1.0-plugins-ugly' as typeof mediaPackages[number]))
+  for (const name of ['gstreamer1.0-pipewire', 'libpipewire-0.3-modules', 'libspa-0.2-modules', 'pipewire-bin']) {
+    assert(capturePackages.includes(name as typeof capturePackages[number]), `capture requires ${name}`)
+    assert(!mediaPackages.includes(name as typeof mediaPackages[number]), `${name} stays capture-only`)
+  }
 })
