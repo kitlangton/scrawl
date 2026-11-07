@@ -51,7 +51,7 @@ xcrun swiftc -O -swift-version 5 -target "$target" \
   engine/native/Export.swift engine/native/LiveTranscribe.swift engine/native/Media.swift \
   capture/engine/native/Mirror.swift capture/desktop/native/Onboarding.swift \
   capture/desktop/native/OnboardingDemo.swift capture/desktop/native/PermissionPanel.swift \
-  capture/engine/native/PlaybackVolume.swift capture/engine/native/ScreenProbe.swift \
+  engine/native/PlaybackVolume.swift engine/native/ScreenProbe.swift \
   capture/desktop/native/Settings.swift capture/desktop/native/ShortcutKeys.swift shared/native/main.swift \
   -o "$TMPDIR/apparent-helper" \
   -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker shared/native/Info.plist
