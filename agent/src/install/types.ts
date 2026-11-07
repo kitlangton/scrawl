@@ -16,6 +16,13 @@ export type NativeManifest = {
     argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'];
     sharesCaptureRuntime: true;
   };
+  recoveryLaunch?: {
+    schema: 'apparent.engine-recovery-peer/1';
+    channel: 'media/2';
+    argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2', '--recovery-peer-v1', '<private-peer-nonce>'];
+    startsFreshCapture: false;
+    onInputEof: 'retain-admitted-finite-work';
+  };
   launch: {
     entry: 'apparent-engine-frames';
     argv: ['--media-runtime-directory', '<private-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '1'];
