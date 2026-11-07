@@ -31,7 +31,7 @@ const encoderPlugin = ['libgstx264.so', 'libgstopenh264.so'].find(name => exists
 if (!encoderPlugin) throw new Error('x264 or OpenH264 GStreamer plugin is required')
 const decoderPlugin = ['libgstopenh264.so', 'libgstlibav.so'].find(name => existsSync(resolve(pluginDir, name)))
 if (!decoderPlugin) throw new Error('OpenH264 decoder or GStreamer libav plugin is required')
-const plugins = [...new Set(['libgstcoreelements.so', 'libgstapp.so', 'libgstvideorate.so', 'libgsttypefindfunctions.so', 'libgstplayback.so', 'libgstvideoconvertscale.so', 'libgstisomp4.so', 'libgstximagesrc.so', 'libgstpipewire.so', encoderPlugin, decoderPlugin, 'libgstvideoparsersbad.so'])]
+const plugins = [...new Set(['libgstcoreelements.so', 'libgstapp.so', 'libgstvideorate.so', 'libgsttypefindfunctions.so', 'libgstplayback.so', 'libgstvideoconvertscale.so', 'libgstisomp4.so', 'libgstximagesrc.so', 'libgstpipewire.so', 'libgstpulseaudio.so', 'libgstaudioconvert.so', 'libgstaudioresample.so', encoderPlugin, decoderPlugin, 'libgstvideoparsersbad.so'])]
 const pipewireInputs = pipewireRuntimeInputs(run('pkg-config', ['--variable=libdir', 'gstreamer-1.0']), resolve(run('pkg-config', ['--variable=prefix', 'gstreamer-1.0']), 'share'))
 const outputStat = existsSync(output) ? lstatSync(output) : undefined
 if (outputStat?.isSymbolicLink() || (outputStat && !outputStat.isDirectory())) throw new Error('dist must be a real directory')
