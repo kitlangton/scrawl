@@ -19,6 +19,7 @@ use std::time::{Duration, Instant};
 
 #[path = "capture/audio.rs"]
 mod audio;
+mod execution;
 #[path = "capture/ink.rs"]
 mod ink;
 #[path = "capture/ink_control.rs"]
@@ -34,6 +35,8 @@ mod publication;
 mod recovery;
 #[path = "retained.rs"]
 mod retained;
+#[path = "capture/speech.rs"]
+mod speech;
 use linux::{Source, available_sources, native_ready, video_dimensions};
 
 const LIMIT: usize = 65_536;
@@ -488,9 +491,32 @@ fn finalize(
         if audio.initial_gap_ms != 0 {
             payload["warnings"] = json!([{"code":"audio-initial-gap","atMs":audio.initial_gap_ms}]);
         }
-        let mut j = shared.journal.lock().map_err(|_| "internal")?;
-        j.release_audio = Some(file["identity"].clone());
-        j.audio_clock = Some(audio.clock.clone());
+        {
+            let mut j = shared.journal.lock().map_err(|_| "internal")?;
+            j.release_audio = Some(file["identity"].clone());
+            j.audio_clock = Some(audio.clock.clone());
+        }
+        // Only this original owning finalizer can adopt child inference. A
+        // standalone model/validator has no material or publication authority.
+        match speech::transcribe(shared, audio, &file, duration) {
+            Ok(mut transcript) => {
+                transcript["schema"] = json!("apparent.capture-transcript/1");
+                transcript["identity"] =
+                    json!({"captureId":j.capture_id,"materialsId":materials_id});
+                let file = seal_fact(shared, "transcript.json", &transcript)?;
+                payload["files"]
+                    .as_array_mut()
+                    .ok_or("internal")?
+                    .push(file);
+                payload["facts"]["transcript"] =
+                    json!({"file":"transcript.json","schema":"apparent.capture-transcript/1"});
+                payload["collection"]["transcript"] = json!("collected");
+            }
+            Err(_) => payload["warnings"]
+                .as_array_mut()
+                .ok_or("internal")?
+                .push(json!({"code":"transcript-unavailable"})),
+        }
     }
     let ink_facts = {
         shared
@@ -615,7 +641,8 @@ fn validate_start(v: &Value) -> Result<(), &'static str> {
         return Err("malformed_request");
     }
     let options = v.get("options").ok_or("malformed_request")?;
-    if options.get("audio").and_then(Value::as_str) != Some("none")
+    let audio = options.get("audio").and_then(Value::as_str);
+    if !(audio == Some("none") || (audio == Some("microphone") && speech::configured()))
         || options.get("localOnly").and_then(Value::as_bool) != Some(true)
         || options.as_object().is_none_or(|o| o.len() != 2)
     {
@@ -1369,6 +1396,9 @@ fn main() {
         eprintln!("capture startup: argument validation started");
     }
     let args: Vec<String> = std::env::args().collect();
+    if args.len() == 2 && args[1] == "--capture-speech-job-v1" {
+        std::process::exit(if speech::child().is_ok() { 0 } else { 1 });
+    }
     let recovery_role =
         if args.len() == 9 && args[7] == "--recovery-peer-v1" && recovery::nonce(&args[8]) {
             Some(recovery::Role {

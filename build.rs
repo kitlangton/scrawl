@@ -1,6 +1,8 @@
 use std::path::PathBuf;
 use std::process::Command;
 
+mod speech_runtime { include!("engine/build/speech-runtime.rs"); }
+
 mod build_version { include!("enablement/build_version.rs"); }
 mod build_cache { include!("enablement/native/build_cache.rs"); }
 
@@ -41,35 +43,7 @@ fn main() {
 
 /// Keep runtime libraries AND dlopen-only CPU modules together: transcribe.cpp's
 /// init_backends_default uses dladdr to search next to the loaded libtranscribe.
-fn stage_transcribe_shared_objects() {
-    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let profile = out_dir
-        .ancestors()
-        .nth(3)
-        .expect("Unexpected OUT_DIR layout");
-    for key in [
-        "DEP_TRANSCRIBE_CPP_RUNTIME_DIR",
-        "DEP_TRANSCRIBE_CPP_MODULE_DIR",
-    ] {
-        println!("cargo:rerun-if-env-changed={key}");
-        let source =
-            PathBuf::from(std::env::var_os(key).expect("dynamic transcribe runtime missing"));
-        let mut count = 0;
-        for entry in std::fs::read_dir(&source).expect("read transcribe runtime") {
-            let path = entry.expect("read transcribe library").path();
-            let name = path.file_name().unwrap();
-            if !name.to_string_lossy().contains(".so") || !path.is_file() {
-                continue;
-            }
-            count += 1;
-            for dir in [profile.to_path_buf(), profile.join("deps")] {
-                std::fs::create_dir_all(&dir).expect("create runtime directory");
-                std::fs::copy(&path, dir.join(name)).expect("stage transcribe library");
-            }
-        }
-        assert!(count > 0, "No shared libraries in {}", source.display());
-    }
-}
+fn stage_transcribe_shared_objects() { speech_runtime::stage(); }
 
 /// transcribe.cpp's DLLs (`dynamic-backends`: `transcribe.dll`, `ggml*.dll`) beside `apparent.exe`
 /// and the test binaries, which load them at start. Its own build script copies them there too,

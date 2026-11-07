@@ -1002,15 +1002,29 @@ function validateStatus(
   return x as unknown as CaptureStatus;
 }
 
-/** Existing engine-native does not implement these capture/2 flags yet. */
+/** Explicit locally provisioned speech asset; never discovers/fetches a model.
+ * This launch input does not advertise audio/transcript capability or native proof. */
+export interface CaptureExecutionOptions {
+  localSpeech?: { profile: "parakeet-unified-en-0.6b-Q8_0"; modelFile: string };
+}
 export function launchCaptureEngine(
   executablePath: string,
   runtimeDirectory: string,
   shutdownTimeoutMs = 3000,
+  execution: CaptureExecutionOptions = {},
 ): ChildProcessCaptureTransport {
   abs(executablePath, "executablePath");
   abs(runtimeDirectory, "runtimeDirectory");
   timeout(shutdownTimeoutMs);
+  const env = { ...process.env };
+  delete env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1;
+  delete env.APPARENT_CAPTURE_SPEECH_PROFILE_V1;
+  if (execution.localSpeech) {
+    if (execution.localSpeech.profile !== "parakeet-unified-en-0.6b-Q8_0") throw new Error("unsupported local speech profile");
+    abs(execution.localSpeech.modelFile, "local speech modelFile");
+    env.APPARENT_CAPTURE_SPEECH_PROFILE_V1 = execution.localSpeech.profile;
+    env.APPARENT_CAPTURE_SPEECH_MODEL_FILE_V1 = execution.localSpeech.modelFile;
+  }
   return new ChildProcessCaptureTransport(
     spawn(
       executablePath,
@@ -1024,6 +1038,7 @@ export function launchCaptureEngine(
       ],
       {
         cwd: dirname(executablePath),
+        env,
         stdio: ["pipe", "pipe", "pipe"],
         shell: false,
       },

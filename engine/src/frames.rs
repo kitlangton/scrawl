@@ -1,4 +1,5 @@
 //! Independent headless media worker. Capture-v1 and live-capture admission are separate.
+mod execution;
 #[path = "media/files.rs"]
 mod files;
 #[path = "media/job.rs"]
