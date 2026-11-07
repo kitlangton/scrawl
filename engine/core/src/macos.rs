@@ -12,7 +12,9 @@ mod tests;
 
 pub use clock::{CaptureAdmissionTime, CaptureClockSample, ClockError, ClockTimestamp};
 pub use output::SckOutputGuard;
-pub use recording::{CaptureStream, FirstSample};
+pub use recording::{
+    CaptureStream, CheckedStopOutcome, FirstSample, RecordingFinalization, StopOperation,
+};
 
 #[derive(Clone, Copy, Debug)]
 pub enum CaptureSource {

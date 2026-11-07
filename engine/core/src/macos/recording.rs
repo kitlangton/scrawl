@@ -35,6 +35,64 @@ pub struct CaptureStream {
     clock_capture: Option<ClockCapture>,
     #[cfg(test)]
     test_samples: Option<Arc<Mutex<TestSampleCollection>>>,
+    checked_stop: Option<(StopOperation, StopOperation)>,
+}
+
+/// Result of one native teardown operation. `NotAttempted` is never successful evidence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum StopOperation {
+    NotAttempted,
+    Succeeded,
+    Failed(String),
+}
+
+/// Current status of the recording-output delegate. A missing finish callback remains pending.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RecordingFinalization {
+    NotApplicable,
+    Pending,
+    Finished,
+    Failed,
+}
+
+/// Checked result for the existing stop-then-remove native sequence.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CheckedStopOutcome {
+    pub stop_capture: StopOperation,
+    pub remove_recording_output: StopOperation,
+    pub recording_finalization: RecordingFinalization,
+}
+
+impl CheckedStopOutcome {
+    /// Success requires both native calls and the recording output's successful finish callback.
+    pub fn is_finalized(&self) -> bool {
+        self.stop_capture == StopOperation::Succeeded
+            && self.remove_recording_output == StopOperation::Succeeded
+            && self.recording_finalization == RecordingFinalization::Finished
+    }
+}
+
+fn operation_outcome(result: Result<(), screencapturekit::error::SCError>) -> StopOperation {
+    match result {
+        Ok(()) => StopOperation::Succeeded,
+        Err(error) => StopOperation::Failed(format!("{error:?}")),
+    }
+}
+
+pub(super) fn recording_finalization(
+    has_recording_output: bool,
+    finished: bool,
+    failed: bool,
+) -> RecordingFinalization {
+    if !has_recording_output {
+        RecordingFinalization::NotApplicable
+    } else if failed {
+        RecordingFinalization::Failed
+    } else if finished {
+        RecordingFinalization::Finished
+    } else {
+        RecordingFinalization::Pending
+    }
 }
 
 struct ClockCapture {
@@ -382,6 +440,7 @@ impl CaptureStream {
                         clock_capture: None,
                         #[cfg(test)]
                         test_samples: None,
+                        checked_stop: None,
                     });
                 }
             }
@@ -398,6 +457,7 @@ impl CaptureStream {
             clock_capture: None,
             #[cfg(test)]
             test_samples: None,
+            checked_stop: None,
         })
     }
 
@@ -412,6 +472,7 @@ impl CaptureStream {
             clock_capture: None,
             #[cfg(test)]
             test_samples: None,
+            checked_stop: None,
         }
     }
 
@@ -559,6 +620,7 @@ impl CaptureStream {
             clock_capture: None,
             #[cfg(test)]
             test_samples: Some(test_samples),
+            checked_stop: None,
         })
     }
 
@@ -697,6 +759,50 @@ impl CaptureStream {
         self.recording_state
             .as_ref()
             .is_some_and(|state| state.failed.load(Ordering::Acquire))
+    }
+
+    /// Reports the latest callback state without inferring completion from stop return or
+    /// callback order. The output object remains owned until this CaptureStream is dropped.
+    pub fn recording_finalization(&self) -> RecordingFinalization {
+        recording_finalization(
+            self.recording_output.is_some(),
+            self.recording_state
+                .as_ref()
+                .is_some_and(|state| state.finished.load(Ordering::Acquire)),
+            self.recording_failed(),
+        )
+    }
+
+    /// Performs the existing blocking `stop_capture` then `remove_recording_output` sequence,
+    /// preserving each result. Taking the stream before either call ensures `Drop` cannot
+    /// retry native teardown after an error. The output/delegate remains owned by `self` so the
+    /// caller can retain its pinned file guard while finalization is pending or failed.
+    pub fn stop_checked(&mut self) -> CheckedStopOutcome {
+        if self.checked_stop.is_none()
+            && let Some(stream) = self.stream.take()
+        {
+            let stopped = operation_outcome(stream.stop_capture());
+            let removed = self
+                .recording_output
+                .as_ref()
+                .map(|output| operation_outcome(stream.remove_recording_output(output)))
+                .unwrap_or(StopOperation::NotAttempted);
+            self.checked_stop = Some((stopped, removed));
+        }
+        self.checked_stop_outcome()
+    }
+
+    /// Re-reads callbacks after a caller's own bounded wait; this performs no native operation.
+    pub fn checked_stop_outcome(&self) -> CheckedStopOutcome {
+        let (stop_capture, remove_recording_output) = self
+            .checked_stop
+            .clone()
+            .unwrap_or((StopOperation::NotAttempted, StopOperation::NotAttempted));
+        CheckedStopOutcome {
+            stop_capture,
+            remove_recording_output,
+            recording_finalization: self.recording_finalization(),
+        }
     }
 
     /// An empty session used by the legacy caller to preserve its previous start-failure loop.
