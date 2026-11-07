@@ -45,6 +45,8 @@ test("rejects wrong scope, invalid tokens and server mismatches before HTTP", as
   await withServer((_req, res) => respond(res, { shares: [], nextCursor: null }), async base => {
     const wrong = { ...opts(base), authorize: async (approvedServer: string, _scope: "read" | "upload") => ({ approvedServer, scope: "upload" as const, token: "x", generation }) };
     await assert.rejects(listShares(wrong), { category: "auth_required" });
+    const mismatch = { ...opts(base), authorize: async (_server: string, scope: "read" | "upload") => ({ approvedServer: base + "/connect", scope, token: "synthetic", generation }) };
+    await assert.rejects(listShares(mismatch), { category: "auth_required" });
     const invalid = { ...opts(base), authorize: async (approvedServer: string, scope: "read" | "upload") => ({ approvedServer, scope, token: "bad token", generation }) };
     await assert.rejects(listShares(invalid), { category: "auth_required" });
     let malformedAuth = 0;
