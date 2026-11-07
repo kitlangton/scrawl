@@ -15,6 +15,7 @@ import { RecipientTransportError } from "../../src/recipient/transport.ts";
 import { uploadPreparedPlainCapture } from "../../src/sender/transport.ts";
 import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-transport.ts";
 import { readSenderPeerAuthority } from "../../src/sender/authority.ts";
+import { requestDeviceStart, requestDevicePoll } from "../../src/account/device.ts";
 import { readAccountStatus } from "../../src/account/status.ts";
 import { listShares, revokeShare } from "../../src/account/shares.ts";
 import { sealCapture } from "../../src/sender/seal.ts";
@@ -101,29 +102,24 @@ async function proxy(
 async function authorize(
   service: Awaited<ReturnType<typeof fixtureAt>>,
   account: Account,
+  approvedServer: string,
   scope: "read" | "upload",
   age: { identity: string; recipient: string },
   signing: Uint8Array,
 ): Promise<DeviceCredential> {
   const publicKey = await ed25519.getPublicKeyAsync(signing);
   const encryptionKey = {
-    version: 1,
+    version: 1 as const,
     recipient: age.recipient,
     signing: Array.from(publicKey, byte => byte.toString(16).padStart(2, "0")).join(""),
   };
-  const started = await service.call("/v1/device/start", {
-    method: "POST", body: { scope, encryptionKey },
-  });
-  assert.equal(started.status, 200, "device authorization starts in the real Worker");
-  const device = await started.json() as { deviceCode: string; userCode: string };
+  const device = await requestDeviceStart({ approvedServer, scope, encryptionKey }) as { deviceCode: string; userCode: string };
   const approved = await service.call("/v1/device/approve", {
     method: "POST", body: { userCode: device.userCode },
     cookie: account.cookie, csrf: account.csrf, origin: account.origin,
   });
   assert.equal(approved.status, 200, "synthetic account approves the pending device via cookie and CSRF");
-  const polled = await service.call("/v1/device/poll", { method: "POST", body: { deviceCode: device.deviceCode } });
-  assert.equal(polled.status, 200);
-  const credential = await polled.json() as DeviceCredential & { status: string };
+  const credential = await requestDevicePoll({ approvedServer, deviceCode: device.deviceCode }) as DeviceCredential & { status: string };
   assert.equal(credential.status, "approved");
   assert.equal(credential.scope, scope);
   return credential;
@@ -175,8 +171,8 @@ async function exerciseProfile(mount: "" | "/connect", profile: "root" | "eviden
     const sender = await generateAgeIdentity();
     const readerSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 31);
     const senderSeed = Uint8Array.from({ length: 32 }, (_, index) => index + 91);
-    const readCredential = await authorize(service, account, "read", reader, readerSeed);
-    const uploadCredential = await authorize(service, account, "upload", sender, senderSeed);
+    const readCredential = await authorize(service, account, serviceOrigin, "read", reader, readerSeed);
+    const uploadCredential = await authorize(service, account, serviceOrigin, "upload", sender, senderSeed);
     const contents = await uploadEncryptedCapture(serviceOrigin, uploadCredential, senderSeed, sender.recipient, profile);
     const result = await retrieveRecipientCapture({
       credential: {

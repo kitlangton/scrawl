@@ -639,3 +639,23 @@ There is no network fallback, refresh, credential mutation or installed route.
 The service supplies the quota; the client does not hardcode a limit or assume
 usage is below it. Local status composition and renewal-owner adoption remain
 host work. Synthetic Worker checks cover both scopes and API mounts, not live auth.
+
+
+## Anonymous device protocol transport
+
+`./device-transport` supplies `requestDeviceStart` and `requestDevicePoll` for
+the existing device authorization policy. Each call sends one anonymous POST to
+the caller-approved root or `/connect` API base, without redirects, bearer
+credentials or cookies. Start pins an explicit read/upload scope and an optional
+validated public encryption key; poll sends the caller's transaction-bound device
+code. A single deadline covers headers and the bounded, duplicate-key-checked
+JSON response. Errors contain fixed categories, and neither operation retries.
+
+Replies remain private, untrusted protocol data. The existing `authorizeDevice`
+policy must validate approval details and matching grant scope before presentation
+or commit. The host must preserve consent, login incarnation, cancellation,
+original issue time and one-shot commit ownership; HTTP success alone proves none
+of those facts. The transport creates no keys and writes no credential or config
+state. Its actual local Worker checks cover both scopes and API mounts, while
+installed Settings/CLI HTTP and durable mutation still belong to Rust. Adoption
+and the coordinated sole-writer transition remain separate acceptance gates.
