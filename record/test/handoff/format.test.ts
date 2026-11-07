@@ -96,3 +96,12 @@ test("requires explicit proof policy and accepts only normalized crop paths", ()
 test("requires a caller-supplied saved bundle fact matching semantic input", () => {
   assert.throws(() => formatLocalHandoff({ ...base, savedBundle: { status: "saved", bundlePath: "/other/take.apparent" } }), /identify the processed bundle/);
 });
+
+test("video-only handoff states missing facts without guessing GUI or CLI origin", () => {
+  const input = structuredClone(base);
+  input.processing.warnings = [{ kind: "videoOnlyInteractionTelemetry" }];
+  const text = formatLocalHandoff(input).text;
+  assert.match(text, /Interaction context: video only; clicks and Shift ink were not collected\. A visible click in the video will not appear in events, marks or click keyframes\./);
+  assert.doesNotMatch(text, /timed CLI|recording shortcut/);
+  assert.deepEqual(input.processing.warnings, [{ kind: "videoOnlyInteractionTelemetry" }]);
+});
