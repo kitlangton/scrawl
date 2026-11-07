@@ -5,6 +5,7 @@ import type { CredentialReadResources } from "../credentials/private-read.ts";
 import { admitTrustedDirectory, DirectoryAdmissionFailure, directoryIdentity } from "./directory.ts";
 
 export type NamespaceLease = { assertHeld(): void; readonly signal: AbortSignal; release(): Promise<void> };
+export type WorkerLease = NamespaceLease & { assertCurrent(): Promise<void> };
 export type NamespaceResources = CredentialReadResources & {
   /** Consumes the lock descriptor. Busy waits are cancellation-aware and timeout-bounded. */
   lock(handle: FileHandle, options: { timeoutMs: number; signal?: AbortSignal }): Promise<
@@ -76,8 +77,15 @@ export function withStateQueue<T>(directoryPath: string, context: StateContext, 
 export function withRenewalScope<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: StateBody<T>): Promise<T> {
   return withStateLock(directoryPath, context, resources, options, body, "renewal");
 }
+/** Holds the internal upload worker lease across one complete runner callback. */
+export function withStateWorker<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions,
+  body: (directory: StateDirectory, lease: WorkerLease) => Promise<T>): Promise<T> {
+  if (context?.scope !== "upload") fail("invalid_credential");
+  return withStateLock(directoryPath, context, resources, { ...options, lockTimeoutMs: options.lockTimeoutMs ?? 0 },
+    (directory, lease) => body(directory, lease as WorkerLease), "worker");
+}
 async function withStateLock<T>(directoryPath: string, context: StateContext, resources: NamespaceResources,
-  options: StateOptions, body: StateBody<T>, kind: "queue" | "renewal"): Promise<T> {
+  options: StateOptions, body: StateBody<T>, kind: "queue" | "renewal" | "worker"): Promise<T> {
   const signal = options.signal, lockTimeoutMs = options.lockTimeoutMs, scope = context?.scope, approvedServer = context?.approvedServer;
   if ((scope !== "read" && scope !== "upload") || typeof approvedServer !== "string") fail("invalid_credential");
   checkSignal(signal);
@@ -85,12 +93,22 @@ async function withStateLock<T>(directoryPath: string, context: StateContext, re
   try { directory = await admitTrustedDirectory(directoryPath, resources, "private-state", signal); }
   catch (e) { if (e instanceof DirectoryAdmissionFailure) return fail(e.category); return fail("unsafe_directory"); }
   try {
-    const lock = await lockFile(directory!, resources, lockTimeoutMs ?? 1000, signal, kind === "queue" ? "queue.lock" : `${scope}.renewal.lock`);
+    const lockName = kind === "queue" ? "queue.lock" : kind === "worker" ? "worker.lock" : `${scope}.renewal.lock`;
+    const lock = await lockFile(directory!, resources, lockTimeoutMs ?? 1000, signal, lockName);
     try {
       const lease = lock.lease;
       checkSignal(signal, lease.signal);
       assertLease(lease);
-      const result = await body(directory!, lease);
+      const borrowed = kind === "worker" ? Object.freeze({ signal: lease.signal,
+        assertHeld: () => lease.assertHeld(), release: () => lease.release(),
+        async assertCurrent() {
+          checkSignal(signal, lease.signal); assertLease(lease);
+          if (!await samePathFd(directory!)) fail("unavailable");
+          const named = await lstat(lock.lockPath, { bigint: true }).catch(() => null);
+          if (!named || !named.isFile() || named.isSymbolicLink() || named.nlink !== 1n || identity(named) !== lock.lockIdentity) fail("unsafe_file");
+          checkSignal(signal, lease.signal); assertLease(lease);
+        } }) : lease;
+      const result = await body(directory!, borrowed);
       checkSignal(signal, lease.signal);
       assertLease(lease);
       if (!await samePathFd(directory!)) fail("unavailable");

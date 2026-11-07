@@ -30,6 +30,7 @@ import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-trans
 import { sealCapture } from "../../src/sender/seal.ts";
 import { publishEncryptedSpool } from "../../src/sender/spool-publication.ts";
 import { commitEncryptedSpool } from "../../src/sender/spool-commit.ts";
+import { runUploadWorkerOnce } from "../../src/queue/worker.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
 const artifactPath = process.env.APPARENT_RESOURCE_ARTIFACT;
@@ -84,11 +85,24 @@ assert.equal(typeof resources.checkAcl, "function", "native SDK must provide des
 
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-test("native spool publication feeds the committed reader and sender under the stable lease", async () => fixture(async root => {
+test("native upload worker spans spool recovery and transfer with independent queue access", async () => fixture(async root => {
   const id = "c".repeat(32), generation = "d".repeat(32);
   const received = new Map<string, Buffer>();
+  let networkLeaseObserved = false;
   let files: { path: string; size: number; sha256: string }[] = [];
   const server = createServer(async (request, response) => {
+    if (!networkLeaseObserved) {
+      try {
+        const worker = await resources.lock(await open(path.join(root, "worker.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+        if (worker.state === "acquired") await worker.lease.release();
+        assert.equal(worker.state, "busy", "worker lease must span real HTTP work");
+        const foreground = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+        assert.equal(foreground.state, "acquired", "foreground queue must remain available during HTTP");
+        if (foreground.state === "acquired") await foreground.lease.release();
+        if (installedResources) await assert.rejects(installedResources.close(), error => !!error && typeof error === "object" && "category" in error && error.category === "invalid_request");
+        networkLeaseObserved = true;
+      } catch { response.writeHead(500); response.end("synthetic worker lease proof failed"); return; }
+    }
     const parts: Buffer[] = []; for await (const part of request) parts.push(Buffer.from(part));
     const bytes = Buffer.concat(parts);
     if (request.method === "POST" && !request.url?.endsWith("/complete")) {
@@ -122,60 +136,74 @@ test("native spool publication feeds the committed reader and sender under the s
     const pendingBefore = await readFile(path.join(root, `${id}.job`));
     await link(path.join(root, `${id}.job`), path.join(root, "legacy-pending-job-alias"));
     const credentialSnapshot = await readCredentialSnapshot(root, { scope: "upload", approvedServer: origin }, resources);
-    const publicationResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
-      async publish(parent: import("node:fs/promises").FileHandle, stage: string, destination: string, options?: { signal?: AbortSignal }) {
-        try {
-          const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
-          if (contender.state === "acquired") await contender.lease.release();
-          assert.equal(contender.state, "busy", "native publication must hold the same queue inode lease");
-        } catch (error) { await parent.close().catch(() => {}); throw error; }
-        return resources.publish(parent, stage, destination, options);
-      } };
-    const published = await publishEncryptedSpool(root, pending, sealed, credentialSnapshot, signingKey, publicationResources, { active: () => true });
-    assert.equal(published.state, "committed"); if (published.state !== "committed") return;
-    assert.deepEqual(await readFile(path.join(root, `${id}.job`)), pendingBefore);
-    assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialsBefore);
-    const receipt = published.record, assets = [...receipt.files], spool = published.path;
-    const envelope = sealed.assets.find(asset => asset.path === "envelope.json")!.bytes;
-    const chunkAssets = assets.filter(asset => asset.path.startsWith("sealed/"));
-    for (const asset of sealed.assets) assert.deepEqual(new Uint8Array(await readFile(path.join(spool, asset.path))), asset.bytes);
-    // Only this isolated fixture invokes the internal writer capability.
-    let replacements = 0;
-    const commitResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
-      async replaceFile(...args: Parameters<StateReplacementResources["replaceFile"]>) {
-        try {
-          const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
-          if (contender.state === "acquired") await contender.lease.release();
-          assert.equal(contender.state, "busy", "job replacement must hold the native queue lease");
-        } catch (error) { await args[0].close().catch(() => {}); throw error; }
-        replacements++; return resources.replaceFile(...args);
-      } };
-    const recovered = await commitEncryptedSpool(root, pending, credentialSnapshot, authority, ownPublicKey, commitResources, { active: () => true });
-    assert.equal(recovered.state, "committed"); if (recovered.state === "uncertain") return;
-    const job = recovered.job;
-    assert.deepEqual(job.futurePrivateField, { preserve: true });
-    assert.deepEqual(JSON.parse(await readFile(path.join(root, `${id}.job`), "utf8")), job);
-    assert.deepEqual(await readFile(path.join(root, "legacy-pending-job-alias")), pendingBefore);
-    assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialsBefore);
-    assert.equal((await commitEncryptedSpool(root, job, credentialSnapshot, authority, ownPublicKey, commitResources, { active: () => true })).state, "unchanged");
-    assert.equal(replacements, 1);
-    const before = await readFile(path.join(spool, "spool-state.json"));
-    const snapshot = await openCommittedEncryptedSpool(root, job, resources, { lockTimeoutMs: 0 });
-    const lock = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
-    assert.equal(lock.state, "acquired");
-    if (lock.state === "acquired") {
-      try { await assert.rejects(snapshot.readAsset("envelope.json"), e => e instanceof EncryptedSpoolReadError && e.category === "state_unavailable"); }
-      finally { await lock.lease.release(); }
-    }
-    await uploadPreparedEncryptedCapture({ server: origin, captureId: id, context, profile: "root", envelope: assets[0]!, chunks: chunkAssets,
-      recipientGrantIds: receipt.metadata.recipientGrants, trustedSenderSigningKey: await ed25519.getPublicKeyAsync(seed), active: () => true,
-      readAsset: async (name, signal) => { const bytes = await snapshot.readAsset(name, signal); borrowed.push(bytes); return bytes; },
-      authorize: async (approvedServer, scope) => ({ approvedServer, scope, token: credential.token,
-        accountId: "account", senderGrantId: "sender", recipientGrantIds: receipt.metadata.recipientGrants }) });
-    assert.equal(received.size, assets.length); assert.deepEqual(received.get("envelope.json"), Buffer.from(envelope));
-    for (const asset of assets) assert.equal(digest(received.get(asset.path)!), asset.sha256);
-    assert.deepEqual(await readFile(path.join(spool, "spool-state.json")), before);
-    sealed.assets.forEach(asset => asset.bytes.fill(0));
+    const workerResult = await runUploadWorkerOnce({ directory: root, approvedServer: origin,
+      readSettings: async () => ({ enabled: true, server: origin, encryptionEnabled: true, sharingEnabled: false, nowSeconds: 100, retentionSeconds: 1000 }),
+      reportProgress: async () => assert.fail("private ready upload emitted failure progress"),
+      upload: async (_job, workerContext) => {
+        await workerContext.assertCurrent();
+        const publicationResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+          async publish(parent: import("node:fs/promises").FileHandle, stage: string, destination: string, options?: { signal?: AbortSignal }) {
+            try {
+              const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+              if (contender.state === "acquired") await contender.lease.release();
+              assert.equal(contender.state, "busy", "native publication must hold the same queue inode lease");
+            } catch (error) { await parent.close().catch(() => {}); throw error; }
+            return resources.publish(parent, stage, destination, options);
+          } };
+        const published = await publishEncryptedSpool(root, pending, sealed, credentialSnapshot, signingKey, publicationResources, { active: () => true });
+        assert.equal(published.state, "committed"); if (published.state !== "committed") throw Error("fixture publication uncertain");
+        assert.deepEqual(await readFile(path.join(root, `${id}.job`)), pendingBefore);
+        assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialsBefore);
+        const receipt = published.record, assets = [...receipt.files], spool = published.path;
+        const envelope = sealed.assets.find(asset => asset.path === "envelope.json")!.bytes;
+        const chunkAssets = assets.filter(asset => asset.path.startsWith("sealed/"));
+        for (const asset of sealed.assets) assert.deepEqual(new Uint8Array(await readFile(path.join(spool, asset.path))), asset.bytes);
+        // Only this isolated fixture invokes the internal writer capability.
+        let replacements = 0;
+        const commitResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+          async replaceFile(...args: Parameters<StateReplacementResources["replaceFile"]>) {
+            try {
+              const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+              if (contender.state === "acquired") await contender.lease.release();
+              assert.equal(contender.state, "busy", "job replacement must hold the native queue lease");
+            } catch (error) { await args[0].close().catch(() => {}); throw error; }
+            replacements++; return resources.replaceFile(...args);
+          } };
+        const recovered = await commitEncryptedSpool(root, pending, credentialSnapshot, authority, ownPublicKey, commitResources, { active: () => true });
+        assert.equal(recovered.state, "committed"); if (recovered.state === "uncertain") throw Error("fixture recovery uncertain");
+        const job = recovered.job;
+        assert.deepEqual(job.futurePrivateField, { preserve: true });
+        assert.deepEqual(JSON.parse(await readFile(path.join(root, `${id}.job`), "utf8")), job);
+        assert.deepEqual(await readFile(path.join(root, "legacy-pending-job-alias")), pendingBefore);
+        assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialsBefore);
+        assert.equal((await commitEncryptedSpool(root, job, credentialSnapshot, authority, ownPublicKey, commitResources, { active: () => true })).state, "unchanged");
+        assert.equal(replacements, 1);
+        const before = await readFile(path.join(spool, "spool-state.json"));
+        const snapshot = await openCommittedEncryptedSpool(root, job, resources, { lockTimeoutMs: 0 });
+        const lock = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+        assert.equal(lock.state, "acquired");
+        if (lock.state === "acquired") {
+          try { await assert.rejects(snapshot.readAsset("envelope.json"), e => e instanceof EncryptedSpoolReadError && e.category === "state_unavailable"); }
+          finally { await lock.lease.release(); }
+        }
+        await uploadPreparedEncryptedCapture({ server: origin, captureId: id, context, profile: "root", envelope: assets[0]!, chunks: chunkAssets,
+          recipientGrantIds: receipt.metadata.recipientGrants, trustedSenderSigningKey: await ed25519.getPublicKeyAsync(seed), active: () => !workerContext.signal.aborted,
+          readAsset: async (name, signal) => { const bytes = await snapshot.readAsset(name, signal); borrowed.push(bytes); return bytes; },
+          authorize: async (approvedServer, scope) => { await workerContext.assertCurrent(); return { approvedServer, scope, token: credential.token,
+            accountId: "account", senderGrantId: "sender", recipientGrantIds: receipt.metadata.recipientGrants }; } });
+        assert.equal(received.size, assets.length); assert.deepEqual(received.get("envelope.json"), Buffer.from(envelope));
+        for (const asset of assets) assert.equal(digest(received.get(asset.path)!), asset.sha256);
+        assert.deepEqual(await readFile(path.join(spool, "spool-state.json")), before);
+        sealed.assets.forEach(asset => asset.bytes.fill(0));
+        return { state: "ready" };
+      } }, resources);
+    assert.equal(workerResult.state, "complete");
+    assert.equal(workerResult.events[0]?.state, "ready");
+    assert.equal(networkLeaseObserved, true);
+    const readyJob = decodeJob(await readFile(path.join(root, `${id}.job`)));
+    assert.equal(readyJob.status, "ready"); assert.equal(readyJob.attempts, 1);
+    assert.deepEqual(readyJob.futurePrivateField, { preserve: true });
+    const snapshot = await openCommittedEncryptedSpool(root, readyJob, resources);
     await writeFile(path.join(root, "upload.credential"), JSON.stringify({ ...credential, generation: "e".repeat(32) }));
     await assert.rejects(snapshot.readAsset("envelope.json"), e => e instanceof EncryptedSpoolReadError && e.category === "stale_snapshot");
   } finally { borrowed.forEach(bytes => bytes.fill(0)); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
