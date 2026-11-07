@@ -1,4 +1,4 @@
-//! Linux capture/2 provider. This worker deliberately exposes X11 outputs only.
+//! Linux capture/2 provider for X11 and one-monitor Hyprland portal sources.
 #![cfg(target_os = "linux")]
 
 use apparent_capture_engine::{CaptureOwnerPermit, LiveCapturePermit, Runtime, new_id};
@@ -359,11 +359,11 @@ fn operation_dir(shared: &Shared) -> Result<apparent_capture_engine::SecureStore
     Ok(dir)
 }
 
-fn capabilities(ready: bool) -> Value {
-    json!({"sourceDiscovery":ready,"displayCapture":ready,"areaCapture":ready,"audioCapture":false,"contextFacts":false,"interactionFacts":false,"candidates":false,"transcript":false,"strokes":false,"publication":true,"retainedMaterials":ready})
+fn capabilities(ready: bool, area: bool) -> Value {
+    json!({"sourceDiscovery":ready,"displayCapture":ready,"areaCapture":ready && area,"audioCapture":false,"contextFacts":false,"interactionFacts":false,"candidates":false,"transcript":false,"strokes":false,"publication":true,"retainedMaterials":ready})
 }
-fn handshake(ready: bool) -> Value {
-    json!({"channel":"capture","protocolVersion":2,"implementation":"native","readiness":if ready {"ready"} else {"unavailable"},"capabilities":capabilities(ready)})
+fn handshake(ready: bool, area: bool) -> Value {
+    json!({"channel":"capture","protocolVersion":2,"implementation":"native","readiness":if ready {"ready"} else {"unavailable"},"capabilities":capabilities(ready, area)})
 }
 fn status(j: &Journal) -> Value {
     let mut v = json!({"captureId":j.capture_id,"state":j.state});
@@ -569,6 +569,12 @@ fn refresh_catalog(generation: &mut String, sources: &mut Vec<Source>, ready: &m
     }
 }
 
+fn portal_start_can_be_stopped(request: &Value, sources: &[Source]) -> bool {
+    sources.iter().any(|source| {
+        source.backend == linux::Backend::HyprlandPortal && source.value == request["source"]
+    })
+}
+
 fn process_request(
     req: Value,
     runtime: &Runtime,
@@ -588,7 +594,11 @@ fn process_request(
             if !recovery_role {
                 refresh_catalog(generation, sources, ready);
             }
-            Ok(handshake(*ready && generation.len() == 32))
+            let available = *ready && generation.len() == 32;
+            Ok(handshake(
+                available,
+                sources.iter().any(|source| source.value["kind"] == "area"),
+            ))
         }
         "publish" | "inspectPublication" => publication::handle(&req, runtime, root, all),
         "discoverSources" => {
@@ -599,7 +609,7 @@ fn process_request(
             }
             refresh_catalog(generation, sources, ready);
             Ok(if sources.is_empty() {
-                json!({"state":"unavailable","sources":[],"reason":"X11 capture is unavailable"})
+                json!({"state":"unavailable","sources":[],"reason":"No supported screen source is available"})
             } else {
                 json!({"state":"available","sources":sources.iter().map(|s|s.value.clone()).collect::<Vec<_>>()})
             })
@@ -898,10 +908,10 @@ fn process_request(
                     active_status(&shared)
                 }
                 "stop" => {
-                    if j.state == "starting" {
+                    if j.state == "starting" && !portal_start_can_be_stopped(&j.request, sources) {
                         return Err("busy");
                     }
-                    if j.state == "recording" {
+                    if j.state == "starting" || j.state == "recording" {
                         j.state = "stopping".into();
                         drop(j);
                         persist(&shared).map_err(|_| "internal")?;
@@ -1232,7 +1242,7 @@ fn main() {
             "capture startup: secure store ready after {}ms",
             startup.elapsed().as_millis()
         );
-        eprintln!("capture startup: probing X11 sources");
+        eprintln!("capture startup: probing screen sources");
     }
     let (mut generation, mut sources) = if recovery_role.is_some() {
         (String::new(), Vec::new())
@@ -1241,7 +1251,7 @@ fn main() {
     };
     if diagnose_startup && recovery_role.is_none() {
         eprintln!(
-            "capture startup: X11 probe returned {} sources after {}ms",
+            "capture startup: screen source probe returned {} sources after {}ms",
             sources.len(),
             startup.elapsed().as_millis()
         );
@@ -1629,8 +1639,39 @@ mod unsealed_cleanup_tests {
 mod publication_capability_tests {
     #[test]
     fn publication_reconciliation_is_advertised_when_screen_capture_is_unavailable() {
-        assert_eq!(super::capabilities(false)["publication"], true);
-        assert_eq!(super::capabilities(false)["displayCapture"], false);
-        assert_eq!(super::capabilities(false)["areaCapture"], false);
+        assert_eq!(super::capabilities(false, false)["publication"], true);
+        assert_eq!(super::capabilities(false, false)["displayCapture"], false);
+        assert_eq!(super::capabilities(false, false)["areaCapture"], false);
+    }
+
+    #[test]
+    fn portal_only_readiness_does_not_advertise_area_capture() {
+        assert_eq!(super::capabilities(true, false)["displayCapture"], true);
+        assert_eq!(super::capabilities(true, false)["areaCapture"], false);
+        assert_eq!(super::capabilities(true, true)["areaCapture"], true);
+    }
+
+    #[test]
+    fn only_the_exact_portal_start_can_be_stopped_while_source_selection_waits() {
+        let portal = super::Source {
+            value: serde_json::json!({"id":"display:4","kind":"display"}),
+            x: 0,
+            y: 0,
+            width: 1920,
+            height: 1080,
+            backend: super::linux::Backend::HyprlandPortal,
+        };
+        let x11 = super::Source {
+            backend: super::linux::Backend::X11,
+            ..portal.clone()
+        };
+        let request = serde_json::json!({"source":{"id":"display:4","kind":"display"}});
+        assert!(super::portal_start_can_be_stopped(
+            &request,
+            &[portal.clone()]
+        ));
+        assert!(!super::portal_start_can_be_stopped(&request, &[x11]));
+        let stale = serde_json::json!({"source":{"id":"display:5","kind":"display"}});
+        assert!(!super::portal_start_can_be_stopped(&stale, &[portal]));
     }
 }
