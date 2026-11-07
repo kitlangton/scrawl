@@ -199,3 +199,37 @@ test("recovery refuses an uncommitted orphan manifest and an inconsistent surviv
     } finally { await f.close(); }
   }
 });
+
+
+test("explicit recovery refuses unsafe survivors and fresh authority loss", async () => {
+  for (const fault of ["extra", "symlink", "size", "acl", "fence"]) {
+    const job = encryptedJob(false, true), f = await fixture(job);
+    try {
+      const spool = await writeSpool(f.root, false);
+      if (fault === "extra") await writeFile(path.join(spool, "unknown"), "retain", { mode: 0o600 });
+      if (fault === "symlink") { await rm(path.join(spool, "envelope.json")); await symlink("spool-state.json", path.join(spool, "envelope.json")); }
+      if (fault === "size") await writeFile(path.join(spool, "envelope.json"), "wrong-size", { mode: 0o600 });
+      if (fault === "acl") f.resources.checkAcl = async handle => { await handle.close(); return { state: "refused" }; };
+      const before = await readdir(spool, { recursive: true });
+      const answer = await resumeQueuedRetirement(f.directory, f.lease, f.resources, { job,
+        expectedStamp: stateFileStamp(await lstat(f.jobPath, { bigint: true })),
+        assertFresh: async () => { if (fault === "fence") throw Error("private detail"); } });
+      assert.deepEqual(answer, { state: "refused" }, fault);
+      assert.deepEqual(await readdir(spool, { recursive: true }), before);
+      assert.ok((await lstat(f.jobPath)).isFile());
+    } finally { await f.close(); }
+  }
+});
+
+test("explicit recovery stops after a partial effect and preserves remaining evidence", async () => {
+  const job = encryptedJob(false, true), f = await fixture(job); let checks = 0;
+  try {
+    const spool = await writeSpool(f.root, false);
+    await rm(path.join(spool, "sealed/part-000000.age"));
+    const answer = await resumeQueuedRetirement(f.directory, f.lease, f.resources, { job,
+      expectedStamp: stateFileStamp(await lstat(f.jobPath, { bigint: true })),
+      assertFresh: async () => { if (++checks === 3) throw Error("cancelled or new login"); } });
+    assert.deepEqual(answer, { state: "uncertain" });
+    assert.ok((await lstat(f.jobPath)).isFile()); assert.ok((await lstat(path.join(spool, "spool-state.json"))).isFile());
+  } finally { await f.close(); }
+});

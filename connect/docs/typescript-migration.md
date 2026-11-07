@@ -25,7 +25,7 @@ Current acceptance inventory (library/fixture capability is not installed adopti
 | Account and Settings | Adopted TypeScript policy/device flow | Rust still supplies private facts and durable effects; login/logout/config adoption remains |
 | CLI and recipients | Grammar, local status, state-backed retrieval/publication and callable Node host | Installed argv/host/resource/writer admission and platform proof |
 | Renewal | Compatible journals, exchange, completed recovery and coordinator library | Live sole-writer adoption, installed recovery and removal of temporary Rust bridge |
-| Queue and sender | Planner, fenced admission/retirement/retry/worker and encrypted spool/HTTP capabilities | Host settings and stable snapshots, lifecycle settlement/restart recovery, worker/caller adoption |
+| Queue and sender | Planner, fenced admission/retirement/retry/worker and encrypted spool/HTTP capabilities | Host settings and stable snapshots, host recovery integration and uncommitted-spool settlement, worker/caller adoption |
 | Native resources | Protected x64 factory and qualified Linux/Mac helper inputs | Supported-target installed assembly, including ARM, remains an adoption gate |
 | Removal and release | TypeScript owner CI and qualified library artifacts | All live callers, packaging/build inputs and Rust donors must be migrated and audited |
 

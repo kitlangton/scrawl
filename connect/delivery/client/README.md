@@ -209,6 +209,15 @@ Pathname checks rely on cooperating same-UID writers honoring the locks and do n
 promise inode-atomic unlink against a process bypassing them. This has no public
 export or production caller and does not authorize pruning beside the Rust writer.
 
+`resumeQueuedRetirement` is a separate internal settlement path for interrupted
+cleanup. When a spool remains it requires the complete committed job manifest,
+cross-checks any surviving receipt, and accepts only known missing files or
+structural directories. Surviving names still require private ACLs, identities,
+size/stamp checks and the caller's fresh policy fence. It does not recover an
+uncommitted orphan spool or missing job metadata, and admission does not invoke it
+automatically. Host recovery integration, uncertainty settlement and installed
+writer adoption remain separate gates; no new journal or public export is added.
+
 The internal `queue/admission-store` applies that planner under one queue lease:
 canonical bundle-path admission, retained-ID reuse, explicit cancellation, bounded
 retirement and expected-absent job creation. It pins the local login/cancellation

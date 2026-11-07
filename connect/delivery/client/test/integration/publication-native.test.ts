@@ -31,7 +31,7 @@ import { sealCapture } from "../../src/sender/seal.ts";
 import { publishEncryptedSpool } from "../../src/sender/spool-publication.ts";
 import { commitEncryptedSpool } from "../../src/sender/spool-commit.ts";
 import { admitQueuedUpload } from "../../src/queue/admission-store.ts";
-import { retireQueuedJob } from "../../src/queue/prune.ts";
+import { retireQueuedJob, resumeQueuedRetirement } from "../../src/queue/prune.ts";
 import { withStateQueue } from "../../src/state/queue-transaction.ts";
 import { stateFileStamp } from "../../src/state/credential-files.ts";
 import { retryQueuedUploads, RetryError } from "../../src/queue/retry.ts";
@@ -215,6 +215,7 @@ test("native upload worker spans spool recovery and transfer with independent qu
     // from the stored receipt or from signature validity alone.
     const jobFile = path.join(root, `${id}.job`), spoolPath = path.join(root, `${id}.sealed`);
     const originalJob = await readFile(jobFile), originalEnvelope = await readFile(path.join(spoolPath, "envelope.json"));
+    const recoveryReceipt = await readFile(path.join(spoolPath, "spool-state.json"));
     await link(jobFile, path.join(root, "retained-ready-job"));
     await link(path.join(spoolPath, "envelope.json"), path.join(root, "retained-envelope"));
     const expectedStamp = stateFileStamp(await lstat(jobFile, { bigint: true }));
@@ -246,6 +247,35 @@ test("native upload worker spans spool recovery and transfer with independent qu
     assert.deepEqual(await readFile(path.join(root, "retained-envelope")), originalEnvelope);
     assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialBytes);
     assert.equal(await readFile(path.join(originalBundle, "summary.md"), "utf8"), "keep original");
+    for (const cut of ["asset", "empty-directories"] as const) {
+      // Recreate an isolated persisted layout using the actual encrypted bytes
+      // and committed job/receipt, then model a known cleanup interruption.
+      await writeFile(jobFile, originalJob, { mode: 0o600 });
+      await mkdir(spoolPath, { mode: 0o700 });
+      for (const asset of readyJob.files) {
+        await mkdir(path.dirname(path.join(spoolPath, asset.path)), { recursive: true, mode: 0o700 });
+        await writeFile(path.join(spoolPath, asset.path), received.get(asset.path)!, { mode: 0o600 });
+      }
+      await writeFile(path.join(spoolPath, "spool-state.json"), recoveryReceipt, { mode: 0o600 });
+      const kept = path.join(root, `recovery-envelope-alias-${cut}`);
+      await link(path.join(spoolPath, "envelope.json"), kept);
+      if (cut === "asset") await rm(path.join(spoolPath, readyJob.files.find(asset => asset.path.endsWith(".age"))!.path));
+      else {
+        for (const asset of readyJob.files) await rm(path.join(spoolPath, asset.path));
+        await rm(path.join(spoolPath, "spool-state.json"));
+      }
+      await withStateQueue(root, { scope: "upload", approvedServer: origin }, resources, {}, async (state, lease) => {
+        const input = { job: readyJob, expectedStamp: stateFileStamp(await lstat(jobFile, { bigint: true })),
+          assertFresh: async () => { const current = decodeJob(await readFile(jobFile)); assert.equal(current.status, "ready"); assert.equal(current.shared, false); } };
+        assert.deepEqual(await retireQueuedJob(state, lease, resources, input), { state: "refused" });
+        assert.deepEqual(await resumeQueuedRetirement(state, lease, resources, input), { state: "retired" }, cut);
+      });
+      await assert.rejects(lstat(jobFile), { code: "ENOENT" }); await assert.rejects(lstat(spoolPath), { code: "ENOENT" });
+      assert.deepEqual(await readFile(kept), originalEnvelope);
+      assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialBytes);
+      assert.equal(await readFile(path.join(originalBundle, "summary.md"), "utf8"), "keep original");
+    }
+
 
   } finally { borrowed.forEach(bytes => bytes.fill(0)); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 }));
