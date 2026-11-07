@@ -291,3 +291,18 @@ aligned WAV to its existing supervised lifetime, cancellation and drain before
 sealing transcript facts. Neither this API nor a file's presence establishes
 model readiness, original-fact authority or public voice availability. Default
 Core does not depend on the speech runtime.
+
+On Linux, `audio::model::ModelFile::verify` accepts an explicitly opened read-only
+regular FD and independently trusted size/SHA256. It copies into a private memfd,
+seals writes/grow/shrink/seal changes, then hashes those immutable snapshot bytes.
+The original file is never chmodded or rewritten. Source mutations cannot change
+what `PinnedRecognizer` loads through the snapshot FD. Unsupported seals fail
+closed; there is no mutable-source fallback. The caller must admit model-size
+snapshot memory **plus** native working memory; a 64KiB copy buffer does not make
+the snapshot free. No actual model-size footprint has been qualified here.
+
+Verification proves bytes, not a usable model/backend. Native load/run and
+filesystem reads are synchronous: an existing supervised child must still enforce
+hard cancellation, memory/time limits and reaping. This API detects late results,
+not interruption of a blocked call or capture/transcript readiness. The snapshot
+mechanism is Linux-only; legacy shared session execution is unchanged.
