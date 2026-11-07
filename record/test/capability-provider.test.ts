@@ -283,6 +283,44 @@ test("provider preserves cursor-qualified note receipts but refuses malformed cu
   assert.equal(createRecordFixture("practice-note-cancelled").driver.current().captures[0]?.outcomes[0]?.kind, "note-save");
 });
 
+test("provider clones typed Saved transcript status and rejects malformed or pre-Saved status", async () => {
+  const {runtime}=runtimeFixture();
+  const saved:RecordCaptureFacts={...outputFacts(),captures:[{captureId:"saved-status",artifactId:"bundle-one",delivery:"unknown",phase:"saved",transcriptStatus:{state:"collected",content:"nonempty",segmentCount:0},outcomes:[{kind:"save",ok:true,at:"2026-01-01T00:00:00Z"}]}]};
+  const client=createRecordCapabilityProvider({runtime,captureFacts:{readFacts:async()=>structuredClone(saved)},providerEpoch:"provider-transcript-status"});
+  await new Promise(resolve=>setImmediate(resolve));
+  const projected=client.current().captures[0]!;
+  assert.deepEqual(projected.transcriptStatus,{state:"collected",content:"nonempty",segmentCount:0});
+  (projected.transcriptStatus as {state:"collected";content:"nonempty";segmentCount:number}).segmentCount=99;
+  assert.deepEqual(client.current().captures[0]?.transcriptStatus,{state:"collected",content:"nonempty",segmentCount:0});
+  client.detach();
+  for(const [index,patch] of [
+    {transcriptStatus:{state:"collected",content:"empty",segmentCount:-1}},
+    {phase:"processing",transcriptStatus:{state:"unavailable"}},
+    {transcriptStatus:{state:"unavailable",privatePath:"/private/transcript.json"}},
+  ].entries()){
+    const fixture=runtimeFixture();
+    const bad={...outputFacts(),captures:[{...saved.captures[0]!,...patch}]} as RecordCaptureFacts;
+    const rejected=createRecordCapabilityProvider({runtime:fixture.runtime,captureFacts:{readFacts:async()=>bad},providerEpoch:`provider-transcript-invalid-${index}`});
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(rejected.current().captures,[]);
+    rejected.detach();
+  }
+});
+
+test("legacy Saved facts stay unknown and terminal transcript status never crosses artifact identity", async()=>{
+  const {runtime}=runtimeFixture();
+  let facts:RecordCaptureFacts={...outputFacts(),captures:[{captureId:"saved-legacy",artifactId:"bundle-old",delivery:"unknown",phase:"saved",outcomes:[{kind:"save",ok:true,at:"2026-01-01T00:00:00Z"}]}]};
+  const client=createRecordCapabilityProvider({runtime,captureFacts:{readFacts:async()=>structuredClone(facts)},providerEpoch:"provider-transcript-artifact"});
+  await new Promise(resolve=>setImmediate(resolve));
+  assert.equal(client.current().captures[0]?.transcriptStatus,undefined,"legacy Saved rows remain unknown");
+  facts={...facts,revision:2,captures:[{captureId:"saved-legacy",artifactId:"bundle-new",delivery:"unknown",phase:"saved",outcomes:[{kind:"save",ok:true,at:"2026-01-01T00:00:01Z"}]}]};
+  const current=client.current();
+  await client.execute({type:"refresh",requestId:"refresh-transcript-artifact",expected:{providerEpoch:current.providerEpoch,revision:current.revision}});
+  assert.equal(client.current().captures[0]?.artifactId,"bundle-new");
+  assert.equal(client.current().captures[0]?.transcriptStatus,undefined,"status from the replaced artifact is never merged");
+  client.detach();
+});
+
 test("retired output epochs cannot restore old note or stroke receipts", async () => {
   const { runtime } = runtimeFixture();
   let facts = outputFacts();

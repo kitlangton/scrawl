@@ -60,6 +60,7 @@ export interface ContextChange {
 
 export type ProcessingWarning =
   | AudioInitialGapWarning
+  | { kind: "transcriptUnavailable" }
   | { kind: "videoOnlyInteractionTelemetry" }
   | { kind: "imageQuality"; message: string }
   | { kind: "noMicrophoneAudio" }
@@ -83,6 +84,8 @@ export interface ProcessingInput {
   context?: Record<string, string>;
   contextChanges?: ContextChange[];
   transcript: { text: string; segments: TranscriptSegment[] };
+  /** Assembler-authored metadata from the original validated transcript fact; never live progress. */
+  transcriptStatus?: import("../../capabilities/index.js").TranscriptStatus;
   frames: SelectedFrame[];
   /** Caller-supplied rich semantic chunks; these are not authenticated bundle facts. */
   semanticFrameText?: { mode: "rich-context"; frames: SemanticFrameText[] };
@@ -279,6 +282,8 @@ function validate(input: ProcessingInput): void {
     if (warning.kind === "audioInitialGap" && (!Number.isSafeInteger(warning.atMs) || warning.atMs < 0 || warning.atMs >= input.durationMs))
       throw new RangeError("Initial audio gap must precede a captured sample within the recording");
   }
+  if (input.transcriptStatus?.state === "collected" && (!Number.isSafeInteger(input.transcriptStatus.segmentCount) || input.transcriptStatus.segmentCount < 0 ||
+      input.transcriptStatus.segmentCount > 100_000 || !["empty", "nonempty"].includes(input.transcriptStatus.content))) throw new TypeError("transcript status metadata is invalid");
   for (const segment of input.transcript.segments) {
     if (!Number.isSafeInteger(segment.startMs) || segment.startMs < 0 || segment.startMs > input.durationMs)
       throw new RangeError("transcript time must be within the recording duration");
@@ -341,8 +346,9 @@ export function assembleProcessingOutput(
     else if (warning.kind === "imageQuality") lines.push(`Image quality: ${warning.message}`);
     else if (warning.kind === "noMicrophoneAudio") lines.push("No microphone audio was saved. Check the microphone and try again.");
     else if (warning.kind === "audioInitialGap") lines.push(audioInitialGapText(warning.atMs));
+    else if (warning.kind === "transcriptUnavailable") lines.push("Transcript unavailable.");
     else if (warning.kind === "noTranscript") lines.push(`No transcript: ${warning.message}`);
-    else lines.push("No words transcribed. Your audio was saved—check it or try again closer to the microphone.");
+    else if (warning.kind === "noWordsTranscribed") lines.push("No words transcribed. Your audio was saved—check it or try again closer to the microphone.");
   }
   if (!clipboard && input.autocrop) lines.push(`Cropped to: ${input.autocrop.label} (full frames in ${input.autocrop.fullFramesDirectory}/)`);
 

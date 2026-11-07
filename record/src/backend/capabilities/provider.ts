@@ -231,7 +231,18 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
     const item = capture as Record<string, unknown>;
     if (typeof item.captureId !== "string" || !["local-only", "host-default", "unknown"].includes(String(item.delivery)) ||
       !["starting", "recording", "processing", "saved", "cancelled", "failed", "unknown"].includes(String(item.phase)) || !Array.isArray(item.outcomes)) return false;
-    if (item.warnings !== undefined && (!Array.isArray(item.warnings) || item.warnings.length > 1 || item.warnings.some(warning => !warning || typeof warning !== "object" || Array.isArray(warning) || Object.keys(warning).sort().join(",") !== "atMs,kind" || warning.kind !== "audioInitialGap" || !Number.isSafeInteger(warning.atMs) || warning.atMs < 0))) return false;
+    if (item.transcriptStatus !== undefined) {
+      const status = item.transcriptStatus as Record<string, unknown>;
+      if (!status || typeof status !== "object" || Array.isArray(status) || (status.state === "unavailable"
+        ? Object.keys(status).sort().join(",") !== "state"
+        : status.state !== "collected" || !["empty", "nonempty"].includes(String(status.content)) || !Number.isSafeInteger(status.segmentCount) || Number(status.segmentCount) < 0 || Number(status.segmentCount) > 100_000 || Object.keys(status).sort().join(",") !== "content,segmentCount,state")) return false;
+      if (item.phase !== "saved" || typeof item.artifactId !== "string" || !item.artifactId) return false;
+    }
+    if (item.warnings !== undefined && (!Array.isArray(item.warnings) || item.warnings.length > 2 || item.warnings.some(warning => {
+      if (!warning || typeof warning !== "object" || Array.isArray(warning)) return true;
+      if (warning.kind === "audioInitialGap") return Object.keys(warning).sort().join(",") !== "atMs,kind" || !Number.isSafeInteger(warning.atMs) || warning.atMs < 0;
+      return warning.kind !== "transcriptUnavailable" || Object.keys(warning).sort().join(",") !== "kind";
+    }) || new Set(item.warnings.map((warning: {kind:string}) => warning.kind)).size !== item.warnings.length)) return false;
     const cursorKeys = new Set<string>(), noteReceipts = new Set<string>();
     const validOutcomes = item.outcomes.every(outcome => {
       if (!outcome || typeof outcome !== "object") return false;
@@ -320,11 +331,14 @@ function consistentCausalHistory(previous: CaptureFact | undefined, next: Captur
 
 function mergeCapture(previous: CaptureFact | undefined, next: CaptureFact): CaptureFact {
   if (!previous) return clone(next);
+  if (previous.artifactId && next.artifactId && previous.artifactId !== next.artifactId) return clone(next);
   const outcomes = [...previous.outcomes];
   for (const outcome of next.outcomes) {
     if (!outcomes.some(value => JSON.stringify(value) === JSON.stringify(outcome))) outcomes.push(clone(outcome));
   }
-  return { ...previous, ...clone(next), outcomes };
+  const merged = { ...previous, ...clone(next), outcomes };
+  if (next.phase !== "saved") delete merged.transcriptStatus;
+  return merged;
 }
 
 function captureFromRuntime(state: RecordHostRuntimePort["state"], observedAt: Map<string, string>): CaptureFact | undefined {

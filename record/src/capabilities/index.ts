@@ -89,6 +89,10 @@ export type CaptureOutcome =
   | ArtifactOpenOutcome
   | ClipboardCopyOutcome;
 export type DeliveryEnforcement = "local-only" | "host-default" | "unknown";
+/** Status derived from the original SDK-validated transcript fact, exposed only with authenticated Saved output. */
+export type TranscriptStatus =
+  | { state: "collected"; content: "empty" | "nonempty"; segmentCount: number }
+  | { state: "unavailable" };
 export interface CaptureFact {
   captureId: string;
   invocationId?: string;
@@ -100,8 +104,10 @@ export interface CaptureFact {
   artifactId?: string;
   phase: "starting" | "recording" | "processing" | "saved" | "cancelled" | "failed" | "unknown";
   outcomes: CaptureOutcome[];
+  /** Absent for legacy publications and until authenticated Saved output exists. */
+  transcriptStatus?: TranscriptStatus;
   /** Saved output warnings; no audio contents or private paths. */
-  warnings?: AudioInitialGapWarning[];
+  warnings?: Array<AudioInitialGapWarning | { kind: "transcriptUnavailable" }>;
 }
 
 export interface CapabilitySnapshot {

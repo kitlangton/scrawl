@@ -56,8 +56,9 @@ export function createRecordPublicationOutput(client: CaptureClient, privateCont
       async readFacts(): Promise<RecordCaptureFacts> {
         const saved = await readSaved();
         const captures: CaptureFact[] = saved.map(binding => ({ captureId: binding.output!.requestId, artifactId: binding.bundleId, delivery: "unknown", phase: "saved",
+          ...(binding.output!.processing.transcriptStatus ? { transcriptStatus: structuredClone(binding.output!.processing.transcriptStatus) } : {}),
           outcomes: [{ kind: "save", ok: true, at: binding.savedObservedAt! }],
-          ...(binding.output!.processing.warnings?.some(warning => warning.kind === "audioInitialGap") ? { warnings: binding.output!.processing.warnings.filter((warning): warning is Extract<typeof warning, {kind:"audioInitialGap"}> => warning.kind === "audioInitialGap").map(warning => ({...warning})) } : {}) }));
+          ...(binding.output!.processing.warnings?.some(warning => warning.kind === "audioInitialGap" || warning.kind === "transcriptUnavailable") ? { warnings: binding.output!.processing.warnings.filter((warning): warning is Extract<typeof warning, {kind:"audioInitialGap"|"transcriptUnavailable"}> => warning.kind === "audioInitialGap" || warning.kind === "transcriptUnavailable").map(warning => ({...warning})) } : {}) }));
         const nextFingerprint = JSON.stringify(captures);
         if (factsInitialized && fingerprint !== nextFingerprint) revision++;
         fingerprint = nextFingerprint;

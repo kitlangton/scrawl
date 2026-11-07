@@ -1089,7 +1089,7 @@ for (const withGap of [false,true]) test("publication output exposes only durabl
     assert.equal(notifications, 1, "durable output updates wake the existing provider without another capture event");
     detach();
     const facts = await reopened.captureFacts.readFacts();
-    assert.deepEqual(facts.captures, [{ captureId: requestId, artifactId: "sdk-bundle", delivery: "unknown", phase: "saved",
+    assert.deepEqual(facts.captures, [{ captureId: requestId, artifactId: "sdk-bundle", delivery: "unknown", phase: "saved", transcriptStatus: {state:"collected",content:"nonempty",segmentCount:1},
       outcomes: [{ kind: "save", ok: true, at: (await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId))!.savedObservedAt }], ...(withGap?{warnings:[{kind:"audioInitialGap",atMs:125}]}:{}) }]);
     const resolution = await reopened.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" });
     assert.equal(resolution?.handoff.savedBundle.bundlePath, destinationPath);
@@ -1779,6 +1779,7 @@ test("standard visual selection CAS preserves its original plan and refuses a di
     const assembly=assembleCanonicalBundle({...input,admission:base.admission,frames:final.frames.map(frame=>({...frame,absolutePath:join(base.admission.bundlePath,frame.bundlePath),artifactPath:frame.bundlePath})),transcriptBounds:final.transcriptBounds,materialReferences:[{role:"audio",relativePath:audio.relativePath}]});
     const doc=JSON.parse(new TextDecoder().decode(assembly.apparentJson));
     assert.deepEqual(doc.transcript,{source:"fixture-provider",model:"fixture-model-v7",text:empty?"":"hello there",segments:empty?[]:[{t0:200,t1:estimated?4000:1200,text:"hello there"}],...(estimated?{estimated:true}:{})});
+    assert.deepEqual(assembly.processing.transcriptStatus,{state:"collected",content:empty?"empty":"nonempty",segmentCount:empty?0:1});
     assert.equal(doc.keyframes[0].said,empty?undefined:"hello there");assert.equal(doc.audio,audio.relativePath);
     const {formatLocalHandoff}=await import("../../dist/backend/handoff/index.js");
     const handoff=formatLocalHandoff({savedBundle:{status:"saved",bundlePath:assembly.bundlePath},processing:assembly.processing,requestVideoProof:false}).text;
@@ -1804,6 +1805,22 @@ test("standard visual selection CAS preserves its original plan and refuses a di
   const duplicate=structuredClone(input);setSealedWarnings(duplicate,[{code:"audio-initial-gap",atMs:125},{code:"audio-initial-gap",atMs:126}]);assert.throws(()=>assembleCanonicalBundle(duplicate),/duplicate initial audio/);
   const forged=await fixture();forged.processingWarnings=[{kind:"audioInitialGap",atMs:125}];assert.throws(()=>assembleCanonicalBundle(forged),/original sealed materials warning/);
  });
+
+test("transcript status derives only from the original collection and sealed unavailable warning",async()=>{
+  const input=await fixture();
+  const payload=JSON.parse(new TextDecoder().decode(input.payloadBytes));
+  payload.collection.transcript="unavailable";delete payload.facts.transcript;
+  payload.files=payload.files.filter((file:{relativePath:string})=>file.relativePath!==input.facts.transcript!.file.relativePath);
+  delete input.facts.transcript;
+  input.payloadBytes=bytes(payload);input.manifest.key.revision=sha(input.payloadBytes);input.manifest.payloadFile.sha256=sha(input.payloadBytes);input.manifest.payloadFile.identity.size=input.payloadBytes.byteLength;
+  for(const artifact of input.artifacts)artifact.materials={...input.manifest.key};
+  const unavailable=assembleCanonicalBundle(input);
+  assert.deepEqual(unavailable.processing.transcriptStatus,{state:"unavailable"});
+  setSealedWarnings(input,[{code:"transcript-unavailable"}]);
+  const failed=assembleCanonicalBundle(input);
+  assert.deepEqual(failed.processing.transcriptStatus,{state:"unavailable"});
+  assert.deepEqual(failed.processing.warnings,[{kind:"transcriptUnavailable"}]);
+});
 
 test("standard original ink persists exact projection and publishes its sealed source document", async () => {
   const { planStandardVisual, finishStandardVisual } = await import("../../dist/backend/host/capture2/standard-visual.js");
@@ -1915,4 +1932,24 @@ test("standard original ink persists exact projection and publishes its sealed s
       }
     }
   } finally { await rm(root, { recursive: true, force: true }); }
+});
+
+test("sealed transcript text and segment count are independent; failures cannot be caller invented", async()=>{
+  for(const mode of ["untimed","segment-only","empty"] as const){
+    const input=await fixture();
+    const payload=JSON.parse(new TextDecoder().decode(input.payloadBytes));
+    const doc=JSON.parse(new TextDecoder().decode(input.facts.transcript!.bytes));
+    if(mode==="untimed") doc.segments=[];
+    else { doc.text=""; if(mode==="empty") doc.segments[0].text=""; }
+    const content=bytes(doc),seal=sealed(input.facts.transcript!.file.relativePath,content,"transcript-status-inode");
+    input.facts.transcript={file:{relativePath:seal.relativePath,identity:seal.identity,sha256:seal.sha256},bytes:content};
+    payload.files=payload.files.map((file:{relativePath:string})=>file.relativePath===seal.relativePath?input.facts.transcript!.file:file);
+    input.payloadBytes=bytes(payload);setSealedWarnings(input,[]);
+    const status=assembleCanonicalBundle(input).processing.transcriptStatus;
+    assert.deepEqual(status,{state:"collected",content:mode==="empty"?"empty":"nonempty",segmentCount:doc.segments.length});
+    input.processingWarnings=[{kind:"transcriptUnavailable"}];
+    assert.throws(()=>assembleCanonicalBundle(input),/original sealed materials/);
+    input.processingWarnings=[];setSealedWarnings(input,[{code:"transcript-unavailable"}]);
+    assert.throws(()=>assembleCanonicalBundle(input),/contradicts collected/);
+  }
 });
