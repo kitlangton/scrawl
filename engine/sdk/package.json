@@ -1,6 +1,6 @@
 {
   "name": "@apparent/engine-sdk",
-  "version": "0.4.3",
+  "version": "0.4.4",
   "private": true,
   "type": "module",
   "files": ["dist", "README-media2.md", "README-recovery.md"],
