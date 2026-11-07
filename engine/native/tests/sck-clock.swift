@@ -161,7 +161,7 @@ func decodedColorSpace(_ pixel: CVPixelBuffer) -> CGColorSpace? {
   guard let attachment = propagated?[kCVImageBufferCGColorSpaceKey as String]
     ?? local?[kCVImageBufferCGColorSpaceKey as String] else { return nil }
   let value = attachment as CFTypeRef
-  guard CFGetTypeID(value) == CGColorSpaceGetTypeID() else { return nil }
+  guard CFGetTypeID(value) == CGColorSpace.typeID else { return nil }
   let space = unsafeBitCast(value, to: CGColorSpace.self)
   guard space.model == .rgb, space.numberOfComponents == 3 else { return nil }
   return space
