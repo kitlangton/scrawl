@@ -50,6 +50,8 @@ test("invalid server, scope, public key, code and timeout are rejected before HT
       assert.throws(() => requestDevicePoll({ approvedServer: origin, deviceCode }), failure("invalid_request"));
     for (const timeoutMs of [0, -1, 30_001, NaN])
       await assert.rejects(requestDevicePoll({ approvedServer: origin, deviceCode: "valid", timeoutMs }), failure("invalid_request"));
+    for (const signal of [null, {}, { aborted: false }] as unknown as AbortSignal[])
+      await assert.rejects(requestDevicePoll({ approvedServer: origin, deviceCode: "valid", signal }), failure("invalid_request"));
     const aborted = new AbortController(); aborted.abort();
     await assert.rejects(requestDevicePoll({ approvedServer: origin, deviceCode: "valid", signal: aborted.signal }), failure("cancelled"));
   });
@@ -63,9 +65,9 @@ test("options are detached before awaiting and active is checked around network 
     requestPath = req.url!; for await (const chunk of req) requestBody += chunk.toString(); arrived();
     await new Promise(resolve => setTimeout(resolve, 15)); respond(res);
   }, async origin => {
-    const options: { approvedServer: string; scope: "read" | "upload"; timeoutMs: number } = { approvedServer: origin, scope: "read", timeoutMs: 2000 };
     const active = { value: true };
-    const pending = requestDeviceStart({ ...options, active: () => active.value });
+    const options: { approvedServer: string; scope: "read" | "upload"; timeoutMs: number; active: () => boolean } = { approvedServer: origin, scope: "read", timeoutMs: 2000, active: () => active.value };
+    const pending = requestDeviceStart(options);
     await seen; options.approvedServer = `${origin}/connect`; options.scope = "upload"; active.value = false;
     await assert.rejects(pending, failure("cancelled"));
   });

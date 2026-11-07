@@ -31,15 +31,14 @@ async function post(path: "/v1/device/start" | "/v1/device/poll", serverInput: s
   const server = normalizeRecipientServer(serverInput);
   const timeout = timeoutInput ?? 30_000;
   if (!validTimeout(timeout)) fail("invalid_request");
-  if (signal !== undefined && (typeof signal !== "object" || typeof signal.aborted !== "boolean")) fail("invalid_request");
+  if (signal !== undefined && (signal === null || typeof signal !== "object" || typeof signal.aborted !== "boolean" || typeof signal.addEventListener !== "function" || typeof signal.removeEventListener !== "function")) fail("invalid_request");
   if (active !== undefined && typeof active !== "function") fail("invalid_request");
   const request = new TextEncoder().encode(JSON.stringify(payload));
   const controller = new AbortController();
   let responseBody: ReadableStream<Uint8Array> | null = null;
-  let requestBytes: Uint8Array | undefined = request;
   let responseBytes: Uint8Array | undefined;
   let timer: ReturnType<typeof setTimeout> | undefined;
-  let callerSignal: AbortSignal | undefined = signal;
+  const callerSignal = signal;
   const abort = () => controller.abort("caller");
   const check = () => {
     if (controller.signal.aborted) fail(controller.signal.reason === "deadline" ? "timeout" : "cancelled");
@@ -85,7 +84,7 @@ async function post(path: "/v1/device/start" | "/v1/device/poll", serverInput: s
   } finally {
     if (timer !== undefined) clearTimeout(timer);
     callerSignal?.removeEventListener("abort", abort);
-    requestBytes?.fill(0); responseBytes?.fill(0);
+    request.fill(0); responseBytes?.fill(0);
     if (responseBody && !responseBody.locked) { try { await responseBody.cancel(); } catch { /* category-only error surface */ } }
     controller.abort();
   }
