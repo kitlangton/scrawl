@@ -21,4 +21,10 @@ export GST_PLUGIN_SYSTEM_PATH=
 export GST_REGISTRY=/dev/null
 export GST_REGISTRY_1_0=/dev/null
 export GST_REGISTRY_FORK=no
+export PIPEWIRE_MODULE_DIR="$root/pipewire"
+export SPA_PLUGIN_DIR="$root/spa"
+export PIPEWIRE_CONFIG_DIR="$root/pipewire-config"
+export PIPEWIRE_CONFIG_NAME=client.conf
+export PIPEWIRE_CONFIG_PREFIX=
+unset PIPEWIRE_NO_CONFIG
 exec "$root/libexec/apparent-engine-capture" "$@"

@@ -12,6 +12,12 @@ Launch with `--runtime-directory DIR --capture-channel capture
 --capture-protocol-version 2`. Provision a persistent private 0700 runtime root.
 No PATH lookup, Node, npm or Cargo is needed at runtime.
 
+The producer also stages the PipeWire GStreamer plugin, the unchanged standard
+vendor client configuration, its six client modules and two SPA factories.
+The launcher pins their configuration/module/plugin directories inside the sealed
+payload, while retaining the caller's Wayland and session-bus authority. This
+runtime closure alone does not enable or qualify a Wayland capture source.
+
 Capture/2's supported retained-material path is
 `<canonical-private-runtime>/capture-v2/materials/<original-captureId>`.
 SDK0.4.4's public `capture2MaterialsRoot(runtimeDirectory, captureId)` derives this
