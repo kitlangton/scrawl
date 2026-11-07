@@ -30,6 +30,7 @@ import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-trans
 import { sealCapture } from "../../src/sender/seal.ts";
 import { publishEncryptedSpool } from "../../src/sender/spool-publication.ts";
 import { commitEncryptedSpool } from "../../src/sender/spool-commit.ts";
+import { admitQueuedUpload } from "../../src/queue/admission-store.ts";
 import { retireQueuedJob } from "../../src/queue/prune.ts";
 import { withStateQueue } from "../../src/state/queue-transaction.ts";
 import { stateFileStamp } from "../../src/state/credential-files.ts";
@@ -247,6 +248,51 @@ test("native upload worker spans spool recovery and transfer with independent qu
     assert.equal(await readFile(path.join(originalBundle, "summary.md"), "utf8"), "keep original");
 
   } finally { borrowed.forEach(bytes => bytes.fill(0)); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
+}));
+
+test("native admission applies reuse cancellation retirement and expected-absent creation", async () => fixture(async root => {
+  const server = "https://connect.example/connect", generation = "b".repeat(32), first = "a".repeat(32), next = "c".repeat(32);
+  const bundle = path.join(root, "original.apparent"), alias = path.join(root, "bundle-alias");
+  await mkdir(bundle, { mode: 0o755 }); await writeFile(path.join(bundle, "apparent.json"), "{}", { mode: 0o644 });
+  await symlink(bundle, alias);
+  const credential = JSON.stringify({ server, scope: "upload", token: "synthetic-upload-token", generation });
+  await writeFile(path.join(root, "upload.credential"), credential, { mode: 0o600 });
+  await writeFile(path.join(root, "config.json"), "synthetic-unrelated-config", { mode: 0o600 });
+  let time = 100;
+  const input = { directory: root, approvedServer: server, bundle: alias, candidateId: first, intent: "automatic-private" as const,
+    readSettings: async () => ({ enabled: true, server, encryptionEnabled: false, sharingEnabled: true, nowSeconds: time++, retentionSeconds: 1000 }) };
+  let replacements = 0;
+  const ports = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+    async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
+      const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+      if (contender.state === "acquired") await contender.lease.release();
+      assert.equal(contender.state, "busy", "admission retains the actual queue lease");
+      replacements++; return resources.replaceFile(...args);
+    } };
+  assert.equal((await admitQueuedUpload(input, ports)).state, "admitted");
+  const initialBytes = await readFile(path.join(root, `${first}.job`));
+  const initialJob = decodeJob(initialBytes);
+  assert.equal(initialJob.bundle, await realpath(bundle)); assert.equal(initialJob.status, "pending"); assert.equal(initialJob.generation, generation);
+  const reused = await admitQueuedUpload({ ...input, candidateId: next }, ports);
+  assert.equal(reused.state, "reusable"); if (reused.state === "reusable") assert.equal(reused.id, first);
+  assert.equal(replacements, 1);
+  await link(path.join(root, `${first}.job`), path.join(root, "retained-pending-alias"));
+  const fresh = await admitQueuedUpload({ ...input, candidateId: next, intent: "explicit-private" }, ports);
+  assert.equal(fresh.state, "admitted"); assert.deepEqual(fresh.cancelledJobIds, [first]); assert.deepEqual(fresh.retiredJobIds, [first]);
+  await assert.rejects(lstat(path.join(root, `${first}.job`)), { code: "ENOENT" });
+  assert.deepEqual(await readFile(path.join(root, "retained-pending-alias")), initialBytes);
+  const publicId = "d".repeat(32), privateBefore = await readFile(path.join(root, `${next}.job`));
+  assert.equal((await admitQueuedUpload({ ...input, candidateId: publicId, intent: "public-copy" }, ports)).state, "admitted");
+  const shared = decodeJob(await readFile(path.join(root, `${publicId}.job`)));
+  assert.equal(shared.status, "awaiting_share"); assert.equal(shared.shared, true); assert.equal(shared.encrypted, false);
+  assert.deepEqual(await readFile(path.join(root, `${next}.job`)), privateBefore);
+  const orphan = "e".repeat(32); await mkdir(path.join(root, `${orphan}.sealed`), { mode: 0o700 });
+  const before = replacements;
+  assert.equal((await admitQueuedUpload({ ...input, candidateId: orphan }, ports)).state, "refused");
+  assert.equal(replacements, before);
+  assert.equal(await readFile(path.join(bundle, "apparent.json"), "utf8"), "{}");
+  assert.equal(await readFile(path.join(root, "upload.credential"), "utf8"), credential);
+  assert.equal(await readFile(path.join(root, "config.json"), "utf8"), "synthetic-unrelated-config");
 }));
 
 test("native queue snapshot uses the stable lease and preserves private job data", async () => fixture(async root => {
