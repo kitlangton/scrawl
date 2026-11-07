@@ -21,34 +21,41 @@ const assertFence = (fence: RevocationFence, signal?: AbortSignal) => {
  * or authorize any caller; the host must supply an admitted directory and fence. */
 export async function publishRevocationIntent(directoryPath: string, logout: boolean, fence: RevocationFence,
   resources: RevocationIntentResources, options: { signal?: AbortSignal } = {}): Promise<RevocationPublishResult> {
+  const signal = options.signal;
   const name = `revocation-${randomBytes(16).toString("hex")}.intent`;
   if (typeof logout !== "boolean") return { state: "refused", name };
   let admitted: Awaited<ReturnType<typeof admitTrustedDirectory>> | undefined;
   let dispatched = false;
   try {
-    assertFence(fence, options.signal);
-    admitted = await admitTrustedDirectory(directoryPath, resources, "private-state", options.signal);
-    assertFence(fence, options.signal);
+    assertFence(fence, signal);
+    admitted = await admitTrustedDirectory(directoryPath, resources, "private-state", signal);
+    assertFence(fence, signal);
     if (!await samePathFd(admitted)) return { state: "refused", name };
     // The guarded port is the only route to native dispatch. Keep both the
     // admitted root descriptor and caller fence alive until it returns.
     const guarded: RevocationIntentResources = {
       checkAcl: resources.checkAcl.bind(resources),
       async replaceFile(parent, source, destination, expected, replaceOptions) {
-        assertFence(fence, options.signal);
-        if (destination !== name || expected.destination !== null || !await samePathFd(admitted!)) return { state: "refused" };
-        assertFence(fence, options.signal);
+        try {
+          assertFence(fence, signal);
+          if (destination !== name || expected.destination !== null || !await samePathFd(admitted!)) throw new Error();
+          assertFence(fence, signal);
+        } catch {
+          await parent.close().catch(() => {});
+          return { state: "refused" };
+        }
         dispatched = true;
         return resources.replaceFile(parent, source, destination, expected, {
           ...replaceOptions,
-          signal: AbortSignal.any([fence.signal, ...(options.signal ? [options.signal] : [])]),
+          signal: AbortSignal.any([fence.signal, ...(signal ? [signal] : [])]),
         });
       },
     };
-    const result = await replacePrivateStateFile(admitted.path, name, Buffer.from(JSON.stringify(logout)), null, fence, guarded, options);
-    assertFence(fence, options.signal);
+    const result = await replacePrivateStateFile(admitted.path, name, Buffer.from(JSON.stringify(logout)), null, fence, guarded, { signal });
+    if (result.state === "publication_uncertain") return { state: "uncertain", name };
+    assertFence(fence, signal);
     if (!await samePathFd(admitted)) return { state: result.state === "committed" ? "uncertain" : "refused", name };
-    return { state: result.state === "publication_uncertain" ? "uncertain" : result.state === "committed" ? "committed" : "refused", name };
+    return { state: result.state === "committed" ? "committed" : "refused", name };
   } catch {
     return { state: dispatched ? "uncertain" : "refused", name };
   } finally { await admitted?.handle.close().catch(() => {}); }

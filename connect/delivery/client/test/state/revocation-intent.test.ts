@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 
-import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { publishRevocationIntent, readRevocationIntentsWithinLease, type RevocationIntentResources, type RevocationFence } from "../../src/account/revocation-intent.ts";
@@ -147,4 +147,34 @@ test("unsafe ACL evidence fails closed", () => fixture(async root => {
     const denied = { ...p, async checkAcl(handle: import("node:fs/promises").FileHandle) { await handle.close(); return { state: "refused" as const }; } };
     await assert.rejects(readRevocationIntentsWithinLease(d, lease(), denied));
   } finally { await d.handle.close(); }
+}));
+
+test("root replacement cannot turn an uncertain native result into refusal", () => fixture(async root => {
+  const previous = `${root}-uncertain`;
+  try {
+    const p = resources(root, async parent => {
+      await parent.close(); await rename(root, previous); await mkdir(root, { mode: 0o700 });
+      return { state: "publication_uncertain" };
+    });
+    assert.equal((await publishRevocationIntent(root, true, fence(), p)).state, "uncertain");
+    assert.ok((await readdir(previous)).some(name => name.startsWith(".connect-stage-")));
+  } finally { await rm(previous, { recursive: true, force: true }); }
+}));
+
+
+test("fence failures release every transferred root descriptor", { skip: process.platform !== "linux" }, () => fixture(async root => {
+  // Sweep the fence checkpoints, including the guarded handoff, without relying
+  // on its current call count or a timer race. This is Linux descriptor evidence.
+  const openRoots = async () => {
+    const names = await readdir("/proc/self/fd");
+    const targets = await Promise.all(names.map(name => readlink(`/proc/self/fd/${name}`).catch(() => "")));
+    return targets.filter(target => target === root).length;
+  };
+  for (let failAt = 1; failAt <= 16; failAt++) {
+    let calls = 0;
+    const p = resources(root, async parent => { await parent.close(); return { state: "refused" }; });
+    await publishRevocationIntent(root, true, { signal: new AbortController().signal,
+      assertHeld() { if (++calls === failAt) throw new Error("fixture fence lost"); } }, p);
+    assert.equal(await openRoots(), 0, `fence checkpoint ${failAt} must not leak a root descriptor`);
+  }
 }));
