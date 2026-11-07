@@ -158,9 +158,12 @@ func cgImageFromBGRA(_ bytes: Data, width: Int, height: Int, stride: Int, space:
 func decodedColorSpace(_ pixel: CVPixelBuffer) -> CGColorSpace? {
   let propagated = CVBufferCopyAttachments(pixel, .shouldPropagate) as NSDictionary?
   let local = CVBufferCopyAttachments(pixel, .shouldNotPropagate) as NSDictionary?
-  guard let space = (propagated?[kCVImageBufferCGColorSpaceKey as String]
-    ?? local?[kCVImageBufferCGColorSpaceKey as String]) as? CGColorSpace,
-        space.model == .rgb, space.numberOfComponents == 3 else { return nil }
+  guard let attachment = propagated?[kCVImageBufferCGColorSpaceKey as String]
+    ?? local?[kCVImageBufferCGColorSpaceKey as String] else { return nil }
+  let value = attachment as CFTypeRef
+  guard CFGetTypeID(value) == CGColorSpaceGetTypeID() else { return nil }
+  let space = unsafeBitCast(value, to: CGColorSpace.self)
+  guard space.model == .rgb, space.numberOfComponents == 3 else { return nil }
   return space
 }
 
@@ -322,7 +325,7 @@ func readback(root: URL, strictCorrespondence: Bool) async throws {
     if let frameColorSpace {
       if let firstDecodedColorSpace {
         decodedProfileStable = decodedProfileStable
-          && CGColorSpaceEqualToColorSpace(firstDecodedColorSpace, frameColorSpace)
+          && CFEqual(firstDecodedColorSpace, frameColorSpace)
       } else {
         firstDecodedColorSpace = frameColorSpace
       }
