@@ -362,7 +362,7 @@ test("RecordClient pill presents transient text readback without claiming owners
   assert.equal(before.actions.find(action => action.id === "copy")?.label, "Copy handoff");
   assert.equal(before.notice, "Saved locally");
   await host.act(before.revision, "copy");
-  assert.equal((await host.read())!.notice, "Handoff text written and read back");
+  assert.equal((await host.read())!.notice, "Handoff submitted; matching clipboard text observed");
   assert.equal(fixture.commands.length, 1);
   fixture.emit({ ...fixture.value(), revision: 6, captures: [{ ...fixture.value().captures[0]!, artifactId: "replacement-artifact" }] });
   assert.equal((await host.read())!.notice, "Saved locally", "prior artifact receipt does not prove replacement copied");

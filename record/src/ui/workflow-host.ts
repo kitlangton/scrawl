@@ -171,7 +171,7 @@ function presentClient(value: CapabilitySnapshot, revision: number, options: Rec
   ]; }
   if (active?.phase === "unknown") result.actions = [{ id: "inspect", label: "Check status", enabled: true, selected: false, primary: true }];
   if (saved) {
-    result.notice = confirmedCopy(saved) ? saved.outcomes.some(outcome => outcome.kind === "copy" && "evidence" in outcome && outcome.evidence === "native-text-readback" && outcome.artifactId === saved.artifactId) ? "Handoff text written and read back" : "Handoff copied" : "Saved locally";
+    result.notice = confirmedCopy(saved) ? saved.outcomes.some(outcome => outcome.kind === "copy" && "evidence" in outcome && outcome.evidence === "native-text-readback" && outcome.artifactId === saved.artifactId) ? "Handoff submitted; matching clipboard text observed" : "Handoff copied" : "Saved locally";
     result.pocket = { tone: result.warning ? "warning" : "info", title: "Local handoff", description: result.warning ?? "", actionIds: [] };
   }
   if (active?.delivery === "unknown" || active?.delivery === "local-only")

@@ -447,9 +447,12 @@ Supply the separate producer's `writeTextReadback` port, fresh native host,
 producer text limit and the same coordinator's authenticated `resolveHandoff`.
 Choose exactly one of `clipboard` and `clipboardTextReadback` per provider.
 A matching `written-readback` digest/UTF-8 length returns that distinct command
-status and `native-text-readback` copy evidence; the pill says “Handoff text
-written and read back”. This confirms transient supplied-text observation only,
-not exclusive/current/enduring ownership, paste or delivery. Unknown, malformed,
+status and `native-text-readback` copy evidence; the pill says “Handoff submitted; matching clipboard text observed”. This means
+the native backend accepted/queued the supplied-text write and a bounded
+independent native read returned matching UTF-8 bytes. Local submission is not
+compositor acknowledgement, and the observed bytes may be identical preexisting
+or foreign text; their origin from this operation is not established. It proves
+neither exclusive/current/enduring ownership nor paste or delivery. Unknown, malformed,
 legacy applied replies on this separate port and identity mismatches remain
 unknown without retry. The old applied/native-write-readback path is unchanged.
 
