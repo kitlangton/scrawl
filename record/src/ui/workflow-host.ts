@@ -174,7 +174,12 @@ function presentClient(value: CapabilitySnapshot, revision: number, options: Rec
   if (saved) {
     const initialGap = saved.warnings?.find(warning => warning.kind === "audioInitialGap");
     if (initialGap) result.warning = result.warning ? result.warning + "; " + audioInitialGapText(initialGap.atMs) : audioInitialGapText(initialGap.atMs);
-    result.notice = confirmedCopy(saved) ? saved.outcomes.some(outcome => outcome.kind === "copy" && "evidence" in outcome && outcome.evidence === "native-text-readback" && outcome.artifactId === saved.artifactId) ? "Handoff submitted; matching clipboard text observed" : "Handoff copied" : "Saved locally";
+    const baseNotice = confirmedCopy(saved) ? saved.outcomes.some(outcome => outcome.kind === "copy" && "evidence" in outcome && outcome.evidence === "native-text-readback" && outcome.artifactId === saved.artifactId) ? "Handoff submitted; matching clipboard text observed" : "Handoff copied" : "Saved locally";
+    const status = saved.transcriptStatus;
+    const transcriptNotice = status?.state === "unavailable" ? "Transcript unavailable"
+      : status?.state === "collected" ? status.content === "empty" ? "Transcript collected; no words" : `Transcript collected; ${status.segmentCount} segments` : undefined;
+    result.notice = transcriptNotice ? `${baseNotice} · ${transcriptNotice}` : baseNotice;
+    if (saved.warnings?.some(warning => warning.kind === "transcriptUnavailable") && !initialGap) result.warning = "Transcript unavailable";
     result.pocket = { tone: result.warning ? "warning" : "info", title: "Local handoff", description: result.warning ?? "", actionIds: [] };
   }
   if (active?.delivery === "unknown" || active?.delivery === "local-only")

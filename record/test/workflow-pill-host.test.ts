@@ -374,8 +374,13 @@ test("RecordClient pill presents transient text readback without claiming owners
 
  test("Saved pill displays the sealed initial audio gap without claiming recorded silence",async()=>{
   const fixture=recordClientFixture();const host=createRecordClientPillHost(fixture.client,{createRequestId:()=>"gap-copy"});
-  fixture.emit({...fixture.value(),revision:4,captures:[{captureId:"saved-gap",artifactId:"artifact-gap",phase:"saved",delivery:"unknown",outcomes:[{kind:"save",ok:true,at:"now"}],warnings:[{kind:"audioInitialGap",atMs:125}]}]});
-  const view=(await host.read())!;assert.equal(view.label,"Recording saved");assert.equal(view.notice,"Saved locally");
+  fixture.emit({...fixture.value(),revision:4,captures:[{captureId:"saved-gap",artifactId:"artifact-gap",phase:"saved",delivery:"unknown",transcriptStatus:{state:"collected",content:"nonempty",segmentCount:2},outcomes:[{kind:"save",ok:true,at:"now"}],warnings:[{kind:"audioInitialGap",atMs:125}]}]});
+  const view=(await host.read())!;assert.equal(view.label,"Recording saved");assert.equal(view.notice,"Saved locally · Transcript collected; 2 segments");
+  assert.match(view.warning!,/unobserved/u,"the audio-gap warning keeps priority over transcript status");
+  fixture.emit({...fixture.value(),revision:5,captures:[{captureId:"saved-empty",artifactId:"artifact-empty",phase:"saved",delivery:"unknown",transcriptStatus:{state:"collected",content:"empty",segmentCount:0},outcomes:[{kind:"save",ok:true,at:"now"}]}]});
+  assert.equal((await host.read())!.notice,"Saved locally · Transcript collected; no words");
+  fixture.emit({...fixture.value(),revision:6,captures:[{captureId:"saved-unavailable",artifactId:"artifact-unavailable",phase:"saved",delivery:"unknown",transcriptStatus:{state:"unavailable"},warnings:[{kind:"transcriptUnavailable"}],outcomes:[{kind:"save",ok:true,at:"now"}]}]});
+  assert.equal((await host.read())!.notice,"Saved locally · Transcript unavailable");
   assert.match(view.warning!,/\[0, 125 ms\).*unobserved.*padded with zeros.*not recorded silence/);assert.equal(view.pocket?.tone,"warning");
   disposeWorkflowPillHost(host);
  });

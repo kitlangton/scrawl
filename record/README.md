@@ -476,6 +476,22 @@ sample-clock mapping before real voice acceptance. Accepted-stroke collections
 still require explicit richer policy and a native collector/surface transform;
 no annotation authority or render availability is inferred from DTOs or RGB.
 
+Canonical assembly also records optional `ProcessingInput.transcriptStatus`
+from the original SDK-validated transcript document and collection declaration:
+`{ state: "collected", content: "empty"|"nonempty", segmentCount }` or
+`{ state: "unavailable" }`. It contains counts only, no transcript text or
+private paths. The existing publication binding persists this metadata with
+the original output request; public `CaptureFact.transcriptStatus` appears only
+after the same artifact has an authenticated Saved receipt, including after
+restart. Older bindings omit it and remain unknown. The Record pill reports
+collected segments, collected-empty, or unavailable alongside Saved while
+keeping copy confirmation and the sealed initial-audio-gap warning intact.
+Before Saved, the pill reports only generic processing; this metadata does not
+represent live transcription progress. A sealed `transcript-unavailable`
+warning is exposed as a fixed warning only when present in original materials.
+This is assembly/publication consumer support, not native microphone or
+transcription readiness.
+
 A native `audio-initial-gap` warning with an explicit first-sample `atMs` is
 mapped only from the SDK-validated original materials into a persisted
 `audioInitialGap` processing warning. Summary and handoff say `[0, atMs)` was
