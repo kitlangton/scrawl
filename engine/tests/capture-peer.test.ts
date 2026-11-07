@@ -555,10 +555,7 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.equal(callerStatus.startDispatches, 1, "the dedicated caller dispatches Start exactly once");
     assert.equal(callerStatus.stopDispatches, 1, "the dedicated caller dispatches Stop exactly once");
     assert.equal(callerStatus.stopResponseDropped, true, "the transport adapter withheld the actual native Stop response");
-    assert.ok(
-      ["already-exited", "eof-exited", "exit-observed", "signal-exited", "kill-exited"].includes(callerStatus.closeOutcome),
-      "ordinary close reports an observed process exit, not an unobserved timeout signal",
-    );
+    assert.equal(callerStatus.closeOutcome, "eof-exited", "ordinary close exits through EOF without timeout signaling");
 
     // The caller's close result is not terminal authority. Reconnect and inspect
     // the same private tuple before validating or releasing any native material.

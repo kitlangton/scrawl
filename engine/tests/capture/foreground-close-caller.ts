@@ -48,7 +48,18 @@ class DropStopResponseTransport implements CaptureTransport {
         ) {
           throw new Error("foreground close fixture refused a non-original Stop");
         }
-        await this.native.request(request, timeoutMs);
+        const response = await this.native.request(request, timeoutMs);
+        const result = response.result;
+        if (
+          response.error !== undefined ||
+          !result ||
+          typeof result !== "object" ||
+          Array.isArray(result) ||
+          !("state" in result) ||
+          !["stopping", "materials-ready"].includes(String(result.state))
+        ) {
+          throw new Error("foreground close fixture did not receive an accepted native Stop");
+        }
         this.stopResponseDropped = true;
         throw new Error("foreground close fixture withheld the Stop response");
       }
