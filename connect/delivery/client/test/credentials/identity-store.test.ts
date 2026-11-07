@@ -4,7 +4,7 @@ import { access, chmod, lstat, mkdtemp, readFile, realpath, rename, rm, writeFil
 import os from "node:os";
 import path from "node:path";
 import type { FileHandle } from "node:fs/promises";
-import { generateStoredIdentityRecord } from "../../src/credentials/recipient-identity.ts";
+import { generateStoredIdentityRecord, StoredIdentityError } from "../../src/credentials/recipient-identity.ts";
 import { publishLoginIdentity, type LoginIdentityResources } from "../../src/credentials/identity-store.ts";
 
 const id = "a".repeat(32), server = "https://sync.example";
@@ -110,4 +110,35 @@ test("login, cancellation, queue inode and record changes during dispatch never 
     await rm(path.join(f.root, "queue.lock"), { force: true }); await rm(path.join(f.root, "queue.old"), { force: true });
     await rm(path.join(f.root, `${id}.identity`), { force: true });
   }
+}));
+
+test("resource methods may live on the installed provider prototype", async () => fixture(async f => {
+  const proposal = await generated();
+  try {
+    const inherited = Object.create(f.resources()) as LoginIdentityResources;
+    assert.equal((await publishLoginIdentity(f.root, context(), proposal.privateRecord, inherited)).state, "published");
+  } finally { proposal.privateRecord.fill(0); }
+}));
+
+test("valid legacy identity JSON whitespace and field order remain readable without replacement", async () => fixture(async f => {
+  const winner = await generated(), proposal = await generated();
+  try {
+    const record = JSON.parse(new TextDecoder().decode(winner.privateRecord));
+    const legacy = JSON.stringify({ signing: record.signing, age: record.age, version: record.version }, null, 2) + "\n";
+    await f.put(`${id}.identity`, legacy);
+    const result = await publishLoginIdentity(f.root, context(), proposal.privateRecord, f.resources());
+    assert.equal(result.state, "existing"); assert.deepEqual(result.publicKey, winner.publicKey);
+    assert.equal(await readFile(path.join(f.root, `${id}.identity`), "utf8"), legacy);
+  } finally { winner.privateRecord.fill(0); proposal.privateRecord.fill(0); }
+}));
+
+
+test("pre-publication failures expose no resource exception content", async () => fixture(async f => {
+  const proposal = await generated();
+  try {
+    await assert.rejects(publishLoginIdentity(f.root, context(), proposal.privateRecord, f.resources({
+      async checkAcl(handle) { await handle.close(); throw new Error("private host diagnostic /secret/path"); },
+    })), error => error instanceof StoredIdentityError && error.category === "encryption_identity_unavailable"
+      && error.message === "encryption_identity_unavailable" && !String(error).includes("secret"));
+  } finally { proposal.privateRecord.fill(0); }
 }));

@@ -35,6 +35,8 @@ import { retireQueuedJob, resumeQueuedRetirement } from "../../src/queue/prune.t
 import { withStateQueue } from "../../src/state/queue-transaction.ts";
 import { stateFileStamp } from "../../src/state/credential-files.ts";
 import { retryQueuedUploads, RetryError } from "../../src/queue/retry.ts";
+import { generateStoredIdentityRecord } from "../../src/credentials/recipient-identity.ts";
+import { publishLoginIdentity } from "../../src/credentials/identity-store.ts";
 import { prepareRevocationState } from "../../src/account/revocation-prepare.ts";
 import { publishRevocationIntent, readRevocationIntentsWithinLease } from "../../src/account/revocation-intent.ts";
 import { runUploadWorkerOnce } from "../../src/queue/worker.ts";
@@ -168,6 +170,65 @@ test("native revocation preparation does not remove logins after an uncertain ep
   assert.equal(result.state, "uncertain"); assert.equal(calls, 1);
   assert.equal(await readFile(path.join(root, "read.login"), "utf8"), JSON.stringify("retained-login"));
   assert.equal(await readFile(path.join(root, intent.name), "utf8"), "false");
+}));
+
+test("native login identity publication keeps the queue fence and existing legacy identity", async () => fixture(async root => {
+  const server = "https://app.tryapparent.com/connect";
+  await writeFile(path.join(root, "cancellation"), JSON.stringify("epoch"), { mode: 0o600 });
+  await writeFile(path.join(root, "config.json"), "synthetic config unchanged", { mode: 0o600 });
+  for (const [scope, id] of [["read", "1".repeat(32)], ["upload", "2".repeat(32)]] as const) {
+    await writeFile(path.join(root, `${scope}.login`), JSON.stringify(id), { mode: 0o600 });
+    const proposal = await generateStoredIdentityRecord(), other = await generateStoredIdentityRecord();
+    try {
+      let calls = 0;
+      const guarded = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+        async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
+          calls++;
+          const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+          if (contender.state === "acquired") await contender.lease.release();
+          assert.equal(contender.state, "busy", "identity publication must hold the real queue lease");
+          assert.equal(args[3].destination, null, "identity publication must never overwrite");
+          return resources.replaceFile(...args);
+        } };
+      const context = { scope, approvedServer: server, loginId: id, cancellation: "epoch" };
+      const result = await publishLoginIdentity(root, context, proposal.privateRecord, guarded);
+      assert.equal(result.state, "published"); if (result.state === "uncertain") return;
+      assert.deepEqual(result.publicKey, proposal.publicKey); assert.equal("privateRecord" in result, false);
+      const file = path.join(root, `${id}.identity`);
+      assert.deepEqual(await readFile(file), Buffer.from(proposal.privateRecord)); mode((await lstat(file)).mode, 0o600, "identity");
+      const decoded = JSON.parse(new TextDecoder().decode(proposal.privateRecord));
+      const legacy = JSON.stringify({ signing: decoded.signing, age: decoded.age, version: 1 }, null, 2) + "\n";
+      await writeFile(file, legacy, { mode: 0o600 }); await link(file, path.join(root, `${id}.alias`));
+      const existing = await publishLoginIdentity(root, context, other.privateRecord, resources);
+      assert.equal(existing.state, "existing"); if (existing.state === "uncertain") return;
+      assert.deepEqual(existing.publicKey, proposal.publicKey); assert.equal(await readFile(file, "utf8"), legacy);
+      assert.equal(calls, 1); assert.equal((await lstat(file)).ino, (await lstat(path.join(root, `${id}.alias`))).ino);
+      await writeFile(file, "damaged", { mode: 0o600 });
+      await assert.rejects(publishLoginIdentity(root, context, other.privateRecord, resources), { category: "encryption_identity_unavailable" });
+      assert.equal(await readFile(file, "utf8"), "damaged");
+    } finally { proposal.privateRecord.fill(0); other.privateRecord.fill(0); }
+  }
+  assert.equal(await readFile(path.join(root, "config.json"), "utf8"), "synthetic config unchanged");
+}));
+
+test("native identity uncertainty retains private bytes and never exposes an approval key", async () => fixture(async root => {
+  const id = "3".repeat(32), server = "https://app.tryapparent.com/connect";
+  await writeFile(path.join(root, "read.login"), JSON.stringify(id), { mode: 0o600 });
+  const proposal = await generateStoredIdentityRecord(); let calls = 0;
+  try {
+    const guarded = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+      async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
+        calls++; assert.equal((await resources.replaceFile(...args)).state, "replaced"); return { state: "publication_uncertain" as const };
+      } };
+    const context = { scope: "read" as const, approvedServer: server, loginId: id, cancellation: null };
+    const result = await publishLoginIdentity(root, context, proposal.privateRecord, guarded);
+    assert.deepEqual(result, { state: "uncertain", identityId: id }); assert.equal("publicKey" in result, false);
+    assert.equal(calls, 1); assert.deepEqual(await readFile(path.join(root, `${id}.identity`)), Buffer.from(proposal.privateRecord));
+    await writeFile(path.join(root, "cancellation"), JSON.stringify("changed"), { mode: 0o600 });
+    await assert.rejects(publishLoginIdentity(root, context, proposal.privateRecord, resources), { category: "encryption_identity_unavailable" });
+    await writeFile(path.join(root, "revocation-pending.intent"), "false", { mode: 0o600 });
+    await assert.rejects(publishLoginIdentity(root, { ...context, cancellation: "changed" }, proposal.privateRecord, resources), { category: "encryption_identity_unavailable" });
+  } finally { proposal.privateRecord.fill(0); }
 }));
 
 test("native upload worker spans spool recovery and transfer with independent queue access", async () => fixture(async root => {

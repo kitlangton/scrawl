@@ -655,6 +655,18 @@ Actual local Worker fixtures consume the generated public key for device enrollm
 and the decoded private record for encrypted root/grouped transfers on both API
 bases. This is synthetic protocol evidence, not durable or installed identity proof.
 
+The internal `publishLoginIdentity` seam privately publishes a supplied record
+only when its scope/login marker, cancellation epoch and current queue lease still
+match and no revocation intent is pending. It uses expected-absent replacement,
+then validates exact readback and the stored public binding before returning a
+key. An existing valid identity wins without rewriting, including supported JSON
+whitespace/order and data-hardlink aliases; damaged or unsafe files fail closed.
+Uncertainty exposes no approval key and never triggers retry. The caller's input
+bytes stay untouched; owned mutable copies are wiped. This seam changes no login
+markers, credentials or config and has no public writer export or live caller.
+Linux installed-provider tests cover these filesystem cases; installed Mac/ARM,
+full login publication and coordinated writer adoption remain separate gates.
+
 
 ## Anonymous device protocol transport
 

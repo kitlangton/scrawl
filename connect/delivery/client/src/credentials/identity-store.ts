@@ -5,7 +5,7 @@ import * as ed25519 from "@noble/ed25519";
 import { identityToRecipient } from "age-encryption";
 import { decodeStrictJson } from "../recipient/json.ts";
 import { validatePeerAuthorityKey, type PeerAuthorityKey } from "../recipient/peer-authority.ts";
-import { decodeStoredIdentityRecord, validateStoredIdentityRecord } from "./recipient-identity.ts";
+import { decodeStoredIdentityRecord, validateStoredIdentityRecord, StoredIdentityError, type StoredIdentityRecord } from "./recipient-identity.ts";
 import { pendingIntent, readCancellation, readStateEvidence, stateFileStamp } from "../state/credential-files.ts";
 import { samePathFd, withStateQueue, type NamespaceResources } from "../state/queue-transaction.ts";
 import { replacePrivateStateFile, type StateReplacementResources } from "../state/replacement.ts";
@@ -18,12 +18,7 @@ const MAX_RECORD = 4096;
 const fail = (): never => { throw new Error("identity_unavailable"); };
 const digest = (bytes: Uint8Array) => createHash("sha256").update(bytes).digest("hex");
 
-async function publicBinding(bytes: Uint8Array, signal?: AbortSignal): Promise<PeerAuthorityKey> {
-  const record = decodeStoredIdentityRecord(bytes);
-  const canonical = new TextEncoder().encode(JSON.stringify(record));
-  const canonicalMatch = canonical.length === bytes.length && canonical.every((byte, index) => byte === bytes[index]);
-  canonical.fill(0);
-  if (!canonicalMatch) return fail();
+async function publicBinding(record: StoredIdentityRecord, signal?: AbortSignal): Promise<PeerAuthorityKey> {
   let validated: Awaited<ReturnType<typeof validateStoredIdentityRecord>> | undefined;
   try {
     validated = await validateStoredIdentityRecord(record, { signal });
@@ -38,7 +33,9 @@ async function publicBinding(bytes: Uint8Array, signal?: AbortSignal): Promise<P
 export function publishLoginIdentity(directory: string, context: LoginIdentityContext, proposedPrivateRecord: Uint8Array,
   resources: LoginIdentityResources, options: { signal?: AbortSignal; lockTimeoutMs?: number } = {}): Promise<LoginIdentityResult | LoginIdentityUncertainty> {
   // Own the proposal before yielding; never mutate the caller's buffer.
-  const proposal = proposedPrivateRecord instanceof Uint8Array ? new Uint8Array(proposedPrivateRecord) : new Uint8Array();
+  if (!(proposedPrivateRecord instanceof Uint8Array) || proposedPrivateRecord.length === 0 || proposedPrivateRecord.length > MAX_RECORD)
+    return Promise.reject(new StoredIdentityError("encryption_identity_unavailable"));
+  const proposal = new Uint8Array(proposedPrivateRecord);
   const copiedContext = context && Object.freeze({ scope: context.scope, approvedServer: context.approvedServer, loginId: context.loginId, cancellation: context.cancellation });
   const copiedOptions = Object.freeze({ signal: options.signal, lockTimeoutMs: options.lockTimeoutMs });
   const identityId = typeof copiedContext?.loginId === "string" && /^[0-9a-f]{32}$/.test(copiedContext.loginId) ? copiedContext.loginId : "";
@@ -48,7 +45,7 @@ export function publishLoginIdentity(directory: string, context: LoginIdentityCo
     if ((ctx.scope !== "read" && ctx.scope !== "upload") || typeof ctx.approvedServer !== "string"
         || typeof copiedContext?.loginId !== "string" || !/^[0-9a-f]{32}$/.test(copiedContext.loginId)
         || proposal.length === 0 || proposal.length > MAX_RECORD) return fail();
-    await publicBinding(proposal, copiedOptions.signal);
+    await publicBinding(decodeStoredIdentityRecord(proposal), copiedOptions.signal);
     return withStateQueue(directory, ctx, resources, copiedOptions, async (state, lease) => {
       const name = `${identityId}.identity`;
       const fresh = async () => {
@@ -63,17 +60,18 @@ export function publishLoginIdentity(directory: string, context: LoginIdentityCo
       };
       if (!await fresh()) return fail();
       const existing = await readStateEvidence(state, name, MAX_RECORD, resources, copiedOptions.signal ?? lease.signal,
-        bytes => ({ bytes: new Uint8Array(bytes), key: undefined as PeerAuthorityKey | undefined }));
+        bytes => decodeStoredIdentityRecord(bytes));
       if (existing) {
-        let key: PeerAuthorityKey;
-        try { key = await publicBinding(existing.value.bytes, copiedOptions.signal); }
-        finally { existing.value.bytes.fill(0); }
+        const key = await publicBinding(existing.value, copiedOptions.signal);
         if (stateFileStamp(await lstat(existing.file, { bigint: true })) !== existing.expectedStamp || !await fresh()) return fail();
         return Object.freeze({ state: "existing", identityId, publicKey: key });
       }
       const expectedHash = digest(proposal);
-      const guarded: LoginIdentityResources = { ...resources, replaceFile: async (parent, source, destination, expected, nativeOptions) => {
-        if (destination !== name || expected.destination !== null || !await fresh()) {
+      const guarded: LoginIdentityResources = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+        replaceFile: async (parent, source, destination, expected, nativeOptions) => {
+        try {
+          if (destination !== name || expected.destination !== null || !await fresh()) throw new Error();
+        } catch {
           await parent.close().catch(() => {}); return { state: "refused" };
         }
         possiblyPublished = true;
@@ -83,17 +81,19 @@ export function publishLoginIdentity(directory: string, context: LoginIdentityCo
       if (outcome.state === "publication_uncertain") return Object.freeze({ state: "uncertain", identityId });
       if (outcome.state !== "committed") { possiblyPublished = false; return fail(); }
       const saved = await readStateEvidence(state, name, MAX_RECORD, resources, copiedOptions.signal ?? lease.signal,
-        bytes => ({ bytes: new Uint8Array(bytes), hash: digest(bytes) }));
+        bytes => ({ record: decodeStoredIdentityRecord(bytes), hash: digest(bytes) }));
       if (!saved) return Object.freeze({ state: "uncertain", identityId });
       let key: PeerAuthorityKey;
-      try { key = await publicBinding(saved.value.bytes, copiedOptions.signal); }
-      catch { saved.value.bytes.fill(0); return Object.freeze({ state: "uncertain", identityId }); }
-      saved.value.bytes.fill(0);
+      try { key = await publicBinding(saved.value.record, copiedOptions.signal); }
+      catch { return Object.freeze({ state: "uncertain", identityId }); }
       if (saved.value.hash !== expectedHash || stateFileStamp(await lstat(saved.file, { bigint: true })) !== saved.expectedStamp || !await fresh())
         return Object.freeze({ state: "uncertain", identityId });
       return Object.freeze({ state: "published", identityId, publicKey: key });
     });
   };
-  return run().catch(error => { if (possiblyPublished) return Object.freeze({ state: "uncertain", identityId }); throw error; })
+  return run().catch(() => {
+    if (possiblyPublished) return Object.freeze({ state: "uncertain", identityId });
+    throw new StoredIdentityError(copiedOptions.signal?.aborted ? "cancelled" : "encryption_identity_unavailable");
+  })
     .finally(() => proposal.fill(0));
 }
