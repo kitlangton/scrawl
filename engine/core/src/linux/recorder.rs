@@ -13,7 +13,7 @@ use gstreamer_app as gst_app;
 
 const FPS: u32 = 30;
 
-fn capture_elapsed_at_gst_pts(
+pub(super) fn capture_elapsed_at_gst_pts(
     sampled_capture_elapsed_ns: u128,
     sampled_gst_clock_ns: u64,
     pipeline_base_time_ns: u64,

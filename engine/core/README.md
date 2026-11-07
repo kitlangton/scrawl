@@ -206,3 +206,10 @@ transcription remain caller-owned; stream drop requests the existing Null state.
 This trusted-caller port does not advertise capture/2 microphone availability.
 The capture runtime still needs its audio plugin closure and authenticated audio
 material lifecycle before adopting it. No system-default source is changed.
+
+`Stream::start_with_clock` additionally accepts the original capture-admission
+Instant and reports each buffer segment running-time mapped through its active
+GStreamer clock. Missing/invalid timing refuses the buffer; callback arrival is
+not an audio offset. This is source pipeline timing, not hardware timestamp proof.
+Callers must also observe `error()` after first-sample readiness and retain WAV
+sample-clock continuity, durable failure and journal/seal authority themselves.
