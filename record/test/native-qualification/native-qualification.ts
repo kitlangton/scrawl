@@ -95,25 +95,100 @@ export async function reconcileAndCancel(mappings: any, client: any, deadline: n
 
 export const QUALIFICATION_IPC_SCHEMA = 'apparent.record-native-qualification/1';
 
-/** A native run cannot start until the supervisor can request and observe local owner drain. */
-export function assertQualificationShutdownProtocol(available: boolean): void {
-  if (!available) throw new Error('native qualification launch refused: the exact SDK 0.4.5 normal-close local-resource contract is not yet admitted for the owning capture client after explicit finish intent and borrower drain');
+export interface QualificationShutdownEvidence {
+  neverInjected?: boolean;
+  externalAdmissionClosed: boolean;
+  admission: string;
+  localDrain: string;
+  disposed: boolean;
+  borrowersDrained: boolean;
 }
 
-/** The native supervisor never kills an SDK-owning group without positive local clearance. */
+export function canReleaseQualificationRecoveryPeers(evidence: QualificationShutdownEvidence): boolean {
+  if (evidence.neverInjected === true) return true;
+  return evidence.externalAdmissionClosed && evidence.admission === 'closed' && evidence.localDrain === 'complete' && evidence.disposed && evidence.borrowersDrained;
+}
+
+export type QualificationCaptureCloseOutcome = 'already-exited' | 'eof-exited' | 'exit-observed' | 'signal-exited' | 'kill-exited' | 'signal-requested-after-timeout' | 'kill-requested-after-timeout';
+export type QualificationEndIntent = 'finish' | 'end' | 'interrupt' | undefined;
+
+export interface QualificationCaptureOwnerCloseInput extends QualificationShutdownEvidence {
+  endIntent: QualificationEndIntent;
+  mediaDispatchedOnCapturePeer: boolean;
+  publicationDispatchedOnCapturePeer: boolean;
+  close: () => Promise<QualificationCaptureCloseOutcome>;
+}
+
+export type QualificationCaptureOwnerCloseResult =
+  | { state: 'retained'; status: 3; reason: string }
+  | { state: 'ended'; status: 0; outcome: Exclude<QualificationCaptureCloseOutcome, 'signal-requested-after-timeout' | 'kill-requested-after-timeout'>; runtimeClearance: 'not-established' }
+  | { state: 'unknown'; status: 3; outcome: 'signal-requested-after-timeout' | 'kill-requested-after-timeout'; runtimeClearance: 'not-established' }
+  | { state: 'unknown'; status: 3; error: string; runtimeClearance: 'not-established' };
+
+function captureOwnerCloseRefusal(input: QualificationCaptureOwnerCloseInput): string | undefined {
+  if (!input.endIntent) return 'no explicit foreground finish/end/interrupt intent';
+  if (input.externalAdmissionClosed !== true || input.admission !== 'closed' || input.localDrain !== 'complete' || input.disposed !== true || input.borrowersDrained !== true)
+    return 'coordinator admission, local drain, disposal, or borrower drain is unresolved';
+  if (input.mediaDispatchedOnCapturePeer || input.publicationDispatchedOnCapturePeer) return 'capture-owning peer has processing/publication work';
+  return undefined;
+}
+
+/** Close only the dedicated foreground capture owner after explicit end intent and a positive local drain. */
+export async function closeQualificationCaptureOwner(input: QualificationCaptureOwnerCloseInput): Promise<QualificationCaptureOwnerCloseResult> {
+  const refusal = captureOwnerCloseRefusal(input);
+  if (refusal) return { state: 'retained', status: 3, reason: refusal };
+  try {
+    const outcome = await input.close();
+    if (outcome === 'signal-requested-after-timeout' || outcome === 'kill-requested-after-timeout') {
+      return { state: 'unknown', status: 3, outcome, runtimeClearance: 'not-established' };
+    }
+    switch (outcome) {
+      case 'already-exited': case 'eof-exited': case 'exit-observed': case 'signal-exited': case 'kill-exited':
+        return { state: 'ended', status: 0, outcome, runtimeClearance: 'not-established' };
+      default:
+        return { state: 'unknown', status: 3, error: 'unrecognized owning close outcome', runtimeClearance: 'not-established' };
+    }
+  } catch (error) {
+    return { state: 'unknown', status: 3, error: error instanceof Error ? error.message : String(error), runtimeClearance: 'not-established' };
+  }
+}
+
+/** Records whether the exact SDK 0.4.5 owning-close contract is present in the frozen consumer. */
+export function assertQualificationShutdownProtocol(available: boolean): void {
+  if (!available) throw new Error('native qualification launch refused: SDK 0.4.5 owning capture close was not validated');
+}
+
+export function assertNativeQualificationAdmission(admitted: boolean): void {
+  if (!admitted) throw new Error('native qualification launch refused: independent consumer review and separate native attempt/resource authorization are not admitted');
+}
+
+/** The supervisor never signals a qualification process group; native owner close stays inside the SDK contract. */
 export async function runQualification(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number; shutdownReportTimeout?: number; outputLimitBytes?: number }): Promise<{ stdout: string; stderr: string; shutdownReport?: unknown }> {
-  const child = spawn(command, args, { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  const runId = randomUUID();
+  const child = spawn(command, args, { cwd: options.cwd, env: { ...options.env, APPARENT_QUALIFICATION_RUN_ID: runId }, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
   let stdout = '', stderr = '', capturedBytes = 0, failure: Error | undefined, childExited = false, childExitCode: number | null = null, childExitSignal: NodeJS.Signals | null = null, abortPromise: Promise<void> | undefined;
   const outputLimit = options.outputLimitBytes ?? 8 * 1024 * 1024;
   let rejectAbort!: (error: Error) => void;
-  let requestedId: string | undefined, shutdownReport: unknown, resolveReport!: (value: unknown) => void;
-  const reportPromise = new Promise<unknown>(resolve => { resolveReport = resolve; });
+  let requestedId: string | undefined, shutdownReport: unknown;
+  const reports = new Map<string, unknown>();
+  const reportWaiters = new Map<string, (value: unknown) => void>();
   child.on('message', message => {
     if (!message || typeof message !== 'object' || Array.isArray(message)) return;
     const value = message as Record<string, unknown>;
-    if (value.schema !== QUALIFICATION_IPC_SCHEMA || value.kind !== 'shutdown-report' || value.requestId !== requestedId || !('report' in value)) return;
+    if (value.schema !== QUALIFICATION_IPC_SCHEMA || value.kind !== 'shutdown-report' || typeof value.requestId !== 'string' || !('report' in value)) return;
+    reports.set(value.requestId, value.report);
+    reportWaiters.get(value.requestId)?.(value.report);
+    if (value.requestId === runId && requestedId === undefined && value.report && typeof value.report === 'object' && (value.report as Record<string, unknown>).status === 3) {
+      shutdownReport = value.report;
+      failure = new Error('qualification child reported unresolved shutdown with status 3');
+      abortPromise = Promise.resolve();
+      Object.assign(failure, { shutdownRequestId: runId, shutdownReport, ownedProcessGroupPid: child.pid, processGroupRetained: !childExited,
+        exitCode: childExitCode, signal: childExitSignal, stdout, stderr });
+      rejectAbort(failure);
+      return;
+    }
+    if (value.requestId !== requestedId) return;
     shutdownReport = value.report;
-    resolveReport(shutdownReport);
   });
   const requestShutdown = async (reason: 'deadline' | 'output-limit'): Promise<unknown> => {
     requestedId = randomUUID();
@@ -126,9 +201,10 @@ export async function runQualification(command: string, args: string[], options:
       Object.assign(failure!, { shutdownRequestError: error instanceof Error ? error.message : String(error) });
       return undefined;
     }
+    if (reports.has(requestedId)) return reports.get(requestedId);
     return new Promise(resolve => {
       const timer = setTimeout(() => resolve(undefined), options.shutdownReportTimeout ?? 3000);
-      void reportPromise.then(value => { clearTimeout(timer); resolve(value); });
+      reportWaiters.set(requestedId!, value => { clearTimeout(timer); reportWaiters.delete(requestedId!); resolve(value); });
     });
   };
   const abort = (error: Error, reason: 'deadline' | 'output-limit') => {
