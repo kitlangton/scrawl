@@ -16,8 +16,9 @@ import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-trans
 import { readSenderPeerAuthority } from "../../src/sender/authority.ts";
 import { revokeDeviceGrant } from "../../src/account/revoke.ts";
 import { decodeStoredCredential } from "../../src/credentials/wire.ts";
-import { prepareLoginCredential } from "../../src/credentials/login-grant.ts";
-import { requestDeviceStart, requestDevicePoll } from "../../src/account/device.ts";
+import { createDeviceLoginTransport } from "../../dist/account/device-session.js";
+import { authorizeDevice } from "../../dist/device-flow.cjs";
+import type { StoredCredential } from "../../src/credentials/wire.ts";
 import { readAccountStatus } from "../../src/account/status.ts";
 import { listShares, revokeShare } from "../../src/account/shares.ts";
 import { sealCapture } from "../../src/sender/seal.ts";
@@ -108,17 +109,28 @@ async function authorize(
   scope: "read" | "upload",
   encryptionKey: PeerAuthorityKey,
 ): Promise<DeviceCredential> {
-  const device = await requestDeviceStart({ approvedServer, scope, encryptionKey }) as { deviceCode: string; userCode: string };
-  const approved = await service.call("/v1/device/approve", {
-    method: "POST", body: { userCode: device.userCode },
-    cookie: account.cookie, csrf: account.csrf, origin: account.origin,
+  let committed: StoredCredential | undefined;
+  let issuedAt = 0;
+  let approval: Promise<void> | undefined;
+  const transport = createDeviceLoginTransport({ approvedServer, scope, encryptionKey,
+    generation: randomBytes(16).toString("hex"), encryptionIdentity: randomBytes(16).toString("hex") }, {
+    signal: new AbortController().signal,
+    issuedNow() { issuedAt = Math.floor(Date.now() / 1000); return issuedAt; },
+    // Synthetic host facts and commit sink; this fixture writes no local state.
+    assertCurrent() {}, async commit(value) { committed = value; return null; },
   });
-  assert.equal(approved.status, 200, "synthetic account approves the pending device via cookie and CSRF");
-  const issuedAt = Math.floor(Date.now() / 1000);
-  const reply = await requestDevicePoll({ approvedServer, deviceCode: device.deviceCode });
-  const credential = prepareLoginCredential(reply, { approvedServer, scope, issuedAt,
-    siteOrigin: account.origin, generation: randomBytes(16).toString("hex"),
-    encryptionIdentity: randomBytes(16).toString("hex") });
+  try {
+    const result = await authorizeDevice(transport, new AbortController().signal, value => {
+      approval = (async () => {
+        const response = await service.call("/v1/device/approve", { method: "POST", body: { userCode: value.userCode },
+          cookie: account.cookie, csrf: account.csrf, origin: account.origin });
+        assert.equal(response.status, 200, "synthetic account approves via cookie and CSRF");
+      })();
+    }, { expectedScope: scope, sleep: async () => { assert.ok(approval); await approval; } });
+    assert.equal(result, null);
+  } finally { transport.dispose(); }
+  assert.ok(committed);
+  const credential = committed;
   assert.equal(credential.site, account.origin);
   assert.equal(credential.scope, scope);
   assert.equal(Object.isFrozen(credential), true);
