@@ -371,3 +371,11 @@ test("RecordClient pill presents transient text readback without claiming owners
   disposeWorkflowPillHost(host);
   assert.equal(fixture.isDetached(), false);
 });
+
+ test("Saved pill displays the sealed initial audio gap without claiming recorded silence",async()=>{
+  const fixture=recordClientFixture();const host=createRecordClientPillHost(fixture.client,{createRequestId:()=>"gap-copy"});
+  fixture.emit({...fixture.value(),revision:4,captures:[{captureId:"saved-gap",artifactId:"artifact-gap",phase:"saved",delivery:"unknown",outcomes:[{kind:"save",ok:true,at:"now"}],warnings:[{kind:"audioInitialGap",atMs:125}]}]});
+  const view=(await host.read())!;assert.equal(view.label,"Recording saved");assert.equal(view.notice,"Saved locally");
+  assert.match(view.warning!,/\[0, 125 ms\).*unobserved.*padded with zeros.*not recorded silence/);assert.equal(view.pocket?.tone,"warning");
+  disposeWorkflowPillHost(host);
+ });

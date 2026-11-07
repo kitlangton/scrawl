@@ -231,6 +231,7 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
     const item = capture as Record<string, unknown>;
     if (typeof item.captureId !== "string" || !["local-only", "host-default", "unknown"].includes(String(item.delivery)) ||
       !["starting", "recording", "processing", "saved", "cancelled", "failed", "unknown"].includes(String(item.phase)) || !Array.isArray(item.outcomes)) return false;
+    if (item.warnings !== undefined && (!Array.isArray(item.warnings) || item.warnings.length > 1 || item.warnings.some(warning => !warning || typeof warning !== "object" || Array.isArray(warning) || Object.keys(warning).sort().join(",") !== "atMs,kind" || warning.kind !== "audioInitialGap" || !Number.isSafeInteger(warning.atMs) || warning.atMs < 0))) return false;
     const cursorKeys = new Set<string>(), noteReceipts = new Set<string>();
     const validOutcomes = item.outcomes.every(outcome => {
       if (!outcome || typeof outcome !== "object") return false;

@@ -1,3 +1,5 @@
+import type { AudioInitialGapWarning } from "./helpers.js";
+export type { AudioInitialGapWarning } from "./helpers.js";
 /** Consumer-neutral host boundary. Implementations must report authoritative provider facts. */
 export type OsStatus = "granted" | "denied" | "not-determined" | "unavailable";
 export type RepairAction = "request-permission" | "open-system-settings" | "request-safe-relaunch";
@@ -98,6 +100,8 @@ export interface CaptureFact {
   artifactId?: string;
   phase: "starting" | "recording" | "processing" | "saved" | "cancelled" | "failed" | "unknown";
   outcomes: CaptureOutcome[];
+  /** Saved output warnings; no audio contents or private paths. */
+  warnings?: AudioInitialGapWarning[];
 }
 
 export interface CapabilitySnapshot {
@@ -166,7 +170,7 @@ export interface RecordClient {
 }
 
 export { createRecordCapabilityProvider } from "../backend/capabilities/provider.js";
-export { hasConfirmedArtifactOpen, PEN_COLOR_RGB } from "./helpers.js";
+export { audioInitialGapText, hasConfirmedArtifactOpen, PEN_COLOR_RGB } from "./helpers.js";
 export type {
   CaptureAction,
   NativeAction,

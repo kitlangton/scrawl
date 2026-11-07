@@ -1,3 +1,4 @@
+import { audioInitialGapText } from "../capabilities/helpers.js";
 import { RecordWorkflow, type RecordState } from "../backend/workflow/controller.js";
 import type { CapabilitySnapshot, RecordClient, CaptureFact } from "../capabilities/index.js";
 import type { PillHost, PillView } from "./types.js";
@@ -171,6 +172,8 @@ function presentClient(value: CapabilitySnapshot, revision: number, options: Rec
   ]; }
   if (active?.phase === "unknown") result.actions = [{ id: "inspect", label: "Check status", enabled: true, selected: false, primary: true }];
   if (saved) {
+    const initialGap = saved.warnings?.find(warning => warning.kind === "audioInitialGap");
+    if (initialGap) result.warning = result.warning ? result.warning + "; " + audioInitialGapText(initialGap.atMs) : audioInitialGapText(initialGap.atMs);
     result.notice = confirmedCopy(saved) ? saved.outcomes.some(outcome => outcome.kind === "copy" && "evidence" in outcome && outcome.evidence === "native-text-readback" && outcome.artifactId === saved.artifactId) ? "Handoff submitted; matching clipboard text observed" : "Handoff copied" : "Saved locally";
     result.pocket = { tone: result.warning ? "warning" : "info", title: "Local handoff", description: result.warning ?? "", actionIds: [] };
   }

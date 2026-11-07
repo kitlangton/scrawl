@@ -98,6 +98,13 @@ function addAudioMaterial(input: BundleAssemblyInput & { manifest: MaterialsDocu
   return audioFile;
 }
 
+function setSealedWarnings(input: BundleAssemblyInput & {manifest: MaterialsDocument["manifest"]}, warnings: Array<{code:string;atMs?:number}>) {
+  const payload=JSON.parse(new TextDecoder().decode(input.payloadBytes));payload.warnings=warnings;
+  input.payloadBytes=bytes(payload);input.manifest.key.revision=sha(input.payloadBytes);
+  input.manifest.payloadFile.sha256=sha(input.payloadBytes);input.manifest.payloadFile.identity.size=input.payloadBytes.byteLength;
+  for(const artifact of input.artifacts)artifact.materials={...input.manifest.key};
+}
+
 function stagingInput(input: BundleAssemblyInput, assembly: ReturnType<typeof assembleCanonicalBundle>, root: string,
   publicationId = "1".repeat(32), destinationPath = join(root, "destination.apparent")) {
   return { ownerToken: "c".repeat(64), publicationId, stagingRoot: join(root, "private"), destinationPath,
@@ -1031,8 +1038,9 @@ test("reserved composed publication resumes its exact detached derivative input 
   }
 });
 
-test("publication output exposes only durably matched Saved facts and handoff after restart", async () => {
+for (const withGap of [false,true]) test("publication output exposes only durably matched Saved facts and handoff after restart"+(withGap?" with sealed initial audio gap":""), async () => {
   const input = await fixture();
+  if(withGap){const audio=addAudioMaterial(input);input.materialReferences=[{role:"audio",relativePath:audio.relativePath}];setSealedWarnings(input,[{code:"audio-initial-gap",atMs:125}]);}
   const root = await mkdtemp(join(tmpdir(), "record-publication-output-"));
   const destinationPath = join(root, "final.apparent");
   const assembly = assemblyForDestination(input, destinationPath);
@@ -1082,10 +1090,12 @@ test("publication output exposes only durably matched Saved facts and handoff af
     detach();
     const facts = await reopened.captureFacts.readFacts();
     assert.deepEqual(facts.captures, [{ captureId: requestId, artifactId: "sdk-bundle", delivery: "unknown", phase: "saved",
-      outcomes: [{ kind: "save", ok: true, at: (await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId))!.savedObservedAt }] }]);
+      outcomes: [{ kind: "save", ok: true, at: (await new SqlitePublicationBindingStore(join(root, "control")).get(identity.captureId))!.savedObservedAt }], ...(withGap?{warnings:[{kind:"audioInitialGap",atMs:125}]}:{}) }]);
     const resolution = await reopened.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" });
     assert.equal(resolution?.handoff.savedBundle.bundlePath, destinationPath);
     assert.equal(resolution?.handoff.requestVideoProof, true);
+    assert.deepEqual(resolution?.handoff.processing.warnings,withGap?[{kind:"audioInitialGap",atMs:125}]:undefined);
+    if(withGap){const {formatLocalHandoff}=await import("../../dist/backend/handoff/index.js");assert.match(formatLocalHandoff(resolution!.handoff).text,/\[0, 125 ms\).*unobserved.*padded with zeros.*not recorded silence/);}
     assert.equal(resolution?.handoff.processing.bundlePath, destinationPath);
     resolution!.handoff.processing.frames.length = 0;
     assert.equal((await reopened.resolveHandoff({ captureId: requestId, artifactId: "sdk-bundle" }))?.handoff.processing.frames.length, assembly.processing.frames.length);
@@ -1779,4 +1789,18 @@ test("standard visual selection CAS preserves its original plan and refuses a di
     assert.equal(sha(input.facts.transcript!.bytes),input.facts.transcript!.file.sha256,"original fact bytes never rewritten");
    }finally{await rm(root,{recursive:true,force:true});}
   }
+ });
+
+ test("initial audio gap comes only from a sealed original warning with declared aligned audio",async()=>{
+  const input=await fixture();const audio=addAudioMaterial(input);input.materialReferences=[{role:"audio",relativePath:audio.relativePath}];
+  setSealedWarnings(input,[{code:"audio-initial-gap",atMs:125}]);
+  const assembled=assembleCanonicalBundle(input);
+  assert.deepEqual(assembled.processing.warnings,[{kind:"audioInitialGap",atMs:125}]);
+  assert.deepEqual(assembled.inventory.warnings,[{code:"audio-initial-gap",atMs:125}]);
+  assert.match(new TextDecoder().decode(assembled.summaryMd),/\[0, 125 ms\).*unobserved.*not recorded silence/);
+  for(const atMs of [undefined,4000,4001]){const bad=structuredClone(input);setSealedWarnings(bad,[{code:"audio-initial-gap",...(atMs===undefined?{}:{atMs})}]);assert.throws(()=>assembleCanonicalBundle(bad));}
+  const noAudio=await fixture();setSealedWarnings(noAudio,[{code:"audio-initial-gap",atMs:125}]);assert.throws(()=>assembleCanonicalBundle(noAudio),/aligned original audio/);
+  const shorterAudio=structuredClone(input);const shortPayload=JSON.parse(new TextDecoder().decode(shorterAudio.payloadBytes));shortPayload.audio.durationMs=100;shorterAudio.payloadBytes=bytes(shortPayload);setSealedWarnings(shorterAudio,[{code:"audio-initial-gap",atMs:125}]);assert.throws(()=>assembleCanonicalBundle(shorterAudio),/first sample time/);
+  const duplicate=structuredClone(input);setSealedWarnings(duplicate,[{code:"audio-initial-gap",atMs:125},{code:"audio-initial-gap",atMs:126}]);assert.throws(()=>assembleCanonicalBundle(duplicate),/duplicate initial audio/);
+  const forged=await fixture();forged.processingWarnings=[{kind:"audioInitialGap",atMs:125}];assert.throws(()=>assembleCanonicalBundle(forged),/original sealed materials warning/);
  });
