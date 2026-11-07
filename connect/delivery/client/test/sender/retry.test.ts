@@ -98,3 +98,30 @@ test("awaited settings boundary fences cancellation, revocation, login, job and 
     } finally { await f.close(); }
   }
 });
+
+test("dispatch refuses expired decisions and a replaced queue lock inode", async () => {
+  for (const change of ["expired", "lock"] as const) {
+    const f = await fixture(); let reads = 0, effects = 0;
+    f.input.readSettings = async () => {
+      if (++reads === 3) {
+        if (change === "expired") f.settings.nowSeconds = 101;
+        else {
+          await rename(path.join(f.root, "queue.lock"), path.join(f.root, "old-queue.lock"));
+          await writeFile(path.join(f.root, "queue.lock"), "", { mode: 0o600 });
+        }
+      }
+      return f.settings;
+    };
+    // Native replacement knows parent/file identity, not queue policy. Do not
+    // make this primitive fake conceal a missing caller-side lease fence.
+    f.resources.replaceFile = async (parent, source, destination) => {
+      try { effects++; await rename(path.join(f.root, source), path.join(f.root, destination)); return { state: "replaced" }; }
+      finally { await parent.close(); }
+    };
+    try {
+      await retryQueuedUploads(f.input, f.resources).catch(error => assert.ok(["stale_snapshot", "state_unavailable"].includes(error.category)));
+      assert.equal(effects, 0, change);
+      assert.equal((await f.read()).attempts, 4);
+    } finally { await f.close(); }
+  }
+});

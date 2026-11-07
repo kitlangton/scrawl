@@ -24,28 +24,31 @@ const frozen = <T>(x: T): T => { if (x && typeof x === "object") { Object.freeze
 
 /** Internal retry preparation. Production routing remains owned by the Rust client. */
 export async function retryQueuedUploads(input: RetryInput, resources: RetryResources): Promise<RetryResult> {
+  const directory = input.directory, callerSignal = input.signal, queueTimeoutMs = input.queueTimeoutMs;
+  const readSettings = input.readSettings, approvedServer = input.approvedServer;
   const changed: string[] = []; let dispatched = false, committedAny = false;
   const result = (state: RetryResult["state"]): RetryResult => frozen({ state, changedJobIds: [...changed] });
   try {
-    const server = normalizeRecipientServer(input.approvedServer), readSettings = input.readSettings;
+    const server = normalizeRecipientServer(approvedServer);
     if (typeof readSettings !== "function") fail("invalid_settings");
-    checkSignal(input.signal);
-    return await withStateQueue(input.directory, { scope: "upload", approvedServer: server }, resources,
-      { signal: input.signal, lockTimeoutMs: input.queueTimeoutMs }, async (root, lease) => {
-        const signal = AbortSignal.any([lease.signal, ...(input.signal ? [input.signal] : [])]);
+    checkSignal(callerSignal);
+    return await withStateQueue(directory, { scope: "upload", approvedServer: server }, resources,
+      { signal: callerSignal, lockTimeoutMs: queueTimeoutMs }, async (root, lease) => {
+        const signal = AbortSignal.any([lease.signal, ...(callerSignal ? [callerSignal] : [])]);
         const check = () => checkSignal(signal, lease.signal);
         const settings = async (): Promise<UploadWorkerSettings> => {
-          check(); let raw: UploadWorkerSettings;
+          await lease.assertCurrent(); check(); let raw: UploadWorkerSettings;
           try { raw = await readSettings(signal); } catch { return fail("state_unavailable"); }
-          check();
+          await lease.assertCurrent(); check();
           let normalized = ""; try { normalized = normalizeRecipientServer(raw?.server); } catch { fail("invalid_settings"); }
           if (typeof raw?.enabled !== "boolean" || normalized !== raw.server || typeof raw.encryptionEnabled !== "boolean"
             || typeof raw.sharingEnabled !== "boolean" || !Number.isSafeInteger(raw.nowSeconds) || raw.nowSeconds < 0
             || raw.nowSeconds > Number.MAX_SAFE_INTEGER - 3600 || !Number.isSafeInteger(raw.retentionSeconds) || raw.retentionSeconds < 0) fail("invalid_settings");
-          return raw;
+          return Object.freeze({ enabled: raw.enabled, server: raw.server, encryptionEnabled: raw.encryptionEnabled,
+            sharingEnabled: raw.sharingEnabled, nowSeconds: raw.nowSeconds, retentionSeconds: raw.retentionSeconds });
         };
         const fresh = async (state: StateDirectory, l: NamespaceLease, scheduled: ReturnType<typeof decodeJob>) => {
-          check(); l.assertHeld();
+          await lease.assertCurrent(); check(); l.assertHeld();
           const policy = await settings();
           if (!policy.enabled) fail("invalid_settings");
           if (policy.server !== server) return null;
@@ -58,7 +61,7 @@ export async function retryQueuedUploads(input: RetryInput, resources: RetryReso
           const cancellation = await readCancellation(state, resources, signal);
           if (job.generation !== credential.generation || (job.publicCopy ? !policy.sharingEnabled || job.encrypted || !job.shared : job.encrypted !== policy.encryptionEnabled)) return null;
           if (await pendingIntent(state.path)) fail("revocation_pending");
-          check(); l.assertHeld();
+          await lease.assertCurrent(); check(); l.assertHeld();
           const facts: FreshQueueSnapshot = { job, enabled: policy.enabled, server: policy.server, generation: credential.generation,
             encryptionEnabled: policy.encryptionEnabled, sharingEnabled: policy.sharingEnabled, now: policy.nowSeconds,
             retentionSeconds: policy.retentionSeconds, cancellationEpoch: epoch(cancellation) };
@@ -85,14 +88,15 @@ export async function retryQueuedUploads(input: RetryInput, resources: RetryReso
           try {
             const guarded: StateReplacementResources = { checkAcl: h => resources.checkAcl(h), async replaceFile(parent, ...args) {
               try {
-                check(); lease.assertHeld();
+                await lease.assertCurrent(); check(); lease.assertHeld();
                 if (!await samePathFd(root) || await pendingIntent(root.path)) { await parent.close(); return { state: "refused" }; }
                 const latest = await fresh(root, lease, scheduled);
                 if (!latest || latest.saved.expectedStamp !== current.saved.expectedStamp || latest.grant !== current.grant
-                  || latest.identity !== current.identity || latest.facts.cancellationEpoch !== current.facts.cancellationEpoch) {
+                  || latest.identity !== current.identity || latest.facts.cancellationEpoch !== current.facts.cancellationEpoch
+                  || retry(latest.facts).kind !== "transition") {
                   await parent.close(); return { state: "refused" };
                 }
-                check(); lease.assertHeld();
+                await lease.assertCurrent(); check(); lease.assertHeld();
               } catch { await parent.close().catch(() => {}); return { state: "refused" }; }
               dispatched = true;
               return resources.replaceFile(parent, ...args);
@@ -108,7 +112,7 @@ export async function retryQueuedUploads(input: RetryInput, resources: RetryReso
       });
   } catch (error) {
     if (dispatched || committedAny) return result("uncertain");
-    if (input.signal?.aborted || error instanceof CredentialSnapshotError && error.category === "cancelled") fail("cancelled");
+    if (callerSignal?.aborted || error instanceof CredentialSnapshotError && error.category === "cancelled") fail("cancelled");
     if (error instanceof RetryError) throw new RetryError(error.category);
     if (error instanceof CredentialSnapshotError && error.category === "revocation_pending") fail("revocation_pending");
     return fail("state_unavailable");

@@ -190,6 +190,15 @@ This supplies no filesystem snapshot admission, auth renewal or progress HTTP
 implementation by itself. It has no public worker export or production caller;
 Rust remains the sole live worker until coordinated adoption and platform gates.
 
+The internal `queue/retry` operation resets eligible pending/failed jobs under one
+queue lease using the existing retry policy and private replacement port. It pins
+login and cancellation, rechecks current settings, retention, job stamps and the
+original queue inode immediately before dispatch, and preserves other metadata.
+Uncertain effects stop the pass and retain observed committed IDs; the caller must
+settle them before retrying. It changes no credential or config, performs no HTTP
+or deletion, and has no public export or production command route. Local settings
+and sole-writer admission remain host responsibilities; Rust still owns live retry.
+
 The queue API's `planAdmission` returns a detached, frozen plan for automatic
 private, explicit private or public-copy admission. It preserves first-match
 deduplication in supplied queue order and the donor's cancellation → pruning →
