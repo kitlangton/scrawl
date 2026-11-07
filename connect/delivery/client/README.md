@@ -209,6 +209,18 @@ Pathname checks rely on cooperating same-UID writers honoring the locks and do n
 promise inode-atomic unlink against a process bypassing them. This has no public
 export or production caller and does not authorize pruning beside the Rust writer.
 
+The internal `queue/admission-store` applies that planner under one queue lease:
+canonical bundle-path admission, retained-ID reuse, explicit cancellation, bounded
+retirement and expected-absent job creation. It pins the local login/cancellation
+and source directory/manifest, rechecks current gates before effects, and refuses
+candidate collisions with queue records or orphan spools. Clock progress does not
+change the original admission issue time. Confirmed cancellations and retirements
+survive uncertain results; a confirmed create also retains `admittedJobId` when
+lease retirement fails. Unknown queue changes stop the pass. Completed-path checks
+are not stable capture-content admission or upload consent. Host settings ownership,
+ID generation/history, partial-effect settlement and restart recovery remain open;
+there is no public admission export, installed route or live TypeScript writer.
+
 The queue API's `planAdmission` returns a detached, frozen plan for automatic
 private, explicit private or public-copy admission. It preserves first-match
 deduplication in supplied queue order and the donor's cancellation → pruning →
