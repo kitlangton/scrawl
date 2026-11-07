@@ -41,19 +41,26 @@ journals, and a cancel acknowledgment follows its durable write. Cancellation is
 sticky through finalization and crash recovery; a sealed manifest remains leased
 until explicit release. Core keeps global live admission for actual capture.
 
-The prior capture/2 runtime has private host Xvfb and isolated Linux guest
-proof. Main `0570f775` delivered a fresh admitted capture archive in run
-`42252644242`, with two packaged checks passing and all 54 runtime seals and
-attestation verified. That archive reports publication unavailable. This
-publication candidate has its own source-bound package and headless release check;
-its real capture-to-Saved, guest proof and publication artifact admission remain
-separate gates. X11 display and the advertised preset area are the supported sources; general picker/area selection, Wayland, macOS, audio,
-and fact collectors remain unavailable. The unmerged publication candidate adds
-authenticated publish/inspection and native derivative/2 registry validation.
-Retained materials alone are never Saved; only validated atomic publication can
-return Saved. Fixture and host Xvfb proof do not establish the full Record
-capture-to-Saved path or current-candidate guest/package qualification. Existing native and installed behavior remains on its current route until
-verified consumer adoption.
+The published capture/2 provider supports X11 displays and the advertised preset
+area, authenticated retained materials, and native derivative/2 publication.
+The X11 capture-to-media/Record/Saved path and same-recording Copy continuation
+have separate retained evidence; they do not establish installed Omarchy use.
+
+This source adds one-monitor Hyprland/Omarchy portal capture when Wayland and
+XWayland are available. It keeps the existing protocol and recorder, binds the
+portal output name and dimensions to the advertised display, and retains the
+PipeWire session through finalization. Other Wayland backends, multiple monitors,
+arbitrary areas, windows, macOS, audio and fact collectors remain unsupported.
+Its native portal/packaged Omarchy qualification is still pending. Local checks
+and a manifest capability are not an availability or installed-adoption claim.
+
+Pending portal consent observes authenticated durable Stop/Cancel intent. The
+original backend is retained privately so cold controls do not depend on source
+discovery. Finish without a frame fails with no materials; only actual Cancel
+intent is classified as cancellation. Existing journals remain readable and
+retain their original starting-stop behavior. Retained materials alone are never
+Saved; validated atomic publication is required. Existing installed routing is
+unchanged until its separate adoption gate clears.
 
 Use `launchCaptureEngine(executable, runtimeDirectory, 40_000)` for this producer;
 `manifest.launch.shutdownTimeoutMs` declares this grace. SDK 0.3.x's default
