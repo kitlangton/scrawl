@@ -1,9 +1,9 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile, link, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdir, mkdtemp, readFile, readdir, readlink, realpath, rename, rm, writeFile, link, type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
-import { beginLoginState, type LoginResources } from "../../src/account/login-state.ts";
+import { assertLoginStateCurrent, beginLoginState, type LoginResources } from "../../src/account/login-state.ts";
 import type { NamespaceResources } from "../../src/state/queue-transaction.ts";
 import type { StateReplacementResources } from "../../src/state/replacement.ts";
 
@@ -132,4 +132,82 @@ test("all failed lease checkpoints release transferred directory descriptors", {
     assert.equal(await openRoots(), 0, `checkpoint ${checkpoint} must consume all root descriptors`);
     await rm(f.file("read.login"), { force: true });
   }
+}));
+
+test("currentness accepts both scopes without changing state and rejects superseded login or cancellation", () => fixture(async f => {
+  const read = await beginLoginState(f.root, context(), f.resources);
+  const upload = await beginLoginState(f.root, context("upload", true), f.resources);
+  assert.equal(read.state, "begun"); assert.equal(upload.state, "begun");
+  const before = await Promise.all((await readdir(f.root)).map(async name => [name, await readFile(f.file(name))] as const));
+  await assertLoginStateCurrent(f.root, read, f.resources);
+  await assertLoginStateCurrent(f.root, upload, f.resources);
+  assert.deepEqual(await Promise.all((await readdir(f.root)).map(async name => [name, await readFile(f.file(name))] as const)), before);
+  await beginLoginState(f.root, context(), f.resources);
+  await assert.rejects(assertLoginStateCurrent(f.root, read, f.resources));
+  await f.put("cancellation", "changed");
+  assert.equal(upload.state, "begun");
+  await assert.rejects(assertLoginStateCurrent(f.root, upload, f.resources));
+}));
+
+test("currentness rejects malformed receipts and revocation intent before marker reads", () => fixture(async f => {
+  const result = await beginLoginState(f.root, context(), f.resources); assert.equal(result.state, "begun");
+  const malformed = { ...result, loginId: "../bad" } as typeof result;
+  let resourceReads = 0;
+  const unavailable = { get checkAcl(): never { resourceReads++; throw Error('unexpected provider access'); },
+    get lock(): never { resourceReads++; throw Error('unexpected provider access'); } };
+  await assert.rejects(assertLoginStateCurrent(f.root, malformed, unavailable));
+  assert.equal(resourceReads, 0);
+  await f.put("revocation-current.intent", false);
+  await assert.rejects(assertLoginStateCurrent(f.root, result, f.resources));
+}));
+
+test("currentness pins receipt and inherited resource methods across queue waits", () => fixture(async f => {
+  const receipt = await beginLoginState(f.root, context(), f.resources); assert.equal(receipt.state, 'begun');
+  if (receipt.state !== 'begun') return;
+  const supplied = { ...receipt };
+  let queued!: () => void; const waiting = new Promise<void>(resolve => { queued = resolve; });
+  f.state.queueStarted = queued; f.state.queueContinue = () => {};
+  const resourceObject = Object.create(f.resources) as NamespaceResources;
+  const pending = assertLoginStateCurrent(f.root, supplied, resourceObject);
+  await waiting;
+  supplied.loginId = 'b'.repeat(32); supplied.approvedServer = 'https://other.example';
+  resourceObject.checkAcl = async () => { throw Error('changed provider'); };
+  f.state.queueContinue?.();
+  await pending;
+}));
+
+test("currentness rejects a replaced root even with copied marker and cancellation", () => fixture(async f => {
+  const receipt = await beginLoginState(f.root, context(), f.resources); assert.equal(receipt.state, 'begun');
+  if (receipt.state !== 'begun') return;
+  const original = f.root + '-original';
+  await rename(f.root, original);
+  try {
+    await mkdir(f.root, { mode: 0o700 }); await f.put('read.login', receipt.loginId);
+    await assert.rejects(assertLoginStateCurrent(f.root, receipt, f.resources), { category: 'stale_snapshot' });
+  } finally { await rm(original, { recursive: true, force: true }); }
+}));
+
+test("currentness supports data aliases but rejects unsafe markers and lease failures", () => fixture(async f => {
+  const receipt = await beginLoginState(f.root, context(), f.resources); assert.equal(receipt.state, 'begun');
+  if (receipt.state !== 'begun') return;
+  await link(f.file('read.login'), f.file('marker.alias'));
+  await assertLoginStateCurrent(f.root, receipt, f.resources);
+  f.state.releaseFailure = true;
+  await assert.rejects(assertLoginStateCurrent(f.root, receipt, f.resources), { category: 'unavailable' });
+  f.state.releaseFailure = false; f.state.assertionChecks = 0; f.state.assertionFailureAt = 1;
+  await assert.rejects(assertLoginStateCurrent(f.root, receipt, f.resources));
+  f.state.assertionFailureAt = 0;
+  await chmod(f.file('read.login'), 0o644);
+  await assert.rejects(assertLoginStateCurrent(f.root, receipt, f.resources));
+}));
+
+test("currentness cancellation during a queue wait fails closed", () => fixture(async f => {
+  const receipt = await beginLoginState(f.root, context(), f.resources); assert.equal(receipt.state, 'begun');
+  if (receipt.state !== 'begun') return;
+  let queued!: () => void; const waiting = new Promise<void>(resolve => { queued = resolve; });
+  f.state.queueStarted = queued; f.state.queueContinue = () => {};
+  const controller = new AbortController();
+  const pending = assertLoginStateCurrent(f.root, receipt, f.resources, { signal: controller.signal });
+  await waiting; controller.abort(); f.state.queueContinue?.();
+  await assert.rejects(pending, { category: 'cancelled' });
 }));

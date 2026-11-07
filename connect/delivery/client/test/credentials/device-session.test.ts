@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { createDeviceLoginTransport } from "../../dist/account/device-session.js";
+import { createDeviceLoginTransport, createStateBackedDeviceLoginTransport } from "../../dist/account/device-session.js";
 import { authorizeDevice } from "../../dist/device-flow.cjs";
 import { generateStoredIdentityRecord } from "../../dist/credentials/recipient-identity.js";
 
@@ -193,4 +193,17 @@ serial("expiry while awaiting the host fence prevents network dispatch", async (
     await assert.rejects(s.transport.start(), /expired/);
     assert.equal(s.calls.length, 0);
   } finally { s.restore(); }
+});
+
+serial("state composition rejects uncertain receipts and checks host allowance before state access", async () => {
+  let calls = 0;
+  const receipt = { state: 'begun' as const, scope: 'upload' as const, approvedServer: 'https://api.example.test/connect',
+    loginId: 'b'.repeat(32), cancellation: null, directoryIdentity: '1:2:16832:1000' };
+  const resources = { async checkAcl() { calls++; throw Error('unexpected ACL'); }, async lock() { calls++; throw Error('unexpected lock'); } };
+  const ports = { generation: 'a'.repeat(32), signal: new AbortController().signal,
+    assertAllowed() { throw Error('private policy refused'); }, async commit() { calls++; return null; } };
+  assert.throws(() => createStateBackedDeviceLoginTransport('/unused', { ...receipt, state: 'uncertain' } as never, null, resources, ports));
+  const transport = createStateBackedDeviceLoginTransport('/unused', receipt, null, resources, ports);
+  try { await assert.rejects(transport.start(), /cancelled/); assert.equal(calls, 0); }
+  finally { transport.dispose(); }
 });

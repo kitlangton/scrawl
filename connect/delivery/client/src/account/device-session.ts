@@ -5,6 +5,9 @@ import { validatePeerAuthorityKey, type PeerAuthorityKey } from "../recipient/pe
 import { prepareLoginCredential } from "../credentials/login-grant.ts";
 import type { StoredCredential } from "../credentials/wire.ts";
 import type { SafeError } from "../settings-presentation.js";
+import { assertLoginStateCurrent, type LoginReceipt } from "./login-state.ts";
+import type { LoginIdentityResult } from "../credentials/identity-store.ts";
+import type { NamespaceResources } from "../state/queue-transaction.ts";
 
 export type DeviceSessionContext = Readonly<{
   scope: DeviceScope; approvedServer: string; generation: string;
@@ -12,12 +15,18 @@ export type DeviceSessionContext = Readonly<{
 }>;
 export type DeviceSessionPorts = Readonly<{
   signal: AbortSignal;
-  assertCurrent(): void | Promise<void>;
+  assertCurrent(signal: AbortSignal): void | Promise<void>;
   commit(credential: StoredCredential, signal: AbortSignal): Promise<SafeError | null>;
   now?: () => number;
   issuedNow?: () => number;
 }>;
 export type DeviceLoginTransport = DeviceTransport & { dispose(): void };
+export type StateDeviceSessionPorts = Omit<DeviceSessionPorts, "assertCurrent"> & Readonly<{
+  generation: string;
+  /** Host-owned fresh consent/settings check, outside queue.lock. */
+  assertAllowed(signal: AbortSignal): void | Promise<void>;
+  lockTimeoutMs?: number;
+}>;
 type SessionState = "new" | "starting" | "pending" | "polling" | "approved" | "committing" | "settled" | "failed" | "disposed";
 type Approved = Readonly<{ status: "approved"; scope: DeviceScope; accessToken: string; refreshToken: string;
   grantId: string; expiresIn: number; refreshExpiresIn: number; accountInitial: string | null }>;
@@ -75,7 +84,7 @@ export function createDeviceLoginTransport(context: DeviceSessionContext, ports:
   };
   const check = async () => {
     active();
-    try { await assertCurrent(); } catch { return fail("cancelled"); }
+    try { await assertCurrent(signal); } catch { return fail("cancelled"); }
     active();
   };
   const timeout = (requested = 30_000) => Math.max(1, Math.min(requested, 30_000, Math.floor(deadline - monotonic())));
@@ -141,4 +150,28 @@ export function createDeviceLoginTransport(context: DeviceSessionContext, ports:
     dispose() { state = "disposed"; clear(); encryptionKey = undefined; disposal.abort(); },
   };
   return Object.freeze(transport);
+}
+
+/** Internal composition only. A durable host commit must independently recheck
+ * these fences under its own writer transaction; this read grants no write lease. */
+export function createStateBackedDeviceLoginTransport(directory: string, receipt: LoginReceipt,
+  identity: LoginIdentityResult | null, resources: NamespaceResources, ports: StateDeviceSessionPorts): DeviceLoginTransport {
+  try {
+    const pinned: LoginReceipt = Object.freeze({ state: receipt.state, scope: receipt.scope, approvedServer: receipt.approvedServer,
+      loginId: receipt.loginId, cancellation: receipt.cancellation, directoryIdentity: receipt.directoryIdentity });
+    if (pinned.state !== "begun" || identity !== null &&
+      (identity.state !== "published" && identity.state !== "existing" || identity.identityId !== pinned.loginId)) return fail();
+    const bound = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources) };
+    const allowed = ports.assertAllowed.bind(ports), commit = ports.commit.bind(ports);
+    const signal = ports.signal, lockTimeoutMs = ports.lockTimeoutMs;
+    return createDeviceLoginTransport({ approvedServer: pinned.approvedServer, scope: pinned.scope, generation: ports.generation,
+      encryptionIdentity: identity === null ? null : identity.identityId, encryptionKey: identity?.publicKey }, {
+      signal, commit, now: ports.now, issuedNow: ports.issuedNow,
+      async assertCurrent(fenceSignal) {
+        await allowed(fenceSignal);
+        await assertLoginStateCurrent(directory, pinned, bound, { signal: fenceSignal, lockTimeoutMs });
+        await allowed(fenceSignal);
+      },
+    });
+  } catch { return fail(); }
 }
