@@ -9,7 +9,7 @@ import test from "node:test";
 import { fileURLToPath } from "node:url";
 import { CaptureClient, capture2MaterialsRoot, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
 import { validateMaterialsDocument } from "../sdk/src/capture-documents/index.ts";
-import { Media2Client, Media2RpcError, Media2TransportError, launchMedia2Worker, type Media2JobInput } from "../sdk/src/media2/index.ts";
+import { Media2Client, Media2RpcError, Media2TransportError, launchMedia2Worker, type Derivative2Envelope, type Media2JobInput } from "../sdk/src/media2/index.ts";
 import { launchCaptureRecoveryPeer } from "../sdk/src/recovery/index.ts";
 
 const id = () => randomBytes(16).toString("hex");
@@ -126,7 +126,7 @@ async function deriveRetainedFrames(runtime: string, ownerToken: string, materia
     const derivative = status.derivative;
     // The public SDK validates detached bytes, original request/layout, native
     // material/lease/job/root binding and every ordered frame/sheet seal.
-    const envelope = derivative.envelope as import("../sdk/src/media2/index.ts").Derivative2Envelope;
+    const envelope = derivative.envelope as Derivative2Envelope;
     assert.deepEqual(envelope.payload.frames.map(frame => frame.requestedBundleMs), input.request.requestedBundleMs);
     assert.deepEqual(envelope.payload.frames.map(frame => frame.requestIndex), [1, 2, 3]);
     assert.equal(envelope.payload.frames[0].file.sha256, envelope.payload.frames[2].file.sha256);
@@ -199,7 +199,7 @@ async function deriveRetainedFrames(runtime: string, ownerToken: string, materia
     assert.equal(afterLoss.jobId, lossAccepted.jobId, "cold recovery keeps the original job identity");
     assert.equal(afterLoss.requestSha256, lossAccepted.requestSha256, "cold recovery keeps the original request digest, output path, materials and lease binding");
     if (afterLoss.state === "complete") {
-      const envelope = afterLoss.derivative.envelope as import("../sdk/src/media2/index.ts").Derivative2Envelope;
+      const envelope = afterLoss.derivative.envelope as Derivative2Envelope;
       assert.equal(envelope.payload.jobId, lossInput.request.jobId);
       assert.equal(envelope.payload.requestSha256, afterLoss.requestSha256);
       assert.deepEqual(envelope.payload.materials, materials.manifest.key);
