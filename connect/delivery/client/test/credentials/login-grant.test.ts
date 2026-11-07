@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { prepareLoginCredential } from '../../src/credentials/login-grant.ts';
+import { decodeStoredCredential } from '../../src/credentials/wire.ts';
 
 const context = (scope: 'read' | 'upload' = 'upload', extra: Record<string, unknown> = {}) => ({
   approvedServer: 'https://api.example.test/connect', siteOrigin: 'https://approval.example.test',
@@ -75,4 +76,14 @@ test('errors contain only a safe category and no private values', () => {
   assert.ok(error instanceof Error);
   assert.equal(error.message, 'Invalid login credential');
   assert.equal(error.message.includes(secret), false);
+});
+
+test('prepared credential passes the existing wire reader with original issue time', () => {
+  const result = prepare(reply('read'), context('read', { issuedAt: 0 }));
+  assert.deepEqual(decodeStoredCredential(new TextEncoder().encode(JSON.stringify(result)), 'read', result.server), result);
+  assert.equal(result.expiresAt, 3600);
+  assert.equal(prepare(reply('upload', { accountInitial: 'x'.repeat(100_000) })).accountInitial, null);
+  for (const accountInitial of ['𐐀𐐁𐐂', 'AB3', '']) {
+    assert.equal(prepare(reply('upload', { accountInitial })).accountInitial, accountInitial || null);
+  }
 });
