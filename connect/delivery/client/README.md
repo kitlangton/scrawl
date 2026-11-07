@@ -680,3 +680,18 @@ The existing writer must commit durable cancellation and local logout first,
 release its locks, and bound subsequent remote cleanup. A failed request may have
 revoked the remote grant; it authorizes neither blind repetition nor local
 settlement. Installed adoption and the coordinated writer cutover remain open.
+
+
+The internal revocation-intent preparation publishes a fresh immutable private
+boolean before acquiring `queue.lock`, using the existing expected-absent native
+file replacement and readback. Concurrent disable/logout intents coexist. A
+queue-held reader returns stamped, frozen observations of all matching legacy
+names; malformed, unsafe or more than 1,024 matching records fail closed. It
+never removes intents or authorizes work. Uncertain publication remains uncertain
+even after a root replacement. Linux installed-provider tests cover publication
+while the queue is held and rejection of subsequent credential reads.
+
+This is not a production logout writer. Config-gate publication, cancellation,
+job/credential settlement and deletion of only covered intents remain host work.
+The config host currently exposes no Connect cloud-gate update operation. Rust
+remains authoritative; first installed Mac/ARM and writer-cutover gates remain.
