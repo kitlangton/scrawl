@@ -80,7 +80,7 @@ export function semanticSummary(bundle: Data, bundleDir: string, agentContext = 
   for (const [key, item] of Object.entries(bundle.context ?? {}).sort(([a],[b])=>a<b?-1:a>b?1:0)) context.push(`${value(key)}: ${value(item)}`);
   if (context.length) lines.push(context.join(' · '));
   if (clean(bundle.note)) lines.push(`Note: ${String(bundle.note).trim()}`);
-  if (bundle.interactionTelemetry === 'videoOnly') lines.push('Interaction context: timed CLI video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes. Use the app\'s recording shortcut for interaction context.');
+  if (bundle.interactionTelemetry === 'videoOnly') lines.push('Interaction context: video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes.');
   if (bundle.imageQualityWarning) lines.push(`Image quality: ${clean(bundle.imageQualityWarning)}`);
   if (bundle.autocrop) lines.push(`Cropped to: ${clean(bundle.autocrop.label)} (full frames in ${clean(bundle.autocrop.fullFrames)}/)`);
   if (bundle.source !== 'iphone' && bundle.context?.microphoneCapture !== 'off') {

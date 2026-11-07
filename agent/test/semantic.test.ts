@@ -34,6 +34,24 @@ test('audio warnings distinguish missing samples, evidence snapshots, iPhone, an
   assert.match(output(bundle,false,true),/No transcript: Recognition unavailable\./);
 });
 
+test('video-only telemetry reports unavailable interactions without inventing capture origin',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'agent-video-only-origin-'));
+  try {
+    const bundle=join(root,'app-output.apparent');await mkdir(bundle);
+    const manifest=JSON.stringify({...fixture,interactionTelemetry:'videoOnly',keyframes:[],marks:[],events:[]});
+    await writeFile(join(bundle,'apparent.json'),manifest);
+    const cli=new URL('../dist/cli.js',import.meta.url).pathname;
+    const run=()=>spawnSync(process.execPath,[cli,'inspect',bundle],{encoding:'utf8',env:{...process.env,HOME:root,PATH:''}});
+    const result=run();assert.equal(result.status,0,result.stderr);
+    assert.match(result.stdout,/Interaction context: video only; clicks and Shift ink were not collected\./);
+    assert.match(result.stdout,/will not appear in events, marks or click keyframes/);
+    assert.doesNotMatch(result.stdout,/timed CLI|recording shortcut/);
+    assert.equal(await (await import('node:fs/promises')).readFile(join(bundle,'apparent.json'),'utf8'),manifest);
+    await writeFile(join(bundle,'apparent.json'),JSON.stringify({...fixture,interactionTelemetry:undefined}));
+    assert.doesNotMatch(run().stdout,/Interaction context: video only/);
+  } finally {await rm(root,{recursive:true,force:true});}
+});
+
 test('config agentContext is read-only, defaults off, and explicit experiment enables it',async()=>{
   const root=await mkdtemp(join(tmpdir(),'agent-experiment-config-'));
   try {
