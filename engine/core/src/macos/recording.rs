@@ -14,6 +14,9 @@ use screencapturekit::recording_output::{
 };
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
+use super::clock::{
+    CaptureAdmissionTime, CaptureClockSample, ClockError, map_sample_to_capture_clock,
+};
 use super::{
     CaptureRequest, FilterRequest, FrameConfiguration, RgbaImage, StreamConfiguration,
     build_filter, build_filter_and_config, stream_configuration,
@@ -27,6 +30,13 @@ pub struct CaptureStream {
     filter: Option<SCContentFilter>,
     first_sample: Option<Arc<Mutex<Option<FirstSample>>>>,
     recording_state: Option<Arc<RecordingState>>,
+    clock_capture: Option<ClockCapture>,
+}
+
+struct ClockCapture {
+    admission: CaptureAdmissionTime,
+    stream_clock: screencapturekit::cm::CMClock,
+    host_clock: screencapturekit::cm::CMClock,
 }
 
 /// The SCK sample's native media timestamp and monotonic callback-observation clock.
@@ -151,6 +161,7 @@ impl CaptureStream {
                         filter: Some(filter),
                         first_sample: None,
                         recording_state: None,
+                        clock_capture: None,
                     });
                 }
             }
@@ -164,6 +175,7 @@ impl CaptureStream {
             filter: Some(filter),
             first_sample: None,
             recording_state: None,
+            clock_capture: None,
         })
     }
 
@@ -175,6 +187,7 @@ impl CaptureStream {
             filter: None,
             first_sample: None,
             recording_state: None,
+            clock_capture: None,
         }
     }
 
@@ -286,7 +299,45 @@ impl CaptureStream {
             filter: Some(filter),
             first_sample: Some(first_sample),
             recording_state: Some(recording_state),
+            clock_capture: None,
         })
+    }
+
+    /// Strict entry carrying a host-clock observation sampled by the caller exactly at its
+    /// capture-admission point. `Instant` remains only the independent callback-arrival
+    /// observation used by `FirstSample`; it does not supply the capture epoch.
+    pub fn start_explicit_display_with_clock(
+        display_id: u32,
+        configuration: StreamConfiguration,
+        video_output_path: PathBuf,
+        observation_epoch: Instant,
+        admission: CaptureAdmissionTime,
+    ) -> Result<Self, String> {
+        let mut capture = Self::start_explicit_display(
+            display_id,
+            configuration,
+            video_output_path,
+            observation_epoch,
+        )?;
+        let stream_clock = capture
+            .stream
+            .as_ref()
+            .and_then(SCStream::synchronization_clock)
+            .ok_or(ClockError::ClockUnavailable);
+        let stream_clock = match stream_clock {
+            Ok(clock) => clock,
+            Err(error) => {
+                capture.stop();
+                return Err(error.to_string());
+            }
+        };
+        let host_clock = screencapturekit::cm::CMClock::host_time_clock();
+        capture.clock_capture = Some(ClockCapture {
+            admission,
+            stream_clock,
+            host_clock,
+        });
+        Ok(capture)
     }
 
     /// First complete screen sample with a mapped, nonempty pixel buffer. Its PTS is on the
@@ -296,6 +347,31 @@ impl CaptureStream {
         self.first_sample
             .as_ref()
             .and_then(|sample| sample.lock().ok().and_then(|sample| *sample))
+    }
+
+    /// Convert the retained first-content sample from the SCK output clock into host time and
+    /// capture-relative milliseconds. This describes the source sample only; it is not a
+    /// recording-output/MP4 origin or `videoOffsetMs` measurement.
+    pub fn first_sample_capture_clock(&self) -> Result<Option<CaptureClockSample>, ClockError> {
+        let Some(clock_capture) = &self.clock_capture else {
+            return Err(ClockError::ClockUnavailable);
+        };
+        let Some(sample) = self.first_sample() else {
+            return Ok(None);
+        };
+        let source_pts = screencapturekit::cm::CMTime {
+            value: sample.presentation_value,
+            timescale: sample.presentation_timescale,
+            flags: sample.presentation_flags,
+            epoch: sample.presentation_epoch,
+        };
+        map_sample_to_capture_clock(
+            source_pts,
+            &clock_capture.stream_clock,
+            &clock_capture.host_clock,
+            clock_capture.admission,
+        )
+        .map(Some)
     }
 
     /// A `true` result means the recording output delegate finished successfully; `false`

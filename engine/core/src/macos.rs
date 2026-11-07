@@ -4,11 +4,13 @@
 
 use screencapturekit::prelude::*;
 
+mod clock;
 mod output;
 mod recording;
 #[cfg(test)]
 mod tests;
 
+pub use clock::{CaptureAdmissionTime, CaptureClockSample, ClockError, ClockTimestamp};
 pub use output::SckOutputGuard;
 pub use recording::{CaptureStream, FirstSample};
 

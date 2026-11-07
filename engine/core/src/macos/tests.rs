@@ -284,17 +284,26 @@ fn run_sck_output_observing(
     output: PathBuf,
     mut observe: impl FnMut() -> std::io::Result<()>,
 ) -> CaptureStream {
-    let admitted = Instant::now();
+    let admission = CaptureAdmissionTime::now().expect("CoreMedia host clock admission time");
+    let observation_epoch = Instant::now();
+    let setup_delay = Duration::from_millis(250);
+    thread::sleep(setup_delay);
     let config = StreamConfiguration {
         width: 640,
         height: 360,
         source_rect: None,
     };
-    let stream = CaptureStream::start_explicit_display(display_id, config, output, admitted)
-        .unwrap_or_else(|error| {
-            fixture.bind_file_if_present(expected_file_path);
-            panic!("SCK strict output start failed: {error}");
-        });
+    let stream = CaptureStream::start_explicit_display_with_clock(
+        display_id,
+        config,
+        output,
+        observation_epoch,
+        admission,
+    )
+    .unwrap_or_else(|error| {
+        fixture.bind_file_if_present(expected_file_path);
+        panic!("SCK strict output start failed: {error}");
+    });
     let deadline = Instant::now() + Duration::from_secs(10);
     while stream.first_sample().is_none() && !stream.recording_failed() {
         fixture.bind_file_if_present(expected_file_path);
@@ -313,12 +322,21 @@ fn run_sck_output_observing(
         "SCK start delegate was not observed"
     );
     let sample = stream.first_sample().expect("first native sample");
+    let clock_sample = stream
+        .first_sample_capture_clock()
+        .expect("SCK-to-host clock conversion")
+        .expect("first sample capture clock mapping");
+    assert!(
+        clock_sample.capture_relative_ms >= setup_delay.as_millis() as u64,
+        "capture-relative source timestamp omitted deliberate pre-start delay"
+    );
     eprintln!(
-        "SCK first sample: pts={}/{} flags={} epoch={} callback_observed_since_epoch_ns={} pixel={}x{} row_bytes={} data_size={}",
-        sample.presentation_value,
-        sample.presentation_timescale,
-        sample.presentation_flags,
-        sample.presentation_epoch,
+        "SCK_CLOCK_EVIDENCE setup_delay_ms={} admission={:?} source_pts={:?} host_pts={:?} capture_relative_ms={} callback_observed_since_epoch_ns={} pixel={}x{} row_bytes={} data_size={} encoded_origin=unproven",
+        setup_delay.as_millis(),
+        admission.timestamp(),
+        clock_sample.source_pts,
+        clock_sample.host_pts,
+        clock_sample.capture_relative_ms,
         sample.callback_observed_since_epoch_ns,
         sample.pixel_width,
         sample.pixel_height,
