@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import { createHash } from "node:crypto";
 import { test } from "node:test";
-import { createRecordLocalClipboardPort, type NativeClipboardPortInput } from "../../dist/backend/host/native/index.js";
+import { createRecordLocalClipboardTextReadbackPort, createRecordLocalClipboardPort, type NativeClipboardPortInput } from "../../dist/backend/host/native/index.js";
 import { formatLocalHandoff, type LocalHandoffInput } from "../../dist/backend/handoff/index.js";
 
 const identity = { captureId: "capture-1", artifactId: "artifact-1" };
@@ -214,3 +214,23 @@ test("public clipboard adapter composes with the provider and pill using control
   disposeWorkflowPillHost(host); client.detach();
   assert.equal(h.shutdowns, 0, "neither consumer closes caller-owned native ports");
 });
+
+ test("separate transient text readback validates exact bytes and never accepts legacy applied", async () => {
+  for (const mode of ["written-readback", "applied", "outcome-unknown", "wrong-digest", "wrong-length", "extra", "throw", "refused"] as const) {
+    let writes=0;
+    const port=createRecordLocalClipboardTextReadbackPort({nativeHost:{readSnapshot:async()=>state},maximumTextBytes:21800,resolveHandoff:async()=>resolution(),clipboard:{async writeTextReadback(text,observed){
+      writes++; assert.deepEqual(observed,state); assert.equal(text,formatLocalHandoff(handoff).text);
+      if(mode==="throw")throw new Error("private");
+      if(mode==="refused")return {status:"refused",reason:"stale"};
+      if(mode==="outcome-unknown")return {status:mode};
+      return {status:mode==="applied"?"applied":"written-readback",digest:mode==="wrong-digest"?"b".repeat(64):createHash("sha256").update(text).digest("hex"),byteLength:Buffer.byteLength(text)+(mode==="wrong-length"?1:0),...(mode==="extra"?{ownership:true}:{})} as never;
+    }}});
+    const result=await port.copyLocal(identity);
+    assert.equal(result.status,mode==="written-readback"?mode:mode==="refused"?"refused":"outcome-unknown"); assert.equal(writes,1);
+    assert.doesNotMatch(JSON.stringify(result),/ownership|private/);
+  }
+ });
+ test("transient readback refuses missing Saved identity and oversize before native effects",async()=>{
+  for(const missing of [true,false]){let writes=0;const port=createRecordLocalClipboardTextReadbackPort({nativeHost:{readSnapshot:async()=>state},maximumTextBytes:1,resolveHandoff:async()=>missing?null:resolution(),clipboard:{async writeTextReadback(){writes++;return {status:"outcome-unknown"};}}});
+  assert.equal((await port.copyLocal(identity)).status,"refused");assert.equal(writes,0);}
+ });

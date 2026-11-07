@@ -58,6 +58,10 @@ export type RecordClipboardResult =
   | { status: "applied"; captureId: string; artifactId: string; digest: string; byteLength: number }
   | { status: "refused"; reason: string }
   | { status: "outcome-unknown" };
+export type RecordClipboardTextReadbackResult = Exclude<RecordClipboardResult, {status:"applied"}> | { status:"written-readback"; captureId:string; artifactId:string; digest:string; byteLength:number };
+export interface RecordClipboardTextReadbackPort {
+  copyLocal(input: {captureId:string; artifactId:string}): Promise<RecordClipboardTextReadbackResult>;
+}
 export interface RecordClipboardPort {
   copyLocal(input: { captureId: string; artifactId: string }): Promise<RecordClipboardResult>;
 }
@@ -82,6 +86,8 @@ export interface RecordCapabilityProviderOptions {
   penConfig?: RecordPenConfigPort;
   /** Undefined keeps copy dispatch-only through the legacy native action seam. */
   clipboard?: RecordClipboardPort;
+  /** Separate transient text readback; cannot establish selection ownership or paste. */
+  clipboardTextReadback?: RecordClipboardTextReadbackPort;
   /** Stable for one provider process; a restarted process must use a new value. */
   providerEpoch: string;
 }
@@ -237,7 +243,7 @@ function validRecordCaptureFacts(value: unknown): value is RecordCaptureFacts {
       if (fact.kind === "accepted-stroke") return fact.ok
         ? ["screen", "whiteboard"].includes(String(fact.surface)) && opaqueId(fact.strokeId) && validCausalOutcome(fact, cursorKeys, noteReceipts)
         : ["screen", "whiteboard"].includes(String(fact.surface)) && ["rejected", "failed"].includes(String(fact.reason)) && validCausalOutcome(fact, cursorKeys, noteReceipts);
-      if (fact.kind === "copy" && "evidence" in fact) return fact.ok === true && fact.evidence === "native-write-readback" &&
+      if (fact.kind === "copy" && "evidence" in fact) return fact.ok === true && ["native-write-readback", "native-text-readback"].includes(String(fact.evidence)) &&
         typeof fact.artifactId === "string" && !!fact.artifactId.trim() && typeof fact.requestId === "string" && !!fact.requestId.trim() && typeof fact.digest === "string" && /^[0-9a-f]{64}$/u.test(fact.digest) &&
         Number.isSafeInteger(fact.byteLength) && Number(fact.byteLength) > 0;
       if (fact.kind === "artifact-open") return typeof fact.artifactId === "string" && (fact.ok
@@ -342,6 +348,7 @@ function captureFromRuntime(state: RecordHostRuntimePort["state"], observedAt: M
 
 /** Compose the published Engine runtime with narrow host/config producers. */
 export function createRecordCapabilityProvider(options: RecordCapabilityProviderOptions): RecordCapabilityProvider {
+  if (options.clipboard && options.clipboardTextReadback) throw new TypeError("Choose one clipboard effect contract");
   if (!options.providerEpoch.trim()) throw new Error("providerEpoch is required");
   let detached = false;
   let revision = 0;
@@ -479,15 +486,17 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
       const known = current.captures.find(capture => capture.captureId === command.captureId);
       if (!known) return refuse(command, "unknown capture");
       if ((command.type === "copy-local" || command.type === "open-capture") && known.phase !== "saved") return refuse(command, "capture is not saved");
-      if (command.type === "copy-local" && options.clipboard) {
+      if (command.type === "copy-local" && (options.clipboard || options.clipboardTextReadback)) {
+        const textReadback = !!options.clipboardTextReadback;
+        const clipboard = options.clipboardTextReadback ?? options.clipboard!;
         const artifactId = known.artifactId;
         if (!artifactId?.trim()) return refuse(command, "saved artifact identity unavailable");
         usedRequests.add(command.requestId);
         try {
-          const receipt = await options.clipboard.copyLocal({ captureId: known.captureId, artifactId });
+          const receipt = await clipboard.copyLocal({ captureId: known.captureId, artifactId });
           if (detached) return response("outcome-unknown");
           if (receipt?.status === "refused" && typeof receipt.reason === "string") return refuse(command, receipt.reason);
-          if (receipt?.status !== "applied" || receipt.captureId !== known.captureId || receipt.artifactId !== artifactId ||
+          if (receipt?.status !== (textReadback ? "written-readback" : "applied") || receipt.captureId !== known.captureId || receipt.artifactId !== artifactId ||
               !/^[0-9a-f]{64}$/u.test(receipt.digest) || !Number.isSafeInteger(receipt.byteLength) || receipt.byteLength <= 0)
             return response("outcome-unknown");
           await refresh();
@@ -496,11 +505,11 @@ export function createRecordCapabilityProvider(options: RecordCapabilityProvider
           const latest = captures.get(known.captureId);
           if (!latest || latest.artifactId !== artifactId) return response("outcome-unknown");
           captures.set(known.captureId, mergeCapture(latest, { ...latest, outcomes: [{
-            kind: "copy", at: new Date().toISOString(), ok: true, evidence: "native-write-readback",
+            kind: "copy", at: new Date().toISOString(), ok: true, evidence: textReadback ? "native-text-readback" : "native-write-readback",
             artifactId, requestId: command.requestId, digest: receipt.digest, byteLength: receipt.byteLength,
           }] }));
           publish();
-          return response("applied");
+          return response(textReadback ? "written-readback" : "applied");
         } catch { return response("outcome-unknown"); }
       }
       if (command.type === "stop-capture" || command.type === "cancel-capture" || command.type === "inspect-capture") {

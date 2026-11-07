@@ -676,3 +676,19 @@ test("causal receipt identities cannot be rebound across snapshots or reconnect"
     assert.deepEqual(client.current().captures[0]!.outcomes, [note, stroke, older], "arrival order does not replace durable causal order");
   } finally { client.detach(); }
 });
+
+ test("transient clipboard readback has distinct evidence and unknown never becomes applied",async()=>{
+ for(const status of ["written-readback","applied","outcome-unknown","foreign"] as const){
+ const {runtime}=runtimeFixture();const facts=outputFacts();facts.captures=[{captureId:"saved-copy",artifactId:"artifact-copy",phase:"saved",delivery:"unknown",outcomes:[{kind:"save",at:"now",ok:true}]}];let writes=0;
+ const client=createRecordCapabilityProvider({runtime,providerEpoch:"readback-"+status,captureFacts:{readFacts:async()=>facts},clipboardTextReadback:{async copyLocal(input){writes++;return {status:status==="foreign"?"written-readback":status,...input,artifactId:status==="foreign"?"other":input.artifactId,digest:"a".repeat(64),byteLength:42} as never;}}});
+ await new Promise(resolve=>setImmediate(resolve));const current=client.current();const command={type:"copy-local" as const,captureId:"saved-copy",requestId:"text-once",expected:{providerEpoch:current.providerEpoch,revision:current.revision}};
+ const result=await client.execute(command);assert.equal(result.status,status==="written-readback"?status:"outcome-unknown");
+ const outcome=result.snapshot.captures[0]!.outcomes.find(item=>item.kind==="copy");
+ if(status==="written-readback")assert.deepEqual(outcome,{kind:"copy",at:outcome?.at,ok:true,evidence:"native-text-readback",artifactId:"artifact-copy",requestId:"text-once",digest:"a".repeat(64),byteLength:42});else assert.equal(outcome,undefined);
+ await client.execute({...command,expected:{providerEpoch:result.snapshot.providerEpoch,revision:result.snapshot.revision}});assert.equal(writes,1);assert.equal(result.snapshot.captures[0]!.delivery,"unknown");client.detach();
+ }
+ });
+
+test("a provider cannot ambiguously install both clipboard effect contracts",()=>{
+ const {runtime}=runtimeFixture();assert.throws(()=>createRecordCapabilityProvider({runtime,providerEpoch:"two-ports",clipboard:{copyLocal:async()=>({status:"outcome-unknown"})},clipboardTextReadback:{copyLocal:async()=>({status:"outcome-unknown"})}}),/Choose one clipboard effect contract/);
+});

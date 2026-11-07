@@ -145,7 +145,7 @@ function canStart(value: CapabilitySnapshot): boolean {
     !value.captures.some(item => ["starting", "recording", "processing", "unknown"].includes(item.phase));
 }
 function confirmedCopy(capture: CaptureFact, requestId?: string): boolean {
-  return capture.outcomes.some(outcome => outcome.kind === "copy" && outcome.ok && "evidence" in outcome && outcome.evidence === "native-write-readback" &&
+  return capture.outcomes.some(outcome => outcome.kind === "copy" && outcome.ok && "evidence" in outcome && ["native-write-readback", "native-text-readback"].includes(outcome.evidence) &&
     outcome.artifactId === capture.artifactId && (!requestId || outcome.requestId === requestId) && /^[0-9a-f]{64}$/u.test(outcome.digest) && Number.isSafeInteger(outcome.byteLength) && outcome.byteLength > 0);
 }
 function presentClient(value: CapabilitySnapshot, revision: number, options: RecordClientPillHostOptions): PillView {
@@ -171,7 +171,7 @@ function presentClient(value: CapabilitySnapshot, revision: number, options: Rec
   ]; }
   if (active?.phase === "unknown") result.actions = [{ id: "inspect", label: "Check status", enabled: true, selected: false, primary: true }];
   if (saved) {
-    result.notice = confirmedCopy(saved) ? "Handoff copied" : "Saved locally";
+    result.notice = confirmedCopy(saved) ? saved.outcomes.some(outcome => outcome.kind === "copy" && "evidence" in outcome && outcome.evidence === "native-text-readback" && outcome.artifactId === saved.artifactId) ? "Handoff text written and read back" : "Handoff copied" : "Saved locally";
     result.pocket = { tone: result.warning ? "warning" : "info", title: "Local handoff", description: result.warning ?? "", actionIds: [] };
   }
   if (active?.delivery === "unknown" || active?.delivery === "local-only")

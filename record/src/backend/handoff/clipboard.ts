@@ -15,10 +15,17 @@ export interface NativeClipboardPortInput {
   writeText(text: string, observed: { processEpoch: string; revision: number }): Promise<NativeClipboardWriteResultInput>;
 }
 
-export type NativeClipboardWriteResultInput =
-  | { status: "applied"; digest: string; byteLength: number }
+type NativeClipboardResult<K extends string> =
+  | { status: K; digest: string; byteLength: number }
   | { status: "refused"; reason: "stale" | "busy" | "unavailable" | "invalid-text" | "too-large" }
   | { status: "outcome-unknown" };
+
+export type NativeClipboardWriteResultInput = NativeClipboardResult<"applied">;
+/** Transient exact supplied-text observation; no selection ownership or paste guarantee. */
+export type NativeClipboardTextReadbackResultInput = NativeClipboardResult<"written-readback">;
+export interface NativeClipboardTextReadbackPortInput {
+  writeTextReadback(text: string, observed: { processEpoch: string; revision: number }): Promise<NativeClipboardTextReadbackResultInput>;
+}
 
 /** Structural read-only subset of the published NativeHostPort. */
 export interface NativeClipboardHostInput {
@@ -36,10 +43,17 @@ export type RecordLocalClipboardRefusalReason =
   | "busy"
   | "unavailable";
 
-export type RecordLocalClipboardResult =
-  | { status: "applied"; captureId: string; artifactId: string; digest: string; byteLength: number }
+type RecordLocalResult<K extends string> =
+  | { status: K; captureId: string; artifactId: string; digest: string; byteLength: number }
   | { status: "refused"; captureId?: string; artifactId?: string; reason: RecordLocalClipboardRefusalReason }
   | { status: "outcome-unknown"; captureId: string; artifactId: string };
+
+export type RecordLocalClipboardResult = RecordLocalResult<"applied">;
+export type RecordLocalClipboardTextReadbackResult = RecordLocalResult<"written-readback">;
+export interface RecordLocalClipboardTextReadbackPort {
+  copyLocal(identity: RecordLocalClipboardIdentity): Promise<RecordLocalClipboardTextReadbackResult>;
+}
+export type RecordLocalClipboardTextReadbackPortInput = Omit<RecordLocalClipboardPortInput, "clipboard"> & { clipboard: NativeClipboardTextReadbackPortInput };
 
 export interface RecordLocalClipboardPort {
   copyLocal(identity: RecordLocalClipboardIdentity): Promise<RecordLocalClipboardResult>;
@@ -85,18 +99,19 @@ function validUnicodeText(text: string): boolean {
   return true;
 }
 
-function nativeResult(
+function nativeResult<K extends "applied" | "written-readback">(
   value: unknown,
   expectedDigest: string,
   expectedByteLength: number,
-): NativeClipboardWriteResultInput | undefined {
+  success: K,
+): NativeClipboardResult<K> | undefined {
   if (!value || typeof value !== "object" || Array.isArray(value)) return undefined;
   const result = value as Record<string, unknown>;
-  if (result.status === "applied" && exactKeys(result, ["status", "digest", "byteLength"])
+  if (result.status === success && exactKeys(result, ["status", "digest", "byteLength"])
     && typeof result.digest === "string" && /^[0-9a-f]{64}$/.test(result.digest)
     && result.digest === expectedDigest && Number.isSafeInteger(result.byteLength)
     && result.byteLength === expectedByteLength) {
-    return { status: "applied", digest: result.digest, byteLength: expectedByteLength };
+    return { status: success, digest: result.digest, byteLength: expectedByteLength };
   }
   if (result.status === "refused" && exactKeys(result, ["status", "reason"])
     && ["stale", "busy", "unavailable", "invalid-text", "too-large"].includes(String(result.reason))) {
@@ -108,6 +123,16 @@ function nativeResult(
 
 /** One exact formatted handoff write over caller-owned public clipboard and host ports. */
 export function createRecordLocalClipboardPort(input: RecordLocalClipboardPortInput): RecordLocalClipboardPort {
+  return createClipboardAdapter(input, "applied");
+}
+
+export function createRecordLocalClipboardTextReadbackPort(input: RecordLocalClipboardTextReadbackPortInput): RecordLocalClipboardTextReadbackPort {
+  if (!input?.clipboard || typeof input.clipboard.writeTextReadback !== "function") throw new TypeError("Invalid text readback port");
+  const clipboard = input.clipboard;
+  return createClipboardAdapter({ ...input, clipboard: { writeText: (text, observed) => clipboard.writeTextReadback(text, observed) } }, "written-readback");
+}
+
+function createClipboardAdapter<K extends "applied" | "written-readback">(input: Omit<RecordLocalClipboardPortInput, "clipboard"> & { clipboard: { writeText(text: string, observed: {processEpoch:string;revision:number}): Promise<NativeClipboardResult<K>> } }, success: K): { copyLocal(identity: RecordLocalClipboardIdentity): Promise<RecordLocalResult<K>> } {
   if (!input || !input.clipboard || typeof input.clipboard.writeText !== "function"
     || !input.nativeHost || typeof input.nativeHost.readSnapshot !== "function"
     || typeof input.resolveHandoff !== "function"
@@ -170,12 +195,12 @@ export function createRecordLocalClipboardPort(input: RecordLocalClipboardPortIn
         return { status: "outcome-unknown", ...correlation };
       }
 
-      let result: NativeClipboardWriteResultInput | undefined;
-      try { result = nativeResult(write, digest, byteLength); }
+      let result: NativeClipboardResult<K> | undefined;
+      try { result = nativeResult(write, digest, byteLength, success); }
       catch { result = undefined; }
       if (!result || result.status === "outcome-unknown") return { status: "outcome-unknown", ...correlation };
-      if (result.status === "refused") return { status: "refused", ...correlation, reason: result.reason };
-      return { status: "applied", ...correlation, digest, byteLength };
+      if (result.status === "refused" && "reason" in result) return { status: "refused", ...correlation, reason: result.reason };
+      return { status: success, ...correlation, digest, byteLength };
     },
   };
 }
