@@ -30,6 +30,7 @@ import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-trans
 import { sealCapture } from "../../src/sender/seal.ts";
 import { publishEncryptedSpool } from "../../src/sender/spool-publication.ts";
 import { commitEncryptedSpool } from "../../src/sender/spool-commit.ts";
+import { retryQueuedUploads, RetryError } from "../../src/queue/retry.ts";
 import { runUploadWorkerOnce } from "../../src/queue/worker.ts";
 
 const target = process.platform === "linux" ? "linux-x64" : process.arch === "arm64" ? "macos-arm64" : "macos-x64";
@@ -241,6 +242,66 @@ test("native queue snapshot uses the stable lease and preserves private job data
   await assert.rejects(readQueueSnapshot(root, context, resources), e => e instanceof QueueStoreError && e.category === "unsafe_file");
   assert.deepEqual(await readFile(file), bytes);
 }));
+
+test("native explicit retry preserves state and uses the admitted queue inode", async () => fixture(async root => {
+  const id = "a".repeat(32), other = "c".repeat(32), server = "https://connect.example/connect", generation = "b".repeat(32);
+  const credential = JSON.stringify({ server, scope: "upload", token: "synthetic-private-token", generation });
+  const config = '{"unrelated":"synthetic-private"}';
+  await writeFile(path.join(root, "upload.credential"), credential, { mode: 0o600 });
+  await writeFile(path.join(root, "config.json"), config, { mode: 0o600 });
+  const original = JSON.stringify({ id, server, generation, bundle: "/synthetic.apparent", created: 10,
+    status: "failed", attempts: 8, nextAttempt: 500, error: "upload_failed", shared: true,
+    files: [{ path: "summary.md", size: 2, sha256: "d".repeat(64) }], future: { keep: true } });
+  await writeFile(path.join(root, `${id}.job`), original, { mode: 0o600 });
+  await link(path.join(root, `${id}.job`), path.join(root, "retained-job-alias"));
+  await writeFile(path.join(root, `${other}.job`), original.replaceAll(id, other).replace('"failed"', '"ready"'), { mode: 0o600 });
+  const untouched = await readFile(path.join(root, `${other}.job`));
+  const settings = { enabled: true, server, encryptionEnabled: false, sharingEnabled: true, nowSeconds: 100, retentionSeconds: 90 };
+  let replacements = 0;
+  const ports = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+    async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
+      const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+      if (contender.state === "acquired") await contender.lease.release();
+      assert.equal(contender.state, "busy", "retry must retain the actual queue inode across replacement");
+      replacements++; return resources.replaceFile(...args);
+    } };
+  const input = { directory: root, approvedServer: server, readSettings: async () => settings };
+  assert.deepEqual(await retryQueuedUploads(input, ports), { state: "complete", changedJobIds: [id] });
+  assert.equal(replacements, 1);
+  const saved = decodeJob(await readFile(path.join(root, `${id}.job`)));
+  assert.equal(saved.status, "pending"); assert.equal(saved.attempts, 0); assert.equal(saved.nextAttempt, 0); assert.equal(saved.error, null);
+  assert.deepEqual(saved.future, { keep: true }); assert.equal(saved.shared, true); assert.equal(saved.files.length, 1);
+  assert.equal(await readFile(path.join(root, "retained-job-alias"), "utf8"), original);
+  assert.deepEqual(await readFile(path.join(root, `${other}.job`)), untouched);
+  assert.equal(await readFile(path.join(root, "upload.credential"), "utf8"), credential);
+  assert.equal(await readFile(path.join(root, "config.json"), "utf8"), config);
+  const lockPath = path.join(root, "queue.lock"), inode = (await lstat(lockPath)).ino;
+  const acquired = await resources.lock(await open(lockPath, constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+  assert.equal(acquired.state, "acquired");
+  if (acquired.state === "acquired") {
+    try { await assert.rejects(retryQueuedUploads({ ...input, queueTimeoutMs: 0 }, ports), e => e instanceof RetryError && e.category === "state_unavailable"); }
+    finally { await acquired.lease.release(); }
+  }
+  assert.equal((await lstat(lockPath)).ino, inode);
+}));
+
+test("native retry refuses queue inode replacement before any write", async () => fixture(async root => {
+  const server = "https://connect.example", generation = "b".repeat(32), id = "a".repeat(32);
+  await writeFile(path.join(root, "upload.credential"), JSON.stringify({ server, scope: "upload", token: "synthetic-token", generation }), { mode: 0o600 });
+  const original = JSON.stringify({ id, server, generation, bundle: "/synthetic.apparent", created: 10, status: "failed", attempts: 8 });
+  await writeFile(path.join(root, `${id}.job`), original, { mode: 0o600 });
+  let reads = 0, effects = 0;
+  const settings = { enabled: true, server, encryptionEnabled: false, sharingEnabled: true, nowSeconds: 100, retentionSeconds: 90 };
+  const ports = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+    async replaceFile(...args: Parameters<typeof resources.replaceFile>) { effects++; return resources.replaceFile(...args); } };
+  await assert.rejects(retryQueuedUploads({ directory: root, approvedServer: server, readSettings: async () => {
+    if (++reads === 3) { await rename(path.join(root, "queue.lock"), path.join(root, "prior-queue.lock"));
+      await writeFile(path.join(root, "queue.lock"), "", { mode: 0o600 }); }
+    return settings;
+  } }, ports), e => e instanceof RetryError && ["state_unavailable", "stale_snapshot"].includes(e.category));
+  assert.equal(effects, 0); assert.equal(await readFile(path.join(root, `${id}.job`), "utf8"), original);
+}));
+
 function capture(evidenceOnly = false): RetrievedRecipientCapture {
   const entries = [
     ["summary.md", Buffer.from("synthetic recipient summary")],

@@ -5,7 +5,8 @@ import type { CredentialReadResources } from "../credentials/private-read.ts";
 import { admitTrustedDirectory, DirectoryAdmissionFailure, directoryIdentity } from "./directory.ts";
 
 export type NamespaceLease = { assertHeld(): void; readonly signal: AbortSignal; release(): Promise<void> };
-export type WorkerLease = NamespaceLease & { assertCurrent(): Promise<void> };
+export type CurrentNamespaceLease = NamespaceLease & { assertCurrent(): Promise<void> };
+export type WorkerLease = CurrentNamespaceLease;
 export type NamespaceResources = CredentialReadResources & {
   /** Consumes the lock descriptor. Busy waits are cancellation-aware and timeout-bounded. */
   lock(handle: FileHandle, options: { timeoutMs: number; signal?: AbortSignal }): Promise<
@@ -70,8 +71,9 @@ type StateContext = { scope: "read" | "upload"; approvedServer: string };
 type StateOptions = { signal?: AbortSignal; lockTimeoutMs?: number };
 export type StateDirectory = { handle: FileHandle; path: string; identity: string };
 type StateBody<T> = (directory: StateDirectory, lease: NamespaceLease) => Promise<T>;
-export function withStateQueue<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: StateBody<T>): Promise<T> {
-  return withStateLock(directoryPath, context, resources, options, body, "queue");
+export function withStateQueue<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: (directory: StateDirectory, lease: CurrentNamespaceLease) => Promise<T>): Promise<T> {
+  return withStateLock(directoryPath, context, resources, options,
+    (directory, lease) => body(directory, lease as CurrentNamespaceLease), "queue");
 }
 /** Scope lock precedes short queue transactions; never call this while queue is held. */
 export function withRenewalScope<T>(directoryPath: string, context: StateContext, resources: NamespaceResources, options: StateOptions, body: StateBody<T>): Promise<T> {
@@ -99,7 +101,7 @@ async function withStateLock<T>(directoryPath: string, context: StateContext, re
       const lease = lock.lease;
       checkSignal(signal, lease.signal);
       assertLease(lease);
-      const borrowed = kind === "worker" ? Object.freeze({ signal: lease.signal,
+      const borrowed = kind !== "renewal" ? Object.freeze({ signal: lease.signal,
         assertHeld: () => lease.assertHeld(), release: () => lease.release(),
         async assertCurrent() {
           checkSignal(signal, lease.signal); assertLease(lease);
