@@ -402,13 +402,12 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const mappedVideoEndMs = payload.clock.videoOffsetMs + payload.video.durationMs;
     const finalFrameIntervalMs = Math.ceil(1000 / 30);
     const integerRoundingMs = 2; // ceil offset + ceil video duration versus floored capture stop.
-    const endpointOverhangMs = Math.max(0, mappedVideoEndMs - payload.clock.durationMs);
+    const endpointDifferenceMs = Math.abs(mappedVideoEndMs - payload.clock.durationMs);
     assert.ok(
-      endpointOverhangMs <= finalFrameIntervalMs + integerRoundingMs,
-      `capture clock must contain the mapped MP4 endpoint except for one scheduled final-frame interval (clock=${payload.clock.durationMs}ms, videoOffset=${payload.clock.videoOffsetMs}ms, video=${payload.video.durationMs}ms, endpoint=${mappedVideoEndMs}ms, overhang=${endpointOverhangMs}ms, finalFrame=${finalFrameIntervalMs}ms, rounding=${integerRoundingMs}ms)`,
+      endpointDifferenceMs <= finalFrameIntervalMs + integerRoundingMs,
+      `capture clock and mapped MP4 endpoint differ by at most one scheduled final-frame interval (clock=${payload.clock.durationMs}ms, videoOffset=${payload.clock.videoOffsetMs}ms, video=${payload.video.durationMs}ms, endpoint=${mappedVideoEndMs}ms, difference=${endpointDifferenceMs}ms, finalFrame=${finalFrameIntervalMs}ms, rounding=${integerRoundingMs}ms)`,
     );
     assert.ok(payload.clock.videoOffsetMs > 0, "video offset maps the first scheduled video PTS into the capture admission clock");
-    assert.ok(Math.abs(payload.clock.durationMs - payload.video.durationMs) < 500, "controlled post-EOS finalization delay is excluded from both capture and encoded-video duration");
     assert.equal(payload.video.width, 1366);
     assert.equal(payload.video.height, 768);
     assert.ok(Object.values(payload.collection).every((state) => state === "unavailable"));

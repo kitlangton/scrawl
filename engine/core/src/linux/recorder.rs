@@ -281,7 +281,7 @@ impl Recorder {
                     let pts = buffer.pts();
                     if base.is_none() {
                         *base = pts;
-                        first.store(started_at.elapsed().as_millis() as u64, Ordering::Release);
+                        let callback_arrival_ms = started_at.elapsed().as_millis() as u64;
                         if let (Some(pts), Some(pipeline)) = (pts, pipeline.upgrade())
                             && let (Some(clock), Some(base_time)) = (pipeline.clock(), pipeline.base_time())
                             && let Some(capture_ns) = capture_elapsed_at_gst_pts(
@@ -293,6 +293,9 @@ impl Recorder {
                         {
                             origin.store(capture_ns, Ordering::Release);
                         }
+                        // A reader that observes readiness must also observe
+                        // the origin written above, when mapping succeeded.
+                        first.store(callback_arrival_ms, Ordering::Release);
                     }
                     if let (Some(pts), Some(zero)) = (pts, *base) {
                         let buffer = buffer.make_mut();
@@ -620,10 +623,10 @@ mod tests {
         let final_frame_ms =
             (1_000_000_000u64 + FPS as u64 * 1_000_000 - 1) / (FPS as u64 * 1_000_000);
         let rounding_ms = 2; // Two ceils and one floor add less than 3 ms.
-        let overhang_ms = video_end_ms.saturating_sub(stop_ms);
+        let endpoint_difference_ms = video_end_ms.abs_diff(stop_ms);
         assert!(
-            overhang_ms <= final_frame_ms + rounding_ms,
-            "scheduled video endpoint must track native stop (stop={stop_ms}ms, offset={offset_ms}ms, video={}ms, overhang={overhang_ms}ms, frame-bound={final_frame_ms}ms + rounding={rounding_ms}ms)",
+            endpoint_difference_ms <= final_frame_ms + rounding_ms,
+            "scheduled video endpoint must track native stop (stop={stop_ms}ms, offset={offset_ms}ms, video={}ms, difference={endpoint_difference_ms}ms, frame-bound={final_frame_ms}ms + rounding={rounding_ms}ms)",
             timing.duration_ms
         );
         file.sync_all().unwrap();
