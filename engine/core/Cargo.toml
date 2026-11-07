@@ -9,7 +9,7 @@ description = "Shared capture admission, bundle leases, and optional Linux recor
 [features]
 default = []
 audio-codec = ["dep:anyhow", "dep:hound"]
-local-speech = ["audio-codec", "dep:transcribe-cpp"]
+local-speech = ["audio-codec", "dep:transcribe-cpp", "dep:sha2"]
 linux-media = ["dep:flume", "dep:anyhow", "dep:gstreamer", "dep:gstreamer-app", "dep:gstreamer-video"]
 linux-portal = ["linux-media", "dep:ashpd", "dep:futures-lite", "dep:zbus"]
 publication = ["dep:anyhow", "dep:sha2", "dep:png"]

@@ -46,3 +46,37 @@ pub fn init_backends() -> Result<()> {
     .map_err(|error| anyhow::anyhow!("transcribe.cpp backends: {error}"))
 }
 
+/// Linux descriptor-bound native execution for the capture worker's supervised child.
+/// The caller must enforce a hard child deadline/cancellation/reaping independently:
+/// native load/run are synchronous. No code path here discovers or fetches a model.
+#[cfg(target_os = "linux")]
+pub struct PinnedRecognizer {
+    recognizer: Recognizer,
+    model: super::model::ModelFile,
+}
+
+#[cfg(target_os = "linux")]
+impl PinnedRecognizer {
+    pub fn load(model: super::model::ModelFile, deadline: std::time::Instant) -> Result<Self> {
+        use std::os::fd::AsRawFd;
+        model.revalidate(deadline)?;
+        // Native fopen follows only this write-sealed snapshot, never mutable source bytes.
+        let path = std::path::PathBuf::from(format!("/proc/self/fd/{}", model.as_raw_fd()));
+        let recognizer = Recognizer::load(&path)?;
+        model.revalidate(deadline)?;
+        Ok(Self { recognizer, model })
+    }
+
+    pub fn run(&mut self, samples: &[f32], deadline: std::time::Instant) -> Result<Transcript> {
+        anyhow::ensure!(std::time::Instant::now() < deadline, "speech deadline");
+        anyhow::ensure!(
+            samples.iter().all(|s| s.is_finite()),
+            "nonfinite speech samples"
+        );
+        self.model.revalidate(deadline)?;
+        let result = self.recognizer.run(samples)?;
+        // No result may acquire original-fact authority after lost seals or late return.
+        self.model.revalidate(deadline)?;
+        Ok(result)
+    }
+}
