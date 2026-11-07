@@ -277,7 +277,7 @@ try {
       import assert from 'node:assert/strict';
       import {createHash} from 'node:crypto';
       import {spawn} from 'node:child_process';
-      import {appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath} from 'node:fs/promises';
+      import {appendFile, chmod, copyFile, lstat, mkdir, mkdtemp, readFile, readdir, realpath, writeFile} from 'node:fs/promises';
       import {tmpdir} from 'node:os';
       import path from 'node:path';
       import {pathToFileURL} from 'node:url';
@@ -378,7 +378,7 @@ try {
       const mediaArtifact=await admitArtifact('media',mediaArchive,{acceptedFile:'linux-accepted.json',sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',manifestSourceSha:'cf8356eb869038f6737a8e83c1cb4ab655fa0237',runId:42314800490,sha256:'cd7346951646f440c0d67e1fe10a8bc44dfde4329e3a9a3cc7d6f0d4297604f4',size:100858133,files:186});
       const capturePayload=captureArtifact.payload, captureManifest=captureArtifact.manifest, mediaPayload=mediaArtifact.payload, mediaManifest=mediaArtifact.manifest;
       let xvfb, display='', scene, client, mediaClient, coordinator, recordClient, pillHost, mappings;
-      let qualificationError, cleanupErrors=[];
+      let qualificationError, cleanupErrors=[], owningClientsClear=false;
       const previousDisplay=process.env.DISPLAY, previousWayland=process.env.WAYLAND_DISPLAY;
       try {
         xvfb=trackChild(spawn('Xvfb',['-displayfd','1','-screen','0','683x480x24','-nolisten','tcp'],{stdio:['ignore','pipe','pipe']}));
@@ -453,9 +453,9 @@ try {
         const cleanupSteps=[];
         if(pillHost) cleanupSteps.push({label:'pill host disposal',run:()=>disposeWorkflowPillHost(pillHost)});
         if(recordClient) cleanupSteps.push({label:'Record client detach',run:()=>recordClient.detach()});
-        if(coordinator) cleanupSteps.push({label:'coordinator drain and disposal',run:async()=>{const report=await coordinator.shutdown();await recordLog('coordinator shutdown report',report);await coordinator.dispose();coordinator=undefined;}});
-        if(mediaClient) cleanupSteps.push({label:'media/2 client close',run:async()=>{await mediaClient.close();mediaClient=undefined;}});
-        if(client) cleanupSteps.push({label:'capture client close',run:async()=>{await client.close();}});
+        if(coordinator) cleanupSteps.push({label:'coordinator drain and disposal',run:async()=>{const report=await coordinator.shutdown();await recordLog('coordinator shutdown report',report);await coordinator.dispose();owningClientsClear=report.scope==='record-coordinator'&&report.admission==='closed'&&report.localDrain==='complete'&&report.runtimeClearance==='clear';coordinator=undefined;if(!owningClientsClear)throw new Error('Owning clients must remain retained: coordinator clearance is unresolved');}});
+        if(mediaClient) cleanupSteps.push({label:'media/2 client close',run:async()=>{if(!owningClientsClear)throw new Error('Media owning close refused without positive clearance');await mediaClient.close();mediaClient=undefined;}});
+        if(client) cleanupSteps.push({label:'capture client close',run:async()=>{if(!owningClientsClear)throw new Error('Capture owning close refused without positive clearance');await client.close();}});
         if(scene) cleanupSteps.push({label:'synthetic scene exit',run:()=>waitForExit(scene,1000)});
         if(xvfb) cleanupSteps.push({label:'owned Xvfb exit',run:()=>waitForExit(xvfb,1000)});
         cleanupErrors=await runCleanupSteps(cleanupSteps); for(const failure of cleanupErrors) console.error(failure.stack);
