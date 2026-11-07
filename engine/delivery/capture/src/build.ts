@@ -79,7 +79,9 @@ while (pending.length) {
   const file = pending.pop()!
   if (seen.has(file)) continue
   seen.add(file)
-  const output = run('ldd', [file])
+  // Match the launcher's closed search path while resolving newly staged
+  // transcribe/ggml dependencies; never borrow an ambient LD_LIBRARY_PATH.
+  const output = execFileSync('ldd', [file], { cwd: root, encoding: 'utf8', env: { ...process.env, LD_LIBRARY_PATH: libOut } }).trim()
   if (/=>\s+not found(?:\s|$)/m.test(output)) throw new Error(`unresolved runtime dependency: ${file}`)
   for (const line of output.split('\n')) {
     const match = line.match(/^\s*(\S+)\s+=>\s+(\/\S+)/)

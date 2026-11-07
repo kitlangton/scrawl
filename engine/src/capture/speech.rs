@@ -45,6 +45,10 @@ pub fn transcribe(
     seal: &Value,
     duration: u64,
 ) -> Result<Value, &'static str> {
+    let deadline = Instant::now() + Duration::from_millis(JOB_MS);
+    if sync_control(shared)?.cancel_requested {
+        return Err("unavailable");
+    }
     if !configured() {
         return Err("unavailable");
     }
@@ -74,9 +78,15 @@ pub fn transcribe(
         audio_bytes: m.len(),
         audio_sha256: seal["sha256"].as_str().ok_or("invalid_materials")?.into(),
         duration_ms: duration,
-        budget_ms: JOB_MS,
+        budget_ms: deadline
+            .saturating_duration_since(Instant::now())
+            .as_millis()
+            .min(JOB_MS as u128) as u64,
     };
-    let deadline = Instant::now() + Duration::from_millis(JOB_MS);
+    if sync_control(shared)?.cancel_requested || Instant::now() >= deadline || input.budget_ms == 0
+    {
+        return Err("unavailable");
+    }
     let (child, _lifetime) = crate::execution::spawn_reexec(
         &["--capture-speech-job-v1"],
         &serde_json::to_vec(&input).map_err(|_| "internal")?,
@@ -84,7 +94,9 @@ pub fn transcribe(
         crate::execution::Profile::Speech,
         false,
     )?;
-    let bytes = collect(OwnedChild(child), deadline, &shared.cancel)?;
+    let bytes = collect(OwnedChild(child), deadline, &shared.cancel, || {
+        sync_control(shared).map(|j| j.cancel_requested)
+    })?;
     let value: Value = serde_json::from_slice(&bytes).map_err(|_| "invalid_materials")?;
     validate_result(&value, duration)?;
     Ok(value)
@@ -93,6 +105,7 @@ fn collect(
     mut child: OwnedChild,
     deadline: Instant,
     cancelled: &AtomicBool,
+    mut durable_cancel: impl FnMut() -> Result<bool, &'static str>,
 ) -> Result<Vec<u8>, &'static str> {
     let mut out = child.0.stdout.take().ok_or("internal")?;
     let fd = out.as_raw_fd();
@@ -103,9 +116,16 @@ fn collect(
     let mut bytes = Vec::new();
     let mut status = None;
     let mut eof = false;
+    let mut next_control = Instant::now();
     loop {
         if cancelled.load(Ordering::Acquire) || Instant::now() >= deadline {
             return Err("unavailable");
+        }
+        if Instant::now() >= next_control {
+            if durable_cancel()? || Instant::now() >= deadline {
+                return Err("unavailable");
+            }
+            next_control = Instant::now() + Duration::from_millis(100);
         }
         let mut buf = [0u8; 8192];
         loop {
@@ -133,7 +153,10 @@ fn collect(
         }
         thread::sleep(Duration::from_millis(5));
     }
-    if !status.unwrap().success() || Instant::now() >= deadline || cancelled.load(Ordering::Acquire)
+    if durable_cancel()?
+        || !status.unwrap().success()
+        || Instant::now() >= deadline
+        || cancelled.load(Ordering::Acquire)
     {
         return Err("unavailable");
     }
@@ -292,7 +315,8 @@ mod tests {
                 collect(
                     OwnedChild(process),
                     Instant::now() + Duration::from_millis(20),
-                    &AtomicBool::new(cancelled)
+                    &AtomicBool::new(cancelled),
+                    || Ok(false)
                 )
                 .is_err()
             );
@@ -316,7 +340,8 @@ mod tests {
             collect(
                 OwnedChild(process),
                 Instant::now() + Duration::from_secs(5),
-                &AtomicBool::new(false)
+                &AtomicBool::new(false),
+                || Ok(false)
             ),
             Err("invalid_materials")
         );
@@ -329,5 +354,115 @@ mod tests {
             io::Error::last_os_error().raw_os_error(),
             Some(libc::ECHILD)
         );
+    }
+    #[test]
+    fn accepted_recovery_peer_cancel_is_observed_from_the_shared_journal_and_reaped() {
+        use std::process::{Command, Stdio};
+        let (base, directory, _, mut journal) = super::super::unsealed_cleanup_tests::fixture();
+        journal.state = "stopping".into();
+        journal.cancel_requested = false;
+        let owner = Shared {
+            journal: Mutex::new(journal.clone()),
+            directory: directory.clone(),
+            runtime: Runtime::open(&base).unwrap(),
+            stop: AtomicBool::new(true),
+            cancel: AtomicBool::new(false),
+            epoch: Instant::now(),
+        };
+        persist_new(&owner).unwrap();
+        let recovery = Arc::new(Shared {
+            journal: Mutex::new(journal.clone()),
+            directory: directory.clone(),
+            runtime: Runtime::open(&base).unwrap(),
+            stop: AtomicBool::new(false),
+            cancel: AtomicBool::new(false),
+            epoch: Instant::now(),
+        });
+        let process = Command::new("/bin/sleep")
+            .arg("30")
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = process.id();
+        let (sent, received) = std::sync::mpsc::sync_channel(1);
+        let peer = recovery.clone();
+        std::thread::scope(|scope| {
+            scope.spawn(|| {
+                let mut all=HashMap::from([(journal.capture_id.clone(),peer.clone())]);
+                let request=json!({"method":"cancel","captureId":journal.capture_id,"ownerToken":journal.owner_token});
+                process_request(request,&peer.runtime,&directory,&mut String::new(),&mut vec![],&mut false,&mut HashMap::new(),&mut all,true).unwrap();
+                assert!(peer.cancel.load(Ordering::Acquire));
+                sent.send(()).unwrap();
+            });
+            let mut first = true;
+            let outcome = collect(
+                OwnedChild(process),
+                Instant::now() + Duration::from_secs(5),
+                &owner.cancel,
+                || {
+                    if first {
+                        received.recv_timeout(Duration::from_secs(2)).unwrap();
+                        first = false;
+                        assert!(!owner.cancel.load(Ordering::Acquire));
+                    }
+                    sync_control(&owner).map(|j| j.cancel_requested)
+                },
+            );
+            assert_eq!(outcome, Err("unavailable"));
+        });
+        assert!(owner.cancel.load(Ordering::Acquire));
+        assert!(
+            read_journal(&directory, &journal.capture_id, &journal.owner_token)
+                .unwrap()
+                .cancel_requested
+        );
+        let mut status = 0;
+        assert_eq!(
+            unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) },
+            -1
+        );
+        assert_eq!(
+            io::Error::last_os_error().raw_os_error(),
+            Some(libc::ECHILD)
+        );
+        remove_unsealed(&directory, &journal).unwrap();
+        drop(owner);
+        drop(recovery);
+        fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn failed_or_late_durable_control_read_never_returns_a_result_and_reaps() {
+        use std::process::{Command, Stdio};
+        for late in [false, true] {
+            let process = Command::new("/bin/sleep")
+                .arg("30")
+                .stdout(Stdio::piped())
+                .spawn()
+                .unwrap();
+            let pid = process.id();
+            let outcome = collect(
+                OwnedChild(process),
+                Instant::now() + Duration::from_millis(10),
+                &AtomicBool::new(false),
+                || {
+                    if late {
+                        std::thread::sleep(Duration::from_millis(20));
+                        Ok(false)
+                    } else {
+                        Err("source_mismatch")
+                    }
+                },
+            );
+            assert!(outcome.is_err());
+            let mut status = 0;
+            assert_eq!(
+                unsafe { libc::waitpid(pid as i32, &mut status, libc::WNOHANG) },
+                -1
+            );
+            assert_eq!(
+                io::Error::last_os_error().raw_os_error(),
+                Some(libc::ECHILD)
+            );
+        }
     }
 }
