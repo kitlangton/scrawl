@@ -23,7 +23,7 @@ required-features = ["capture"]
 [features]
 media = ["apparent-capture-engine/linux-media", "apparent-capture-engine/materials-media", "dep:anyhow", "dep:libc", "dep:png", "dep:sha2", "dep:gstreamer"]
 
-capture = ["apparent-capture-engine/linux-media", "apparent-capture-engine/publication", "apparent-capture-engine/materials-media", "dep:anyhow", "dep:libc", "dep:sha2", "dep:gstreamer", "dep:x11rb"]
+capture = ["apparent-capture-engine/linux-portal", "apparent-capture-engine/publication", "apparent-capture-engine/materials-media", "dep:anyhow", "dep:libc", "dep:sha2", "dep:gstreamer", "dep:x11rb"]
 
 [dependencies]
 apparent-capture-engine = { path = "core" }

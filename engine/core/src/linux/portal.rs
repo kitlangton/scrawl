@@ -90,6 +90,19 @@ pub fn screencast(
     stopping: &AtomicBool,
     request_failed: impl FnOnce(),
 ) -> Result<(Stream, Option<String>)> {
+    screencast_with_control(window, restore_token, stopping, request_failed, || Ok(()))
+}
+
+/// Uses the existing consent wait while allowing its trusted caller to refresh
+/// durable control into `stopping`. The callback runs on the waiting caller,
+/// never on the portal thread; it must remain bounded and does not grant consent.
+pub fn screencast_with_control(
+    window: bool,
+    restore_token: Option<String>,
+    stopping: &AtomicBool,
+    request_failed: impl FnOnce(),
+    observe_control: impl FnMut() -> Result<()>,
+) -> Result<(Stream, Option<String>)> {
     use ashpd::desktop::PersistMode;
     use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 
@@ -173,14 +186,38 @@ pub fn screencast(
             });
         })?;
     // The first time the desktop asks which display, so wait for the person to choose.
+    let (node, fd, rect, mapping_id, token) = wait_for_stream(
+        ready_rx,
+        &stop_tx,
+        stopping,
+        request_failed,
+        observe_control,
+    )?;
+    Ok((
+        Stream::new(node, Some(fd), rect, mapping_id, Some(stop_tx)),
+        token,
+    ))
+}
+
+fn wait_for_stream<T>(
+    ready_rx: flume::Receiver<Result<T>>,
+    stop_tx: &flume::Sender<()>,
+    stopping: &AtomicBool,
+    request_failed: impl FnOnce(),
+    mut observe_control: impl FnMut() -> Result<()>,
+) -> Result<T> {
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
-    let (node, fd, rect, mapping_id, token) = loop {
+    loop {
+        if let Err(error) = observe_control() {
+            let _ = stop_tx.try_send(());
+            return Err(error);
+        }
         if stopping.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
             let _ = stop_tx.try_send(());
             bail!("Screen sharing was cancelled or the dialog wasn't answered");
         }
         match ready_rx.recv_timeout(Duration::from_millis(100)) {
-            Ok(Ok(stream)) => break stream,
+            Ok(Ok(stream)) => return Ok(stream),
             Ok(Err(error)) => {
                 request_failed();
                 return Err(error);
@@ -188,9 +225,48 @@ pub fn screencast(
             Err(flume::RecvTimeoutError::Timeout) => {}
             Err(error) => return Err(error.into()),
         }
-    };
-    Ok((
-        Stream::new(node, Some(fd), rect, mapping_id, Some(stop_tx)),
-        token,
-    ))
+    }
+}
+
+#[cfg(test)]
+mod consent_control_tests {
+    use super::*;
+
+    #[test]
+    fn pending_consent_observes_control_before_waiting_for_portal_response() {
+        let (_ready_tx, ready_rx) = flume::bounded::<Result<()>>(1);
+        let (stop_tx, stop_rx) = flume::bounded(1);
+        let stopping = AtomicBool::new(false);
+        let result = wait_for_stream(
+            ready_rx,
+            &stop_tx,
+            &stopping,
+            || panic!("not a portal error"),
+            || {
+                stopping.store(true, Ordering::Release);
+                Ok(())
+            },
+        );
+        assert!(result.is_err());
+        assert_eq!(stop_rx.try_recv(), Ok(()));
+    }
+
+    #[test]
+    fn invalid_durable_control_closes_pending_consent_without_adopting_response() {
+        let (ready_tx, ready_rx) = flume::bounded::<Result<()>>(1);
+        ready_tx.send(Ok(())).unwrap();
+        let (stop_tx, stop_rx) = flume::bounded(1);
+        let result = wait_for_stream(
+            ready_rx,
+            &stop_tx,
+            &AtomicBool::new(false),
+            || panic!("not a portal error"),
+            || bail!("invalid durable control binding"),
+        );
+        assert_eq!(
+            result.unwrap_err().to_string(),
+            "invalid durable control binding"
+        );
+        assert_eq!(stop_rx.try_recv(), Ok(()));
+    }
 }

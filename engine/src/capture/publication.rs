@@ -1057,8 +1057,7 @@ mod tests {
         time::{SystemTime, UNIX_EPOCH},
     };
 
-    const FRAME: &[u8] =
-        include_bytes!("../../core/tests/fixtures/frame.png");
+    const FRAME: &[u8] = include_bytes!("../../core/tests/fixtures/frame.png");
     const MOVIE: &[u8] = include_bytes!("../../core/tests/fixtures/tiny.mp4");
 
     struct Fixture {
@@ -1284,6 +1283,7 @@ mod tests {
             capture_id: capture_id.clone(),
             owner_token: owner.clone(),
             request: json!({"captureId":capture_id,"ownerToken":owner,"bundleId":bundle_id,"bundlePath":start_path}),
+            capture_backend: None,
             state: "materials-ready".into(),
             error: None,
             materials: Some(manifest),

@@ -1,4 +1,4 @@
-//! Linux X11 source discovery, GStreamer readiness and native movie execution.
+//! Linux X11 and Hyprland portal source discovery, GStreamer readiness and execution.
 //! Capture admission, authenticated journals, control and publication remain in `capture.rs`.
 
 use super::{
@@ -25,12 +25,29 @@ pub(super) struct Source {
     pub(super) y: i16,
     pub(super) width: u16,
     pub(super) height: u16,
+    pub(super) backend: Backend,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub(super) enum Backend {
+    X11,
+    HyprlandPortal,
 }
 
 pub(super) fn available_sources() -> Result<(String, Vec<Source>), &'static str> {
-    if std::env::var_os("WAYLAND_DISPLAY").is_some() || std::env::var_os("DISPLAY").is_none() {
+    let backend = if std::env::var_os("WAYLAND_DISPLAY").is_some() {
+        if std::env::var_os("HYPRLAND_INSTANCE_SIGNATURE").is_none()
+            || std::env::var_os("DISPLAY").is_none()
+        {
+            return Err("unavailable");
+        }
+        Backend::HyprlandPortal
+    } else if std::env::var_os("DISPLAY").is_some() {
+        Backend::X11
+    } else {
         return Err("unavailable");
-    }
+    };
     let (connection, screen_num) = x11rb::connect(None).map_err(|_| "unavailable")?;
     let screen = connection
         .setup()
@@ -44,6 +61,7 @@ pub(super) fn available_sources() -> Result<(String, Vec<Source>), &'static str>
         .map_err(|_| "unavailable")?;
     let generation = new_id().map_err(|_| "internal")?;
     let mut sources = Vec::new();
+    let mut displays = 0usize;
     for output in resources.outputs {
         let info = connection
             .randr_get_output_info(output, resources.config_timestamp)
@@ -67,8 +85,9 @@ pub(super) fn available_sources() -> Result<(String, Vec<Source>), &'static str>
         let output_name = String::from_utf8_lossy(&info.name).into_owned();
         let display_bounds =
             json!({"x":crtc.x,"y":crtc.y,"width":crtc.width,"height":crtc.height,"scale":1});
-        sources.push(Source { value: json!({"id":format!("display:{display_id}"),"generation":generation,"kind":"display","displayId":display_id,"bounds":display_bounds,"name":output_name}), x:crtc.x, y:crtc.y, width:crtc.width, height:crtc.height });
-        if crtc.width >= 2 && crtc.height >= 2 {
+        sources.push(Source { value: json!({"id":format!("display:{display_id}"),"generation":generation,"kind":"display","displayId":display_id,"bounds":display_bounds,"name":output_name}), x:crtc.x, y:crtc.y, width:crtc.width, height:crtc.height, backend });
+        displays += 1;
+        if backend == Backend::X11 && crtc.width >= 2 && crtc.height >= 2 {
             let (x, y) = (
                 i32::from(crtc.x) + i32::from(crtc.width / 4),
                 i32::from(crtc.y) + i32::from(crtc.height / 4),
@@ -78,10 +97,10 @@ pub(super) fn available_sources() -> Result<(String, Vec<Source>), &'static str>
             };
             let (width, height) = (crtc.width / 2, crtc.height / 2);
             let bounds = json!({"x":x,"y":y,"width":width,"height":height,"scale":1});
-            sources.push(Source { value: json!({"id":format!("area:{display_id}:{x}:{y}:{width}:{height}"),"generation":generation,"kind":"area","displayId":display_id,"bounds":bounds,"name":output_name}), x, y, width, height });
+            sources.push(Source { value: json!({"id":format!("area:{display_id}:{x}:{y}:{width}:{height}"),"generation":generation,"kind":"area","displayId":display_id,"bounds":bounds,"name":output_name}), x, y, width, height, backend });
         }
     }
-    if sources.is_empty() {
+    if sources.is_empty() || (backend == Backend::HyprlandPortal && displays != 1) {
         return Err("unavailable");
     }
     Ok((generation, sources))
@@ -93,22 +112,21 @@ pub(super) fn native_ready(sources: &[Source]) -> bool {
     if sources.is_empty() || gst::init().is_err() {
         return false;
     }
-    let base = [
-        "ximagesrc",
-        "videoconvert",
-        "h264parse",
-        "mp4mux",
-        "fdsink",
-        "decodebin",
-    ];
+    let base = ["videoconvert", "h264parse", "mp4mux", "fdsink", "decodebin"];
     let encoder = ["x264enc", "openh264enc"]
         .iter()
         .any(|name| gst::ElementFactory::find(name).is_some());
     let decoder = ["avdec_h264", "openh264dec"]
         .iter()
         .any(|name| gst::ElementFactory::find(name).is_some());
-    base.iter()
-        .all(|name| gst::ElementFactory::find(name).is_some())
+    let source_ready = sources.iter().all(|source| match source.backend {
+        Backend::X11 => gst::ElementFactory::find("ximagesrc").is_some(),
+        Backend::HyprlandPortal => gst::ElementFactory::find("pipewiresrc").is_some(),
+    });
+    source_ready
+        && base
+            .iter()
+            .all(|name| gst::ElementFactory::find(name).is_some())
         && encoder
         && decoder
 }
@@ -117,14 +135,68 @@ fn recording_start(
     movie: &File,
     shared: &Shared,
     epoch: Instant,
-) -> Result<apparent_capture_engine::linux::Recorder, &'static str> {
-    let native = apparent_capture_engine::linux::Source::X11 {
-        rect: [
-            f64::from(source.x),
-            f64::from(source.y),
-            f64::from(source.width),
-            f64::from(source.height),
-        ],
+) -> Result<
+    (
+        apparent_capture_engine::linux::Recorder,
+        apparent_capture_engine::linux::Source,
+    ),
+    &'static str,
+> {
+    let native = match source.backend {
+        Backend::X11 => apparent_capture_engine::linux::Source::X11 {
+            rect: [
+                f64::from(source.x),
+                f64::from(source.y),
+                f64::from(source.width),
+                f64::from(source.height),
+            ],
+        },
+        Backend::HyprlandPortal => {
+            let mut control_error = None;
+            let (session, _) = apparent_capture_engine::linux::portal::screencast_with_control(
+                false,
+                None,
+                &shared.stop,
+                || {},
+                || {
+                    if let Err(code) = sync_control(shared) {
+                        control_error = Some(code);
+                        return Err(anyhow::anyhow!(code));
+                    }
+                    // Owning EOF can cancel a starting capture locally. The
+                    // portal wait uses the same stop flag as durable controls.
+                    if shared.cancel.load(Ordering::Acquire) {
+                        shared.stop.store(true, Ordering::Release);
+                    }
+                    Ok(())
+                },
+            )
+            .map_err(|_| {
+                if let Some(code) = control_error {
+                    code
+                } else if shared.cancel.load(Ordering::Acquire) {
+                    "cancelled"
+                } else if shared.stop.load(Ordering::Acquire) {
+                    "invalid_materials"
+                } else {
+                    "unavailable"
+                }
+            })?;
+            if !portal_stream_matches(source, &session) {
+                return Err("source_changed");
+            }
+            let (_, current) = available_sources().map_err(|_| "source_changed")?;
+            if !current
+                .iter()
+                .any(|candidate| same_source(candidate, source))
+            {
+                return Err("source_changed");
+            }
+            apparent_capture_engine::linux::Source::PipeWire {
+                session,
+                crop: None,
+            }
+        }
     };
     let recorder = apparent_capture_engine::linux::Recorder::new_with_file(
         &native,
@@ -141,6 +213,10 @@ fn recording_start(
             recorder.stop();
             return Err("cancelled");
         }
+        if shared.stop.load(Ordering::Acquire) && recorder.first_frame_ms().is_none() {
+            recorder.stop();
+            return Err("invalid_materials");
+        }
         if Instant::now() >= deadline {
             recorder.stop();
             return Err("deadline_exceeded");
@@ -151,7 +227,20 @@ fn recording_start(
         }
         thread::sleep(Duration::from_millis(20));
     }
-    Ok(recorder)
+    Ok((recorder, native))
+}
+
+fn portal_stream_matches(
+    source: &Source,
+    session: &apparent_capture_engine::linux::Stream,
+) -> bool {
+    source.backend == Backend::HyprlandPortal
+        && source.value["kind"] == "display"
+        && session.mapping_id.as_deref() == source.value["name"].as_str()
+        && session.rect.is_some_and(|rect| {
+            (rect[2] - f64::from(source.width)).abs() <= 1.0
+                && (rect[3] - f64::from(source.height)).abs() <= 1.0
+        })
 }
 
 pub(super) fn video_dimensions(source: &Source) -> (u32, u32) {
@@ -187,7 +276,9 @@ pub(super) fn worker(
             );
         }
         persist(&shared).map_err(|_| "internal")?;
-        let recorder = recording_start(&source, &movie, &shared, shared.epoch)?;
+        // Keep the PipeWire FD and portal session alive until finalization has
+        // drained the recorder pipeline.
+        let (recorder, _native_source) = recording_start(&source, &movie, &shared, shared.epoch)?;
         let video_origin_ns = recorder.video_origin_ns().ok_or("invalid_materials")?;
         {
             let mut j = shared.journal.lock().map_err(|_| "internal")?;
@@ -302,6 +393,66 @@ pub(super) fn worker(
         let _ = persist(&shared);
     }
     drop(permit);
+}
+
+#[cfg(test)]
+mod portal_source_tests {
+    use super::*;
+
+    fn source(name: &str, width: u16, height: u16) -> Source {
+        Source {
+            value: json!({"name":name,"kind":"display"}),
+            x: 0,
+            y: 0,
+            width,
+            height,
+            backend: Backend::HyprlandPortal,
+        }
+    }
+
+    fn stream(
+        name: Option<&str>,
+        rect: Option<[f64; 4]>,
+    ) -> apparent_capture_engine::linux::Stream {
+        apparent_capture_engine::linux::Stream::new(12, None, rect, name.map(str::to_owned), None)
+    }
+
+    #[test]
+    fn portal_source_requires_exact_hyprland_output_identity_and_geometry() {
+        let chosen = source("eDP-1", 1920, 1080);
+        assert!(portal_stream_matches(
+            &chosen,
+            &stream(Some("eDP-1"), Some([0.0, 0.0, 1920.0, 1080.0]))
+        ));
+        assert!(!portal_stream_matches(
+            &chosen,
+            &stream(Some("DP-1"), Some([0.0, 0.0, 1920.0, 1080.0]))
+        ));
+        assert!(!portal_stream_matches(
+            &chosen,
+            &stream(None, Some([0.0, 0.0, 1920.0, 1080.0]))
+        ));
+        assert!(!portal_stream_matches(
+            &chosen,
+            &stream(Some("eDP-1"), Some([0.0, 0.0, 1280.0, 720.0]))
+        ));
+        assert!(!portal_stream_matches(
+            &chosen,
+            &stream(Some("eDP-1"), None)
+        ));
+    }
+
+    #[test]
+    fn portal_backend_refuses_area_sources() {
+        let area = Source {
+            value: json!({"name":"eDP-1","kind":"area"}),
+            ..source("eDP-1", 960, 540)
+        };
+        assert!(!portal_stream_matches(
+            &area,
+            &stream(Some("eDP-1"), Some([0.0, 0.0, 960.0, 540.0]))
+        ));
+    }
 }
 
 fn pause_test_cancel_after_unsealed_cleanup(journal: &Journal) {

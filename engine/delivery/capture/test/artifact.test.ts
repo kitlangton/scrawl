@@ -42,7 +42,7 @@ test('capture artifact inventory and absolute SDK launch contract', { skip: !art
   assert.match(manifest.sourceSha, /^[0-9a-f]{40}$/)
   assert.equal(manifest.target, 'linux-x64')
   validateRecoveryAdvertisement(manifest.recoveryLaunch, 'capture/2')
-  assert.deepEqual(manifest.capabilities, ['capture/2', 'x11-display', 'x11-area', 'retained-materials', 'authenticated-publication'])
+  assert.deepEqual(manifest.capabilities, ['capture/2', 'x11-display', 'x11-area', 'hyprland-single-display', 'retained-materials', 'authenticated-publication'])
   assert.deepEqual(manifest.launch.argv, ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2'])
   assert.equal(manifest.launch.pathLookup, false)
   assert.equal(manifest.launch.shutdownTimeoutMs, 40_000)

@@ -12,6 +12,12 @@ Launch with `--runtime-directory DIR --capture-channel capture
 --capture-protocol-version 2`. Provision a persistent private 0700 runtime root.
 No PATH lookup, Node, npm or Cargo is needed at runtime.
 
+The producer also stages the PipeWire GStreamer plugin, the unchanged standard
+vendor client configuration, its six client modules and two SPA factories.
+The launcher pins their configuration/module/plugin directories inside the sealed
+payload, while retaining the caller's Wayland and session-bus authority. This
+runtime closure alone does not enable or qualify a Wayland capture source.
+
 Capture/2's supported retained-material path is
 `<canonical-private-runtime>/capture-v2/materials/<original-captureId>`.
 SDK0.4.4's public `capture2MaterialsRoot(runtimeDirectory, captureId)` derives this
@@ -35,19 +41,31 @@ journals, and a cancel acknowledgment follows its durable write. Cancellation is
 sticky through finalization and crash recovery; a sealed manifest remains leased
 until explicit release. Core keeps global live admission for actual capture.
 
-The prior capture/2 runtime has private host Xvfb and isolated Linux guest
-proof. Main `0570f775` delivered a fresh admitted capture archive in run
-`42252644242`, with two packaged checks passing and all 54 runtime seals and
-attestation verified. That archive reports publication unavailable. This
-publication candidate has its own source-bound package and headless release check;
-its real capture-to-Saved, guest proof and publication artifact admission remain
-separate gates. X11 display and the advertised preset area are the supported sources; general picker/area selection, Wayland, macOS, audio,
-and fact collectors remain unavailable. The unmerged publication candidate adds
-authenticated publish/inspection and native derivative/2 registry validation.
-Retained materials alone are never Saved; only validated atomic publication can
-return Saved. Fixture and host Xvfb proof do not establish the full Record
-capture-to-Saved path or current-candidate guest/package qualification. Existing native and installed behavior remains on its current route until
-verified consumer adoption.
+The published capture/2 provider supports X11 displays and the advertised preset
+area, authenticated retained materials, and native derivative/2 publication.
+The X11 capture-to-media/Record/Saved path and same-recording Copy continuation
+have separate retained evidence; they do not establish installed Omarchy use.
+
+This source adds one-monitor Hyprland/Omarchy portal capture when Wayland and
+XWayland are available. It keeps the existing protocol and recorder, binds the
+portal output name and dimensions to the advertised display, and retains the
+PipeWire session through finalization. Other Wayland backends, multiple monitors,
+arbitrary areas, windows, macOS, audio and fact collectors remain unsupported.
+A source-bound closed package passed the public SDK 0.4.5 peer in a disposable
+Omarchy guest: native monitor consent, first-frame recording, Stop, sealed H.264
+readback and cold authenticated materials inspection. That proof used one
+1280×800 output at scale 1. Exact-main CI/archive admission, other scale
+configurations and the desktop Saved/Copy adoption remain separate gates.
+The first movie frames can include the native chooser fading out; no initial
+UI exclusion or clean-frame guarantee is claimed.
+
+Pending portal consent observes authenticated durable Stop/Cancel intent. The
+original backend is retained privately so cold controls do not depend on source
+discovery. Finish without a frame fails with no materials; only actual Cancel
+intent is classified as cancellation. Existing journals remain readable and
+retain their original starting-stop behavior. Retained materials alone are never
+Saved; validated atomic publication is required. Existing installed routing is
+unchanged until its separate adoption gate clears.
 
 Use `launchCaptureEngine(executable, runtimeDirectory, 40_000)` for this producer;
 `manifest.launch.shutdownTimeoutMs` declares this grace. SDK 0.3.x's default
