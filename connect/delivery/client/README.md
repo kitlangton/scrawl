@@ -695,3 +695,20 @@ This is not a production logout writer. Config-gate publication, cancellation,
 job/credential settlement and deletion of only covered intents remain host work.
 The config host currently exposes no Connect cloud-gate update operation. Rust
 remains authoritative; first installed Mac/ARM and writer-cutover gates remain.
+
+
+`prepareRevocationState` is an internal follow-on phase, not a logout command.
+With valid pending intents and one current queue lease, it rotates the cancellation
+epoch and removes the captured upload/read login markers only after confirmed
+epoch readback. It keeps credentials, jobs, config, identities, renewal evidence
+and every intent. Its frozen prepared receipt covers only the original stamped
+intents; concurrent new intents remain pending and uncovered. Publication, partial
+removal, directory-sync or lease-release uncertainty stops the phase without retry.
+A marker appearing where absence was captured prevents a prepared receipt.
+
+Linux installed-provider tests verify the real queue lease and replacement path,
+retained inputs and injected lost-ack handling. They do not prove crash durability
+or installed adoption. Path check/unlink assumes cooperating same-UID writers
+honor the queue lock; it is not inode-atomic deletion. The existing Rust writer
+remains authoritative until the coordinated cutover; config gates and full local
+logout settlement still require their separate capability and acceptance.
