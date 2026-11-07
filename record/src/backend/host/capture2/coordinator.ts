@@ -60,6 +60,8 @@ export interface RecordCaptureProcessingSelection {
 
 export interface RecordCaptureCoordinatorOptions {
   captureClient: CaptureClient;
+  /** Optional separately owned publication peer for the SAME runtime and original authority. Defaults to captureClient. */
+  publicationClient?: CaptureClient;
   mediaClient: Media2Client;
   mappings?: Capture2MappingStore;
   mappingRoot?: string;
@@ -169,7 +171,7 @@ export async function createRecordCaptureCoordinator(options: RecordCaptureCoord
 
   const host = createCapture2Host({ client: options.captureClient, mappings, destinations });
   const runtime = await createCapture2RecordRuntime({ host, createStartIntent: options.createStartIntent, pollIntervalMs });
-  const output = createRecordPublicationOutput(options.captureClient, options.privateControlRoot, options.preflight);
+  const output = createRecordPublicationOutput(options.publicationClient ?? options.captureClient, options.privateControlRoot, options.preflight);
   const store = new SqlitePublicationBindingStore(options.privateControlRoot);
   const flights = new Map<string, Promise<void>>();
   const projections = new Set<Promise<unknown>>();

@@ -17,6 +17,18 @@ The remaining Rust state/queue/CLI and their production consumers remain migrati
 work; this does not establish whole-Connect independence. Subsequent
 slices must adopt those callers, preserve one writer and retire replaced donors.
 
+Current acceptance inventory (library/fixture capability is not installed adoption):
+
+| Workflow | Implemented checkpoint | Remaining acceptance |
+|---|---|---|
+| Browser and hosted API | Canonical combined TypeScript Worker, live sign-in and shared-link management | Preserve live routing/auth/privacy contracts during later changes |
+| Account and Settings | Adopted TypeScript policy/device flow | Rust still supplies private facts and durable effects; login/logout/config adoption remains |
+| CLI and recipients | Grammar, local status, state-backed retrieval/publication and callable Node host | Installed argv/host/resource/writer admission and platform proof |
+| Renewal | Compatible journals, exchange, completed recovery and coordinator library | Live sole-writer adoption, installed recovery and removal of temporary Rust bridge |
+| Queue and sender | Planner, fenced admission/retirement/retry/worker and encrypted spool/HTTP capabilities | Host settings and stable snapshots, lifecycle settlement/restart recovery, worker/caller adoption |
+| Native resources | Protected x64 factory and qualified Linux/Mac helper inputs | Supported-target installed assembly, including ARM, remains an adoption gate |
+| Removal and release | TypeScript owner CI and qualified library artifacts | All live callers, packaging/build inputs and Rust donors must be migrated and audited |
+
 The TypeScript recipient boundary now decodes bounded raw JSON without duplicate
 keys, validates signed envelopes, decrypts bounded age streams through final EOF,
 and checks inner manifests, content hashes and bundle references. This is an

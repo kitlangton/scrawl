@@ -244,7 +244,15 @@ standard path requires interaction, transcript and accepted-stroke collections t
 be unavailable; collected rich facts need the explicit policy path rather than
 being silently discarded. Context and collection availability remain in the bundle.
 Source selection, permission/consent, trusted runtime roots and client ownership
-remain host inputs. `createdAtMs` defaults to the original invocation's
+remain host inputs. An optional `publicationClient` can supply a separately owned
+SDK recovery peer for the same private runtime and original capture authority;
+otherwise publication uses `captureClient` as before. Media already has its own
+injected client. The coordinator borrows these clients and never converts their
+roles or closes/releases them. Its shutdown report and disposal must positively
+drain local work before the composition owner applies each peer's public lifetime
+contract. An owning capture client still uses ending semantics, not recovery
+release. This separation does not make unresolved runtime work clear or authorize
+cancellation, process-group termination, or an unapproved native qualification. `createdAtMs` defaults to the original invocation's
 `observedAtMs`; trusted composition can supply it explicitly, along with optional
 destination metadata. No native candidate collection is claimed.
 
