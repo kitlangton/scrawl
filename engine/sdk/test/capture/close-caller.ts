@@ -16,13 +16,18 @@ if (mode === "pipe-holder") {
       writeFileSync(marker, JSON.stringify({ pid: process.pid, finished: released }));
     }
   }, 20);
+  writeFileSync(marker + ".holder-ready", "ready");
 } else if (mode === "peer" || mode === "peer-already") {
-  const finish = () => {
-    const holder = spawn(process.execPath, ["--experimental-strip-types", self, "pipe-holder", marker], {
-      stdio: ["ignore", process.stdout, process.stderr],
-    });
-    holder.once("spawn", () => process.exit(0)); // The synthetic peer's native-exit event.
-  };
+  spawn(process.execPath, ["--experimental-strip-types", self, "pipe-holder", marker], {
+    stdio: ["ignore", process.stdout, process.stderr],
+  });
+  const deadline = Date.now() + 3000;
+  while (!existsSync(marker + ".holder-ready")) {
+    if (Date.now() >= deadline) throw new Error("synthetic pipe holder did not become ready");
+    await new Promise(done => setTimeout(done, 10));
+  }
+  // Process creation belongs to fixture preparation, before its ready barrier.
+  const finish = () => process.exit(0); // The synthetic peer's native-exit event.
   if (mode === "peer-already") finish();
   else {
     process.stdin.resume(); process.stdin.once("end", finish);
@@ -31,7 +36,9 @@ if (mode === "pipe-holder") {
 } else if (mode === "caller-eof" || mode === "caller-already") {
   const child = spawn(process.execPath, ["--experimental-strip-types", self,
     mode === "caller-already" ? "peer-already" : "peer", marker], { stdio: ["pipe", "pipe", "pipe"] });
-  const client = new CaptureClient(new ChildProcessCaptureTransport(child, 100));
+  // Exercise natural exit with the SDK's normal grace, not a 100 ms spawn race.
+  // The parent retains its independent five-second natural-caller-exit bound.
+  const client = new CaptureClient(new ChildProcessCaptureTransport(child));
   if (mode === "caller-already") await new Promise<void>(done => child.once("exit", () => done()));
   else {
     const deadline = Date.now() + 3000;
