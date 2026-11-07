@@ -475,3 +475,14 @@ Engine must return original authenticated audio/transcript seals and verified
 sample-clock mapping before real voice acceptance. Accepted-stroke collections
 still require explicit richer policy and a native collector/surface transform;
 no annotation authority or render availability is inferred from DTOs or RGB.
+
+A native `audio-initial-gap` warning with an explicit first-sample `atMs` is
+mapped only from the SDK-validated original materials into a persisted
+`audioInitialGap` processing warning. Summary and handoff say `[0, atMs)` was
+unobserved and padded with zeros, not recorded silence. After a matching Saved
+receipt, `CaptureFact.warnings` carries that bounded timestamp and the pill shows
+the same warning; it does not claim microphone success from padding. Malformed,
+duplicate or caller-invented initial-gap warnings fail closed. This does not
+construct/retime audio or establish source PTS, real samples, rounding precision
+or native transcription; those remain Engine producer/native-proof obligations.
+Historical output without this warning is unchanged.

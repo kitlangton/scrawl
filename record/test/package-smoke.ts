@@ -42,9 +42,11 @@ try {
     import { createRecordHostRuntime, SqliteCaptureMappingStore, PrivateBundleAllocator, AbsentDestinationAllocator, type AbsentDestinationBinding } from '@apparent/record/host';
     import { decodeSelectedFrames, assembleProcessingOutput } from '@apparent/record/processing';
     import { RecordMediaJob, processCompletedBundle, createProcessingOutputDirectory } from '@apparent/record/processing/media-consumer';
-    import { createRecordCapabilityProvider, hasConfirmedArtifactOpen, type DurableNoteSaveOutcome, type RecordCommand, type ScreenStrokeCursor, type ShortcutTrialBinding, type ShortcutTrialFact, type ShortcutTrialReservationIdentity } from '@apparent/record/capabilities';
+    import { createRecordCapabilityProvider, hasConfirmedArtifactOpen, type AudioInitialGapWarning, type DurableNoteSaveOutcome, type RecordCommand, type ScreenStrokeCursor, type ShortcutTrialBinding, type ShortcutTrialFact, type ShortcutTrialReservationIdentity } from '@apparent/record/capabilities';
     import { createRecordLocalClipboardTextReadbackPort, type NativeClipboardTextReadbackPortInput, createRecordNativePort, type NativeHostPortInput } from '@apparent/record/host/native';
     import { createRecordFixture } from '@apparent/record/fixtures';
+    const initialGap: AudioInitialGapWarning = {kind:"audioInitialGap",atMs:125};
+    void initialGap;
     declare const cursor: ScreenStrokeCursor;
     declare const trial: ShortcutTrialFact;
     declare const note: DurableNoteSaveOutcome;
