@@ -101,3 +101,6 @@ mod tests {
         );
     }
 }
+
+/// Existing trusted-caller bounded WAV writer, lease and recovery mechanics.
+pub mod persistence;
