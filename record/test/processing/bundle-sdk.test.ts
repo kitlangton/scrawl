@@ -1800,6 +1800,7 @@ test("standard visual selection CAS preserves its original plan and refuses a di
   assert.match(new TextDecoder().decode(assembled.summaryMd),/\[0, 125 ms\).*unobserved.*not recorded silence/);
   for(const atMs of [undefined,4000,4001]){const bad=structuredClone(input);setSealedWarnings(bad,[{code:"audio-initial-gap",...(atMs===undefined?{}:{atMs})}]);assert.throws(()=>assembleCanonicalBundle(bad));}
   const noAudio=await fixture();setSealedWarnings(noAudio,[{code:"audio-initial-gap",atMs:125}]);assert.throws(()=>assembleCanonicalBundle(noAudio),/aligned original audio/);
+  const shorterAudio=structuredClone(input);const shortPayload=JSON.parse(new TextDecoder().decode(shorterAudio.payloadBytes));shortPayload.audio.durationMs=100;shorterAudio.payloadBytes=bytes(shortPayload);setSealedWarnings(shorterAudio,[{code:"audio-initial-gap",atMs:125}]);assert.throws(()=>assembleCanonicalBundle(shorterAudio),/first sample time/);
   const duplicate=structuredClone(input);setSealedWarnings(duplicate,[{code:"audio-initial-gap",atMs:125},{code:"audio-initial-gap",atMs:126}]);assert.throws(()=>assembleCanonicalBundle(duplicate),/duplicate initial audio/);
   const forged=await fixture();forged.processingWarnings=[{kind:"audioInitialGap",atMs:125}];assert.throws(()=>assembleCanonicalBundle(forged),/original sealed materials warning/);
  });
