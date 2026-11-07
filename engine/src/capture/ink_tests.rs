@@ -124,3 +124,57 @@ fn malformed_clock_foreign_transform_future_and_gap_fail_closed() {
         assert!(r.facts("c", "m").is_none());
     }
 }
+#[test]
+fn fractional_screen_mapping_matches_the_exact_donor_cast_order() {
+    for (origin, x, expected) in [(0.0, 1.6319998999999998, 9), (10.0, 10.2879999, 1)] {
+        let s = Surface {
+            value: json!({"target":"capture-rectangle"}),
+            x: origin,
+            y: 0.0,
+            width: 1920,
+            height: 1080,
+        };
+        let donor = ((((x - origin) / 1920.0) as f32) * 10_000.0_f32).round() as i32;
+        assert_eq!(donor, expected);
+        assert_eq!(point(&json!({"x":x,"y":0}), &s).unwrap().0, donor);
+    }
+}
+#[test]
+fn closing_requires_the_exact_registered_incarnation_and_viewport() {
+    let (mut req, source, n) = input();
+    let board = json!({"surfaceId":"board","transformId":"t1","nativeIncarnation":"board-1","target":"whiteboard-canvas","pointSpace":"paper-logical","contentRectangle":{"x":200,"y":164,"width":720,"height":476},"plane":{"width":1600,"height":1100}});
+    req["observation"]["surfaces"] = json!([board]);
+    for field in ["nativeIncarnation", "geometry"] {
+        let mut r = Registration::new(&req, &source, n, "boot").unwrap();
+        let mut wrong = board.clone();
+        if field == "geometry" {
+            wrong["contentRectangle"]["width"] = json!(721)
+        } else {
+            wrong["nativeIncarnation"] = json!("foreign")
+        }
+        let b = batch(
+            &r,
+            0,
+            json!([{"kind":"surface-state","state":"closed","surface":wrong,"observedAtNs":n.to_string(),"nativeRevision":1}]),
+        );
+        assert!(r.submit(&b, n + 1, &source).is_err());
+        assert!(r.current.contains_key("board"));
+    }
+}
+#[test]
+fn post_stop_lifecycle_exception_never_admits_new_points_or_commit() {
+    let (req, source, n) = input();
+    for kind in ["points", "commit"] {
+        let mut r = Registration::new(&req, &source, n, "boot").unwrap();
+        let first = batch(&r, 0, json!([begin(n)]));
+        r.submit(&first, n + 1, &source).unwrap();
+        let late = if kind == "points" {
+            json!({"kind":"points","gestureId":"d".repeat(32),"points":[{"timeNs":(n+2).to_string(),"x":30,"y":30}]})
+        } else {
+            json!({"kind":"commit","gestureId":"d".repeat(32),"acceptedAtNs":(n+2).to_string()})
+        };
+        let b = batch(&r, 1, json!([late]));
+        assert!(r.submit_at(&b, n + 1, n + 3, &source).is_err());
+        assert!(!r.collecting());
+    }
+}

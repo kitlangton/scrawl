@@ -37,7 +37,9 @@ pub fn handle(req: &Value, shared: &Shared, live_owner: bool) -> Result<Value, &
         }
         if let Some(r) = &j.ink_registration {
             if r.matches(req) {
-                return Ok(r.receipt(&j.capture_id));
+                let receipt = r.receipt(&j.capture_id);
+                write_locked(shared, &j)?;
+                return Ok(receipt);
             }
             return Err("identity_conflict");
         }
@@ -57,16 +59,23 @@ pub fn handle(req: &Value, shared: &Shared, live_owner: bool) -> Result<Value, &
     let cutoff = j.ink_cutoff_ns.unwrap_or(now);
     let expired = j
         .ink_cutoff_ns
-        .is_some_and(|n| now > n.saturating_add(ink::GRACE_NS));
+        .is_some_and(|n| now >= n.saturating_add(ink::GRACE_NS));
     let r = j.ink_registration.as_mut().ok_or("unavailable")?;
     // Authenticate before invalidating a producer: a foreign secret is not an
     // instruction to discard accepted history. The mapper repeats this check.
     r.authenticate(req)?;
+    if r.frozen() {
+        return if req["method"] == "finishInkProducer" {
+            r.finish(req, now)
+        } else {
+            Err("unavailable")
+        };
+    }
     if expired && r.collecting() {
         r.invalidate()
     }
     let result = if req["method"] == "submitInkEvents" {
-        r.submit(req, cutoff, &source)
+        r.submit_at(req, cutoff, now, &source)
     } else {
         r.finish(req, now)
     };
@@ -107,6 +116,37 @@ pub fn close_input(shared: &Shared) -> Result<(), &'static str> {
         return Err("unavailable");
     }
     write_locked(shared, &j)
+}
+/// Freeze the exact registration revision before releasing its fact snapshot.
+/// Requests after this point cannot invalidate/resurrect the immutable decision.
+pub fn freeze(shared: &Shared, materials: &str) -> Result<Option<Value>, &'static str> {
+    let mut j = shared.journal.lock().map_err(|_| "internal")?;
+    let _transaction = shared
+        .runtime
+        .capture_transaction()
+        .map_err(|_| "internal")?;
+    let current = read_journal(&shared.directory, &j.capture_id, &j.owner_token)?;
+    if !["recording", "stopping"].contains(&current.state.as_str()) {
+        return Err("unavailable");
+    }
+    if current.state == "stopping" {
+        j.state = "stopping".into();
+    }
+    if current.ink_cutoff_ns.is_none() {
+        return Err("internal");
+    }
+    let capture = j.capture_id.clone();
+    let facts = if let Some(r) = j.ink_registration.as_mut() {
+        if current.cancel_requested {
+            r.invalidate();
+        }
+        r.freeze(&capture, materials)
+    } else {
+        None
+    };
+    j.cancel_requested |= current.cancel_requested;
+    write_locked(shared, &j)?;
+    Ok(facts)
 }
 pub fn drain(shared: &Shared) -> Result<(), &'static str> {
     close_input(shared)?;
@@ -163,6 +203,29 @@ mod tests {
         assert_eq!(handle(&req, &shared, false), Err("unavailable"));
         let registration = handle(&req, &shared, true).unwrap();
         assert_eq!(handle(&req, &shared, true).unwrap(), registration);
+        // Simulate the durable side of a lost failed first registration write:
+        // in-memory identity must never produce an ACK without a successful write.
+        let mut missing = read_journal(
+            &shared.directory,
+            req["captureId"].as_str().unwrap(),
+            req["ownerToken"].as_str().unwrap(),
+        )
+        .unwrap();
+        missing.ink_registration = None;
+        apparent_capture_engine::SecureStore::open(&shared.directory)
+            .unwrap()
+            .replace_checked(
+                &path_id(&missing.capture_id),
+                &serde_json::to_vec(&missing).unwrap(),
+            )
+            .unwrap();
+        assert_eq!(handle(&req, &shared, true).unwrap(), registration);
+        assert!(
+            read_journal(&shared.directory, &missing.capture_id, &missing.owner_token)
+                .unwrap()
+                .ink_registration
+                .is_some()
+        );
         let n = shared
             .journal
             .lock()
@@ -193,11 +256,37 @@ mod tests {
             req["ownerToken"].as_str().unwrap(),
         )
         .unwrap();
-        let fact = cold
-            .ink_registration
-            .unwrap()
-            .facts(req["captureId"].as_str().unwrap(), &"e".repeat(32))
-            .unwrap();
+        assert!(
+            cold.ink_registration
+                .unwrap()
+                .facts(req["captureId"].as_str().unwrap(), &"e".repeat(32))
+                .is_some()
+        );
+        close_input(&shared).unwrap();
+        let fact = freeze(&shared, &"e".repeat(32)).unwrap().unwrap();
+        // Deterministically pause after the exact durable fact snapshot, then
+        // attempt concurrent authenticated invalidation before file sealing.
+        let mut conflicting = finish.clone();
+        conflicting["seal"]["nativeRevision"] = json!(999);
+        std::thread::scope(|scope| {
+            scope
+                .spawn(|| assert!(handle(&conflicting, &shared, true).is_err()))
+                .join()
+                .unwrap();
+        });
+        let current = read_journal(
+            &shared.directory,
+            req["captureId"].as_str().unwrap(),
+            req["ownerToken"].as_str().unwrap(),
+        )
+        .unwrap();
+        assert_eq!(
+            current
+                .ink_registration
+                .unwrap()
+                .facts(req["captureId"].as_str().unwrap(), &"e".repeat(32)),
+            Some(fact.clone())
+        );
         let sealed = seal_fact(&shared, "accepted-strokes.json", &fact).unwrap();
         let bytes = operation_dir(&shared)
             .unwrap()
@@ -267,6 +356,79 @@ mod tests {
         );
         let cold = shared.journal.lock().unwrap().clone();
         remove_unsealed(&shared.directory, &cold).unwrap();
+        drop(shared);
+        fs::remove_dir_all(base).unwrap();
+    }
+    #[test]
+    fn live_stop_then_lifecycle_discard_and_new_rpc_finish_replay_preserve_history() {
+        let (base, shared, req) = fixture();
+        let shared = Arc::new(shared);
+        let receipt = handle(&req, &shared, true).unwrap();
+        let n = shared
+            .journal
+            .lock()
+            .unwrap()
+            .admitted_monotonic_ns
+            .unwrap();
+        let submit = |seq: u64, events: Value| {
+            let raw = serde_json::to_string(&events).unwrap();
+            json!({"method":"submitInkEvents","ingressVersion":1,"ownerToken":req["ownerToken"],"captureId":req["captureId"],"registrationId":receipt["registrationId"],"producerToken":receipt["producerToken"],"sequence":seq,"eventsJson":raw,"batchSha256":sha(raw.as_bytes())})
+        };
+        let begin = |id: &str, t: u64| json!({"kind":"begin","gestureId":id,"surfaceId":"screen","transformId":"t","nativeIncarnation":"i","timeNs":t.to_string(),"x":10,"y":20});
+        let first = "d".repeat(32);
+        let second = "e".repeat(32);
+        let batch = submit(
+            0,
+            json!([begin(&first,n),{"kind":"points","gestureId":first,"points":[{"timeNs":(n+1).to_string(),"x":30,"y":20}]},{"kind":"commit","gestureId":first,"acceptedAtNs":(n+2).to_string()},begin(&second,n+3)]),
+        );
+        handle(&batch, &shared, true).unwrap();
+        let mut all = HashMap::from([(
+            req["captureId"].as_str().unwrap().to_owned(),
+            shared.clone(),
+        )]);
+        let stop =
+            json!({"method":"stop","captureId":req["captureId"],"ownerToken":req["ownerToken"]});
+        assert_eq!(
+            process_request(
+                stop,
+                &shared.runtime,
+                &shared.directory,
+                &mut String::new(),
+                &mut vec![],
+                &mut true,
+                &mut HashMap::new(),
+                &mut all,
+                false
+            )
+            .unwrap()["state"],
+            "stopping"
+        );
+        assert!(shared.stop.load(Ordering::Acquire));
+        let cutoff = shared.journal.lock().unwrap().ink_cutoff_ns.unwrap();
+        // Queued real points stay before cutoff. Lifecycle resolution retains
+        // its real after-Stop time; neither is shifted into another interval.
+        let queued = submit(
+            1,
+            json!([{"kind":"points","gestureId":second,"points":[{"timeNs":cutoff.to_string(),"x":40,"y":20}]}]),
+        );
+        handle(&queued, &shared, true).unwrap();
+        let discard = submit(
+            2,
+            json!([{"kind":"discard","gestureId":second,"observedAtNs":(cutoff+1).to_string(),"reason":"input-sealed"}]),
+        );
+        handle(&discard, &shared, true).unwrap();
+        let mut finish = json!({"channel":"capture","protocolVersion":2,"clientId":"f".repeat(32),"rpcId":"a".repeat(32),"method":"finishInkProducer","ingressVersion":1,"ownerToken":req["ownerToken"],"captureId":req["captureId"],"registrationId":receipt["registrationId"],"producerToken":receipt["producerToken"],"finalSequence":2,"seal":{"state":"sealed-and-drained","observedAtNs":monotonic_ns().unwrap().to_string(),"nativeRevision":1}});
+        parse_line(&serde_json::to_vec(&finish).unwrap()).unwrap();
+        assert_eq!(handle(&finish, &shared, true).unwrap()["state"], "complete");
+        finish["rpcId"] = json!("b".repeat(32));
+        assert_eq!(handle(&finish, &shared, true).unwrap()["state"], "complete");
+        drain(&shared).unwrap();
+        let facts = freeze(&shared, &"f".repeat(32)).unwrap().unwrap();
+        assert_eq!(facts["strokes"].as_array().unwrap().len(), 1);
+        assert_eq!(handle(&finish, &shared, true).unwrap()["state"], "complete");
+        let cold = shared.journal.lock().unwrap().clone();
+        remove_unsealed(&shared.directory, &cold).unwrap();
+        drop(all);
         drop(shared);
         fs::remove_dir_all(base).unwrap();
     }

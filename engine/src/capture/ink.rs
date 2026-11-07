@@ -12,6 +12,8 @@ enum Phase {
     Collecting,
     Complete,
     Unavailable,
+    FrozenComplete,
+    FrozenUnavailable,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Registration {
@@ -35,8 +37,8 @@ pub struct Registration {
 #[derive(Clone, Debug, Serialize, Deserialize)]
 struct Surface {
     value: Value,
-    x: f32,
-    y: f32,
+    x: f64,
+    y: f64,
     width: u32,
     height: u32,
 }
@@ -140,7 +142,7 @@ fn parse_surface(v: &Value, source: &Value) -> Result<Surface> {
             {
                 return Err("source_changed");
             }
-            (number(&b["x"])? as f32, number(&b["y"])? as f32)
+            (number(&b["x"])?, number(&b["y"])?)
         }
         // A resizable Board viewport is NOT its logical paper plane. Coordinates
         // are already paper-local; movement/resize changes the transform only.
@@ -264,7 +266,13 @@ impl Registration {
     pub fn collecting(&self) -> bool {
         self.phase == Phase::Collecting
     }
+    pub fn frozen(&self) -> bool {
+        matches!(self.phase, Phase::FrozenComplete | Phase::FrozenUnavailable)
+    }
     pub fn invalidate(&mut self) {
+        if self.frozen() {
+            return;
+        }
         self.phase = Phase::Unavailable;
         self.active = None;
         self.revision += 1;
@@ -283,7 +291,13 @@ impl Registration {
         }
         Ok(())
     }
-    fn event(&mut self, e: &Value, cutoff: u64, source: &Value) -> Result<usize> {
+    fn event(
+        &mut self,
+        e: &Value,
+        cutoff: u64,
+        lifecycle_cutoff: u64,
+        source: &Value,
+    ) -> Result<usize> {
         match e["kind"].as_str() {
             Some("begin") => {
                 let mut fields = vec![
@@ -428,7 +442,12 @@ impl Registration {
                 {
                     return Err("malformed_request");
                 }
-                self.stamp(&e["observedAtNs"], cutoff)?;
+                let end = if e["reason"] == "input-sealed" {
+                    lifecycle_cutoff
+                } else {
+                    cutoff
+                };
+                self.stamp(&e["observedAtNs"], end)?;
                 self.active = None;
                 Ok(0)
             }
@@ -473,9 +492,12 @@ impl Registration {
                 }
                 match text(&e["state"])? {
                     "closed" => {
-                        if self.current.remove(&id) != Some(k) {
+                        if self.current.get(&id) != Some(&k)
+                            || self.surfaces.get(&k).is_none_or(|old| old.value != *s)
+                        {
                             return Err("source_changed");
                         }
+                        self.current.remove(&id);
                     }
                     "opened" | "replaced" => {
                         if self.current.len() >= 8 && !self.current.contains_key(&id) {
@@ -489,7 +511,14 @@ impl Registration {
                     }
                     _ => return Err("malformed_request"),
                 }
-                self.control_stamp(e, cutoff)?;
+                self.control_stamp(
+                    e,
+                    if e["state"] == "closed" {
+                        lifecycle_cutoff
+                    } else {
+                        cutoff
+                    },
+                )?;
                 Ok(0)
             }
             _ => Err("malformed_request"),
@@ -505,6 +534,15 @@ impl Registration {
         Ok(())
     }
     pub fn submit(&mut self, req: &Value, cutoff: u64, source: &Value) -> Result<Value> {
+        self.submit_at(req, cutoff, cutoff, source)
+    }
+    pub fn submit_at(
+        &mut self,
+        req: &Value,
+        cutoff: u64,
+        lifecycle_cutoff: u64,
+        source: &Value,
+    ) -> Result<Value> {
         self.authenticate(req)?;
         let seq = safe(&req["sequence"])?;
         let raw = req["eventsJson"].as_str().ok_or("malformed_request")?;
@@ -528,7 +566,12 @@ impl Registration {
             }
             let mut points = 0;
             for e in &events {
-                points += self.event(e, cutoff, source)?;
+                points += self.event(
+                    e,
+                    cutoff,
+                    lifecycle_cutoff.min(cutoff.saturating_add(GRACE_NS)),
+                    source,
+                )?;
                 if points > 256 {
                     return Err("invalid_materials");
                 }
@@ -562,11 +605,15 @@ impl Registration {
     }
     pub fn finish(&mut self, req: &Value, now: u64) -> Result<Value> {
         self.authenticate(req)?;
+        let stable = json!({"ingressVersion":req["ingressVersion"],"ownerToken":req["ownerToken"],"captureId":req["captureId"],"registrationId":req["registrationId"],"producerToken":req["producerToken"],"finalSequence":req["finalSequence"],"seal":req["seal"]});
         if let Some(prior) = &self.finish {
-            if prior != req {
+            if prior != &stable {
                 return Err("identity_conflict");
             }
             return Ok(self.finish_receipt(req));
+        }
+        if self.frozen() {
+            return Err("unavailable");
         }
         exact(&req["seal"], &["state", "observedAtNs", "nativeRevision"])?;
         let expected = if self.digests.is_empty() {
@@ -589,25 +636,42 @@ impl Registration {
             self.phase = Phase::Complete;
             self.revision += 1
         }
-        self.finish = Some(req.clone());
+        self.finish = Some(stable);
         Ok(self.finish_receipt(req))
     }
     fn finish_receipt(&self, req: &Value) -> Value {
-        json!({"ingressVersion":1,"captureId":req["captureId"],"registrationId":self.registration_id,"finalSequence":req["finalSequence"],"state":if self.phase==Phase::Complete{"complete"}else{"unavailable"}})
+        json!({"ingressVersion":1,"captureId":req["captureId"],"registrationId":self.registration_id,"finalSequence":req["finalSequence"],"state":if matches!(self.phase, Phase::Complete | Phase::FrozenComplete){"complete"}else{"unavailable"}})
     }
     fn fact_value(&self, capture: &str, materials: &str) -> Value {
         json!({"schema":"apparent.capture-strokes/1","identity":{"captureId":capture,"materialsId":materials},"coordinates":"target-normalized-10000","surfaces":self.surfaces.values().map(|s|json!({"surfaceId":s.value["surfaceId"],"transformId":s.value["transformId"],"width":s.width,"height":s.height,"target":s.value["target"]})).collect::<Vec<_>>(),"strokes":self.strokes})
     }
+    pub fn freeze(&mut self, capture: &str, materials: &str) -> Option<Value> {
+        if !self.frozen() {
+            self.phase = if self.phase == Phase::Complete {
+                Phase::FrozenComplete
+            } else {
+                Phase::FrozenUnavailable
+            };
+            self.revision += 1;
+        }
+        self.facts(capture, materials)
+    }
     pub fn facts(&self, capture: &str, materials: &str) -> Option<Value> {
-        (self.phase == Phase::Complete).then(|| self.fact_value(capture, materials))
+        matches!(self.phase, Phase::Complete | Phase::FrozenComplete)
+            .then(|| self.fact_value(capture, materials))
     }
 }
 fn point(v: &Value, s: &Surface) -> Result<(i32, i32)> {
     // Match the donor f32 arithmetic, rejecting overflow before narrowing. Raw
     // excursions survive until Core clips/splits; never clamp to the viewport.
-    let normalize = |v: &Value, origin: f32, size: u32| -> Result<i32> {
+    let normalize = |v: &Value, origin: f64, size: u32| -> Result<i32> {
         let input = number(v)?;
-        let value = ((input as f32 - origin) / size as f32 * 10_000.0).round();
+        let normalized = if s.value["target"] == "capture-rectangle" {
+            ((input - origin) / f64::from(size)) as f32
+        } else {
+            (input as f32 - origin as f32) / size as f32
+        };
+        let value = (normalized * 10_000.0_f32).round();
         if !value.is_finite()
             || f64::from(value) < f64::from(i32::MIN)
             || f64::from(value) > f64::from(i32::MAX)

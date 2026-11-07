@@ -518,15 +518,7 @@ fn finalize(
                 .push(json!({"code":"transcript-unavailable"})),
         }
     }
-    let ink_facts = {
-        shared
-            .journal
-            .lock()
-            .map_err(|_| "internal")?
-            .ink_registration
-            .as_ref()
-            .and_then(|r| r.facts(&j.capture_id, &materials_id))
-    };
+    let ink_facts = ink_control::freeze(shared, &materials_id)?;
     if let Some(facts) = ink_facts {
         let file = seal_fact(shared, "accepted-strokes.json", &facts)?;
         payload["files"]
