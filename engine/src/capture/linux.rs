@@ -280,6 +280,16 @@ pub(super) fn worker(
         // drained the recorder pipeline.
         let (recorder, _native_source) = recording_start(&source, &movie, &shared, shared.epoch)?;
         let video_origin_ns = recorder.video_origin_ns().ok_or("invalid_materials")?;
+        // Public admission still refuses microphone requests until the exact
+        // runtime clock/seal/package qualification gate is closed. Keep its
+        // owner-local execution in this same lifecycle, not a second recorder.
+        let audio = if shared.journal.lock().map_err(|_| "internal")?.request["options"]["audio"]
+            == "microphone"
+        {
+            Some(super::audio::Capture::start(&shared)?)
+        } else {
+            None
+        };
         {
             let mut j = shared.journal.lock().map_err(|_| "internal")?;
             j.state = "recording".into();
@@ -295,6 +305,9 @@ pub(super) fn worker(
                 recorder.stop();
                 return Err("unavailable");
             }
+            if let Some(audio) = &audio {
+                audio.check()?;
+            }
             thread::sleep(Duration::from_millis(30));
             if Instant::now() >= source_check {
                 source_check = Instant::now() + Duration::from_millis(250);
@@ -303,6 +316,7 @@ pub(super) fn worker(
                 });
                 if current.is_none() {
                     recorder.stop();
+                    drop(audio);
                     drop(movie);
                     let j = shared.journal.lock().map_err(|_| "internal")?;
                     let _ = remove_unsealed(&shared.directory, &j);
@@ -312,6 +326,7 @@ pub(super) fn worker(
         }
         if shared.cancel.load(Ordering::Acquire) {
             recorder.stop();
+            drop(audio);
             drop(movie);
             let prior = shared.journal.lock().map_err(|_| "internal")?;
             remove_unsealed(&shared.directory, &prior)?;
@@ -329,6 +344,7 @@ pub(super) fn worker(
             .elapsed()
             .as_millis()
             .min(9_007_199_254_740_991) as u64;
+        let audio = audio.map(|audio| audio.finish()).transpose()?;
         if !recorder.finish(|_| {}) {
             return Err("invalid_materials");
         }
@@ -338,7 +354,14 @@ pub(super) fn worker(
             }
         }
         movie.sync_all().map_err(|_| "invalid_materials")?;
-        let manifest = finalize(&shared, &movie, &source, capture_duration, video_origin_ns)?;
+        let manifest = finalize(
+            &shared,
+            &movie,
+            &source,
+            capture_duration,
+            video_origin_ns,
+            audio.as_ref(),
+        )?;
         let mut j = shared.journal.lock().map_err(|_| "internal")?;
         let mut ready = j.clone();
         ready.state = if ready.cancel_requested {

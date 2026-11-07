@@ -33,7 +33,7 @@ fn mapped_timing(elapsed: u128, clock: u64, base: u64, pts: Option<u64>) -> Opti
 
 impl Stream {
     pub fn start(name: &str, on_samples: impl Fn(&[f32]) + Send + Sync + 'static) -> Result<Self> {
-        Self::start_inner(name, None, move |samples, _| on_samples(samples))
+        Self::start_inner(Some(name), None, move |samples, _| on_samples(samples))
     }
 
     /// Timestamped input for a caller retaining the SAME admission Instant.
@@ -43,8 +43,21 @@ impl Stream {
         admission: std::time::Instant,
         on_samples: impl Fn(&[f32], PcmTiming) + Send + Sync + 'static,
     ) -> Result<Self> {
-        Self::start_inner(name, Some(admission), move |samples, timing| {
+        Self::start_inner(Some(name), Some(admission), move |samples, timing| {
             // start_inner refuses a timed buffer without a valid mapping.
+            if let Some(timing) = timing {
+                on_samples(samples, timing);
+            }
+        })
+    }
+
+    /// The Pulse server's current default input, without changing its default.
+    /// Device selection/settings remain caller policy; no fallback is attempted.
+    pub fn start_default_with_clock(
+        admission: std::time::Instant,
+        on_samples: impl Fn(&[f32], PcmTiming) + Send + Sync + 'static,
+    ) -> Result<Self> {
+        Self::start_inner(None, Some(admission), move |samples, timing| {
             if let Some(timing) = timing {
                 on_samples(samples, timing);
             }
@@ -69,7 +82,7 @@ impl Stream {
     }
 
     fn start_inner(
-        name: &str,
+        name: Option<&str>,
         admission: Option<std::time::Instant>,
         on_samples: impl Fn(&[f32], Option<PcmTiming>) + Send + Sync + 'static,
     ) -> Result<Self> {
@@ -77,10 +90,11 @@ impl Stream {
         // Only the constant part is parsed. Never interpolate a device name into a pipeline.
         let pipeline = gst::parse::launch("audioconvert name=convert ! audioresample ! audio/x-raw,format=F32LE,rate=16000,channels=1 ! appsink name=input max-buffers=4 drop=true sync=false")?
             .downcast::<gst::Pipeline>().map_err(|_| anyhow::anyhow!("Not an audio pipeline"))?;
-        let source = gst::ElementFactory::make("pulsesrc")
-            .property("device", name)
-            .build()
-            .context("Pulse source is unavailable")?;
+        let mut builder = gst::ElementFactory::make("pulsesrc");
+        if let Some(name) = name {
+            builder = builder.property("device", name);
+        }
+        let source = builder.build().context("Pulse source is unavailable")?;
         pipeline.add(&source)?;
         source.link(&pipeline.by_name("convert").context("No audio converter")?)?;
         let sink = pipeline

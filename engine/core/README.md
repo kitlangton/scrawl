@@ -221,8 +221,8 @@ prefix outside the live ring. Input must stop/drain before finish returns that
 same descriptor for identity checks and sealing. The caller retains its existing
 capture journal and owner permit; no second lease or path writer is introduced.
 These are source-level prerequisites, not audio clock, consent or package proof.
-The capture runtime still needs its audio plugin closure and authenticated audio
-material lifecycle before adopting it. No system-default source is changed.
+The capture runtime still needs its audio plugin closure and native qualification
+before public adoption. No system-default source is changed.
 
 `Stream::start_with_clock` additionally accepts the original capture-admission
 Instant and reports each buffer segment running-time mapped through its active
@@ -230,3 +230,30 @@ GStreamer clock. Missing/invalid timing refuses the buffer; callback arrival is
 not an audio offset. This is source pipeline timing, not hardware timestamp proof.
 Callers must also observe `error()` after first-sample readiness and retain WAV
 sample-clock continuity, durable failure and journal/seal authority themselves.
+
+## Capture-owned original audio adapter (unavailable publicly)
+
+`engine/src/capture/audio.rs` connects these existing primitives to the SAME
+capture owner, admission epoch, Store directory and journal. It journals the
+created `audio.wav` inode before opening input; Stop drains native input and the
+bounded writer before hashing/sealing that original descriptor. Partial cleanup
+and material release require the journalled identities and use Store checked
+removal, preserving replacements and unknown entries. No separate audio lease,
+path writer, original-material rewrite or detached inference authority is added.
+
+The original material payload includes its sealed mono16kHz PCM16 WAV,
+`clock.audioOffsetMs: 0` and actual sample-count-derived duration. A nonzero initial
+unobserved interval is zero padded once and seals warning
+`{code:"audio-initial-gap",atMs:firstRealSampleMs}`; it is not recorded silence.
+The private capture journal retains exact first running PTS, mapped admission
+nanoseconds, source sample count and ceil-millisecond origin rounding (<1ms once).
+Unknown timing, discontinuity, no real samples, writer backlog or persistence
+failure refuses successful materials. There is no internal gap filling.
+
+This is a source-only adapter: capture/2 still advertises `audioCapture:false`
+and rejects microphone admission. Tests use synthetic PCM/files only. The closed
+producer audio plugin closure, genuine Pulse source/clock/WAV native proof and
+consumer/audio package acceptance remain required before enabling that contract.
+Transcript and accepted strokes remain unavailable. Record keeps formatting and
+selection policy; original-ingress transcript sealing must precede the immutable
+material revision and is not implemented by this audio-only slice.

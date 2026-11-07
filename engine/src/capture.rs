@@ -17,6 +17,8 @@ use std::sync::{
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[path = "capture/audio.rs"]
+mod audio;
 #[path = "capture/linux.rs"]
 mod linux;
 #[path = "materials_media/mod.rs"]
@@ -57,6 +59,12 @@ struct Journal {
     release_payload: Option<Value>,
     #[serde(default)]
     partial_movie: Option<Value>,
+    #[serde(default)]
+    partial_audio: Option<Value>,
+    #[serde(default)]
+    release_audio: Option<Value>,
+    #[serde(default)]
+    audio_clock: Option<Value>,
     #[serde(default)]
     payload_digest: Option<String>,
     #[serde(default)]
@@ -262,9 +270,6 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
         }
         Err(_) => return Err("source_mismatch"),
     };
-    let parent_file = parent.directory_file().map_err(|_| "source_mismatch")?;
-    let leaf =
-        std::ffi::CString::new(journal.capture_id.as_str()).map_err(|_| "source_mismatch")?;
     let meta = dir.directory_metadata().map_err(|_| "source_mismatch")?;
     if !meta.is_dir()
         || meta.file_type().is_symlink()
@@ -284,7 +289,7 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
     {
         let entry = entry.map_err(|_| "internal")?;
         let name = entry.file_name().to_string_lossy().into_owned();
-        if !["recording.mp4", "materials.json"].contains(&name.as_str()) {
+        if !["recording.mp4", "materials.json", "audio.wav"].contains(&name.as_str()) {
             return Err("source_mismatch");
         }
         let file = dir.file(&name, false).map_err(|_| "source_mismatch")?;
@@ -295,6 +300,11 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
                 .partial_movie
                 .as_ref()
                 .or(journal.release_movie.as_ref())
+        } else if name == "audio.wav" {
+            journal
+                .partial_audio
+                .as_ref()
+                .or(journal.release_audio.as_ref())
         } else {
             journal.release_payload.as_ref()
         };
@@ -327,24 +337,22 @@ fn remove_unsealed(directory: &Path, journal: &Journal) -> Result<(), &'static s
         {
             return Err("source_mismatch");
         }
-        found.push(name);
+        found.push((name, m.dev(), m.ino()));
     }
-    for name in found {
-        let leaf = std::ffi::CString::new(name).map_err(|_| "source_mismatch")?;
-        if unsafe { libc::unlinkat(dir.as_raw_fd(), leaf.as_ptr(), 0) } != 0 {
-            return Err("internal");
-        }
+    for (name, device, inode) in found {
+        dir.remove_file_if_identity(&name, device, inode)
+            .map_err(|_| "source_mismatch")?;
     }
     dir.directory_file()
         .map_err(|_| "internal")?
         .sync_all()
         .map_err(|_| "internal")?;
-    // Unknown entries make unlinkat(AT_REMOVEDIR) fail; they are never traversed/deleted.
-    if unsafe { libc::unlinkat(parent_file.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR) } != 0 {
-        return Err("source_mismatch");
-    }
-    parent.check().map_err(|_| "source_mismatch")?;
-    parent_file.sync_all().map_err(|_| "internal")
+    // The Store quarantines and verifies the named inode before removing it.
+    // Unknown entries or replaced directories remain preserved.
+    parent
+        .remove_empty_child_if_identity(&journal.capture_id, meta.dev(), meta.ino())
+        .map_err(|_| "source_mismatch")?;
+    parent.check().map_err(|_| "source_mismatch")
 }
 fn operation_dir(shared: &Shared) -> Result<apparent_capture_engine::SecureStore, &'static str> {
     let j = shared.journal.lock().map_err(|_| "internal")?.clone();
@@ -399,6 +407,7 @@ fn finalize(
     source: &Source,
     duration_ms: u64,
     video_origin_ns: u64,
+    audio: Option<&audio::Completed>,
 ) -> Result<Value, &'static str> {
     let (materials_id, lease_id) = (
         new_id().map_err(|_| "internal")?,
@@ -429,7 +438,23 @@ fn finalize(
         .map(|ns| ns.saturating_add(999_999) / 1_000_000)
         .ok_or("invalid_materials")?;
     let (video_width, video_height) = video_dimensions(source);
-    let payload = json!({"schema":"apparent.capture-materials-payload/1","identity":{"captureId":j.capture_id,"materialsId":materials_id},"bundleId":j.request["bundleId"],"root":root,"leaseId":lease_id,"clock":{"epoch":"capture-admission-monotonic","units":"integer-milliseconds","durationMs":duration,"videoOffsetMs":video_offset_ms},"confirmedSource":confirmed,"invocation":invocation,"files":[movie_file],"video":{"file":"recording.mp4","width":video_width,"height":video_height,"durationMs":video_duration_ms},"facts":{},"collection":{"context":"unavailable","interactions":"unavailable","candidates":"unavailable","transcript":"unavailable","acceptedStrokes":"unavailable"},"warnings":[],"safety":{"nativeRemoteDelivery":"forbidden","safeForProcessing":true}});
+    let mut payload = json!({"schema":"apparent.capture-materials-payload/1","identity":{"captureId":j.capture_id,"materialsId":materials_id},"bundleId":j.request["bundleId"],"root":root,"leaseId":lease_id,"clock":{"epoch":"capture-admission-monotonic","units":"integer-milliseconds","durationMs":duration,"videoOffsetMs":video_offset_ms},"confirmedSource":confirmed,"invocation":invocation,"files":[movie_file],"video":{"file":"recording.mp4","width":video_width,"height":video_height,"durationMs":video_duration_ms},"facts":{},"collection":{"context":"unavailable","interactions":"unavailable","candidates":"unavailable","transcript":"unavailable","acceptedStrokes":"unavailable"},"warnings":[],"safety":{"nativeRemoteDelivery":"forbidden","safeForProcessing":true}});
+    if let Some(audio) = audio {
+        let opdir = operation_dir(shared)?;
+        let file = audio.seal(&opdir, duration)?;
+        payload["files"]
+            .as_array_mut()
+            .ok_or("internal")?
+            .push(file.clone());
+        payload["clock"]["audioOffsetMs"] = json!(0);
+        payload["audio"] = json!({"file":"audio.wav","durationMs":audio.duration_ms,"sampleRate":16000,"channels":1});
+        if audio.initial_gap_ms != 0 {
+            payload["warnings"] = json!([{"code":"audio-initial-gap","atMs":audio.initial_gap_ms}]);
+        }
+        let mut j = shared.journal.lock().map_err(|_| "internal")?;
+        j.release_audio = Some(file["identity"].clone());
+        j.audio_clock = Some(audio.clock.clone());
+    }
     let payload_bytes = serde_json::to_vec(&payload).map_err(|_| "internal")?;
     {
         let mut j = shared.journal.lock().map_err(|_| "internal")?;
@@ -765,6 +790,9 @@ fn process_request(
                 release_movie: None,
                 release_payload: None,
                 partial_movie: None,
+                partial_audio: None,
+                release_audio: None,
+                audio_clock: None,
                 payload_digest: None,
                 admitted_monotonic_ns: Some(admitted_ns),
                 confirmed_at_ms: Some(confirmed_at_ms),
@@ -1011,7 +1039,10 @@ fn process_request(
                     {
                         return Err(release_refusal("root-identity"));
                     }
-                    let expected = ["recording.mp4", "materials.json"];
+                    let mut expected = vec!["recording.mp4", "materials.json"];
+                    if jnow.release_audio.is_some() {
+                        expected.push("audio.wav");
+                    }
                     let mut seen = Vec::new();
                     for entry in fs::read_dir(format!("/proc/self/fd/{}/", pinned.as_raw_fd()))
                         .map_err(|_| "internal")?
@@ -1030,6 +1061,8 @@ fn process_request(
                         let m = f.metadata().map_err(|_| release_refusal("file-metadata"))?;
                         let binding = if name == "recording.mp4" {
                             &jnow.release_movie
+                        } else if name == "audio.wav" {
+                            &jnow.release_audio
                         } else {
                             &jnow.release_payload
                         };
@@ -1085,12 +1118,26 @@ fn process_request(
                     {
                         return Err(release_refusal("durable-binding-missing"));
                     }
+                    let cleanup = operation_dir(&shared)?;
                     for name in expected {
                         if seen.iter().any(|x| x == name) {
-                            let c = std::ffi::CString::new(name).unwrap();
-                            if unsafe { libc::unlinkat(pinned.as_raw_fd(), c.as_ptr(), 0) } != 0 {
-                                return Err("internal");
-                            }
+                            let binding = match name {
+                                "recording.mp4" => &jnow.release_movie,
+                                "audio.wav" => &jnow.release_audio,
+                                _ => &jnow.release_payload,
+                            };
+                            let binding = binding.as_ref().ok_or("source_mismatch")?;
+                            let device = binding["device"]
+                                .as_str()
+                                .and_then(|x| x.parse().ok())
+                                .ok_or("source_mismatch")?;
+                            let inode = binding["inode"]
+                                .as_str()
+                                .and_then(|x| x.parse().ok())
+                                .ok_or("source_mismatch")?;
+                            cleanup
+                                .remove_file_if_identity(name, device, inode)
+                                .map_err(|_| "source_mismatch")?;
                         }
                     }
                     pinned
@@ -1098,17 +1145,16 @@ fn process_request(
                         .map_err(|_| "internal")?
                         .sync_all()
                         .map_err(|_| "internal")?;
-                    let parent = pinned_dir(dir.parent().ok_or("internal")?)
-                        .map_err(|_| release_refusal("parent-open"))?;
-                    let leaf = std::ffi::CString::new(capture)
-                        .map_err(|_| release_refusal("directory-name"))?;
-                    if unsafe {
-                        libc::unlinkat(parent.as_raw_fd(), leaf.as_ptr(), libc::AT_REMOVEDIR)
-                    } != 0
-                    {
-                        return Err(release_refusal("directory-unlink"));
-                    }
-                    parent.sync_all().map_err(|_| "internal")?;
+                    let parent =
+                        apparent_capture_engine::SecureStore::open(dir.parent().ok_or("internal")?)
+                            .map_err(|_| release_refusal("parent-open"))?;
+                    parent
+                        .remove_empty_child_if_identity(
+                            capture,
+                            jnow.root_device.ok_or("source_mismatch")?,
+                            jnow.root_inode.ok_or("source_mismatch")?,
+                        )
+                        .map_err(|_| release_refusal("directory-unlink"))?;
                     let mut j = shared.journal.lock().map_err(|_| "internal")?;
                     j.materials = None;
                     j.state = "cancelled".into();
@@ -1526,12 +1572,44 @@ mod unsealed_cleanup_tests {
             partial_movie: Some(
                 json!({"device":file.dev().to_string(),"inode":file.ino().to_string()}),
             ),
+            partial_audio: None,
+            release_audio: None,
+            audio_clock: None,
             payload_digest: None,
             admitted_monotonic_ns: None,
             confirmed_at_ms: None,
             cancel_requested: true,
         };
         (base, capture_root, root, journal)
+    }
+
+    #[test]
+    fn partial_audio_cleanup_requires_its_original_journalled_identity() {
+        let (base, directory, root, mut journal) = fixture();
+        let store = apparent_capture_engine::SecureStore::open(&root).unwrap();
+        let audio = store.file("audio.wav", true).unwrap();
+        let m = audio.metadata().unwrap();
+        assert_eq!(
+            remove_unsealed(&directory, &journal),
+            Err("source_mismatch")
+        );
+        journal.partial_audio =
+            Some(json!({"device":m.dev().to_string(),"inode":m.ino().to_string()}));
+        fs::rename(root.join("audio.wav"), base.join("retained-audio.wav")).unwrap();
+        let replacement = store.file("audio.wav", true).unwrap();
+        assert_eq!(
+            remove_unsealed(&directory, &journal),
+            Err("source_mismatch")
+        );
+        assert!(root.join("recording.mp4").exists());
+        drop(replacement);
+        fs::remove_file(root.join("audio.wav")).unwrap();
+        fs::rename(base.join("retained-audio.wav"), root.join("audio.wav")).unwrap();
+        drop(audio);
+        drop(store);
+        remove_unsealed(&directory, &journal).unwrap();
+        assert!(!root.exists());
+        fs::remove_dir_all(base).unwrap();
     }
 
     #[test]
@@ -1641,6 +1719,22 @@ mod unsealed_cleanup_tests {
 
 #[cfg(test)]
 mod publication_capability_tests {
+    use super::{capabilities, validate_start};
+    use serde_json::json;
+    #[test]
+    fn microphone_execution_does_not_open_public_admission_before_qualification() {
+        let mut request = json!({
+            "captureId":"a".repeat(32),"ownerToken":"b".repeat(64),
+            "bundleId":"original-audio","bundlePath":"/private/original-audio.apparent",
+            "options":{"audio":"none","localOnly":true},
+            "invocation":{"kind":"explicit","invocationId":"c".repeat(32),"observedAtMs":0}
+        });
+        assert_eq!(validate_start(&request), Ok(()));
+        request["options"]["audio"] = json!("microphone");
+        assert_eq!(validate_start(&request), Err("unavailable"));
+        assert_eq!(capabilities(true, false)["audioCapture"], false);
+    }
+
     #[test]
     fn publication_reconciliation_is_advertised_when_screen_capture_is_unavailable() {
         assert_eq!(super::capabilities(false, false)["publication"], true);
