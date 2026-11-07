@@ -3,6 +3,8 @@ import { RecipientTransportError } from "../recipient/transport.ts";
 import { checkActive, scopedRequest } from "../sender/request.ts";
 import { pinAccountRequest, safeTransportCategory, type AccountRequestOptions } from "./authority.ts";
 
+export type { AccountRequestOptions, ShareAuthorization as AccountAuthorization } from "./authority.ts";
+
 export type AccountStatus = Readonly<{ beta: "active" | "waitlist"; quotaBytes: number; usedBytes: number }>;
 
 function invalid(): never { throw new RecipientTransportError("invalid_response"); }

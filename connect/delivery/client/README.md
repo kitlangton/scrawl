@@ -627,3 +627,15 @@ an acknowledged DELETE without valid readback raises `ShareRevocationError` with
 case authorizes an automatic repeat. Share secrets are never management IDs.
 The service remains authoritative. Installed command and renewal-owner adoption
 remain separate; root and `/connect` loopback Worker tests do not prove live auth.
+
+
+## Scoped account-status transport
+
+`./account-status` exposes `readAccountStatus` for the existing `status --account`
+workflow. One bounded GET returns only frozen `beta`, `quotaBytes` and `usedBytes`
+facts. It reuses the share transport's approved server, scope and local generation
+binding; the caller selects upload credentials first or a read credential locally.
+There is no network fallback, refresh, credential mutation or installed route.
+The service supplies the quota; the client does not hardcode a limit or assume
+usage is below it. Local status composition and renewal-owner adoption remain
+host work. Synthetic Worker checks cover both scopes and API mounts, not live auth.

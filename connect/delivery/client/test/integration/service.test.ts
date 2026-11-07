@@ -15,6 +15,7 @@ import { RecipientTransportError } from "../../src/recipient/transport.ts";
 import { uploadPreparedPlainCapture } from "../../src/sender/transport.ts";
 import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-transport.ts";
 import { readSenderPeerAuthority } from "../../src/sender/authority.ts";
+import { readAccountStatus } from "../../src/account/status.ts";
 import { listShares, revokeShare } from "../../src/account/shares.ts";
 import { sealCapture } from "../../src/sender/seal.ts";
 
@@ -249,6 +250,11 @@ test("prepared plaintext sender reserves, uploads and verifies through real Work
         assert.equal(approvedServer, server); assert.equal(requested, scope); calls.push(requested);
         return { approvedServer, scope: requested, generation, token: scope === "read" ? account.read : account.token };
       } });
+    for (const scope of ["upload", "read"] as const) {
+      const status = await readAccountStatus(management(scope));
+      assert.deepEqual(status, { beta: "active", quotaBytes: 500_000_000, usedBytes: files.reduce((total, file) => total + file.size, 0) });
+      assert.equal(Object.isFrozen(status), true);
+    }
     const listed = await listShares(management("read"));
     assert.equal(listed.shares.length, 1); assert.equal(listed.shares[0]!.captureId, captureId);
     assert.equal(listed.shares[0]!.url, shared.url); assert.equal(listed.shares[0]!.status, "ready");
@@ -259,7 +265,7 @@ test("prepared plaintext sender reserves, uploads and verifies through real Work
     await revokeShare(management("upload"), listed.shares[0]!.id);
     const after = await listShares(management("read"));
     assert.equal(after.shares[0]!.status, "revoked"); assert.equal(after.shares[0]!.url, null);
-    assert.deepEqual(calls, ["read", "upload", "upload", "read"]);
+    assert.deepEqual(calls, ["upload", "read", "read", "upload", "upload", "read"]);
     assert.equal((await fetch(shared.url)).status, 410, "revoked capability is denied by the actual Worker");
 
   });
