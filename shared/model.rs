@@ -3,9 +3,7 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use crate::shared::windows::{CursorSample, WindowSnapshot};
-
-/// Coordinates in `Stroke::pts` are scaled to `0..=10_000` (1/10000 of target width/height).
-pub const SCALE: i32 = 10_000;
+pub use apparent_capture_engine::ink::{SCALE, Stroke};
 
 /// Pause longer than this (ms) between strokes starts a new `Mark`.
 pub const MARK_GAP_MS: u64 = 1_200;
@@ -375,74 +373,6 @@ pub struct WordTiming {
     pub text: String,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
-#[serde(rename_all = "camelCase")]
-pub struct Stroke {
-    pub t0: u64,
-    pub t1: u64,
-    pub fw: u32,
-    pub fh: u32,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub on: Option<String>,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub pin: Option<u32>,
-    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
-    pub laser: bool,
-    /// Exact recorded sRGB bytes. Absent retains the renderer's unnamed legacy default.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub rgb: Option<[u8; 3]>,
-    /// Flat triples `[x, y, dt_ms, ...]` where `x, y` are in `0..=SCALE` and `dt_ms` is ms since `t0`.
-    pub pts: Vec<i32>,
-}
-
-impl Stroke {
-    /// Moves the stroke `ms` earlier onto a clock that started at `ms`, shifting point `dt_ms`
-    /// by any clipped prefix and dropping points before `ms`. Returns `false` if the stroke
-    /// ended before `ms` or has no remaining points.
-    pub fn rebase(&mut self, ms: u64) -> bool {
-        if self.t1 < ms {
-            self.pts.clear();
-            return false;
-        }
-        let lost = ms.saturating_sub(self.t0) as i64;
-        self.t0 = self.t0.saturating_sub(ms);
-        self.t1 = self.t1.saturating_sub(ms);
-        if lost > 0 {
-            let mut kept = Vec::with_capacity(self.pts.len());
-            for chunk in self.pts.chunks_exact(3) {
-                let dt = i64::from(chunk[2]) - lost;
-                if dt >= 0 {
-                    kept.extend_from_slice(&[chunk[0], chunk[1], dt as i32]);
-                }
-            }
-            self.pts = kept;
-        }
-        !self.pts.is_empty()
-    }
-
-    /// Returns normalized `(x, y)` points in `0.0..=1.0`.
-    pub fn normalized_points(&self) -> Vec<[f32; 2]> {
-        self.pts
-            .chunks_exact(3)
-            .map(|c| [c[0] as f32 / SCALE as f32, c[1] as f32 / SCALE as f32])
-            .collect()
-    }
-
-    /// Returns `(x, y, absolute_t_ms)` points.
-    pub fn timed_points(&self) -> Vec<(f32, f32, u64)> {
-        self.pts
-            .chunks_exact(3)
-            .map(|c| {
-                (
-                    c[0] as f32 / SCALE as f32,
-                    c[1] as f32 / SCALE as f32,
-                    self.t0.saturating_add(c[2].max(0) as u64),
-                )
-            })
-            .collect()
-    }
-}
-
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Shape {
@@ -709,24 +639,6 @@ mod tests {
         assert_eq!(json["contextChanges"][0]["value"], serde_json::Value::Null);
         let back: ApparentBundle = serde_json::from_value(json).unwrap();
         assert_eq!(back, bundle);
-    }
-
-    #[test]
-    fn stroke_rgb_preserves_legacy_bytes_and_exact_colored_rebase() {
-        let old = r#"{"t0":100,"t1":200,"fw":100,"fh":100,"pts":[100,200,0,300,400,100]}"#;
-        let mut stroke: Stroke = serde_json::from_str(old).unwrap();
-        assert_eq!(stroke.rgb, None);
-        assert_eq!(serde_json::to_string(&stroke).unwrap(), old);
-        stroke.rgb = Some([0, 203, 255]);
-        let saved = serde_json::to_string(&stroke).unwrap();
-        assert!(saved.contains("\"rgb\":[0,203,255]"));
-        let mut restored: Stroke = serde_json::from_str(&saved).unwrap();
-        assert!(restored.rebase(150));
-        assert_eq!(restored.rgb, Some([0, 203, 255]));
-        for invalid in ["[-1,0,0]", "[256,0,0]", "[0.5,0,0]", "[0,0]", "[0,0,0,0]", "\"coral\""] {
-            let bad = old.replace("\"pts\":", &format!("\"rgb\":{invalid},\"pts\":"));
-            assert!(serde_json::from_str::<Stroke>(&bad).is_err(), "{invalid}");
-        }
     }
 
     #[test]

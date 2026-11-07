@@ -12,6 +12,7 @@ pub mod linux;
 mod locking;
 #[cfg(feature = "recording-notes")]
 pub mod recording;
+pub mod ink;
 pub mod observations;
 #[cfg(all(target_os = "macos", feature = "macos-capture"))]
 pub mod macos;

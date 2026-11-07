@@ -35,6 +35,8 @@ import { retireQueuedJob, resumeQueuedRetirement } from "../../src/queue/prune.t
 import { withStateQueue } from "../../src/state/queue-transaction.ts";
 import { stateFileStamp } from "../../src/state/credential-files.ts";
 import { retryQueuedUploads, RetryError } from "../../src/queue/retry.ts";
+import { beginLoginState } from "../../src/account/login-state.ts";
+import { directoryIdentity } from "../../src/state/directory.ts";
 import { generateStoredIdentityRecord } from "../../src/credentials/recipient-identity.ts";
 import { publishLoginIdentity } from "../../src/credentials/identity-store.ts";
 import { prepareRevocationState } from "../../src/account/revocation-prepare.ts";
@@ -190,7 +192,7 @@ test("native login identity publication keeps the queue fence and existing legac
           assert.equal(args[3].destination, null, "identity publication must never overwrite");
           return resources.replaceFile(...args);
         } };
-      const context = { scope, approvedServer: server, loginId: id, cancellation: "epoch" };
+      const context = { scope, approvedServer: server, loginId: id, cancellation: "epoch", directoryIdentity: directoryIdentity(await lstat(root, { bigint: true })) };
       const result = await publishLoginIdentity(root, context, proposal.privateRecord, guarded);
       assert.equal(result.state, "published"); if (result.state === "uncertain") return;
       assert.deepEqual(result.publicKey, proposal.publicKey); assert.equal("privateRecord" in result, false);
@@ -220,7 +222,7 @@ test("native identity uncertainty retains private bytes and never exposes an app
       async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
         calls++; assert.equal((await resources.replaceFile(...args)).state, "replaced"); return { state: "publication_uncertain" as const };
       } };
-    const context = { scope: "read" as const, approvedServer: server, loginId: id, cancellation: null };
+    const context = { scope: "read" as const, approvedServer: server, loginId: id, cancellation: null, directoryIdentity: directoryIdentity(await lstat(root, { bigint: true })) };
     const result = await publishLoginIdentity(root, context, proposal.privateRecord, guarded);
     assert.deepEqual(result, { state: "uncertain", identityId: id }); assert.equal("publicKey" in result, false);
     assert.equal(calls, 1); assert.deepEqual(await readFile(path.join(root, `${id}.identity`)), Buffer.from(proposal.privateRecord));
@@ -229,6 +231,55 @@ test("native identity uncertainty retains private bytes and never exposes an app
     await writeFile(path.join(root, "revocation-pending.intent"), "false", { mode: 0o600 });
     await assert.rejects(publishLoginIdentity(root, { ...context, cancellation: "changed" }, proposal.privateRecord, resources), { category: "encryption_identity_unavailable" });
   } finally { proposal.privateRecord.fill(0); }
+}));
+
+test("native login state joins private identity publication and fences superseded receipts", async () => fixture(async root => {
+  const server = "https://app.tryapparent.com/connect";
+  await writeFile(path.join(root, "read.login"), "opaque legacy marker", { mode: 0o600 });
+  await link(path.join(root, "read.login"), path.join(root, "read-marker.alias"));
+  await writeFile(path.join(root, "upload.credential"), "synthetic credential unchanged", { mode: 0o600 });
+  assert.equal((await beginLoginState(root, { scope: "upload", approvedServer: server, uploadConsent: false }, resources)).state, "refused");
+  const proposal = await generateStoredIdentityRecord();
+  try {
+    const first = await beginLoginState(root, { scope: "read", approvedServer: server, uploadConsent: false }, resources);
+    assert.equal(first.state, "begun"); if (first.state !== "begun") return;
+    assert.equal(await readFile(path.join(root, "read-marker.alias"), "utf8"), "opaque legacy marker");
+    assert.equal(JSON.parse(await readFile(path.join(root, "read.login"), "utf8")), first.loginId);
+    mode((await lstat(path.join(root, "read.login"))).mode, 0o600, "login marker");
+    assert.equal((await publishLoginIdentity(root, first, proposal.privateRecord, resources)).state, "published");
+    const second = await beginLoginState(root, { scope: "read", approvedServer: server, uploadConsent: false }, resources);
+    assert.equal(second.state, "begun"); if (second.state !== "begun") return;
+    assert.notEqual(second.loginId, first.loginId);
+    await assert.rejects(publishLoginIdentity(root, first, proposal.privateRecord, resources), { category: "encryption_identity_unavailable" });
+    assert.equal((await publishLoginIdentity(root, second, proposal.privateRecord, resources)).state, "published");
+    const upload = await beginLoginState(root, { scope: "upload", approvedServer: server, uploadConsent: true }, resources);
+    assert.equal(upload.state, "begun");
+    assert.equal(JSON.parse(await readFile(path.join(root, "read.login"), "utf8")), second.loginId);
+    assert.equal(await readFile(path.join(root, "upload.credential"), "utf8"), "synthetic credential unchanged");
+  } finally { proposal.privateRecord.fill(0); }
+}));
+
+test("native login queue waits cannot outlive cancellation or a revocation intent", async () => fixture(async root => {
+  for (const mutation of ["cancellation", "intent"] as const) {
+    const state = path.join(root, mutation); await mkdir(state, { mode: 0o700 });
+    await writeFile(path.join(state, "read.login"), JSON.stringify("previous-login"), { mode: 0o600 });
+    await writeFile(path.join(state, "cancellation"), JSON.stringify("before"), { mode: 0o600 });
+    const held = await resources.lock(await open(path.join(state, "queue.lock"), constants.O_RDWR | constants.O_CREAT | constants.O_NOFOLLOW, 0o600), { timeoutMs: 0 });
+    assert.equal(held.state, "acquired"); if (held.state !== "acquired") return;
+    let release = true;
+    try {
+      let queued!: () => void; const waiting = new Promise<void>(resolve => { queued = resolve; });
+      const guarded = { checkAcl: resources.checkAcl.bind(resources), replaceFile: resources.replaceFile.bind(resources),
+        lock(handle: Parameters<typeof resources.lock>[0], options: Parameters<typeof resources.lock>[1]) { queued(); return resources.lock(handle, options); } };
+      const pending = beginLoginState(state, { scope: "read", approvedServer: "https://app.tryapparent.com/connect", uploadConsent: false }, guarded, { lockTimeoutMs: 5000 });
+      await waiting;
+      if (mutation === "cancellation") await writeFile(path.join(state, "cancellation"), JSON.stringify("after"), { mode: 0o600 });
+      else assert.equal((await publishRevocationIntent(state, true, { signal: new AbortController().signal, assertHeld() {} }, resources)).state, "committed");
+      await held.lease.release(); release = false;
+      assert.equal((await pending).state, "refused");
+      assert.equal(JSON.parse(await readFile(path.join(state, "read.login"), "utf8")), "previous-login");
+    } finally { if (release) await held.lease.release(); }
+  }
 }));
 
 test("native upload worker spans spool recovery and transfer with independent queue access", async () => fixture(async root => {
