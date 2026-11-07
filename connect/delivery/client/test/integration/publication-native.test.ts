@@ -35,6 +35,7 @@ import { retireQueuedJob, resumeQueuedRetirement } from "../../src/queue/prune.t
 import { withStateQueue } from "../../src/state/queue-transaction.ts";
 import { stateFileStamp } from "../../src/state/credential-files.ts";
 import { retryQueuedUploads, RetryError } from "../../src/queue/retry.ts";
+import { prepareRevocationState } from "../../src/account/revocation-prepare.ts";
 import { publishRevocationIntent, readRevocationIntentsWithinLease } from "../../src/account/revocation-intent.ts";
 import { runUploadWorkerOnce } from "../../src/queue/worker.ts";
 
@@ -123,6 +124,50 @@ test("native intent publication retains uncertain effects after root replacement
     assert.equal(await readFile(path.join(previous, result.name), "utf8"), "true");
     assert.deepEqual(await readdir(root), []);
   } finally { await rm(previous, { recursive: true, force: true }); }
+}));
+
+test("native revocation preparation rotates epoch and fences logins while preserving durable inputs", async () => fixture(async root => {
+  const server = "https://app.tryapparent.com/connect";
+  const preserved = new Map([
+    ["upload.credential", JSON.stringify({ token: "synthetic-upload" })], ["read.credential", JSON.stringify({ token: "synthetic-read" })],
+    ["ready.job", JSON.stringify({ status: "ready" })], ["config.json", JSON.stringify({ cloud: { enabled: true, uploadConsent: true, server } })],
+    ["endpoint.identity", JSON.stringify({ synthetic: true })], ["read.renewal", JSON.stringify({ synthetic: true })],
+  ]);
+  for (const [name, bytes] of preserved) await writeFile(path.join(root, name), bytes, { mode: 0o600 });
+  await writeFile(path.join(root, "cancellation"), JSON.stringify("previous-epoch"), { mode: 0o600 });
+  for (const name of ["upload.login", "read.login"]) await writeFile(path.join(root, name), JSON.stringify(name), { mode: 0o600 });
+  const intent = await publishRevocationIntent(root, true, { signal: new AbortController().signal, assertHeld() {} }, resources);
+  assert.equal(intent.state, "committed");
+  let replacements = 0;
+  const guarded = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+    async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
+      const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+      if (contender.state === "acquired") await contender.lease.release();
+      assert.equal(contender.state, "busy", "epoch replacement must retain the real queue lease");
+      replacements++; return resources.replaceFile(...args);
+    } };
+  const prepared = await prepareRevocationState(root, { approvedServer: server }, guarded);
+  assert.equal(prepared.state, "prepared"); if (prepared.state !== "prepared") return;
+  assert.equal(replacements, 1); assert.match(prepared.epoch, /^[a-f0-9]{32}$/); assert.equal(prepared.logout, true);
+  assert.equal(JSON.parse(await readFile(path.join(root, "cancellation"), "utf8")), prepared.epoch);
+  for (const name of ["upload.login", "read.login"]) await assert.rejects(lstat(path.join(root, name)), { code: "ENOENT" });
+  assert.equal(await readFile(path.join(root, intent.name), "utf8"), "true");
+  for (const [name, bytes] of preserved) assert.equal(await readFile(path.join(root, name), "utf8"), bytes);
+}));
+
+test("native revocation preparation does not remove logins after an uncertain epoch replacement", async () => fixture(async root => {
+  await writeFile(path.join(root, "read.login"), JSON.stringify("retained-login"), { mode: 0o600 });
+  const intent = await publishRevocationIntent(root, false, { signal: new AbortController().signal, assertHeld() {} }, resources);
+  assert.equal(intent.state, "committed"); let calls = 0;
+  const guarded = { checkAcl: resources.checkAcl.bind(resources), lock: resources.lock.bind(resources),
+    async replaceFile(...args: Parameters<typeof resources.replaceFile>) {
+      calls++; assert.equal((await resources.replaceFile(...args)).state, "replaced");
+      return { state: "publication_uncertain" as const };
+    } };
+  const result = await prepareRevocationState(root, { approvedServer: "https://app.tryapparent.com/connect" }, guarded);
+  assert.equal(result.state, "uncertain"); assert.equal(calls, 1);
+  assert.equal(await readFile(path.join(root, "read.login"), "utf8"), JSON.stringify("retained-login"));
+  assert.equal(await readFile(path.join(root, intent.name), "utf8"), "false");
 }));
 
 test("native upload worker spans spool recovery and transfer with independent queue access", async () => fixture(async root => {

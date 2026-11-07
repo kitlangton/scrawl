@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { chmod, lstat, mkdtemp, readFile, readdir, realpath, rename, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { existsSync, renameSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { prepareRevocationState } from "../../src/account/revocation-prepare.ts";
@@ -17,7 +18,7 @@ async function createFixture() {
   const put = (name: string, value: unknown) => writeFile(file(name), JSON.stringify(value), { mode: 0o600 });
   const events: string[] = [], held = new Set<string>();
   const state = { dispatches: 0, replaceResult: "replaced" as "replaced" | "refused" | "destination_changed" | "publication_uncertain",
-    failRelease: "", afterReplace: undefined as undefined | (() => Promise<void>), beforeAcl: undefined as undefined | ((handle: FileHandle) => Promise<void>) };
+    failRelease: "", leaseCheck: undefined as undefined | (() => void), afterReplace: undefined as undefined | (() => Promise<void>), beforeAcl: undefined as undefined | ((handle: FileHandle) => Promise<void>) };
   const resources: NamespaceResources & StateReplacementResources = {
     async checkAcl(handle) { try { await state.beforeAcl?.(handle); return { state: "accepted" }; } finally { await handle.close(); } },
     async lock(handle) {
@@ -26,7 +27,7 @@ async function createFixture() {
       finally { await handle.close(); }
       assert.ok(name); assert.equal(held.has(name), false); held.add(name); events.push(`acquire:${name}`);
       return { state: "acquired", lease: { signal: new AbortController().signal,
-        assertHeld() { assert.equal(held.has(name), true); }, async assertCurrent() { this.assertHeld(); }, async release() { held.delete(name); events.push(`release:${name}`); if (state.failRelease === name) throw Error(); } } };
+        assertHeld() { assert.equal(held.has(name), true); state.leaseCheck?.(); }, async assertCurrent() { this.assertHeld(); }, async release() { held.delete(name); events.push(`release:${name}`); if (state.failRelease === name) throw Error(); } } };
     },
     async replaceFile(parent, source, destination) {
       try {
@@ -51,7 +52,7 @@ test("prepare aggregates logout, rotates absent cancellation and removes capture
   await f.put("config.json", { enabled: true }); await f.put("identity", { retained: true });
   const receipt = await prepareRevocationState(f.root, context, f.resources);
   assert.equal(receipt.state, "prepared"); if (receipt.state !== "prepared") return;
-  assert.equal(receipt.epoch.length, 32); assert.equal(receipt.logout, true); assert.equal(receipt.intents.length, 2);
+  assert.equal(Object.isFrozen(receipt), true); assert.equal(receipt.epoch.length, 32); assert.equal(receipt.logout, true); assert.equal(receipt.intents.length, 2);
   assert.equal(JSON.parse(await readFile(f.file("cancellation"), "utf8")), receipt.epoch);
   assert.equal((await readdir(f.root)).includes("upload.login"), false); assert.equal((await readdir(f.root)).includes("read.login"), false);
   for (const name of ["revocation-a.intent", "revocation-b.intent", "upload.credential", "ready.job", "config.json", "identity"]) assert.ok((await readdir(f.root)).includes(name));
@@ -132,4 +133,29 @@ test("new intent appearing during staging is left retained while existing snapsh
   const result = await prepareRevocationState(f.root, context, f.resources);
   assert.equal(result.state, "prepared"); if (result.state === "prepared") assert.equal(result.intents.length, 1);
   assert.ok((await readdir(f.root)).includes("revocation-new.intent"));
+}));
+
+test("a previously absent login appearing after epoch publication is retained and uncertain", () => fixture(async f => {
+  await f.put("revocation-a.intent", false);
+  f.state.afterReplace = () => f.put("read.login", "replacement-login");
+  assert.equal((await prepareRevocationState(f.root, context, f.resources)).state, "uncertain");
+  assert.equal(JSON.parse(await readFile(f.file("read.login"), "utf8")), "replacement-login");
+  assert.ok((await readdir(f.root)).includes("revocation-a.intent"));
+}));
+
+
+test("partial login removal stops on substitution and preserves remaining evidence", () => fixture(async f => {
+  await f.put("revocation-a.intent", true); await f.put("upload.login", "upload"); await f.put("read.login", "read");
+  let published = false, substituted = false;
+  f.state.afterReplace = async () => { published = true; };
+  f.state.leaseCheck = () => {
+    if (published && !substituted && !existsSync(f.file("upload.login"))) {
+      substituted = true; renameSync(f.file("read.login"), f.file("saved-login"));
+      writeFileSync(f.file("read.login"), JSON.stringify("new-login"), { mode: 0o600 });
+    }
+  };
+  assert.equal((await prepareRevocationState(f.root, context, f.resources)).state, "uncertain");
+  assert.equal(substituted, true); assert.equal(existsSync(f.file("upload.login")), false);
+  assert.equal(JSON.parse(await readFile(f.file("read.login"), "utf8")), "new-login");
+  assert.equal(f.state.dispatches, 1); assert.ok(existsSync(f.file("revocation-a.intent")));
 }));

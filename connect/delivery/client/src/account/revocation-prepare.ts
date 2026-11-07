@@ -12,7 +12,7 @@ type Outcome = { state: "prepared"; epoch: string; intents: readonly RevocationI
   | { state: "refused"; reason: "intent_unavailable" | "unsafe_state" | "stale_snapshot" | "cancelled" }
   | { state: "uncertain"; proposedEpoch: string };
 type Resources = NamespaceResources & StateReplacementResources;
-type Marker = { name: "upload.login" | "read.login"; stamp: string };
+type Marker = { name: "upload.login" | "read.login"; stamp: string | null };
 const privateStamp = (stat: BigIntStats) => stateFileStamp(stat);
 
 /** Inactive preparation for a future coordinated writer. This only fences work
@@ -47,7 +47,7 @@ export async function prepareRevocationState(directoryPath: string, context: { a
         const marker = await readStateEvidence(directory, name, 128, resources, signal, bytes => {
           const value = decodeStrictJson(bytes, 128); if (typeof value !== "string") throw new Error(); return value;
         });
-        if (marker) logins.push({ name, stamp: marker.expectedStamp });
+        logins.push({ name, stamp: marker?.expectedStamp ?? null });
       }
       proposedEpoch = randomBytes(16).toString("hex");
       const verifyCaptured = async () => {
@@ -63,8 +63,10 @@ export async function prepareRevocationState(directoryPath: string, context: { a
         if ((currentCancellation?.expectedStamp ?? null) !== cancellationStamp
           || (currentCancellation?.value ?? null) !== cancellation) throw new Error("stale");
         for (const marker of logins) {
-          const now = await lstat(path.join(directory.path, marker.name), { bigint: true }).catch(() => null);
-          if (!now || privateStamp(now) !== marker.stamp || !now.isFile() || now.isSymbolicLink()) throw new Error("stale");
+          const now = await lstat(path.join(directory.path, marker.name), { bigint: true }).catch(error => {
+            if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error;
+          });
+          if (marker.stamp === null ? now !== null : !now || privateStamp(now) !== marker.stamp || !now.isFile() || now.isSymbolicLink()) throw new Error("stale");
         }
         await check();
       };
@@ -93,7 +95,13 @@ export async function prepareRevocationState(directoryPath: string, context: { a
       for (const marker of logins) {
         await check();
         const file = path.join(directory.path, marker.name);
-        const named = await lstat(file, { bigint: true }).catch(() => null);
+        const named = await lstat(file, { bigint: true }).catch(error => {
+          if ((error as NodeJS.ErrnoException).code === "ENOENT") return null; throw error;
+        });
+        if (marker.stamp === null) {
+          if (named !== null) return { state: "uncertain", proposedEpoch };
+          continue;
+        }
         if (!named || !named.isFile() || named.isSymbolicLink() || privateStamp(named) !== marker.stamp) return { state: "uncertain", proposedEpoch };
         // Cooperative queue exclusion plus stamp checking; unlink is not inode-atomic.
         await unlink(file);
@@ -101,11 +109,11 @@ export async function prepareRevocationState(directoryPath: string, context: { a
       await directory.handle.sync(); await check();
       if (await readCancellation(directory, resources, signal) !== proposedEpoch) return { state: "uncertain", proposedEpoch };
       for (const marker of logins) if (await lstat(path.join(directory.path, marker.name), { bigint: true }).then(() => true, e => (e as NodeJS.ErrnoException).code !== "ENOENT")) return { state: "uncertain", proposedEpoch };
-      return { state: "prepared", epoch: proposedEpoch, intents: intents.intents, logout: intents.logout };
+      return Object.freeze({ state: "prepared", epoch: proposedEpoch, intents: intents.intents, logout: intents.logout });
     });
   } catch (error) {
     if (phase.value === "effect_possible") return { state: "uncertain", proposedEpoch };
-    const category = error && typeof error === "object" && "category" in error ? String((error as { category: unknown }).category) : "";
+    const category = error && typeof error === "object" && "category" in error && typeof (error as { category: unknown }).category === "string" ? (error as { category: string }).category : "";
     return { state: "refused", reason: category === "cancelled" ? "cancelled" : category === "revocation_pending" ? "intent_unavailable" : "unsafe_state" };
   }
 }
