@@ -9,6 +9,11 @@ import type {
   RecordLocalClipboardPortInput,
 } from '../../handoff/clipboard.js';
 export type {
+  NativeClipboardTextReadbackPortInput,
+  NativeClipboardTextReadbackResultInput,
+  RecordLocalClipboardTextReadbackPortInput,
+  RecordLocalClipboardTextReadbackPort,
+  RecordLocalClipboardTextReadbackResult,
   NativeClipboardHostInput,
   NativeClipboardPortInput,
   NativeClipboardWriteResultInput,
@@ -19,6 +24,18 @@ export type {
   RecordLocalClipboardResult,
   RecordLocalHandoffResolution,
 } from '../../handoff/clipboard.js';
+
+/** Separate transient text observation; never broadens the legacy applied contract. */
+export function createRecordLocalClipboardTextReadbackPort(input: import('../../handoff/clipboard.js').RecordLocalClipboardTextReadbackPortInput): import('../../handoff/clipboard.js').RecordLocalClipboardTextReadbackPort {
+  if (!input?.clipboard || typeof input.clipboard.writeTextReadback !== 'function' || !input.nativeHost || typeof input.nativeHost.readSnapshot !== 'function' || typeof input.resolveHandoff !== 'function' || !Number.isSafeInteger(input.maximumTextBytes) || input.maximumTextBytes <= 0) throw new TypeError('Invalid text readback adapter inputs');
+  const adapterInput = { ...input };
+  let adapter: Promise<import('../../handoff/clipboard.js').RecordLocalClipboardTextReadbackPort> | undefined;
+  return { copyLocal(identity) {
+    const snapshot = identity && typeof identity === 'object' ? {captureId:identity.captureId, artifactId:identity.artifactId} : identity;
+    adapter ??= import('../../handoff/clipboard.js').then(module => module.createRecordLocalClipboardTextReadbackPort(adapterInput));
+    return adapter.then(port => port.copyLocal(snapshot));
+  } };
+}
 
 /** Lazy loading keeps source-level native-host consumers independent of emitted handoff files. */
 export function createRecordLocalClipboardPort(input: RecordLocalClipboardPortInput): RecordLocalClipboardPort {

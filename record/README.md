@@ -438,3 +438,22 @@ back. Wayland's inability to confirm ownership remains unknown. The receipt
 contains a digest/length, never ambient clipboard contents or a private bundle
 path. A copy receipt does not establish paste, delivery or artifact-open success.
 Disposing the pill unsubscribes its view; native transports remain caller-owned.
+
+### Separate transient clipboard text readback
+
+Trusted composition can inject `createRecordLocalClipboardTextReadbackPort`
+from `@apparent/record/host/native` as provider option `clipboardTextReadback`.
+Supply the separate producer's `writeTextReadback` port, fresh native host,
+producer text limit and the same coordinator's authenticated `resolveHandoff`.
+Choose exactly one of `clipboard` and `clipboardTextReadback` per provider.
+A matching `written-readback` digest/UTF-8 length returns that distinct command
+status and `native-text-readback` copy evidence; the pill says “Handoff text
+written and read back”. This confirms transient supplied-text observation only,
+not exclusive/current/enduring ownership, paste or delivery. Unknown, malformed,
+legacy applied replies on this separate port and identity mismatches remain
+unknown without retry. The old applied/native-write-readback path is unchanged.
+
+This is a structural consumer of Platform's assessed additive contract. It does
+not install a fallback producer or establish native availability. Its committed
+public port/package and real Omarchy effect evidence remain producer gates;
+rendered/installed first-path acceptance and activation remain separate.
