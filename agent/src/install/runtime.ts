@@ -1,6 +1,7 @@
 import { execFileSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { MediaClient, launchMediaWorker } from '@apparent/engine-sdk/media';
+import { CaptureClient, launchCaptureEngine } from '@apparent/engine-sdk/capture';
 import type { HandshakeResult, InstallerDependencies } from './types.js';
 
 export const systemInstallerDependencies: InstallerDependencies = {
@@ -45,6 +46,20 @@ export const systemInstallerDependencies: InstallerDependencies = {
     }
     if (failure) throw new Error(`native media handshake failed: ${(failure as Error).message}`);
     if (!reply) throw new Error('native media handshake returned no response');
+    return { reply, closeOutcome };
+  },
+
+  async captureHandshake(entry, runtime, shutdownTimeoutMs) {
+    const client = new CaptureClient(launchCaptureEngine(entry, runtime, shutdownTimeoutMs));
+    let reply: Awaited<ReturnType<typeof client.handshake>> | undefined;
+    let failure: unknown;
+    try { reply = await client.handshake(); } catch (error) { failure = error; }
+    let closeOutcome: string;
+    try { closeOutcome = await client.close(); } catch (error) {
+      throw new Error(`native capture worker close failed: ${(error as Error).message}`);
+    }
+    if (failure) throw new Error(`native capture handshake failed: ${(failure as Error).message}`);
+    if (!reply) throw new Error('native capture handshake returned no response');
     return { reply, closeOutcome };
   },
 };

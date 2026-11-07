@@ -55,6 +55,13 @@ mode and hash in the native inventory before and after copying, then requires
 a media/1 handshake and confirmed worker close before writing a success
 receipt. The full root (entry, worker, libraries, plugins and manifest) is
 retained, including the exact additive `media/1` + `media/2` manifest form.
+An optional paired `--capture-root` and `--capture-manifest-sha256` installs
+the complete separately authenticated Capture/2 closure. Capture and media/2
+use the same private persistent runtime, and an installed public Capture SDK
+handshake plus confirmed close is required before the receipt; no capture is
+started. The wrapper exports explicit capture and media/2 executable paths,
+while default routing remains unchanged. Handshake readiness is reported but
+does not claim capture availability or Saved output.
 The installer still launches and handshakes through the existing media/1 entry
 and private runtime. It does not activate media/2 or configure capture-v1
 recording or global `apparent` routing. Input archives and roots are never
@@ -65,8 +72,8 @@ Manifest integrity is not provenance: callers must obtain both digests from a
 trusted upstream admission/receipt. The documented 463 artifact pair is an
 example and does not override current-tree admission/reuse requirements.
 
-This install path does not add Connect, Mac media, capture, export, inference,
-or maintenance support and makes no codec claim from its handshake. The
+This install path does not add Connect, Mac media, capture readiness, export,
+inference, or maintenance support and makes no codec claim from its handshakes. The
 consumer continues to use the SDK for media frames/zoom; ordinary standalone
 Node CLI inspection stays portable without an installed provider.
 

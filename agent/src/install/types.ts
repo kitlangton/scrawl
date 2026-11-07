@@ -34,12 +34,40 @@ export type NativeManifest = {
   runtimeFiles: RuntimeFile[];
 };
 
+export type CaptureManifest = {
+  schema: 1;
+  sourceSha: string;
+  recoveryLaunch: {
+    schema: 'apparent.engine-recovery-peer/1';
+    channel: 'capture/2';
+    argv: ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2', '--recovery-peer-v1', '<private-peer-nonce>'];
+    startsFreshCapture: false;
+    onInputEof: 'retain-admitted-finite-work';
+  };
+  eligibleForReuse: true;
+  target: 'linux-x64';
+  rustTriple: 'x86_64-unknown-linux-gnu';
+  capabilities: string[];
+  launch: {
+    entry: 'apparent-engine-capture-launch';
+    argv: ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2'];
+    worker: 'libexec/apparent-engine-capture';
+    pathLookup: false;
+    runtimeBuilds: false;
+    shutdownTimeoutMs: 40000;
+  };
+  environment: Record<string, unknown>;
+  runtimeFiles: RuntimeFile[];
+};
+
 export type InstallerInput = {
   agentPath: string;
   agentSha256: string;
   nativeRoot: string;
   manifestSha256: string;
   prefix: string;
+  captureRoot?: string;
+  captureManifestSha256?: string;
 };
 
 export type InventoryLimits = {
@@ -65,6 +93,10 @@ export type InstallerDependencies = {
   installNpm(snapshotPath: string, installRoot: string, privateHome: string): void;
   smokeCli(cliPath: string, privateHome: string, installRoot: string): void;
   handshake(sdkMediaModule: string, entry: string, runtime: string): Promise<HandshakeResult>;
+  captureHandshake?(entry: string, runtime: string, shutdownTimeoutMs: number): Promise<{
+    reply: { channel: string; protocolVersion: number; implementation: string; readiness?: string };
+    closeOutcome: string;
+  }>;
 };
 
 export const DEFAULT_LIMITS: InventoryLimits = {
