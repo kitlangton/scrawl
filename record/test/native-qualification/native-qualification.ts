@@ -92,31 +92,70 @@ export async function reconcileAndCancel(mappings: any, client: any, deadline: n
   }
 }
 
-/** Linux qualification owns a process group so its hard deadline also covers descendants. */
+export interface QualificationClearance {
+  scope: 'record-coordinator';
+  admission: 'closed';
+  localDrain: 'complete';
+  runtimeClearance: 'clear';
+  disposed: true;
+  owningClientsClosed: true;
+}
+
+/** A native run cannot start until the supervisor can request and observe local owner drain. */
+export function assertQualificationShutdownProtocol(available: boolean): void {
+  if (!available) throw new Error('native qualification launch refused: supervisor has no child-to-parent coordinator shutdown and clearance protocol; SDK 0.4.4 cannot release an unresolved owning peer safely');
+}
+
+function hasPositiveClearance(value: unknown): value is QualificationClearance {
+  if (!value || typeof value !== 'object') return false;
+  const report = value as Partial<QualificationClearance>;
+  return report.scope === 'record-coordinator' && report.admission === 'closed' && report.localDrain === 'complete' &&
+    report.runtimeClearance === 'clear' && report.disposed === true && report.owningClientsClosed === true;
+}
+
+/** Signal a process group only after the owner has drained and released its local SDK handles. */
+export async function terminateQualificationGroupAfterClearance(pid: number, clearance: unknown, graceMs = 500): Promise<void> {
+  if (!hasPositiveClearance(clearance)) throw new Error('qualification process group retained: positive coordinator clearance and client close are required');
+  try { process.kill(-pid, 'SIGTERM'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
+  const deadline = Date.now() + graceMs;
+  while (Date.now() < deadline) {
+    try { process.kill(-pid, 0); }
+    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
+  try { process.kill(-pid, 'SIGKILL'); }
+  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+}
+
+/** The native supervisor never kills an SDK-owning group without positive local clearance. */
 export async function runQualification(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<{ stdout: string; stderr: string }> {
   const child = spawn(command, args, { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   let stdout = '', stderr = '', failure: Error | undefined;
-  const signal = (value: NodeJS.Signals) => {
-    if (!child.pid) return;
-    try { process.kill(-child.pid, value); } catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
-  };
-  let escalation: ReturnType<typeof setTimeout> | undefined;
+  const outputLimit = 8 * 1024 * 1024;
+  let rejectAbort!: (error: Error) => void;
   const abort = (error: Error) => {
     failure ??= error;
-    signal('SIGTERM');
-    escalation ??= setTimeout(() => signal('SIGKILL'), 500);
+    if (child.pid) Object.assign(error, { ownedProcessGroupPid: child.pid, processGroupRetained: true });
+    rejectAbort(error);
   };
+  const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
   const timer = setTimeout(() => abort(new Error('native qualification deadline exceeded')), options.timeout);
   try {
-    await new Promise<void>((resolve, reject) => {
-      child.stdout.setEncoding('utf8').on('data', value => { stdout += value; if (stdout.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
-      child.stderr.setEncoding('utf8').on('data', value => { stderr += value; if (stderr.length > 8 * 1024 * 1024) abort(new Error('qualification output limit')); });
+    await Promise.race([new Promise<void>((resolve, reject) => {
+      const collect = (current: string, value: string, assign: (next: string) => void) => {
+        if (failure) return;
+        const remaining = outputLimit - current.length;
+        assign(current + value.slice(0, remaining));
+        if (value.length > remaining) abort(new Error('qualification output limit'));
+      };
+      child.stdout.setEncoding('utf8').on('data', value => collect(stdout, value, next => { stdout = next; }));
+      child.stderr.setEncoding('utf8').on('data', value => collect(stderr, value, next => { stderr = next; }));
       child.once('error', reject);
       child.once('close', code => failure ? reject(new Error(`${failure.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`)) : code === 0 ? resolve() : reject(new Error(`native qualification failed (${code}):\nstdout:\n${stdout}\nstderr:\n${stderr}`)));
-    });
+    }), aborted]);
     return { stdout, stderr };
   } finally {
-    clearTimeout(timer); clearTimeout(escalation);
-    signal('SIGKILL'); // Includes descendants left after an early parent exit.
+    clearTimeout(timer);
   }
 }

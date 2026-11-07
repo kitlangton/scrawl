@@ -7,7 +7,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
-import { checkGeneratedNodeScript, runQualification } from './native-qualification/native-qualification.ts';
+import { assertQualificationShutdownProtocol, checkGeneratedNodeScript, runQualification } from './native-qualification/native-qualification.ts';
 
 const run = promisify(execFile);
 const scratch = await mkdtemp(path.join(tmpdir(), 'record-packed-'));
@@ -480,20 +480,28 @@ try {
       const frozenScript=path.join(output,'qualification.mjs');
       await copyFile(qualificationScript,frozenScript); await chmod(frozenScript,0o600);
       const base=(await run('git',['merge-base','HEAD','origin/main'],{cwd:root})).stdout.trim();
-      const packet={schema:1,mode:'offline-preparation-only',base,
+      const candidateHead=(await run('git',['rev-parse','HEAD'],{cwd:root})).stdout.trim();
+      const packet={schema:1,mode:'offline-preparation-only',base,candidateHead,
         preparedAt:new Date().toISOString(),sdk:{path:qualificationSdk,version:'0.4.4',sha256:'62e188a118261b73097372000d5ae4fe0f0e72ca2ad710f0714002f276856172',
           acceptedPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk-accepted.json',receiptPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk/receipt.json',attestationPath:'/home/simon/.local/share/apparent-evidence/engine-materials-root-main-c18340f1/sdk/attestation.json'},
         capture:{path:archive,acceptedPath:path.join(path.dirname(path.dirname(archive)),'capture-accepted.json'),receiptPath:path.join(path.dirname(archive),'receipt.json'),attestationPath:path.join(path.dirname(archive),'attestation.json'),inventoryPath:path.join(path.dirname(path.dirname(archive)),'inventory-verification.json'),sourceSha:'c18340f1886d0b796717bee91333fc1c8533b993',runId:42319740724,artifactId:13552701819,sha256:'00577928145323f8c964dda8cc1e47668d1f58b7d571ec9f7fb896aadc277708',runtimeFiles:54},
         media:{path:mediaArchive,acceptedPath:path.join(path.dirname(path.dirname(mediaArchive)),'linux-accepted.json'),receiptPath:path.join(path.dirname(mediaArchive),'receipt.json'),attestationPath:path.join(path.dirname(mediaArchive),'attestation.json'),inventoryPath:path.join(path.dirname(path.dirname(mediaArchive)),'inventory-verification.json'),sourceSha:'9915e8d343a4feafbeb31b4cea6bed43f2cb93a1',manifestSourceSha:'cf8356eb869038f6737a8e83c1cb4ab655fa0237',runId:42314800490,artifactId:13550580801,sha256:'cd7346951646f440c0d67e1fe10a8bc44dfde4329e3a9a3cc7d6f0d4297604f4',runtimeFiles:186},
         runner:frozenScript,runnerSha256:createHash('sha256').update(nativeScript).digest('hex'),syntaxChecked:true,nativeExecuted:false,resourcesAllocated:false,
-        nextRun:{explicitOptIn:'APPARENT_CAPTURE2_QUALIFY=1',attempts:1,deadlineMs:240000,display:'inspect existing process inventory, then owned synthetic Xvfb only',runtime:'one canonical private 0700 capture/media runtime',
+        nextRun:{explicitOptIn:'APPARENT_CAPTURE2_QUALIFY=1',attempts:1,deadlineMs:240000,deadlineSemantics:'observation budget only; it is not capture cancel/end intent and does not guarantee bounded cleanup of an unresolved owning peer',
+          executionBlockedUntil:'a child-to-parent coordinator shutdown/drain and positive-clearance protocol plus safe SDK owning-handle release are available',
+          display:'inspect existing process inventory, then owned synthetic Xvfb only',runtime:'one canonical private 0700 capture/media runtime',
           flow:'public Record pill start/finish -> standard coordinator -> authenticated Saved -> same-binding restart resolver',copy:'not exercised',
           preflight:'verify current Xvfb/process inventory and all frozen artifacts before a separately authorized run',
-          cleanup:'drain coordinator, record its ownership report, close only caller-owned clients and wait for owned scene/Xvfb; never auto-cancel ambiguous capture/media/publication work',
+          cleanup:'request coordinator admission closure and local drain; close owning clients only after closed admission, complete drain, clear runtime ownership and disposal; if unresolved, preserve private authority/runtime and peers without process-group signals',
           stopOn:'archive or attestation mismatch, non-native handshake, unknown media/publication result, cleanup error; retain the private root'}};
       await writeFile(path.join(output,'preparation.json'),JSON.stringify(packet,null,2)+'\n',{mode:0o600});
       console.log('offline qualification preparation retained: '+output+' (native execution skipped)');
     } else {
+      // SDK 0.4.4 exposes recovery release, not safe release of an unresolved
+      // owning capture/media handle. Do not start native peers until the
+      // supervisor can request coordinator admission closure/drain and observe
+      // positive clearance before any process-group cleanup.
+      assertQualificationShutdownProtocol(false);
       const capture2Result = await runQualification(process.execPath, ['--experimental-strip-types', '--input-type=module', '-e', nativeScript], { cwd: capture2, timeout: 240000, env: { ...process.env, APPARENT_CAPTURE2_ARCHIVE: archive, APPARENT_MEDIA2_ARCHIVE: mediaArchive, APPARENT_CAPTURE2_SDK_TARBALL: qualificationSdk, APPARENT_QUALIFICATION_HELPERS: path.join(root, 'test/native-qualification/native-qualification.ts'), APPARENT_QUALIFICATION_SCRIPT_PATH: qualificationScript } });
       process.stdout.write(capture2Result.stdout);
     }
