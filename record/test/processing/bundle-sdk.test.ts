@@ -1159,7 +1159,7 @@ async function syntheticStandardDerivative(input: BundleAssemblyInput, request: 
   return { envelope: { schema: "apparent.media-derivative/2", materials: payload.materials, leaseId: payload.leaseId, jobId: payload.jobId,
     receiptId: payload.receiptId, root: payload.root, requestSha256: payload.requestSha256, receiptFile, payload }, bytes: content, request, layoutBytes };
 }
-type CoordinatorCase = "standard" | "standard-unavailable" | "standard-unknown" | "standard-blocked" | "standard-selected-restart" | "complete" | "media-failed" | "media-unknown" | "media-blocked" | "publication-unknown" | "publication-reserved" | "publication-reserved-close" | "selection-failed";
+type CoordinatorCase = "separate-publication-peer" | "standard" | "standard-unavailable" | "standard-unknown" | "standard-blocked" | "standard-selected-restart" | "complete" | "media-failed" | "media-unknown" | "media-blocked" | "publication-unknown" | "publication-reserved" | "publication-reserved-close" | "selection-failed";
 async function coordinatorCase(mode: CoordinatorCase) {
   const input = await fixture();
   const standard = mode.startsWith("standard");
@@ -1294,10 +1294,15 @@ async function coordinatorCase(mode: CoordinatorCase) {
       },
       async close() { throw new Error("coordinator must not close caller-owned media client"); },
     });
+    const publicationClient = mode === "separate-publication-peer" ? { ...captureClient } as unknown as CaptureClient : undefined;
+    if (publicationClient) {
+      captureClient.publish = async () => { throw new Error("Publication must not dispatch on the capture-owning peer"); };
+      captureClient.inspectPublication = async () => { throw new Error("Publication inspection must not use the capture-owning peer"); };
+    }
     const destinations = new AbsentDestinationAllocator(controlRoot, outputRoot);
     let selections = 0;
     const options = {
-      captureClient, mediaClient, mappings: mappings as never, destinations, privateControlRoot: controlRoot,
+      captureClient, publicationClient, mediaClient, mappings: mappings as never, destinations, privateControlRoot: controlRoot,
       createStartIntent: () => { throw new Error("preexisting synthetic capture must not be restarted"); },
       trustedMaterialsRoot: () => materialRoot,
       selectProcessing: ({ materials }: { mapping: Readonly<{ requestId: string }>; materials: MaterialsDocument }) => { selections++; if (mode === "selection-failed") throw new Error("invalid selection " + ownerToken); return ({
@@ -1387,7 +1392,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
         } finally { release(); await inspecting; SqlitePublicationBindingStore.prototype.get = originalGet; }
         return;
       }
-      if (mode !== "complete" && mode !== "standard") {
+      if (mode !== "complete" && mode !== "standard" && mode !== "separate-publication-peer") {
         let notices = 0;
         const detach = coordinator.observeProcessingIssues(() => { notices++; });
         coordinator.observeProcessingIssues(() => { throw new Error("isolated observer"); });
@@ -1488,7 +1493,7 @@ async function coordinatorCase(mode: CoordinatorCase) {
   } finally { restoreReserve(); releaseMediaHandshake(); await rm(root, { recursive: true, force: true }); }
 }
 
-for (const mode of ["standard", "standard-unavailable", "standard-unknown", "standard-blocked", "standard-selected-restart", "complete", "media-failed", "media-unknown", "media-blocked", "publication-unknown", "publication-reserved", "publication-reserved-close", "selection-failed"] as const)
+for (const mode of ["separate-publication-peer", "standard", "standard-unavailable", "standard-unknown", "standard-blocked", "standard-selected-restart", "complete", "media-failed", "media-unknown", "media-blocked", "publication-unknown", "publication-reserved", "publication-reserved-close", "selection-failed"] as const)
   test(`capture coordinator retains the original identity and exposes ${mode}`, () => coordinatorCase(mode));
 
 for (const mode of ["pending", "failed"] as const) test(`coordinator startup ${mode} is observable and drains before cleanup`, { timeout: 5000 }, async () => {
