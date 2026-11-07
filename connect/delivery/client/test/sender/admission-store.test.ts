@@ -1,6 +1,6 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { lstat, mkdtemp, mkdir, readFile, realpath, rename, rm, writeFile } from "node:fs/promises";
+import { link, lstat, mkdtemp, mkdir, readFile, realpath, rename, rm, symlink, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { admitQueuedUpload, type AdmissionStoreResources } from "../../src/queue/admission-store.ts";
@@ -124,5 +124,102 @@ test("retention equality is inclusive and stale plain jobs retire through the do
     assert.equal(result.state, "admitted"); assert.deepEqual(result.retiredJobIds, [expired]);
     await assert.rejects(readFile(path.join(f.root, `${expired}.job`)), { code: "ENOENT" });
     assert.equal(JSON.parse(await readFile(path.join(f.root, `${inclusive}.job`), "utf8")).created, 40);
+  } finally { await f.close(); }
+});
+
+
+test("accepts a canonical bundle through an alias without a suffix", async () => {
+  const f = await fixture(); try {
+    const alias = path.join(path.dirname(f.bundle), "bundle-alias"); await symlink(f.bundle, alias);
+    f.input.bundle = alias;
+    assert.equal((await admitQueuedUpload(f.input, f.resources)).state, "admitted");
+  } finally { await f.close(); }
+});
+
+test("ordinary clock progress does not invalidate a fenced admission", async () => {
+  const f = await fixture(); let reads = 0;
+  const policy = await f.input.readSettings();
+  f.input.readSettings = async () => ({ ...policy, nowSeconds: 100 + reads++ });
+  try { assert.equal((await admitQueuedUpload(f.input, f.resources)).state, "admitted"); }
+  finally { await f.close(); }
+});
+
+test("reuse rechecks gates after the queue snapshot", async () => {
+  const f = await fixture(); const existing = "c".repeat(32);
+  const bytes = encodeJob({ ...row(f.bundle), id: existing });
+  const policy = await f.input.readSettings();
+  await writeFile(path.join(f.root, `${existing}.job`), bytes, { mode: 0o600 });
+  f.resources.checkAcl = async handle => { const stat = await handle.stat(); await handle.close();
+    if (stat.isFile() && stat.size === bytes.length) policy.enabled = false;
+    return { state: "accepted" }; };
+  try { assert.equal((await admitQueuedUpload(f.input, f.resources)).state, "refused"); assert.equal(f.writes(), 0); }
+  finally { await f.close(); }
+});
+
+test("a refused create after confirmed cancellation reports partial effects", async () => {
+  const f = await fixture(); const previous = "c".repeat(32); let reads = 0;
+  await writeFile(path.join(f.root, `${previous}.job`), encodeJob({ ...row(f.bundle), id: previous, shared: true }), { mode: 0o600 });
+  f.input.intent = "explicit-private";
+  const policy = await f.input.readSettings();
+  f.input.readSettings = async () => ({ ...policy, enabled: ++reads < 4 });
+  try { const result = await admitQueuedUpload(f.input, f.resources);
+    assert.equal(result.state, "uncertain"); assert.deepEqual(result.cancelledJobIds, [previous]); assert.equal(f.writes(), 1);
+  } finally { await f.close(); }
+});
+
+test("post-create lease failure retains the confirmed admission identity", async () => {
+  const f = await fixture(), lock = f.resources.lock;
+  f.resources.lock = async (...args) => { const acquired = await lock(...args);
+    if (acquired.state === "acquired") { const release = acquired.lease.release;
+      acquired.lease.release = async () => { await release(); throw Error("private lease details"); }; }
+    return acquired;
+  };
+  try { const result = await admitQueuedUpload(f.input, f.resources);
+    assert.equal(result.state, "uncertain"); assert.equal(result.admittedJobId, id);
+  } finally { await f.close(); }
+});
+
+
+test("full retains preceding explicit cancellations without losing metadata or aliases", async () => {
+  const f = await fixture(), previous = "0".repeat(32); f.input.intent = "explicit-private";
+  try {
+    for (let index = 0; index < 100; index++) {
+      const key = index.toString(16).padStart(32, "0");
+      await writeFile(path.join(f.root, `${key}.job`), encodeJob({ ...row(index ? `/other-${index}.apparent` : f.bundle), id: key, shared: true }), { mode: 0o600 });
+    }
+    const original = await readFile(path.join(f.root, `${previous}.job`));
+    await link(path.join(f.root, `${previous}.job`), path.join(f.root, "retained-alias"));
+    const result = await admitQueuedUpload(f.input, f.resources);
+    assert.equal(result.state, "full"); assert.deepEqual(result.cancelledJobIds, [previous]); assert.deepEqual(result.retiredJobIds, []);
+    const saved = decodeJob(await readFile(path.join(f.root, `${previous}.job`)));
+    assert.equal(saved.status, "cancelled"); assert.deepEqual(saved.unknownField, { retained: true });
+    assert.deepEqual(await readFile(path.join(f.root, "retained-alias")), original);
+    await assert.rejects(lstat(path.join(f.root, `${id}.job`)), { code: "ENOENT" });
+  } finally { await f.close(); }
+});
+
+test("a foreign queue change after cancellation cannot be adopted as the new baseline", async () => {
+  const f = await fixture(), previous = "c".repeat(32), extra = "d".repeat(32); f.input.intent = "explicit-private";
+  await writeFile(path.join(f.root, `${previous}.job`), encodeJob({ ...row(f.bundle), id: previous, shared: true }), { mode: 0o600 });
+  const replace = f.resources.replaceFile;
+  f.resources.replaceFile = async (...args) => {
+    const response = await replace(...args);
+    await writeFile(path.join(f.root, `${extra}.job`), encodeJob({ ...row("/other.apparent"), id: extra }), { mode: 0o600 });
+    return response;
+  };
+  try { const result = await admitQueuedUpload(f.input, f.resources);
+    assert.equal(result.state, "uncertain"); assert.deepEqual(result.cancelledJobIds, [previous]); assert.equal(f.writes(), 1);
+    await assert.rejects(lstat(path.join(f.root, `${id}.job`)), { code: "ENOENT" });
+  } finally { await f.close(); }
+});
+
+test("a refused retirement cannot free queue capacity logically", async () => {
+  const f = await fixture(), expired = "c".repeat(32);
+  await writeFile(path.join(f.root, `${expired}.job`), encodeJob({ ...row("/other.apparent"), id: expired, created: 1 }), { mode: 0o600 });
+  await mkdir(path.join(f.root, `${expired}.sealed`), { mode: 0o700 });
+  try { const result = await admitQueuedUpload(f.input, f.resources);
+    assert.equal(result.state, "refused"); assert.deepEqual(result.retiredJobIds, []); assert.equal(f.writes(), 0);
+    assert.equal((await lstat(path.join(f.root, `${expired}.job`))).isFile(), true);
+    await assert.rejects(lstat(path.join(f.root, `${id}.job`)), { code: "ENOENT" });
   } finally { await f.close(); }
 });

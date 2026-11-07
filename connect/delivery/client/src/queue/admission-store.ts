@@ -1,32 +1,31 @@
-import { constants as C } from "node:fs";
 import { lstat, realpath, readdir } from "node:fs/promises";
 import path from "node:path";
 import { normalizeRecipientServer } from "../recipient/transport.ts";
 import { readCancellation, readCredential, pendingIntent, readStateEvidence, stateFileStamp } from "../state/credential-files.ts";
-import { CredentialSnapshotError, checkSignal, samePathFd, withStateQueue, type CurrentNamespaceLease, type NamespaceResources, type StateDirectory } from "../state/queue-transaction.ts";
+import { CredentialSnapshotError, checkSignal, samePathFd, withStateQueue, type NamespaceResources } from "../state/queue-transaction.ts";
 import { replacePrivateStateFile, type StateReplacementResources } from "../state/replacement.ts";
 import { decodeJob, encodeJob, type Job } from "./job.ts";
-import { planAdmission, type AdmissionIntent, type AdmissionProposal } from "./admission.ts";
+import { planAdmission, ADMISSION_MAX_JOBS, type AdmissionIntent, type AdmissionProposal } from "./admission.ts";
 import { readQueueWithinLease } from "./store.ts";
 import { retireQueuedJob } from "./prune.ts";
 import type { UploadWorkerSettings } from "./worker.ts";
 
 export type AdmissionStoreResources = NamespaceResources & StateReplacementResources;
 export type AdmissionOutcome = Readonly<{ state: "admitted" | "reusable"; id: string; cancelledJobIds: readonly string[]; retiredJobIds: readonly string[] }>
-  | Readonly<{ state: "full" | "refused" | "uncertain"; cancelledJobIds: readonly string[]; retiredJobIds: readonly string[] }>;
+  | Readonly<{ state: "full" | "refused" | "uncertain"; admittedJobId?: string; cancelledJobIds: readonly string[]; retiredJobIds: readonly string[] }>;
 export type AdmissionStoreInput = Readonly<{ directory: string; approvedServer: string; bundle: string; intent: AdmissionIntent; candidateId: string;
   readSettings(signal: AbortSignal): Promise<UploadWorkerSettings>; signal?: AbortSignal; queueTimeoutMs?: number }>;
 const frozen = <T>(v: T): T => { if (v && typeof v === "object" && !Object.isFrozen(v)) { Object.freeze(v); for (const x of Object.values(v as object)) frozen(x); } return v; };
 const idOk = (v: unknown): v is string => typeof v === "string" && /^[0-9a-f]{32}$/.test(v);
 const epoch = (v: string | null) => JSON.stringify(v);
-type BundlePin = { directory: string; dir: string; dirStamp: string; manifest: string; manifestStamp: string };
+type BundlePin = { directory: string; dirStamp: string; manifest: string; manifestStamp: string };
 async function bundlePin(value: string): Promise<BundlePin> {
-  if (typeof value !== "string" || !path.isAbsolute(value) || value.includes("\0") || path.extname(value) !== ".apparent") throw Error();
+  if (typeof value !== "string" || !path.isAbsolute(value) || value.includes("\0")) throw Error();
   const directory = await realpath(value), ds = await lstat(directory, { bigint: true });
-  if (!ds.isDirectory() || ds.isSymbolicLink()) throw Error();
+  if (path.extname(directory) !== ".apparent" || !ds.isDirectory() || ds.isSymbolicLink()) throw Error();
   const manifest = path.join(directory, "apparent.json"), ms = await lstat(manifest, { bigint: true });
   if (!ms.isFile() || ms.isSymbolicLink() || ms.nlink < 1n) throw Error();
-  return { directory, dir: stamp(ds), dirStamp: stamp(ds), manifest, manifestStamp: stamp(ms) };
+  return { directory, dirStamp: stamp(ds), manifest, manifestStamp: stamp(ms) };
 }
 const stamp = (s: { dev: bigint; ino: bigint; mode: bigint; uid: bigint; size: bigint; mtimeNs: bigint; ctimeNs: bigint; nlink: bigint }) => `${s.dev}:${s.ino}:${s.mode}:${s.uid}:${s.size}:${s.mtimeNs}:${s.ctimeNs}:${s.nlink}`;
 
@@ -35,7 +34,8 @@ export async function admitQueuedUpload(input: AdmissionStoreInput, resources: A
   const directory = input?.directory, approvedServer = input?.approvedServer, source = input?.bundle, intent = input?.intent,
     candidateId = input?.candidateId, readSettings = input?.readSettings, callerSignal = input?.signal, queueTimeoutMs = input?.queueTimeoutMs;
   const cancelled: string[] = [], retired: string[] = [];
-  const result = (state: AdmissionOutcome["state"], id?: string): AdmissionOutcome => frozen({ state, ...(id ? { id } : {}), cancelledJobIds: [...cancelled], retiredJobIds: [...retired] } as AdmissionOutcome);
+  let admittedJobId: string | undefined;
+  const result = (state: AdmissionOutcome["state"], id?: string): AdmissionOutcome => frozen({ state, ...(id ? { id } : {}), ...(state === "uncertain" && admittedJobId ? { admittedJobId } : {}), cancelledJobIds: [...cancelled], retiredJobIds: [...retired] } as AdmissionOutcome);
   let dispatched = false, effects = false;
   try {
     const server = normalizeRecipientServer(approvedServer);
@@ -51,7 +51,7 @@ export async function admitQueuedUpload(input: AdmissionStoreInput, resources: A
         if (typeof raw?.enabled !== "boolean" || normalized !== server || typeof raw.encryptionEnabled !== "boolean" || typeof raw.sharingEnabled !== "boolean"
           || !Number.isSafeInteger(raw.nowSeconds) || raw.nowSeconds < 0 || raw.nowSeconds > Number.MAX_SAFE_INTEGER - 3600
           || !Number.isSafeInteger(raw.retentionSeconds) || raw.retentionSeconds < 0 || !raw.enabled || intent === "public-copy" && !raw.sharingEnabled) throw Error();
-        return Object.freeze({ enabled: raw.enabled, server: raw.server, encryptionEnabled: raw.encryptionEnabled, sharingEnabled: raw.sharingEnabled, nowSeconds: raw.nowSeconds, retentionSeconds: raw.retentionSeconds });
+        return Object.freeze({ enabled: raw.enabled, server: normalized, encryptionEnabled: raw.encryptionEnabled, sharingEnabled: raw.sharingEnabled, nowSeconds: raw.nowSeconds, retentionSeconds: raw.retentionSeconds });
       };
       const settingsPin = await settings();
       await check();
@@ -74,7 +74,8 @@ export async function admitQueuedUpload(input: AdmissionStoreInput, resources: A
       const plan = planning(snapshot);
       const recheck = async (expected: readonly Job[] = expectedJobs) => {
         await check(); const p = await settings();
-        if (JSON.stringify(p) !== JSON.stringify(settingsPin) || await pendingIntent(root.path)) throw Error();
+        if (p.enabled !== settingsPin.enabled || p.server !== settingsPin.server || p.encryptionEnabled !== settingsPin.encryptionEnabled
+          || p.sharingEnabled !== settingsPin.sharingEnabled || p.retentionSeconds !== settingsPin.retentionSeconds || await pendingIntent(root.path)) throw Error();
         const c = await readCredential(root, { scope: "upload", approvedServer: server }, resources, signal);
         if (c.generation !== credential.generation || c.grantId !== credential.grantId || c.encryption_identity !== credential.encryption_identity
           || epoch(await readCancellation(root, resources, signal)) !== cancellation) throw Error();
@@ -99,37 +100,36 @@ export async function admitQueuedUpload(input: AdmissionStoreInput, resources: A
           try {
             const replaced = await replacePrivateStateFile(root.path, `${proposal.job.id}.job`, bytes, { device: String(named.dev), inode: String(named.ino) },
               { signal, assertHeld: () => { checkSignal(signal, lease.signal); lease.assertHeld(); } }, guarded, { signal });
-            if (replaced.state !== "committed") return result(dispatched || replaced.state === "publication_uncertain" ? "uncertain" : "refused");
+            if (replaced.state !== "committed") return result(effects || dispatched || replaced.state === "publication_uncertain" ? "uncertain" : "refused");
             effects = true; cancelled.push(proposal.job.id); dispatched = false;
-            expectedJobs = await readQueueWithinLease(root, lease, resources, signal);
+            expectedJobs = expectedJobs.map(job => job.id === proposal.job.id ? proposal.job as Job : job);
           } finally { bytes.fill(0); }
         } else {
           const fresh = await readStateEvidence(root, `${proposal.id}.job`, 2_000_000, resources, signal, decodeJob);
           if (!fresh) throw Error();
           const job = fresh.value;
           const assertFresh = async () => {
-            const { latest } = await recheck(expectedJobs);
-            if (planning(latest).proposals.find(x => x.kind === "prune" && x.id === proposal.id) === undefined) throw Error();
+            const { latest, p } = await recheck(expectedJobs);
+            if (planning(latest, p).proposals.find(x => x.kind === "prune" && x.id === proposal.id) === undefined) throw Error();
           };
           dispatched = true;
-          const retiredResult = await retireQueuedJob(root, lease as CurrentNamespaceLease, resources, { job, expectedStamp: fresh.expectedStamp, assertFresh });
+          const retiredResult = await retireQueuedJob(root, lease, resources, { job, expectedStamp: fresh.expectedStamp, assertFresh });
           if (retiredResult.state !== "retired") return result(effects || retiredResult.state === "uncertain" ? "uncertain" : "refused");
           effects = true; retired.push(proposal.id); dispatched = false;
-          expectedJobs = await readQueueWithinLease(root, lease, resources, signal);
+          expectedJobs = expectedJobs.filter(job => job.id !== proposal.id);
         }
       }
-      const latest = await readQueueWithinLease(root, lease, resources, signal);
-      if (latest.length > 100 || latest.some(j => j.id === candidateId)) return result("uncertain");
+      const { latest } = await recheck(expectedJobs);
+      if (latest.length > ADMISSION_MAX_JOBS || latest.some(j => j.id === candidateId)) return result("uncertain");
       const finalPlan = planning(latest);
       if (finalPlan.kind === "reusable") return result("reusable", finalPlan.id);
       if (finalPlan.kind === "full") return result("full");
       if (finalPlan.kind !== "admit") return result("refused");
-      await recheck(latest);
       const bytes = encodeJob(finalPlan.job);
       const guarded: StateReplacementResources = { checkAcl: h => resources.checkAcl(h), async replaceFile(parent, ...args) {
         try {
           const { latest: fresh } = await recheck(expectedJobs);
-          if (fresh.length >= 100 || fresh.some(j => j.id === candidateId)) { await parent.close(); return { state: "refused" }; }
+          if (fresh.length >= ADMISSION_MAX_JOBS || fresh.some(j => j.id === candidateId)) { await parent.close(); return { state: "refused" }; }
           const currentPlan = planning(fresh); if (currentPlan.kind !== "admit" || JSON.stringify(currentPlan.job) !== JSON.stringify(finalPlan.job)) { await parent.close(); return { state: "refused" }; }
         } catch { await parent.close().catch(() => {}); return { state: "refused" }; }
         dispatched = true; return resources.replaceFile(parent, ...args);
@@ -137,8 +137,8 @@ export async function admitQueuedUpload(input: AdmissionStoreInput, resources: A
       try {
         const outcome = await replacePrivateStateFile(root.path, `${candidateId}.job`, bytes, null,
           { signal, assertHeld: () => { checkSignal(signal, lease.signal); lease.assertHeld(); } }, guarded, { signal });
-        if (outcome.state === "committed") { effects = true; dispatched = false; return result("admitted", candidateId); }
-        return result(dispatched || outcome.state === "publication_uncertain" ? "uncertain" : "refused");
+        if (outcome.state === "committed") { effects = true; dispatched = false; admittedJobId = candidateId; return result("admitted", candidateId); }
+        return result(effects || dispatched || outcome.state === "publication_uncertain" ? "uncertain" : "refused");
       } finally { bytes.fill(0); }
     });
   } catch (e) {
