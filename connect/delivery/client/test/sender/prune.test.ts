@@ -5,7 +5,7 @@ import os from "node:os";
 import path from "node:path";
 import type { FileHandle } from "node:fs/promises";
 import { decodeJob, encodeJob, type Job } from "../../src/queue/job.ts";
-import { retireQueuedJob, type QueueRetirementResources } from "../../src/queue/prune.ts";
+import { retireQueuedJob, resumeQueuedRetirement, type QueueRetirementResources } from "../../src/queue/prune.ts";
 import { admitTrustedDirectory } from "../../src/state/directory.ts";
 import { stateFileStamp } from "../../src/state/credential-files.ts";
 
@@ -13,8 +13,12 @@ const id = "a".repeat(32), server = "https://connect.example/connect", generatio
 const context = { origin: server, accountId: "account", captureId: id, senderGrantId: "sender" };
 const plainJob = () => decodeJob(Buffer.from(JSON.stringify({ id, bundle: "/synthetic.apparent", server, generation, created: 1,
   attempts: 0, nextAttempt: 0, status: "cancelled" })));
-const encryptedJob = (grouped = false) => decodeJob(Buffer.from(JSON.stringify({ id, bundle: "/synthetic.apparent", server, generation, created: 1,
-  attempts: 0, nextAttempt: 0, status: "expired", encrypted: true, grouped, encryption: { context, recipientGrants: ["sender"] } })));
+const encryptedJob = (grouped = false, complete = false) => decodeJob(Buffer.from(JSON.stringify({ id, bundle: "/synthetic.apparent", server, generation, created: 1,
+  attempts: 0, nextAttempt: 0, status: "expired", encrypted: true, grouped, encryption: { context, recipientGrants: ["sender"] },
+  ...(complete ? { files: (grouped ? ["evidence/", "media/"] : [""]).flatMap(prefix => [
+    { path: `${prefix}envelope.json`, size: 2, sha256: "c".repeat(64) },
+    { path: `${prefix}sealed/part-000000.age`, size: 10, sha256: "c".repeat(64) },
+  ]) } : {}) })));
 const resources = (): QueueRetirementResources => ({
   async checkAcl(handle: FileHandle) { await handle.close(); return { state: "accepted" }; },
   async lock(handle: FileHandle) { await handle.close(); return { state: "refused" }; },
@@ -140,6 +144,58 @@ test("a file or spool root substituted by a fresh fence is retained", async () =
       assert.ok((await lstat(f.jobPath)).isFile());
       if (target === "file") assert.equal((await readFile(path.join(spool, "sealed/part-000000.age"))).toString(), "replacement");
       else assert.ok((await lstat(spool)).isDirectory());
+    } finally { await f.close(); }
+  }
+});
+
+test("explicit recovery finishes only known missing assets, receipt, and pinned empty directories", async () => {
+  for (const cut of ["asset", "receipt", "dirs", "nested", "group"]) {
+    const job = encryptedJob(true, true), f = await fixture(job);
+    try {
+      const spool = await writeSpool(f.root, true);
+      if (cut === "asset") await (await import("node:fs/promises")).unlink(path.join(spool, "evidence/sealed/part-000000.age"));
+      if (cut === "receipt") await (await import("node:fs/promises")).unlink(path.join(spool, "spool-state.json"));
+      if (cut === "dirs") {
+        for (const file of ["evidence/envelope.json", "evidence/sealed/part-000000.age", "media/envelope.json", "media/sealed/part-000000.age", "spool-state.json"])
+          await (await import("node:fs/promises")).unlink(path.join(spool, file));
+      }
+      if (cut === "nested") {
+        await (await import("node:fs/promises")).unlink(path.join(spool, "evidence/sealed/part-000000.age"));
+        await (await import("node:fs/promises")).rmdir(path.join(spool, "evidence/sealed"));
+      }
+      if (cut === "group") {
+        for (const file of ["evidence/envelope.json", "evidence/sealed/part-000000.age"])
+          await (await import("node:fs/promises")).unlink(path.join(spool, file));
+        await (await import("node:fs/promises")).rmdir(path.join(spool, "evidence/sealed"));
+        await (await import("node:fs/promises")).rmdir(path.join(spool, "evidence"));
+      }
+      assert.deepEqual(await f.retire(), { state: "refused" });
+      assert.deepEqual(await resumeQueuedRetirement(f.directory, f.lease, f.resources,
+        { job, expectedStamp: stateFileStamp(await lstat(f.jobPath, { bigint: true })), assertFresh: async () => {} }), { state: "retired" }, cut);
+      await assert.rejects(lstat(f.jobPath), { code: "ENOENT" });
+      await assert.rejects(lstat(spool), { code: "ENOENT" });
+    } finally { await f.close(); }
+  }
+});
+
+test("recovery refuses an uncommitted orphan manifest and an inconsistent surviving receipt", async () => {
+  for (const mismatch of ["orphan", "receipt"]) {
+    const job = encryptedJob(false, mismatch !== "orphan"), f = await fixture(job);
+    try {
+      const spool = await writeSpool(f.root, false);
+      if (mismatch === "receipt") await writeFile(path.join(spool, "spool-state.json"), JSON.stringify({
+        metadata: { context, recipientGrants: ["sender", "other"] },
+        files: [
+          { path: "envelope.json", size: 2, sha256: "c".repeat(64) },
+          { path: "sealed/part-000000.age", size: 10, sha256: "c".repeat(64) },
+        ],
+      }), { mode: 0o600 });
+      const expectedStamp = stateFileStamp(await lstat(f.jobPath, { bigint: true }));
+      assert.deepEqual(await resumeQueuedRetirement(f.directory, f.lease, f.resources,
+        { job, expectedStamp, assertFresh: async () => {} }), { state: "refused" });
+      assert.ok((await lstat(f.jobPath)).isFile());
+      assert.ok((await lstat(spool)).isDirectory());
+      assert.ok((await lstat(path.join(spool, "envelope.json"))).isFile());
     } finally { await f.close(); }
   }
 });

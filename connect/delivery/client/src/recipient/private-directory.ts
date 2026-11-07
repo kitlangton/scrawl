@@ -37,8 +37,12 @@ export async function cleanupPrivateDirectoryStage(parent: FileHandle, stagePath
     for (const [rel, identity] of createdDirs) { const named = await lstat(path.join(stagePath, rel), { bigint: true }); if (!named.isDirectory() || named.isSymbolicLink() || dirStat(named) !== identity) return false; }
     for (const [rel, identity] of created) { const st = await lstat(path.join(stagePath, rel), { bigint: true }); if (!st.isFile() || dirStat(st) !== identity) return false; }
     for (const [rel, identity] of [...created].reverse()) { const target = path.join(stagePath, rel); const st = await lstat(target, { bigint: true }).catch(() => undefined); if (!st) continue; if (!st.isFile() || st.isSymbolicLink() || dirStat(st) !== identity) return false; if (beforeEffect && !await beforeEffect(rel, "file")) return false; await unlink(target); }
+    // Include explicitly pinned directories even when their files were already
+    // removed by an interrupted owner cleanup. Never infer ownership of other
+    // empty directories from the current tree.
     const dirs = new Set([...created.keys()].flatMap(rel => { const parts = rel.split("/"); const out: string[] = []; while (parts.length > 1) { parts.pop(); out.push(parts.join("/")); } return out; }));
-    for (const rel of [...dirs].sort((a,b) => b.length-a.length)) { const p = path.join(stagePath, rel); const st = await lstat(p, { bigint: true }).catch(() => undefined); if (st) { if (!st.isDirectory() || st.isSymbolicLink()) return false; if (beforeEffect && !await beforeEffect(rel, "directory")) return false; await rmdir(p); } }
+    for (const rel of createdDirs.keys()) if (rel !== "") dirs.add(rel);
+    for (const rel of [...dirs].sort((a,b) => b.length-a.length)) { const p = path.join(stagePath, rel); const st = await lstat(p, { bigint: true }).catch(() => undefined); if (st) { if (!st.isDirectory() || st.isSymbolicLink() || dirStat(st) !== createdDirs.get(rel)) return false; if (beforeEffect && !await beforeEffect(rel, "directory")) return false; await rmdir(p); } }
     const parentCheck = await lstat(path.dirname(stagePath), { bigint: true }); const stageCheck = await lstat(stagePath, { bigint: true });
     if (dirStat(parentCheck) !== parentIdentity || dirStat(stageCheck) !== stageIdentity) return false;
     if (beforeEffect && !await beforeEffect("", "directory")) return false; await rmdir(stagePath); await parent.sync(); return true;
