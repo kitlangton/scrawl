@@ -25,18 +25,23 @@ const safeRelativePath = (name: string) => typeof name === "string" && !name.inc
 const flags = C.O_RDONLY | (C.O_NOFOLLOW ?? 0) | (C.O_DIRECTORY ?? 0);
 const dirStat = directoryIdentity;
 async function openedDir(name: string): Promise<FileHandle> { return open(name, flags); }
-async function cleanupStage(parent: FileHandle, stagePath: string, parentIdentity: string, stageIdentity: string, created: Map<string, string>, createdDirs: Map<string, string>): Promise<boolean> {
+export type PrivateCleanupFence = (relativePath: string, kind: "file" | "directory") => Promise<boolean>;
+/** INTERNAL cleanup primitive shared with bounded queue retirement. Caller pins
+ * an exact inventory first; pathname checks still rely on the cooperative
+ * same-UID namespace protocol and are not atomic against lock bypass. */
+export async function cleanupPrivateDirectoryStage(parent: FileHandle, stagePath: string, parentIdentity: string, stageIdentity: string,
+  created: Map<string, string>, createdDirs: Map<string, string>, beforeEffect?: PrivateCleanupFence): Promise<boolean> {
   try {
     const [parentNow, parentFd, stageNow] = await Promise.all([lstat(path.dirname(stagePath), { bigint: true }), parent.stat({ bigint: true }), lstat(stagePath, { bigint: true })]);
     if (!parentNow.isDirectory() || dirStat(parentNow) !== parentIdentity || dirStat(parentFd) !== parentIdentity || !stageNow.isDirectory() || dirStat(stageNow) !== stageIdentity) return false;
     for (const [rel, identity] of createdDirs) { const named = await lstat(path.join(stagePath, rel), { bigint: true }); if (!named.isDirectory() || named.isSymbolicLink() || dirStat(named) !== identity) return false; }
     for (const [rel, identity] of created) { const st = await lstat(path.join(stagePath, rel), { bigint: true }); if (!st.isFile() || dirStat(st) !== identity) return false; }
-    for (const [rel, identity] of [...created].reverse()) { const target = path.join(stagePath, rel); const st = await lstat(target, { bigint: true }).catch(() => undefined); if (!st) continue; if (!st.isFile() || st.isSymbolicLink() || dirStat(st) !== identity) return false; await unlink(target); }
+    for (const [rel, identity] of [...created].reverse()) { const target = path.join(stagePath, rel); const st = await lstat(target, { bigint: true }).catch(() => undefined); if (!st) continue; if (!st.isFile() || st.isSymbolicLink() || dirStat(st) !== identity) return false; if (beforeEffect && !await beforeEffect(rel, "file")) return false; await unlink(target); }
     const dirs = new Set([...created.keys()].flatMap(rel => { const parts = rel.split("/"); const out: string[] = []; while (parts.length > 1) { parts.pop(); out.push(parts.join("/")); } return out; }));
-    for (const rel of [...dirs].sort((a,b) => b.length-a.length)) { const p = path.join(stagePath, rel); const st = await lstat(p, { bigint: true }).catch(() => undefined); if (st) { if (!st.isDirectory() || st.isSymbolicLink()) return false; await rmdir(p); } }
+    for (const rel of [...dirs].sort((a,b) => b.length-a.length)) { const p = path.join(stagePath, rel); const st = await lstat(p, { bigint: true }).catch(() => undefined); if (st) { if (!st.isDirectory() || st.isSymbolicLink()) return false; if (beforeEffect && !await beforeEffect(rel, "directory")) return false; await rmdir(p); } }
     const parentCheck = await lstat(path.dirname(stagePath), { bigint: true }); const stageCheck = await lstat(stagePath, { bigint: true });
     if (dirStat(parentCheck) !== parentIdentity || dirStat(stageCheck) !== stageIdentity) return false;
-    await rmdir(stagePath); await parent.sync(); return true;
+    if (beforeEffect && !await beforeEffect("", "directory")) return false; await rmdir(stagePath); await parent.sync(); return true;
   } catch { return false; }
 }
 
@@ -92,7 +97,7 @@ export async function publishPrivateDirectory(parentPath: string, destination: s
     if (outcome.state === "destination_exists" || outcome.state === "refused") {
       const source = await lstat(stagePath, { bigint: true }).catch(() => undefined), namedParent = await lstat(parentPath, { bigint: true }).catch(() => undefined);
       if (source?.isDirectory() && dirStat(source) === stageIdentity && namedParent?.isDirectory() && dirStat(namedParent) === parentIdentity) {
-        const cleanupParent = await openedDir(parentPath); const cleaned = await cleanupStage(cleanupParent, stagePath, parentIdentity, stageIdentity, created, createdDirs); await cleanupParent.close();
+        const cleanupParent = await openedDir(parentPath); const cleaned = await cleanupPrivateDirectoryStage(cleanupParent, stagePath, parentIdentity, stageIdentity, created, createdDirs); await cleanupParent.close();
         if (!cleaned) return { state: "publication-uncertain" }; phase = "preparing"; if (outcome.state === "destination_exists") fail("destination_exists"); fail("publication_refused");
       }
       phase = "uncertain"; return { state: "publication-uncertain" };
@@ -107,7 +112,7 @@ export async function publishPrivateDirectory(parentPath: string, destination: s
     } finally { await namedParent.close().catch(() => {}); await dest.close().catch(() => {}); }
     return { state: "committed", path: requested };
   } catch (error) {
-    if (phase === "preparing" && parent && stage && stagePath) await cleanupStage(parent, stagePath, parentIdentity, stageIdentity, created, createdDirs);
+    if (phase === "preparing" && parent && stage && stagePath) await cleanupPrivateDirectoryStage(parent, stagePath, parentIdentity, stageIdentity, created, createdDirs);
     if (phase !== "preparing") return { state: "publication-uncertain" };
     if (error instanceof PrivateDirectoryError) throw error;
     if (error instanceof DirectoryAdmissionFailure) fail(error.category === "cancelled" ? "cancelled" : "unsafe_directory");

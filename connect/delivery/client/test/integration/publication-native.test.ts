@@ -30,6 +30,9 @@ import { uploadPreparedEncryptedCapture } from "../../src/sender/encrypted-trans
 import { sealCapture } from "../../src/sender/seal.ts";
 import { publishEncryptedSpool } from "../../src/sender/spool-publication.ts";
 import { commitEncryptedSpool } from "../../src/sender/spool-commit.ts";
+import { retireQueuedJob } from "../../src/queue/prune.ts";
+import { withStateQueue } from "../../src/state/queue-transaction.ts";
+import { stateFileStamp } from "../../src/state/credential-files.ts";
 import { retryQueuedUploads, RetryError } from "../../src/queue/retry.ts";
 import { runUploadWorkerOnce } from "../../src/queue/worker.ts";
 
@@ -207,6 +210,42 @@ test("native upload worker spans spool recovery and transfer with independent qu
     const snapshot = await openCommittedEncryptedSpool(root, readyJob, resources);
     await writeFile(path.join(root, "upload.credential"), JSON.stringify({ ...credential, generation: "e".repeat(32) }));
     await assert.rejects(snapshot.readAsset("envelope.json"), e => e instanceof EncryptedSpoolReadError && e.category === "stale_snapshot");
+    // Retirement policy is explicit synthetic caller authority, never inferred
+    // from the stored receipt or from signature validity alone.
+    const jobFile = path.join(root, `${id}.job`), spoolPath = path.join(root, `${id}.sealed`);
+    const originalJob = await readFile(jobFile), originalEnvelope = await readFile(path.join(spoolPath, "envelope.json"));
+    await link(jobFile, path.join(root, "retained-ready-job"));
+    await link(path.join(spoolPath, "envelope.json"), path.join(root, "retained-envelope"));
+    const expectedStamp = stateFileStamp(await lstat(jobFile, { bigint: true }));
+    const credentialBytes = await readFile(path.join(root, "upload.credential"));
+    const originalBundle = path.join(root, "original.apparent");
+    await mkdir(originalBundle, { mode: 0o700 }); await writeFile(path.join(originalBundle, "summary.md"), "keep original");
+    let checkedLease = false;
+    const retire = () => withStateQueue(root, { scope: "upload", approvedServer: origin }, resources, {}, (state, lease) =>
+      retireQueuedJob(state, lease, resources, { job: readyJob, expectedStamp, assertFresh: async () => {
+        const current = decodeJob(await readFile(jobFile));
+        assert.equal(current.status, "ready"); assert.equal(current.shared, false);
+        if (!checkedLease) {
+          const contender = await resources.lock(await open(path.join(root, "queue.lock"), constants.O_RDWR | constants.O_NOFOLLOW), { timeoutMs: 0 });
+          if (contender.state === "acquired") await contender.lease.release();
+          assert.equal(contender.state, "busy", "retirement must retain the actual queue lease");
+          checkedLease = true;
+        }
+      } }));
+    const extra = path.join(spoolPath, "unexpected-private-file");
+    await writeFile(extra, "retained unsafe inventory", { mode: 0o600 });
+    assert.deepEqual(await retire(), { state: "refused" });
+    assert.deepEqual(await readFile(jobFile), originalJob); assert.deepEqual(await readFile(path.join(spoolPath, "envelope.json")), originalEnvelope);
+    // Remove only our identified negative-case fixture before the valid case.
+    await rm(extra);
+    assert.deepEqual(await retire(), { state: "retired" });
+    assert.equal(checkedLease, true);
+    await assert.rejects(lstat(jobFile), { code: "ENOENT" }); await assert.rejects(lstat(spoolPath), { code: "ENOENT" });
+    assert.deepEqual(await readFile(path.join(root, "retained-ready-job")), originalJob);
+    assert.deepEqual(await readFile(path.join(root, "retained-envelope")), originalEnvelope);
+    assert.deepEqual(await readFile(path.join(root, "upload.credential")), credentialBytes);
+    assert.equal(await readFile(path.join(originalBundle, "summary.md"), "utf8"), "keep original");
+
   } finally { borrowed.forEach(bytes => bytes.fill(0)); server.closeAllConnections(); await new Promise<void>(resolve => server.close(() => resolve())); }
 }));
 

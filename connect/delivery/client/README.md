@@ -199,6 +199,16 @@ settle them before retrying. It changes no credential or config, performs no HTT
 or deletion, and has no public export or production command route. Local settings
 and sole-writer admission remain host responsibilities; Rust still owns live retry.
 
+The internal `queue/prune` mechanism retires only a caller-authorized, stamped job
+and its exact bounded legacy spool inventory. It reuses private-directory cleanup,
+checks ACLs and original identities, and calls the held queue lease and fresh policy
+fence before each effect. Metadata is removed last; unknown or damaged spool
+contents are retained. Partial cleanup reports uncertainty and must be settled by
+the host before admission proceeds; this API supplies no restart-recovery journal.
+Pathname checks rely on cooperating same-UID writers honoring the locks and do not
+promise inode-atomic unlink against a process bypassing them. This has no public
+export or production caller and does not authorize pruning beside the Rust writer.
+
 The queue API's `planAdmission` returns a detached, frozen plan for automatic
 private, explicit private or public-copy admission. It preserves first-match
 deduplication in supplied queue order and the donor's cancellation → pruning →
