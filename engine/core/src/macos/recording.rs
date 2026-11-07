@@ -2,8 +2,6 @@
 //! The legacy `start` path below retains its existing fallback, filter and timestamp behavior.
 
 use std::path::PathBuf;
-#[cfg(test)]
-use std::slice;
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
@@ -19,6 +17,8 @@ use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 use super::clock::{
     CaptureAdmissionTime, CaptureClockSample, ClockError, map_sample_to_capture_clock,
 };
+#[cfg(test)]
+use super::sample::{PackedBgraSample, copy_packed_bgra_sample};
 use super::{
     CaptureRequest, FilterRequest, FrameConfiguration, RgbaImage, StreamConfiguration,
     build_filter, build_filter_and_config, stream_configuration,
@@ -117,41 +117,15 @@ pub struct FirstSample {
 }
 
 #[cfg(test)]
-#[derive(Clone)]
-pub(super) struct TestSamplePixels {
-    pub(super) pts: screencapturekit::cm::CMTime,
-    pub(super) width: usize,
-    pub(super) height: usize,
-    pub(super) pixel_format: u32,
-    pub(super) planar: bool,
-    pub(super) bytes_per_row: usize,
-    pub(super) data_size: usize,
-    pub(super) color: TestPixelColorAttachments,
-    pub(super) bytes: Vec<u8>,
-}
-
-#[cfg(test)]
-#[derive(Clone, Debug)]
-pub(super) struct TestPixelColorAttachments {
-    pub(super) primaries: Option<String>,
-    pub(super) transfer_function: Option<String>,
-    pub(super) ycbcr_matrix: Option<String>,
-    pub(super) cg_color_space: Option<String>,
-    pub(super) cg_color_space_icc: Option<Vec<u8>>,
-}
-
-#[cfg(test)]
 #[derive(Default)]
 struct TestSampleCollection {
-    samples: Vec<TestSamplePixels>,
+    samples: Vec<PackedBgraSample>,
     last_pts: Option<screencapturekit::cm::CMTime>,
     refusal: Option<String>,
 }
 
 #[cfg(test)]
 const TEST_SAMPLE_LIMIT: usize = 12;
-#[cfg(test)]
-const TEST_SAMPLE_MAX_BYTES: usize = 2 * 1024 * 1024;
 #[cfg(test)]
 const TEST_SAMPLE_SPACING_MS: u64 = 100;
 
@@ -222,181 +196,6 @@ pub(super) fn has_usable_capture_sample(
                 && evidence.data_size > 0
                 && evidence.mapped
         })
-}
-
-#[cfg(test)]
-fn copy_test_sample_pixels(
-    buffer: &screencapturekit::cv::CVPixelBuffer,
-    pts: screencapturekit::cm::CMTime,
-) -> Result<TestSamplePixels, String> {
-    const PIXEL_FORMAT_32_BGRA: u32 = u32::from_be_bytes(*b"BGRA");
-    if buffer.is_planar() {
-        return Err(
-            "source sample is planar; correspondence observer only accepts packed BGRA".into(),
-        );
-    }
-    let pixel_format = buffer.pixel_format();
-    if pixel_format != PIXEL_FORMAT_32_BGRA {
-        return Err(format!(
-            "unsupported source pixel format {pixel_format:#010x}; expected 32BGRA"
-        ));
-    }
-    let width = buffer.width();
-    let height = buffer.height();
-    let bytes_per_row = buffer.bytes_per_row();
-    let minimum_row = width
-        .checked_mul(4)
-        .ok_or_else(|| "source pixel row size overflow".to_owned())?;
-    if width == 0 || height == 0 || bytes_per_row < minimum_row {
-        return Err("invalid source pixel dimensions or stride".into());
-    }
-    let byte_count = bytes_per_row
-        .checked_mul(height)
-        .filter(|size| *size <= TEST_SAMPLE_MAX_BYTES && *size <= buffer.data_size())
-        .ok_or_else(|| "source pixel sample exceeds bounded copy budget".to_owned())?;
-    let lock = buffer
-        .lock_read_only()
-        .map_err(|error| format!("source pixel lock failed: {error}"))?;
-    let address = lock.base_address();
-    if address.is_null() {
-        return Err("source pixel buffer has no mapped base address".into());
-    }
-    // SAFETY: CVPixelBuffer is read-locked; checked dimensions/stride bound the copied extent.
-    let bytes = unsafe { slice::from_raw_parts(address, byte_count) }.to_vec();
-    Ok(TestSamplePixels {
-        pts,
-        width,
-        height,
-        pixel_format,
-        planar: false,
-        bytes_per_row,
-        data_size: buffer.data_size(),
-        color: test_pixel_color_attachments(buffer),
-        bytes,
-    })
-}
-
-/// Retain color declarations and bounded ICC bytes from the exact callback buffer used by the
-/// correspondence diagnostic. The locked SCK crate does not expose the attachment wrapper, so
-/// this test-only copy uses CoreVideo's retained copy API and checks CF object type/lifetime.
-#[cfg(test)]
-fn test_pixel_color_attachments(
-    buffer: &screencapturekit::cv::CVPixelBuffer,
-) -> TestPixelColorAttachments {
-    use std::ffi::{CStr, c_char, c_void};
-
-    type CfRef = *const c_void;
-    const UTF8_ENCODING: u32 = 0x0800_0100;
-
-    #[link(name = "CoreVideo", kind = "framework")]
-    unsafe extern "C" {
-        static kCVImageBufferColorPrimariesKey: CfRef;
-        static kCVImageBufferTransferFunctionKey: CfRef;
-        static kCVImageBufferYCbCrMatrixKey: CfRef;
-        static kCVImageBufferCGColorSpaceKey: CfRef;
-        fn CVBufferCopyAttachment(buffer: *mut c_void, key: CfRef, mode: *mut u32)
-        -> *const c_void;
-    }
-    #[link(name = "CoreFoundation", kind = "framework")]
-    unsafe extern "C" {
-        fn CFGetTypeID(value: CfRef) -> usize;
-        fn CFCopyDescription(value: CfRef) -> CfRef;
-        fn CFStringGetCString(
-            value: CfRef,
-            buffer: *mut c_char,
-            capacity: isize,
-            encoding: u32,
-        ) -> bool;
-        fn CFDataGetLength(data: CfRef) -> isize;
-        fn CFDataGetBytePtr(data: CfRef) -> *const u8;
-        fn CFRelease(value: CfRef);
-    }
-    #[link(name = "CoreGraphics", kind = "framework")]
-    unsafe extern "C" {
-        fn CGColorSpaceGetTypeID() -> usize;
-        fn CGColorSpaceCopyICCData(color_space: CfRef) -> CfRef;
-    }
-
-    unsafe fn read(buffer: *mut c_void, key: CfRef, describe: bool) -> Option<String> {
-        let value = unsafe { CVBufferCopyAttachment(buffer, key, std::ptr::null_mut()) };
-        if value.is_null() {
-            return None;
-        }
-        let string = if describe {
-            unsafe { CFCopyDescription(value) }
-        } else {
-            value
-        };
-        if string.is_null() {
-            unsafe { CFRelease(value) };
-            return None;
-        }
-        let mut output = [0i8; 512];
-        let copied = unsafe {
-            CFStringGetCString(
-                string,
-                output.as_mut_ptr(),
-                output.len() as isize,
-                UTF8_ENCODING,
-            )
-        };
-        let result = copied.then(|| {
-            // SAFETY: successful CFStringGetCString writes a NUL-terminated UTF-8 buffer.
-            unsafe { CStr::from_ptr(output.as_ptr()) }
-                .to_string_lossy()
-                .into_owned()
-        });
-        if describe {
-            unsafe { CFRelease(string) };
-        }
-        unsafe { CFRelease(value) };
-        result
-    }
-
-    unsafe fn read_icc(buffer: *mut c_void, key: CfRef) -> Option<Vec<u8>> {
-        const MAX_ICC_PROFILE_BYTES: usize = 32 * 1024;
-        let color_space = unsafe { CVBufferCopyAttachment(buffer, key, std::ptr::null_mut()) };
-        if color_space.is_null() {
-            return None;
-        }
-        // Accept only a genuine Core Graphics color-space object, not a textual description.
-        let is_color_space = unsafe { CFGetTypeID(color_space) == CGColorSpaceGetTypeID() };
-        if !is_color_space {
-            unsafe { CFRelease(color_space) };
-            return None;
-        }
-        let data = unsafe { CGColorSpaceCopyICCData(color_space) };
-        unsafe { CFRelease(color_space) };
-        if data.is_null() {
-            return None;
-        }
-        let length = unsafe { CFDataGetLength(data) };
-        if length <= 0 || length as usize > MAX_ICC_PROFILE_BYTES {
-            unsafe { CFRelease(data) };
-            return None;
-        }
-        let bytes = unsafe { CFDataGetBytePtr(data) };
-        if bytes.is_null() {
-            unsafe { CFRelease(data) };
-            return None;
-        }
-        // SAFETY: CFData owns a live allocation of the checked positive length until release.
-        let copied = unsafe { slice::from_raw_parts(bytes, length as usize) }.to_vec();
-        unsafe { CFRelease(data) };
-        Some(copied)
-    }
-
-    // SAFETY: CoreVideo exports these static CFString keys for process lifetime.
-    unsafe {
-        let buffer = buffer.as_ptr();
-        TestPixelColorAttachments {
-            primaries: read(buffer, kCVImageBufferColorPrimariesKey, false),
-            transfer_function: read(buffer, kCVImageBufferTransferFunctionKey, false),
-            ycbcr_matrix: read(buffer, kCVImageBufferYCbCrMatrixKey, false),
-            cg_color_space: read(buffer, kCVImageBufferCGColorSpaceKey, true),
-            cg_color_space_icc: read_icc(buffer, kCVImageBufferCGColorSpaceKey),
-        }
-    }
 }
 
 impl CaptureStream {
@@ -590,7 +389,7 @@ impl CaptureStream {
                                 }
                             };
                             if due {
-                                match copy_test_sample_pixels(buffer, pts) {
+                                match copy_packed_bgra_sample(buffer, pts, 2 * 1024 * 1024) {
                                     Ok(observation) => {
                                         observations.last_pts = Some(pts);
                                         observations.samples.push(observation);
@@ -696,7 +495,7 @@ impl CaptureStream {
     }
 
     #[cfg(test)]
-    pub(super) fn test_sample_pixels(&self) -> Result<Vec<TestSamplePixels>, String> {
+    pub(super) fn test_sample_pixels(&self) -> Result<Vec<PackedBgraSample>, String> {
         let state = self
             .test_samples
             .as_ref()

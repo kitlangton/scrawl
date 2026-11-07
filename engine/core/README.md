@@ -23,6 +23,15 @@ ARM64 macOS 26.6.2 qualification covers that clock readback and the Store-backed
 native output guard; Intel exact-head checks remain separate. Standalone Mac
 provider, durable journal, filter acknowledgement and capture/2 support remain open.
 
+`macos::copy_packed_bgra_sample` exposes the existing packed BGRA readback with
+owned row bytes, unchanged native PTS and bounded color attachments. Its caller
+must establish sample readiness and supply a positive byte budget, capped at
+256 MiB; the diagnostic collector retains its existing 2 MiB budget. Unsupported
+layouts are refused and absent color remains unavailable. ARM64 macOS 26.6.2
+file-only tests cover full-size rows, budget refusal and wrong-type attachments.
+This accessor performs no color conversion, encoded-clock mapping or capture
+admission. Writer ICC correspondence and standalone Mac capture remain unproven.
+
 ## Source and retained review
 
 This package-only port uses the complete 16-file admission/leases package from

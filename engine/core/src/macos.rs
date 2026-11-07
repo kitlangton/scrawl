@@ -7,6 +7,7 @@ use screencapturekit::prelude::*;
 mod clock;
 mod output;
 mod recording;
+mod sample;
 #[cfg(test)]
 mod tests;
 
@@ -15,6 +16,7 @@ pub use output::SckOutputGuard;
 pub use recording::{
     CaptureStream, CheckedStopOutcome, FirstSample, RecordingFinalization, StopOperation,
 };
+pub use sample::{PackedBgraSample, SampleColorAttachments, copy_packed_bgra_sample};
 
 #[derive(Clone, Copy, Debug)]
 pub enum CaptureSource {
