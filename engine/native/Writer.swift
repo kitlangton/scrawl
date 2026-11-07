@@ -218,6 +218,7 @@ final class SegmentedVideoWriter {
     )
     writer.delegate = segmentSink
     writer.preferredOutputSegmentInterval = preferredSegmentInterval
+    writer.initialSegmentStartTime = .zero
     writer.add(input)
     guard writer.startWriting() else {
       throw SegmentedVideoWriterError.writerFailed(
