@@ -641,6 +641,21 @@ usage is below it. Local status composition and renewal-owner adoption remain
 host work. Synthetic Worker checks cover both scopes and API mounts, not live auth.
 
 
+## Endpoint identity preparation
+
+`./endpoint-identity` exposes the same bounded codec and explicit
+`generateStoredIdentityRecord` for a new login identity only. It returns canonical
+caller-owned private record bytes and the matching frozen public key; it performs
+no filesystem access, approval, fallback, caching or replacement of existing keys.
+The privileged host must persist privately, verify readback and bind the identity
+to its current login before approval. Raw private bytes must never enter a renderer
+and must be wiped when the caller finishes. Owned mutable seeds and failed output
+buffers are cleared; immutable JavaScript strings have no erasure guarantee.
+Actual local Worker fixtures consume the generated public key for device enrollment
+and the decoded private record for encrypted root/grouped transfers on both API
+bases. This is synthetic protocol evidence, not durable or installed identity proof.
+
+
 ## Anonymous device protocol transport
 
 `./device-transport` supplies `requestDeviceStart` and `requestDevicePoll` for
