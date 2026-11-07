@@ -264,7 +264,9 @@ export async function resolveBundle(input = 'latest', captures?: string): Promis
     }
     if (!(await stat(path).catch(() => null))?.isDirectory()) throw new Error(`Local bundle directory not found: ${path}`);
   }
-  if (!path.endsWith('.apparent')) throw new Error('Expected a .apparent directory');
+  // Explicit local paths are bundles only when their bounded manifest validates;
+  // unlike latest discovery, their directory name need not carry a suffix.
+  await readManifest(path);
   return resolve(path);
 }
 
