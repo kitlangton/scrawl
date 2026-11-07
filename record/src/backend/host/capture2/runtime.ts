@@ -138,6 +138,7 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
       if (!selected || !discovery.sources.some(source => isDeepStrictEqual(source, selected.source))) { releaseReservation(requestId, reservation); return { state, outcome: "refused" }; }
     } catch { releaseReservation(requestId, reservation); return { state, outcome: "refused" }; }
     if (disposed) return { state, outcome: "refused" };
+    const previousState = state;
     publish({ phase: "checking", captureId: requestId, readiness });
     try {
       const receipt = await options.host.start({ ...selected, requestId });
@@ -145,7 +146,10 @@ export async function createCapture2RecordRuntime(options: Capture2RecordRuntime
       return { state, outcome: receipt.phase === "unknown" || receipt.phase === "submitted-unknown" ? "outcome-unknown" : "accepted" };
     } catch (error) {
       const definitelyNotDispatched = !!error && typeof error === "object" && (error as { dispatched?: unknown }).dispatched === false;
-      if (!disposed && definitelyNotDispatched) releaseReservation(requestId, reservation);
+      if (!disposed && definitelyNotDispatched && known.get(requestId) === reservation) {
+        releaseReservation(requestId, reservation);
+        if (state.phase === "checking" && state.captureId === requestId) publish({ ...previousState, readiness });
+      }
       if (!definitelyNotDispatched && !disposed && known.get(requestId) === reservation) { known.set(requestId, { requestId, phase: "unknown" }); startup = { state: "blocked", knownRequestIds: [...new Set([...startup.knownRequestIds, requestId])].sort(), unresolved: [{ requestId, state: "unknown", phase: "unknown" }] }; publish({ phase: "uncertain", captureId: requestId, readiness, message: error instanceof Error ? error.message : String(error) }); }
       return { state, outcome: definitelyNotDispatched ? "refused" : "outcome-unknown" };
     }
