@@ -210,15 +210,22 @@ const object = (v: unknown): v is Record<string, any> => !!v && typeof v === 'ob
 export const safeReference = (v: unknown): v is string => typeof v === 'string' && !!v && !v.includes('\\') && !v.includes('\0') &&
   !v.startsWith('/') && !/^[a-z][a-z\d+.-]*:/i.test(v) && !v.split('/').includes('..');
 
-export async function checkImageReference(bundle: string, reference: string): Promise<void> {
-  if (!safeReference(reference)) throw new Error('Bundle contains an unsafe image reference');
+export async function checkImageReference(bundle: string, reference: string): Promise<boolean> {
+  if (!safeReference(reference)) throw new Error(`Bundle contains an unsafe image reference: ${reference}`);
   let path = bundle;
-  for (const part of reference.split('/')) {
+  const parts = reference.split('/');
+  for (const [index, part] of parts.entries()) {
     path = join(path, part);
-    const info = await lstat(path).catch((error: NodeJS.ErrnoException) => { if (error.code === 'ENOENT') return null; throw error; });
-    if (!info) break; // References can describe unavailable media without reading it.
-    if (info.isSymbolicLink()) throw new Error('Bundle image reference follows a symlink');
+    const info = await lstat(path).catch((error: NodeJS.ErrnoException) => {
+      if (error.code === 'ENOENT') return null;
+      throw new Error(`Cannot inspect bundle image reference ${reference}: ${error.message}`);
+    });
+    if (!info) return false; // References can describe unavailable media without reading it.
+    if (info.isSymbolicLink()) throw new Error(`Bundle image reference follows a symlink: ${reference}`);
+    if (index < parts.length - 1 && !info.isDirectory()) return false;
+    if (index === parts.length - 1) return info.isFile();
   }
+  return false;
 }
 
 export async function resolveBundle(input = 'latest', captures?: string): Promise<string> {
@@ -239,7 +246,7 @@ export async function resolveBundle(input = 'latest', captures?: string): Promis
           ...(value.autocrop ? [value.autocrop.fullContactSheet, ...value.keyframes.map((k: any) => k.file.startsWith('frames/')
             ? `${value.autocrop.fullFrames}/${k.file.slice('frames/'.length)}` : undefined)] : [])].filter((v) => v !== undefined);
         if (!references.every(safeReference)) continue;
-        for (const reference of references) { await checkImageReference(path, reference); if (!(await stat(join(path, reference))).isFile()) throw new Error('incomplete image artifacts'); }
+        for (const reference of references) if (!(await checkImageReference(path, reference))) throw new Error('incomplete image artifacts');
         candidates.push({ path, created: value.createdAtMs });
       } catch { /* malformed or incomplete candidates do not shadow a completed bundle */ }
     }

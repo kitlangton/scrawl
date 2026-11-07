@@ -1,9 +1,10 @@
-import { mkdtemp, mkdir, rm, writeFile, truncate, readFile } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, writeFile, truncate, readFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
+import { PNG } from 'pngjs';
 
 const target = {mode:'display',app:null,bundleId:null,windowTitle:null,windowId:null,displayId:0,frame:{x:0,y:0,width:800,height:600,scale:1}};
 import { recordWithEngine, type RecordingClient } from '../src/recording.ts';
@@ -11,9 +12,13 @@ import { recordWithEngine, type RecordingClient } from '../src/recording.ts';
 test('local bundle commands preserve raw JSON, summary, transcript, marks, and reject unsafe references', async () => {
   const root = await mkdtemp(join(tmpdir(), 'apparent-agent-'));
   try {
-    const bundle = join(root, 'fixture.apparent'); await mkdir(bundle);
-    const raw = JSON.stringify({version:1,id:'fixture',createdAtMs:10,durationMs:3,target,transcript:{text:'héllo',segments:[],words:[]},strokes:[],marks:[{id:'m1',strokes:[0],t0:1,t1:2,boxNorm:[0,0,1,1],shape:'circle',description:'mark'}],events:[],keyframes:[{index:1,t:0,reason:'mark',event:'marked',said:'héllo',markId:'m1',file:'frames/001.png'}],contactSheet:'contact-sheet.png'});
+    const bundle = join(root, "Sam's review 👋.apparent"); await mkdir(bundle);
+    await mkdir(join(bundle,'frames')); await mkdir(join(bundle,'directory-reference'));
+    const png=new PNG({width:1,height:1});png.data.set([1,2,3,255]);const image=PNG.sync.write(png);
+    await writeFile(join(bundle,'contact-sheet.png'),image); await writeFile(join(bundle,'frames/001.png'),image);
+    const raw = JSON.stringify({version:1,id:'fixture',createdAtMs:10,durationMs:3,target,transcript:{text:'héllo',segments:[],words:[]},strokes:[],marks:[{id:'m1',strokes:[0],t0:1,t1:2,boxNorm:[0,0,1,1],shape:'circle',description:'mark'}],events:[],keyframes:[{index:1,t:0,reason:'mark',event:'marked',said:'héllo',markId:'m1',file:'frames/001.png'},{index:2,t:1,file:'frames/missing.png'},{index:3,t:2,file:'directory-reference'},{index:4,t:2,file:'frames/001.png'}],contactSheet:'contact-sheet.png'});
     await writeFile(join(bundle, 'apparent.json'), raw); await writeFile(join(bundle, 'summary.md'), '# Stored\n');
+    await writeFile(join(bundle,'.evidence-only.json'),JSON.stringify({version:1,captureId:'a'.repeat(32),server:'https://connect.example',media:'not downloaded',guidance:'Use apparent fetch <id> --media --out <new-directory> for the complete recording'}));
     const cli = new URL('../dist/cli.js', import.meta.url).pathname;
     const run = (...args: string[]) => spawnSync(process.execPath, [cli, 'inspect', ...args], { encoding: 'utf8' });
     const json = run(join(bundle, 'apparent.json'), '--json'); assert.equal(json.stdout, raw);
@@ -21,9 +26,20 @@ test('local bundle commands preserve raw JSON, summary, transcript, marks, and r
     assert.equal(run(bundle, '--stored-summary').stdout, '# Stored\n');
     assert.equal(run(bundle, '--transcript').stdout, 'héllo\n');
     assert.equal(JSON.parse(run(bundle, '--marks', '--json').stdout)[0].id, 'm1');
-    assert.deepEqual(JSON.parse(run(bundle, '--images').stdout).references, ['contact-sheet.png', 'frames/001.png']);
+    const imageOutput=run(bundle,'--images'); assert.equal(imageOutput.status,0);
+    const images=JSON.parse(imageOutput.stdout);
+    assert.deepEqual(images.references,['contact-sheet.png','frames/001.png','frames/missing.png','directory-reference']);
+    assert.deepEqual(images.paths,[join(bundle,'contact-sheet.png'),join(bundle,'frames/001.png')]);
+    assert.deepEqual(images.missingReferences,['frames/missing.png','directory-reference']);
+    assert.deepEqual(await readFile(join(bundle,'apparent.json')),Buffer.from(raw));
+    assert.equal(run(bundle,'--transcript').stdout,'héllo\n');
     await writeFile(join(bundle, 'apparent.json'), raw.replace('frames/001.png', '../secret.png'));
     assert.equal(run(bundle, '--images').status, 2);
+    await writeFile(join(bundle, 'apparent.json'),raw);
+    await symlink(join(bundle,'frames/001.png'),join(bundle,'frames/linked.png'));
+    const symlinkManifest=JSON.parse(raw);symlinkManifest.keyframes.push({index:5,t:2,file:'frames/linked.png'});
+    await writeFile(join(bundle,'apparent.json'),JSON.stringify(symlinkManifest));
+    assert.equal(run(bundle,'--images').status,2);
     await writeFile(join(bundle, 'apparent.json'), raw.replace('"segments":[]', '"segments":[{"t0":"bad","t1":2,"text":"x"}]'));
     assert.equal(run(bundle).status, 2);
     await writeFile(join(bundle, 'apparent.json'),raw);
