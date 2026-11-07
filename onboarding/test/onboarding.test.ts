@@ -1021,3 +1021,12 @@ test("restart and repeated return use the existing recording entry without onboa
  }
  assert.equal(entries,3);assert.equal(f.progress.revision,revision);assert.equal(f.progress.value.stage,"shortcut");assert.deepEqual(f.driver.commands(),[]);f.controller.dispose();
 });
+
+
+test("legacy donor successful trial is remembered without treating empty or future markers as completion", () => {
+ const legacy={seen:false,resume:"TryIt",shortcutChosen:true,shortcutTestedFor:"Ctrl+Shift+R",tourRevision:1};
+ assert.equal(onboardingProgressCodec.decode(legacy).setupCompleted,true);
+ assert.equal(onboardingProgressCodec.decode({...legacy,shortcutTestedFor:""}).setupCompleted,false);
+ assert.equal(onboardingProgressCodec.decode({...legacy,shortcutChosen:false}).setupCompleted,false);
+ assert.equal(onboardingProgressCodec.decode({...legacy,tourRevision:2}).setupCompleted,false);
+});
