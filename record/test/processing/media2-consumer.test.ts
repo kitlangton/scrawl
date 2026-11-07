@@ -315,12 +315,21 @@ test("separate processes reopening the same ready journal cannot both dispatch",
       const request = JSON.parse(process.argv[3]);
       const materials = JSON.parse(process.argv[4]);
       const requestSha256 = process.argv[5];
-      const client = {async derive() { console.log('dispatch'); return {jobId:request.jobId,requestSha256,state:'running'}; }};
+      let dispatched = false;
+      const client = {async derive() { dispatched = true; console.log('dispatch'); return {jobId:request.jobId,requestSha256,state:'running'}; }};
       const job = await RecordMedia2Job.reopen(client, process.argv[1], {ownerToken:'${token}',request,materials});
       console.log('ready');
       await new Promise(resolve => process.stdin.once('data', resolve));
       try { await job.derive('${token}'); console.log('accepted'); }
-      catch { console.log('refused'); }
+      catch (error) {
+        console.log('refused');
+        const message = error instanceof Error ? error.message : '';
+        const reason = message === 'Record host storage is unavailable or invalid' ? 'storage-unavailable'
+          : message === 'retained media2 journal changed; inspection is required' ? 'journal-changed'
+          : message === 'retained media2 job requires inspection before another derive' ? 'already-dispatched' : 'other';
+        console.error(JSON.stringify({stage:'derive',dispatched,state:job.state,reason,
+          sqliteCode:typeof error?.errcode === 'number' ? error.errcode : undefined}));
+      }
     `;
     const runs = [0, 1].map(() => {
       const child = spawn(process.execPath, ["--input-type=module", "-e", source, journal,
@@ -337,18 +346,21 @@ test("separate processes reopening the same ready journal cannot both dispatch",
       });
       const done = new Promise<void>((resolve, reject) => {
         child.once("error", reject);
-        child.once("exit", code => code === 0 ? resolve() : reject(new Error(`media2 child exit ${code}: ${error}`)));
+        // exit can precede the final stdout/stderr data; close establishes that
+        // all child output used by the strict one-winner assertions was drained.
+        child.once("close", code => code === 0 ? resolve() : reject(new Error(`media2 child exit ${code}: ${error}`)));
       });
       void done.catch(() => {}); // Cleanup still awaits owned children when a barrier fails.
-      return { child, ready, done, output: () => output };
+      return { child, ready, done, output: () => output, diagnostics: () => error };
     });
     await Promise.all(runs.map(run => run.ready));
     for (const run of runs) run.child.stdin!.end("start\n");
     await Promise.all(runs.map(run => run.done));
     const lines = runs.flatMap(run => run.output().trim().split("\n"));
-    assert.equal(lines.filter(line => line === "dispatch").length, 1);
-    assert.equal(lines.filter(line => line === "accepted").length, 1);
-    assert.equal(lines.filter(line => line === "refused").length, 1);
+    const diagnostics = JSON.stringify(runs.map(run => ({stdout:run.output(),stderr:run.diagnostics()})));
+    assert.equal(lines.filter(line => line === "dispatch").length, 1, diagnostics);
+    assert.equal(lines.filter(line => line === "accepted").length, 1, diagnostics);
+    assert.equal(lines.filter(line => line === "refused").length, 1, diagnostics);
   } finally {
     await Promise.all(children.filter(child => child.exitCode === null && child.signalCode === null).map(child =>
       new Promise<void>(resolve => { child.once("exit", () => resolve()); child.kill("SIGKILL"); })));
