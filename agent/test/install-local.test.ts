@@ -10,7 +10,7 @@ import { parseInstallArguments } from '../dist/install/arguments.js';
 import { installLocal } from '../dist/install/core.js';
 import { hashRegularFile, inventory, validateFreshPrefix } from '../dist/install/filesystem.js';
 import { makeLauncher } from '../dist/install/launcher.js';
-import { validateManifest } from '../dist/install/manifest.js';
+import { validateCaptureManifest, validateManifest } from '../dist/install/manifest.js';
 import { DEFAULT_LIMITS, type InstallerDependencies, type InstallerInput, type NativeManifest, type RuntimeFile } from '../dist/install/types.js';
 import { makeNpmInvocation } from '../dist/install/runtime.js';
 
@@ -76,9 +76,14 @@ function fixtureDependencies(overrides: Partial<InstallerDependencies> = {}): In
     mkdirSync(join(sdkRoot, 'dist/src'), { recursive: true, mode: 0o700 });
     writeFileSync(join(agentRoot, 'package.json'), JSON.stringify({ name: '@apparent/agent', version: '0.1.0', type: 'module', bin: { 'apparent-agent': './dist/cli.js' }, dependencies: { '@apparent/engine-sdk': 'file:vendor/apparent-engine-sdk-0.3.2.tgz' } }), { mode: 0o600 });
     writeFileSync(join(agentRoot, 'dist/cli.js'), 'process.stdout.write(JSON.stringify(process.argv.slice(2)) + "\\n");', { mode: 0o700 });
-    writeFileSync(join(sdkRoot, 'package.json'), JSON.stringify({ name: '@apparent/engine-sdk', version: '0.3.2', exports: { './media': { import: './dist/src/media.js', types: './dist/src/media.d.ts' } } }), { mode: 0o600 });
+    writeFileSync(join(sdkRoot, 'package.json'), JSON.stringify({ name: '@apparent/engine-sdk', version: '0.3.2', exports: {
+      './media': { import: './dist/src/media.js', types: './dist/src/media.d.ts' },
+      './capture': { import: './dist/src/capture.js', types: './dist/src/capture.d.ts' },
+    } }), { mode: 0o600 });
     writeFileSync(join(sdkRoot, 'dist/src/media.js'), '', { mode: 0o600 });
     writeFileSync(join(sdkRoot, 'dist/src/media.d.ts'), '', { mode: 0o600 });
+    writeFileSync(join(sdkRoot, 'dist/src/capture.js'), '', { mode: 0o600 });
+    writeFileSync(join(sdkRoot, 'dist/src/capture.d.ts'), '', { mode: 0o600 });
     assert.equal(sha256(readFileSync(snapshotPath)), sha256(agentTar));
     assert.ok(privateHome.startsWith(dirname(installRoot)));
   });
@@ -93,7 +98,44 @@ function fixtureDependencies(overrides: Partial<InstallerDependencies> = {}): In
       reply: { channel: 'media', protocolVersion: 1, implementation: 'native', capabilities: { decodeFrames: true } },
       closeOutcome: 'eof-exited',
     })),
+    captureHandshake: overrides.captureHandshake ?? (async () => ({
+      reply: { channel: 'capture', protocolVersion: 2, implementation: 'native', readiness: 'unavailable' },
+      closeOutcome: 'eof-exited',
+    })),
   };
+}
+
+async function fixtureCaptureRoot(parent: string) {
+  const root = join(parent, 'capture fixture');
+  const files: RuntimeFile[] = [];
+  const add = async (path: string) => {
+    const full = join(root, path);
+    await mkdir(dirname(full), { recursive: true, mode: 0o700 });
+    await writeFile(full, executable, { mode: 0o755 });
+    await chmod(full, 0o755);
+    files.push({ path, mode: 0o755, sha256: sha256(executable) });
+  };
+  await add('apparent-engine-capture-launch');
+  await add('libexec/apparent-engine-capture');
+  const manifest = {
+    schema: 1,
+    sourceSha: 'b'.repeat(40),
+    recoveryLaunch: { schema: 'apparent.engine-recovery-peer/1', channel: 'capture/2', argv: [
+      '--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2',
+      '--recovery-peer-v1', '<private-peer-nonce>',
+    ], startsFreshCapture: false, onInputEof: 'retain-admitted-finite-work' },
+    eligibleForReuse: true,
+    target: 'linux-x64',
+    rustTriple: 'x86_64-unknown-linux-gnu',
+    capabilities: ['capture/2', 'x11-display', 'x11-area', 'retained-materials', 'authenticated-publication'],
+    launch: { entry: 'apparent-engine-capture-launch', argv: ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2'],
+      worker: 'libexec/apparent-engine-capture', pathLookup: false, runtimeBuilds: false, shutdownTimeoutMs: 40000 },
+    environment: { architecture: 'x86_64' },
+    runtimeFiles: files,
+  };
+  const bytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+  await writeFile(join(root, 'manifest.json'), bytes, { mode: 0o600 });
+  return { root, manifest, bytes, sha256: sha256(bytes) };
 }
 
 async function withTemp<T>(run: (directory: string) => Promise<T>): Promise<T> {
@@ -115,7 +157,87 @@ test('argument parser rejects absent, malformed, unknown, duplicate and invalid 
   assert.throws(() => parseInstallArguments([
     '--agent', '/tmp/a', '--agent-sha256', 'x', '--native-root', '/tmp/n', '--manifest-sha256', '0'.repeat(64), '--prefix', '/tmp/p',
   ]), /invalid Agent SHA-256/);
+  assert.throws(() => parseInstallArguments([
+    '--agent', '/tmp/a', '--agent-sha256', 'a'.repeat(64), '--native-root', '/tmp/n', '--manifest-sha256', 'b'.repeat(64),
+    '--prefix', '/tmp/p', '--capture-root', '/tmp/c',
+  ]), /must be supplied together/);
 });
+
+test('Capture/2 manifest is exact, validated before prefix creation, and installed with the shared private runtime', async () => withTemp(async (directory) => {
+  const { input: baseInput, prefix, native } = await fixtureInputs(directory, 'capture-prefix');
+  const dualMedia = structuredClone(native.manifest) as any;
+  dualMedia.capabilities = ['media/1', 'media/2'];
+  dualMedia.media2Launch = { argv: ['--media-runtime-directory', '<capture-runtime-dir>', '--media-channel', 'media', '--media-protocol-version', '2'], sharesCaptureRuntime: true };
+  const dualMediaBytes = Buffer.from(`${JSON.stringify(dualMedia, null, 2)}\n`);
+  await writeFile(join(native.root, 'manifest.json'), dualMediaBytes, { mode: 0o600 });
+  const input = { ...baseInput, manifestSha256: sha256(dualMediaBytes) };
+  const capture = await fixtureCaptureRoot(directory);
+  assert.equal(validateCaptureManifest(capture.manifest).runtimeFiles.length, 2);
+  const acceptedInput = { ...input, captureRoot: capture.root, captureManifestSha256: capture.sha256 };
+  const observations: unknown[] = [];
+  const deps = fixtureDependencies({
+    async captureHandshake(entry, runtime, shutdownTimeoutMs) {
+      observations.push({ entry, runtime, shutdownTimeoutMs });
+      return { reply: { channel: 'capture', protocolVersion: 2, implementation: 'native', readiness: 'unavailable' }, closeOutcome: 'eof-exited' };
+    },
+  });
+  await installLocal(acceptedInput, deps);
+  assert.deepEqual(observations, [{ entry: join(prefix, 'native-capture/apparent-engine-capture-launch'), runtime: join(prefix, 'runtime'), shutdownTimeoutMs: 40000 }]);
+  assert.equal((await lstat(join(prefix, 'runtime'))).mode & 0o777, 0o700);
+  const launcher = await readFile(join(prefix, 'apparent-agent'), 'utf8');
+  assert.match(launcher, /APPARENT_ENGINE_CAPTURE_EXECUTABLE=/);
+  assert.match(launcher, new RegExp(`APPARENT_ENGINE_MEDIA2_BIN='${prefix}/native-media/apparent-engine-frames'`));
+  assert.deepEqual(JSON.parse(await readFile(join(prefix, 'native-capture/manifest.json'), 'utf8')), capture.manifest);
+  assert.equal(JSON.parse(await readFile(join(prefix, 'install-receipt.json'), 'utf8')).captureReadiness, 'unavailable');
+
+  for (const mutate of [
+    (value: any) => { value.extra = true; },
+    (value: any) => { value.launch.argv[0] = '--wrong'; },
+    (value: any) => { value.recoveryLaunch.startsFreshCapture = true; },
+    (value: any) => { value.capabilities.push('unknown'); },
+  ]) {
+    const bad = structuredClone(capture.manifest);
+    mutate(bad);
+    assert.throws(() => validateCaptureManifest(bad));
+    const bytes = Buffer.from(`${JSON.stringify(bad)}\n`);
+    await writeFile(join(capture.root, 'manifest.json'), bytes, { mode: 0o600 });
+    const rejected = { ...acceptedInput, prefix: join(directory, `rejected-${Math.random()}`), captureManifestSha256: sha256(bytes) };
+    await assert.rejects(installLocal(rejected, fixtureDependencies()), /capture/);
+    await assert.rejects(lstat(rejected.prefix), { code: 'ENOENT' });
+  }
+}));
+
+test('Capture/2 symlink inventory is rejected before prefix creation and uncertain close never writes a receipt', async () => withTemp(async (directory) => {
+  const { input, prefix } = await fixtureInputs(directory, 'capture-symlink-prefix');
+  const capture = await fixtureCaptureRoot(directory);
+  await rm(join(capture.root, 'libexec/apparent-engine-capture'));
+  await symlink(join(capture.root, 'apparent-engine-capture-launch'), join(capture.root, 'libexec/apparent-engine-capture'));
+  const badInput = { ...input, captureRoot: capture.root, captureManifestSha256: capture.sha256 };
+  await assert.rejects(installLocal(badInput, fixtureDependencies()), /symlink/);
+  await assert.rejects(lstat(prefix), { code: 'ENOENT' });
+
+  const valid = await fixtureCaptureRoot(join(directory, 'valid'));
+  const nextPrefix = join(directory, 'capture-close-prefix');
+  const dependencies = fixtureDependencies({ async captureHandshake() {
+    return { reply: { channel: 'capture', protocolVersion: 2, implementation: 'native', readiness: 'unavailable' }, closeOutcome: 'signal-requested-after-timeout' };
+  } });
+  await assert.rejects(installLocal({ ...input, prefix: nextPrefix, captureRoot: valid.root, captureManifestSha256: valid.sha256 }, dependencies), /handshake or confirmed close rejected/);
+  assert.ok((await lstat(nextPrefix)).isDirectory());
+  await assert.rejects(lstat(join(nextPrefix, 'install-receipt.json')), { code: 'ENOENT' });
+}));
+
+test('Capture/2 source mutation after authenticated inventory fails closed without a receipt', async () => withTemp(async (directory) => {
+  const { input, prefix } = await fixtureInputs(directory, 'capture-mutation-prefix');
+  const capture = await fixtureCaptureRoot(directory);
+  const defaultInstall = fixtureDependencies().installNpm;
+  const dependencies = fixtureDependencies({ installNpm(snapshot, root, home) {
+    defaultInstall(snapshot, root, home);
+    writeFileSync(join(capture.root, 'apparent-engine-capture-launch'), '#!/bin/sh\nexit 7\n');
+  } });
+  await assert.rejects(installLocal({ ...input, captureRoot: capture.root, captureManifestSha256: capture.sha256 }, dependencies), /changed since inventory/);
+  assert.ok((await lstat(prefix)).isDirectory());
+  await assert.rejects(lstat(join(prefix, 'install-receipt.json')), { code: 'ENOENT' });
+}));
 
 test('archive digest mismatch is checked against actual bytes before any prefix mutation', async () => withTemp(async (directory) => {
   const { input, prefix } = await fixtureInputs(directory);

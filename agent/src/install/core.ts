@@ -2,7 +2,7 @@ import { createHash } from 'node:crypto';
 import { chmod, writeFile } from 'node:fs/promises';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { copyInventoryFile, createPrivateDirectory, hashRegularFile, inventory, readRegularFile, sameInventorySnapshot, snapshotRegularFile, validateFreshPrefix } from './filesystem.js';
-import { sameInventory, validateManifest } from './manifest.js';
+import { sameInventory, validateCaptureManifest, validateManifest } from './manifest.js';
 import { makeLauncher } from './launcher.js';
 import type { InstallerDependencies, InstallerInput, InventoryLimits } from './types.js';
 import { DEFAULT_LIMITS, MAX_AGENT_ARCHIVE_BYTES, MAX_MANIFEST_BYTES } from './types.js';
@@ -35,6 +35,7 @@ function validatePackageMetadata(agent: unknown, sdk: unknown) {
   if (!sdk || typeof sdk !== 'object' || Array.isArray(sdk)) fail('installed Engine SDK package metadata is invalid');
   const sdkPackage = sdk as Record<string, any>;
   const mediaExport = sdkPackage.exports?.['./media'];
+  const captureExport = sdkPackage.exports?.['./capture'];
   if (sdkPackage.name !== '@apparent/engine-sdk' || !supportedMediaSdkVersion(sdkPackage.version) ||
       !mediaExport || mediaExport.import !== './dist/src/media.js' || mediaExport.types !== './dist/src/media.d.ts') {
     fail('installed SDK media export/version mismatch');
@@ -44,7 +45,7 @@ function validatePackageMetadata(agent: unknown, sdk: unknown) {
   const sdkSource = agentPackage.dependencies?.['@apparent/engine-sdk'];
   if (sdkSource !== 'file:../engine/sdk' && sdkSource !== `file:vendor/apparent-engine-sdk-${sdkPackage.version}.tgz`)
     fail('installed Agent package metadata mismatch');
-  return { agentPackage, sdkPackage, mediaImport: mediaExport.import.slice(2) };
+  return { agentPackage, sdkPackage, mediaImport: mediaExport.import.slice(2), captureImport: captureExport?.import.slice(2), captureExport };
 }
 
 export async function installLocal(
@@ -54,11 +55,14 @@ export async function installLocal(
 ): Promise<void> {
   const agentPath = canonicalAbsolute(input.agentPath, 'Agent archive path');
   const nativeRoot = canonicalAbsolute(input.nativeRoot, 'native root');
+  const captureRoot = input.captureRoot === undefined ? undefined : canonicalAbsolute(input.captureRoot, 'capture root');
   const prefix = canonicalAbsolute(input.prefix, 'prefix');
   if (process.platform !== 'linux' || process.arch !== 'x64') fail('requires Linux x64');
   const [nodeMajor, nodeMinor] = process.versions.node.split('.').map(Number);
   if (nodeMajor < 22 || (nodeMajor === 22 && nodeMinor < 18)) fail('requires Node.js 22.18+');
-  if (!SHA256.test(input.agentSha256) || !SHA256.test(input.manifestSha256)) fail('trusted SHA-256 values are required');
+  if (!SHA256.test(input.agentSha256) || !SHA256.test(input.manifestSha256) ||
+      ((captureRoot === undefined) !== (input.captureManifestSha256 === undefined)) ||
+      (input.captureManifestSha256 !== undefined && !SHA256.test(input.captureManifestSha256))) fail('trusted SHA-256 values are required');
 
   const initialArchiveHash = await hashRegularFile(agentPath, MAX_AGENT_ARCHIVE_BYTES);
   if (!equalHash(initialArchiveHash, input.agentSha256)) fail('Agent tarball SHA-256 mismatch');
@@ -70,6 +74,17 @@ export async function installLocal(
   const manifest = validateManifest(JSON.parse(rawManifest.toString('utf8')));
   const sourceInventory = await inventory(nativeRoot, limits);
   if (!sameInventory(sourceInventory, manifest.runtimeFiles)) fail('native root inventory does not exactly match manifest');
+  let captureManifest: ReturnType<typeof validateCaptureManifest> | undefined;
+  let captureManifestPath: string | undefined;
+  let captureInventory: Awaited<ReturnType<typeof inventory>> | undefined;
+  if (captureRoot) {
+    captureManifestPath = join(captureRoot, 'manifest.json');
+    const rawCaptureManifest = await readRegularFile(captureManifestPath, MAX_MANIFEST_BYTES);
+    if (!equalHash(createHash('sha256').update(rawCaptureManifest).digest('hex'), input.captureManifestSha256!)) fail('native capture manifest SHA-256 mismatch');
+    captureManifest = validateCaptureManifest(JSON.parse(rawCaptureManifest.toString('utf8')));
+    captureInventory = await inventory(captureRoot, limits);
+    if (!sameInventory(captureInventory, captureManifest.runtimeFiles)) fail('native capture root inventory does not exactly match manifest');
+  }
 
   // Validate every existing ancestor before creating the prefix or any staging file.
   await validateFreshPrefix(prefix);
@@ -94,11 +109,14 @@ export async function installLocal(
     const sdkPackagePath = join(installRoot, 'node_modules/@apparent/agent/node_modules/@apparent/engine-sdk/package.json');
     const agentPackage = JSON.parse((await readRegularFile(agentPackagePath, MAX_MANIFEST_BYTES)).toString('utf8'));
     const sdkPackage = JSON.parse((await readRegularFile(sdkPackagePath, MAX_MANIFEST_BYTES)).toString('utf8'));
-    const { mediaImport, sdkPackage: validatedSdk } = validatePackageMetadata(agentPackage, sdkPackage);
+    const { mediaImport, captureImport, captureExport, sdkPackage: validatedSdk } = validatePackageMetadata(agentPackage, sdkPackage);
+    if (captureRoot && (!captureExport || captureExport.import !== './dist/src/capture.js' || captureExport.types !== './dist/src/capture.d.ts'))
+      fail('installed SDK capture export/version mismatch');
     const cliPath = join(installRoot, 'node_modules/@apparent/agent/dist/cli.js');
     const mediaModule = join(dirname(sdkPackagePath), mediaImport);
     await readRegularFile(cliPath, MAX_MANIFEST_BYTES);
     await readRegularFile(mediaModule, MAX_MANIFEST_BYTES);
+    if (captureRoot && captureImport) await readRegularFile(join(dirname(sdkPackagePath), captureImport), MAX_MANIFEST_BYTES);
     const entry = join(prefix, 'native-media/apparent-engine-frames');
     const runtime = join(prefix, 'runtime');
     const nativeDestination = join(prefix, 'native-media');
@@ -113,10 +131,24 @@ export async function installLocal(
       fail('native source changed during installation');
     }
     if (!sameInventory(await inventory(nativeDestination, limits), sourceInventory)) fail('copied native inventory changed');
+    let captureDestination: string | undefined;
+    if (captureRoot && captureManifest && captureInventory && captureManifestPath && input.captureManifestSha256) {
+      captureDestination = join(prefix, 'native-capture');
+      await createPrivateDirectory(captureDestination);
+      for (const item of captureInventory) await copyInventoryFile(captureRoot, captureDestination, item, limits);
+      const copiedCaptureManifest = join(captureDestination, 'manifest.json');
+      await snapshotRegularFile(captureManifestPath, copiedCaptureManifest, input.captureManifestSha256, MAX_MANIFEST_BYTES);
+      await chmod(copiedCaptureManifest, 0o600);
+      const captureAfterCopy = await inventory(captureRoot, limits);
+      if (!sameInventory(captureAfterCopy, captureManifest.runtimeFiles) || !sameInventorySnapshot(captureInventory, captureAfterCopy)) fail('native capture source changed during installation');
+      if (!sameInventory(await inventory(captureDestination, limits), captureInventory)) fail('copied native capture inventory changed');
+    }
     await createPrivateDirectory(runtime);
 
     const launcherPath = join(prefix, 'apparent-agent');
-    const launcher = makeLauncher(process.execPath, cliPath, entry, runtime);
+    const captureEntry = captureDestination && captureManifest ? join(captureDestination, captureManifest.launch.entry) : undefined;
+    const media2Entry = manifest.capabilities.some((capability) => capability === 'media/2') ? entry : undefined;
+    const launcher = makeLauncher(process.execPath, cliPath, entry, runtime, captureEntry, media2Entry);
     await writeFile(launcherPath, launcher, { mode: PRIVATE_MODE, flag: 'wx' });
     await chmod(launcherPath, PRIVATE_MODE);
     dependencies.smokeCli(cliPath, privateHome, installRoot);
@@ -127,6 +159,14 @@ export async function installLocal(
     }
     if (result.closeOutcome !== 'already-exited' && result.closeOutcome !== 'eof-exited') {
       fail('native worker close was uncertain');
+    }
+    let captureResult: Awaited<ReturnType<NonNullable<InstallerDependencies['captureHandshake']>>> | undefined;
+    if (captureEntry && captureManifest) {
+      if (!dependencies.captureHandshake) fail('Capture/2 handshake dependency is unavailable');
+      captureResult = await dependencies.captureHandshake(captureEntry, runtime, captureManifest.launch.shutdownTimeoutMs);
+      if (captureResult.reply.channel !== 'capture' || captureResult.reply.protocolVersion !== 2 || captureResult.reply.implementation !== 'native' ||
+          (captureResult.reply.readiness !== 'ready' && captureResult.reply.readiness !== 'unavailable') ||
+          !['already-exited', 'eof-exited', 'exit-observed'].includes(captureResult.closeOutcome)) fail('native Capture/2 handshake or confirmed close rejected');
     }
 
     const receipt = {
@@ -143,10 +183,16 @@ export async function installLocal(
       launcher: launcherPath,
       nativeEntry: entry,
       nativeWorker: join(nativeDestination, manifest.launch.worker),
+      captureManifestSha256: input.captureManifestSha256,
+      captureSourceSha: captureManifest?.sourceSha,
+      captureEntry,
+      captureWorker: captureDestination && captureManifest ? join(captureDestination, captureManifest.launch.worker) : undefined,
+      captureReadiness: captureResult?.reply.readiness,
       runtime,
       claims: [
         'local Agent consumer installed',
         'native media/1 handshake and confirmed close passed; no codec claim',
+        ...(captureResult ? [`native Capture/2 handshake and confirmed close passed; readiness=${captureResult.reply.readiness}; no capture started`] : []),
         'does not imply current-main artifact admission or global routing',
       ],
     };

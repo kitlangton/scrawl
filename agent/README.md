@@ -49,18 +49,27 @@ With an explicitly configured native Engine media provider, zoom requests the ex
 `delivery.json` registers Agent with the independent value-stream producer. Its inputs track the Agent owner, including its vendored SDK artifact and lockfile; sibling Engine SDK source, Engine Rust/native implementation and Desktop are not producer inputs. The Linux producer builds/tests/packs and verifies a fresh public API import. This stages a reusable npm artifact; it does not publish to npm or switch the installed app CLI. The package root exports application helpers without running a CLI. Agent's Capture/2 launch supplies the admitted provider's 40-second shutdown bound for native finalization; close remains bounded and an unconfirmed exit is reported as uncertain with the request identity retained.
 
 Agent-only TypeScript, JSON, Markdown and package-control changes run the installed owner suite without legacy Rust compilation. Engine SDK changes also run Agent tests but retain conservative native selection; unknown/native Agent file types, mixed shared changes and unknown history remain conservative. Hooks never install dependencies.
-# Offline local installation with native Linux media
+# Offline local installation with native Linux Engine closures
 
 `apparent-agent-install-local` installs an already-built Agent npm tarball and
 an already-built complete Engine media root into a fresh private Linux x64
 prefix. It performs no download, authentication, build, global npm install or
-OS routing change. The two SHA-256 values must come from a trusted upstream
-admission or receipt; a native manifest hash proves integrity only, not who
+OS routing change. The Agent and media SHA-256 values, and the optional Capture
+manifest SHA-256, must come from a trusted upstream admission or receipt; a
+native manifest hash proves integrity only, not who
 produced it. The installer checks the package hash before npm, validates the
 entire native inventory against its manifest before and after copying, and
 requires the installed Agent 0.1.0 and a stable SDK 0.2.x, 0.3.x or qualified 0.4.x media export.
 It accepts plain patch releases in those lines and stable 0.4.x after media/1 contract qualification; other new minor lines and prereleases are refused.
-The media/1 handshake remains mandatory. An exact dual `media/1` + `media/2`
+The media/1 handshake remains mandatory. An optional `--capture-root` plus
+`--capture-manifest-sha256` pair installs a separately admitted complete
+Capture/2 tree alongside the media closure. Its exact manifest and full
+no-follow inventory are checked before prefix creation and after copying;
+the installed SDK must expose its published Capture API, whose native public
+handshake and confirmed close gate the receipt without starting a capture.
+Capture/2 and media/2 receive the installer's one owner-private persistent
+runtime directory. Readiness is recorded only as returned by the handshake
+and is not implied by successful installation. An exact dual `media/1` + `media/2`
 manifest is retained as part of the full runtime closure, while the launcher
 still uses only media/1. This does not activate media/2 or configure native
 recording. For dual-capability manifests, the installer also accepts the exact
@@ -72,7 +81,9 @@ preserved on dual-capability manifests (`apparent.engine-recovery-peer/1`,
 `media/2`, the fixed recovery-peer argv, `startsFreshCapture: false` and
 `onInputEof: retain-admitted-finite-work`). It is descriptive only: this
 installer still launches and handshakes over media/1 and never starts a
-recovery peer. Node 22.18+ and an existing npm are required.
+recovery peer. The wrapper sets explicit Capture/2 and media/2 executable
+paths when those closures are present; Agent's default protocol and routing
+remain unchanged. Node 22.18+ and an existing npm are required.
 
 ```sh
 node /absolute/path/to/extracted-agent-package/dist/install-local.js \
@@ -80,6 +91,8 @@ node /absolute/path/to/extracted-agent-package/dist/install-local.js \
   --agent-sha256 c9e87015dee2ff2c35dcd72bc4627733e21b427e468318888ed29beafca4f3aa \
   --native-root /absolute/path/to/native-payload \
   --manifest-sha256 98ef787ed53c430e074484de806bd4de4b08893aba21fb1c34ab36f238a6da20 \
+  --capture-root /absolute/path/to/capture-payload \
+  --capture-manifest-sha256 '<trusted-capture-manifest-sha256>' \
   --prefix /absolute/fresh/private-prefix
 /absolute/fresh/private-prefix/apparent-agent --version
 /absolute/fresh/private-prefix/apparent-agent frames /absolute/capture.apparent --from 0 --to 2
@@ -89,9 +102,13 @@ The example digests identify the locally retained 463f0053908 artifact pair;
 they do not bypass the normal current-tree admission/reuse gate. The launcher
 keeps both native entry and worker in the copied tree, supplies only the
 explicit media executable and private runtime paths, and invokes the installed
-Agent CLI. Install success requires a native media/1 handshake and confirmed
-worker exit. This is not codec proof. Native media decode is available here
-through this installer only for Linux x64; capture, export and inference remain unavailable in this install path.
+Agent CLI. Install success requires native media/1 and, when a Capture/2
+closure is provided, native Capture/2 handshakes with confirmed worker exits.
+These are protocol and close checks, not codec or capture-readiness proof.
+Native media decode is available here through this installer only for Linux
+x64; Capture/2 is installed for existing explicit commands and does not add
+discovery, capture, Saved, export or inference guarantees. Without the optional
+closure, the previous media-only install form remains supported.
 Connect is deferred. Standalone Node CLI inspection remains portable without
 the native tree. A failure retains a clearly named private partial prefix and
 never emits a success receipt. Paths are private to cooperating same-UID
