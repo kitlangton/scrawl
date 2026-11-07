@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import test from "node:test";
-import { CaptureClient, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
+import { CaptureClient, capture2MaterialsRoot, launchCaptureEngine, type CaptureStatus } from "../sdk/src/capture.ts";
 import { validateMaterialsDocument } from "../sdk/src/capture-documents/index.ts";
 import { Media2Client, Media2RpcError, Media2TransportError, launchMedia2Worker, type Media2JobInput } from "../sdk/src/media2/index.ts";
 import { launchCaptureRecoveryPeer } from "../sdk/src/recovery/index.ts";
@@ -378,7 +378,9 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     const ready = await until(client, { captureId, ownerToken }, ["materials-ready"]);
     assert.equal(ready.state, "materials-ready");
     const manifest = ready.materials!;
-    const payloadPath = join(manifest.root, manifest.payloadFile.relativePath);
+    const trustedMaterialsRoot = capture2MaterialsRoot(runtime, captureId);
+    assert.equal(manifest.root, trustedMaterialsRoot, "native materials root matches the independently configured runtime and admitted capture");
+    const payloadPath = join(trustedMaterialsRoot, manifest.payloadFile.relativePath);
     const payloadBytes = readFileSync(payloadPath);
     const payloadStat = statSync(payloadPath, { bigint: true });
     assert.equal(createHash("sha256").update(payloadBytes).digest("hex"), manifest.payloadFile.sha256);
@@ -456,7 +458,9 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     }
     await client.stop({ captureId: second.captureId, ownerToken: second.ownerToken });
     const areaReady = await until(client, { captureId: second.captureId, ownerToken: second.ownerToken }, ["materials-ready"]);
-    const areaDocument = validateMaterialsDocument(areaReady.materials!, readFileSync(join(areaReady.materials!.root, areaReady.materials!.payloadFile.relativePath)));
+    const areaRoot = capture2MaterialsRoot(runtime, second.captureId);
+    assert.equal(areaReady.materials!.root, areaRoot);
+    const areaDocument = validateMaterialsDocument(areaReady.materials!, readFileSync(join(areaRoot, areaReady.materials!.payloadFile.relativePath)));
     assert.equal(areaDocument.payload.confirmedSource.rectangle.width, 683, "confirmed source keeps the actual physical area");
     assert.equal(areaDocument.payload.video.width, 682, "manifest reports the actual even encoded width");
     assert.equal(areaDocument.payload.video.height, 384);
