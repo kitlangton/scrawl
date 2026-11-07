@@ -28,7 +28,8 @@ pub(super) struct Source {
     pub(super) backend: Backend,
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "kebab-case")]
 pub(super) enum Backend {
     X11,
     HyprlandPortal,
@@ -151,15 +152,32 @@ fn recording_start(
             ],
         },
         Backend::HyprlandPortal => {
-            let (session, _) = apparent_capture_engine::linux::portal::screencast(
+            let mut control_error = None;
+            let (session, _) = apparent_capture_engine::linux::portal::screencast_with_control(
                 false,
                 None,
                 &shared.stop,
                 || {},
+                || {
+                    if let Err(code) = sync_control(shared) {
+                        control_error = Some(code);
+                        return Err(anyhow::anyhow!(code));
+                    }
+                    // Owning EOF can cancel a starting capture locally. The
+                    // portal wait uses the same stop flag as durable controls.
+                    if shared.cancel.load(Ordering::Acquire) {
+                        shared.stop.store(true, Ordering::Release);
+                    }
+                    Ok(())
+                },
             )
             .map_err(|_| {
-                if shared.stop.load(Ordering::Acquire) || shared.cancel.load(Ordering::Acquire) {
+                if let Some(code) = control_error {
+                    code
+                } else if shared.cancel.load(Ordering::Acquire) {
                     "cancelled"
+                } else if shared.stop.load(Ordering::Acquire) {
+                    "invalid_materials"
                 } else {
                     "unavailable"
                 }
@@ -197,7 +215,7 @@ fn recording_start(
         }
         if shared.stop.load(Ordering::Acquire) && recorder.first_frame_ms().is_none() {
             recorder.stop();
-            return Err("cancelled");
+            return Err("invalid_materials");
         }
         if Instant::now() >= deadline {
             recorder.stop();

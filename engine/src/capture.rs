@@ -37,6 +37,8 @@ struct Journal {
     capture_id: String,
     owner_token: String,
     request: Value,
+    #[serde(default)]
+    capture_backend: Option<linux::Backend>,
     state: String,
     error: Option<String>,
     materials: Option<Value>,
@@ -569,10 +571,10 @@ fn refresh_catalog(generation: &mut String, sources: &mut Vec<Source>, ready: &m
     }
 }
 
-fn portal_start_can_be_stopped(request: &Value, sources: &[Source]) -> bool {
-    sources.iter().any(|source| {
-        source.backend == linux::Backend::HyprlandPortal && source.value == request["source"]
-    })
+fn portal_start_can_be_stopped(journal: &Journal) -> bool {
+    // Cold recovery does not probe the current source catalogue. Retain the
+    // backend of the authenticated original admission instead.
+    journal.capture_backend == Some(linux::Backend::HyprlandPortal)
 }
 
 fn process_request(
@@ -750,6 +752,7 @@ fn process_request(
                 capture_id: capture.into(),
                 owner_token: owner.into(),
                 request: request_binding(&req),
+                capture_backend: Some(source.backend),
                 state: "starting".into(),
                 error: None,
                 materials: None,
@@ -908,7 +911,7 @@ fn process_request(
                     active_status(&shared)
                 }
                 "stop" => {
-                    if j.state == "starting" && !portal_start_can_be_stopped(&j.request, sources) {
+                    if j.state == "starting" && !portal_start_can_be_stopped(&j) {
                         return Err("busy");
                     }
                     if j.state == "starting" || j.state == "recording" {
@@ -1507,6 +1510,7 @@ mod unsealed_cleanup_tests {
             capture_id: capture_id.clone(),
             owner_token: "a".repeat(64),
             request: json!({"bundleId":"cleanup-test.apparent"}),
+            capture_backend: None,
             state: "recording".into(),
             error: None,
             materials: None,
@@ -1652,26 +1656,18 @@ mod publication_capability_tests {
     }
 
     #[test]
-    fn only_the_exact_portal_start_can_be_stopped_while_source_selection_waits() {
-        let portal = super::Source {
-            value: serde_json::json!({"id":"display:4","kind":"display"}),
-            x: 0,
-            y: 0,
-            width: 1920,
-            height: 1080,
-            backend: super::linux::Backend::HyprlandPortal,
-        };
-        let x11 = super::Source {
-            backend: super::linux::Backend::X11,
-            ..portal.clone()
-        };
-        let request = serde_json::json!({"source":{"id":"display:4","kind":"display"}});
-        assert!(super::portal_start_can_be_stopped(
-            &request,
-            &[portal.clone()]
-        ));
-        assert!(!super::portal_start_can_be_stopped(&request, &[x11]));
-        let stale = serde_json::json!({"source":{"id":"display:5","kind":"display"}});
-        assert!(!super::portal_start_can_be_stopped(&stale, &[portal]));
+    fn pending_portal_stop_uses_durable_backend_without_source_discovery() {
+        let legacy = serde_json::json!({"capture_id":"capture","owner_token":"owner",
+            "request":{},"state":"starting","root":"/not-opened"});
+        let mut journal: super::Journal = serde_json::from_value(legacy.clone()).unwrap();
+        assert!(!super::portal_start_can_be_stopped(&journal));
+        journal.capture_backend = Some(super::linux::Backend::X11);
+        assert!(!super::portal_start_can_be_stopped(&journal));
+        journal.capture_backend = Some(super::linux::Backend::HyprlandPortal);
+        let reopened = serde_json::from_slice(&serde_json::to_vec(&journal).unwrap()).unwrap();
+        assert!(super::portal_start_can_be_stopped(&reopened));
+        let mut invalid = legacy;
+        invalid["capture_backend"] = serde_json::json!("unrecognized-backend");
+        assert!(serde_json::from_value::<super::Journal>(invalid).is_err());
     }
 }
