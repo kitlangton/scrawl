@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { chmod, lstat, mkdtemp, readFile, readdir, realpath, rm, writeFile, type FileHandle } from "node:fs/promises";
+import { chmod, lstat, mkdtemp, readFile, readdir, readlink, realpath, rm, writeFile, link, type FileHandle } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { beginLoginState, type LoginResources } from "../../src/account/login-state.ts";
@@ -14,7 +14,7 @@ async function create() {
   const root = await mkdtemp(path.join(await realpath(os.tmpdir()), "connect-login-state-")); await chmod(root, 0o700);
   const file = (name: string) => path.join(root, name), put = (name: string, value: unknown) => writeFile(file(name), JSON.stringify(value), { mode: 0o600 });
   const held = new Set<string>(), state = { dispatches: 0, result: "replaced" as "replaced" | "refused" | "destination_changed" | "publication_uncertain",
-    releaseFailure: false, queueStarted: undefined as undefined | (() => void), queueContinue: undefined as undefined | (() => void) };
+    releaseFailure: false, assertionFailureAt: 0, assertionChecks: 0, queueStarted: undefined as undefined | (() => void), queueContinue: undefined as undefined | (() => void) };
   const resources: LoginResources = {
     async checkAcl(h) { try { return { state: "accepted" as const }; } finally { await h.close(); } },
     async lock(h) {
@@ -23,7 +23,7 @@ async function create() {
       assert.ok(name); state.queueStarted?.(); if (state.queueContinue) await new Promise<void>(resolve => { state.queueContinue = () => { state.queueContinue = undefined; resolve(); }; });
       assert.equal(held.has(name), false); held.add(name);
       return { state: "acquired" as const, lease: { signal: new AbortController().signal,
-        assertHeld() { assert.ok(held.has(name)); }, async assertCurrent() { this.assertHeld(); }, async release() { held.delete(name); if (state.releaseFailure) throw Error("release"); } } };
+        assertHeld() { assert.ok(held.has(name)); if (++state.assertionChecks === state.assertionFailureAt) throw new Error("fixture fence lost"); }, async assertCurrent() { this.assertHeld(); }, async release() { held.delete(name); if (state.releaseFailure) throw Error("release"); } } };
     },
     async replaceFile(parent, source, destination, expected) {
       try {
@@ -72,7 +72,7 @@ test("pending intent refuses before dispatch; pending intent appearing during qu
 test("cancellation changed while waiting and pre-aborted signal do not dispatch", () => fixture(async f => {
   await f.put("cancellation", "one");
   let started!: () => void; const waiting = new Promise<void>(r => { started = r; }); f.state.queueStarted = started;
-  const operation = beginLoginState(f.root, context(), f.resources); await waiting; await f.put("cancellation", "two");
+  f.state.queueContinue = () => {}; const operation = beginLoginState(f.root, context(), f.resources); await waiting; await f.put("cancellation", "two");
   f.state.queueContinue?.(); assert.equal((await operation).state, "refused"); assert.equal(f.state.dispatches, 0);
   const controller = new AbortController(); controller.abort();
   assert.deepEqual(await beginLoginState(f.root, context(), f.resources, { signal: controller.signal }), { state: "refused", reason: "cancelled" });
@@ -97,4 +97,39 @@ test("inherited provider methods are bound to the provider instance", () => fixt
   const ports = new Ports();
   const result = await beginLoginState(f.root, context(), ports as LoginResources);
   assert.equal(result.state, "begun"); assert.ok(ports.count > 0);
+}));
+
+
+test("new login snapshots the current marker after acquiring the queue", () => fixture(async f => {
+  await f.put("read.login", "before-wait");
+  let started!: () => void; const waiting = new Promise<void>(resolve => { started = resolve; });
+  f.state.queueStarted = started; f.state.queueContinue = () => {};
+  const pending = beginLoginState(f.root, context(), f.resources);
+  await waiting; await f.put("read.login", "other-login-completed-while-waiting"); f.state.queueContinue?.();
+  assert.equal((await pending).state, "begun");
+}));
+
+test("safe marker data hardlinks are preserved when the named marker is replaced", () => fixture(async f => {
+  await f.put("read.login", "old-login"); await link(f.file("read.login"), f.file("marker.alias"));
+  assert.equal((await beginLoginState(f.root, context(), f.resources)).state, "begun");
+  assert.equal(JSON.parse(await readFile(f.file("marker.alias"), "utf8")), "old-login");
+}));
+
+test("invalid resource bindings do not expose private provider errors", () => fixture(async f => {
+  const broken = { ...f.resources, get checkAcl(): LoginResources["checkAcl"] { throw new Error("private provider /secret/path"); } };
+  assert.deepEqual(await beginLoginState(f.root, context(), broken), { state: "refused", reason: "state_unavailable" });
+}));
+
+test("all failed lease checkpoints release transferred directory descriptors", { skip: process.platform !== "linux" }, () => fixture(async f => {
+  const openRoots = async () => {
+    const names = await readdir("/proc/self/fd");
+    const targets = await Promise.all(names.map(name => readlink(`/proc/self/fd/${name}`).catch(() => "")));
+    return targets.filter(target => target === f.root).length;
+  };
+  for (let checkpoint = 1; checkpoint <= 64; checkpoint++) {
+    f.state.assertionFailureAt = checkpoint; f.state.assertionChecks = 0;
+    await beginLoginState(f.root, context(), f.resources);
+    assert.equal(await openRoots(), 0, `checkpoint ${checkpoint} must consume all root descriptors`);
+    await rm(f.file("read.login"), { force: true });
+  }
 }));
