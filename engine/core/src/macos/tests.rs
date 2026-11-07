@@ -1,4 +1,7 @@
-use super::recording::{PixelBufferEvidence, has_usable_capture_sample};
+use super::recording::{
+    CheckedStopOutcome, PixelBufferEvidence, RecordingFinalization, StopOperation,
+    has_usable_capture_sample, recording_finalization,
+};
 use super::*;
 use screencapturekit::cm::SCFrameStatus;
 use std::fs;
@@ -295,6 +298,64 @@ fn first_frame_readiness_requires_complete_nonempty_pixel_data() {
         })
     ));
 }
+
+#[test]
+fn checked_stop_requires_successful_native_operations_and_finish_callback() {
+    let successful = CheckedStopOutcome {
+        stop_capture: StopOperation::Succeeded,
+        remove_recording_output: StopOperation::Succeeded,
+        recording_finalization: RecordingFinalization::Finished,
+    };
+    assert!(successful.is_finalized());
+
+    for outcome in [
+        CheckedStopOutcome {
+            recording_finalization: RecordingFinalization::Pending,
+            ..successful.clone()
+        },
+        CheckedStopOutcome {
+            recording_finalization: RecordingFinalization::Failed,
+            ..successful.clone()
+        },
+        CheckedStopOutcome {
+            stop_capture: StopOperation::Failed("stop failed".into()),
+            ..successful.clone()
+        },
+        CheckedStopOutcome {
+            remove_recording_output: StopOperation::Failed("remove failed".into()),
+            ..successful.clone()
+        },
+        CheckedStopOutcome {
+            stop_capture: StopOperation::NotAttempted,
+            ..successful.clone()
+        },
+        CheckedStopOutcome {
+            remove_recording_output: StopOperation::NotAttempted,
+            ..successful.clone()
+        },
+    ] {
+        assert!(
+            !outcome.is_finalized(),
+            "unexpected finalization: {outcome:?}"
+        );
+    }
+}
+
+#[test]
+fn recording_failure_dominates_finish_and_untracked_output_stays_unproven() {
+    assert_eq!(
+        recording_finalization(true, true, true),
+        RecordingFinalization::Failed
+    );
+    assert_eq!(
+        recording_finalization(true, false, false),
+        RecordingFinalization::Pending
+    );
+    assert_eq!(
+        recording_finalization(false, true, false),
+        RecordingFinalization::NotApplicable
+    );
+}
 fn admitted_synthetic_display() -> u32 {
     assert_eq!(
         std::env::var("APPARENT_TEST_SCK_SYNTHETIC_CAPTURE_ACK").as_deref(),
@@ -515,13 +576,19 @@ fn run_sck_output_observing(
 }
 
 fn finish_sck_output(mut stream: CaptureStream) {
-    stream.stop();
+    let stopped = stream.stop_checked();
+    assert_eq!(stopped.stop_capture, StopOperation::Succeeded);
+    assert_eq!(stopped.remove_recording_output, StopOperation::Succeeded);
     let deadline = Instant::now() + Duration::from_secs(10);
-    while !stream.recording_finished() && !stream.recording_failed() {
+    while stream.recording_finalization() == RecordingFinalization::Pending {
         assert!(Instant::now() < deadline, "SCK stop did not finish output");
         thread::sleep(Duration::from_millis(20));
     }
-    assert!(stream.recording_finished(), "SCK output did not finalize");
+    let outcome = stream.checked_stop_outcome();
+    assert!(
+        outcome.is_finalized(),
+        "SCK checked stop did not prove output finalization: {outcome:?}"
+    );
 }
 /// Exercises the Store-backed output guard with an absent leaf. This remains an ignored
 /// synthetic-display diagnostic; it does not make SCK output available to capture/2.
