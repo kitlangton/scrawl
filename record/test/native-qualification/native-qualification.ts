@@ -1,4 +1,5 @@
 import { spawn, type ChildProcess } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { chmod, mkdtemp, rm, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import path from 'node:path';
@@ -92,69 +93,88 @@ export async function reconcileAndCancel(mappings: any, client: any, deadline: n
   }
 }
 
-export interface QualificationClearance {
-  scope: 'record-coordinator';
-  admission: 'closed';
-  localDrain: 'complete';
-  runtimeClearance: 'clear';
-  disposed: true;
-  owningClientsClosed: true;
-}
+export const QUALIFICATION_IPC_SCHEMA = 'apparent.record-native-qualification/1';
 
 /** A native run cannot start until the supervisor can request and observe local owner drain. */
 export function assertQualificationShutdownProtocol(available: boolean): void {
-  if (!available) throw new Error('native qualification launch refused: supervisor has no child-to-parent coordinator shutdown and clearance protocol; SDK 0.4.4 cannot release an unresolved owning peer safely');
-}
-
-function hasPositiveClearance(value: unknown): value is QualificationClearance {
-  if (!value || typeof value !== 'object') return false;
-  const report = value as Partial<QualificationClearance>;
-  return report.scope === 'record-coordinator' && report.admission === 'closed' && report.localDrain === 'complete' &&
-    report.runtimeClearance === 'clear' && report.disposed === true && report.owningClientsClosed === true;
-}
-
-/** Signal a process group only after the owner has drained and released its local SDK handles. */
-export async function terminateQualificationGroupAfterClearance(pid: number, clearance: unknown, graceMs = 500): Promise<void> {
-  if (!hasPositiveClearance(clearance)) throw new Error('qualification process group retained: positive coordinator clearance and client close are required');
-  try { process.kill(-pid, 'SIGTERM'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
-  const deadline = Date.now() + graceMs;
-  while (Date.now() < deadline) {
-    try { process.kill(-pid, 0); }
-    catch (error) { if ((error as NodeJS.ErrnoException).code === 'ESRCH') return; throw error; }
-    await new Promise(resolve => setTimeout(resolve, 20));
-  }
-  try { process.kill(-pid, 'SIGKILL'); }
-  catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ESRCH') throw error; }
+  if (!available) throw new Error('native qualification launch refused: the exact SDK 0.4.5 normal-close local-resource contract is not yet admitted for the owning capture client after explicit finish intent and borrower drain');
 }
 
 /** The native supervisor never kills an SDK-owning group without positive local clearance. */
-export async function runQualification(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number }): Promise<{ stdout: string; stderr: string }> {
-  const child = spawn(command, args, { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
-  let stdout = '', stderr = '', failure: Error | undefined;
-  const outputLimit = 8 * 1024 * 1024;
+export async function runQualification(command: string, args: string[], options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number; shutdownReportTimeout?: number; outputLimitBytes?: number }): Promise<{ stdout: string; stderr: string; shutdownReport?: unknown }> {
+  const child = spawn(command, args, { cwd: options.cwd, env: options.env, detached: true, stdio: ['ignore', 'pipe', 'pipe', 'ipc'] });
+  let stdout = '', stderr = '', capturedBytes = 0, failure: Error | undefined, childExited = false, childExitCode: number | null = null, childExitSignal: NodeJS.Signals | null = null, abortPromise: Promise<void> | undefined;
+  const outputLimit = options.outputLimitBytes ?? 8 * 1024 * 1024;
   let rejectAbort!: (error: Error) => void;
-  const abort = (error: Error) => {
-    failure ??= error;
-    if (child.pid) Object.assign(error, { ownedProcessGroupPid: child.pid, processGroupRetained: true });
-    rejectAbort(error);
+  let requestedId: string | undefined, shutdownReport: unknown, resolveReport!: (value: unknown) => void;
+  const reportPromise = new Promise<unknown>(resolve => { resolveReport = resolve; });
+  child.on('message', message => {
+    if (!message || typeof message !== 'object' || Array.isArray(message)) return;
+    const value = message as Record<string, unknown>;
+    if (value.schema !== QUALIFICATION_IPC_SCHEMA || value.kind !== 'shutdown-report' || value.requestId !== requestedId || !('report' in value)) return;
+    shutdownReport = value.report;
+    resolveReport(shutdownReport);
+  });
+  const requestShutdown = async (reason: 'deadline' | 'output-limit'): Promise<unknown> => {
+    requestedId = randomUUID();
+    if (!child.connected) return undefined;
+    try {
+      child.send({ schema: QUALIFICATION_IPC_SCHEMA, kind: 'shutdown-request', requestId: requestedId, reason }, error => {
+        if (error && failure) Object.assign(failure, { shutdownRequestError: error.message });
+      });
+    } catch (error) {
+      Object.assign(failure!, { shutdownRequestError: error instanceof Error ? error.message : String(error) });
+      return undefined;
+    }
+    return new Promise(resolve => {
+      const timer = setTimeout(() => resolve(undefined), options.shutdownReportTimeout ?? 3000);
+      void reportPromise.then(value => { clearTimeout(timer); resolve(value); });
+    });
+  };
+  const abort = (error: Error, reason: 'deadline' | 'output-limit') => {
+    if (failure) return;
+    failure = error;
+    abortPromise = (async () => {
+      const report = await requestShutdown(reason);
+      Object.assign(error, {
+        shutdownRequestId: requestedId,
+        shutdownReport: report ?? null,
+        ownedProcessGroupPid: child.pid,
+        processGroupRetained: !childExited,
+        exitCode: childExitCode,
+        signal: childExitSignal,
+        stdout,
+        stderr,
+      });
+      rejectAbort(error);
+    })();
   };
   const aborted = new Promise<never>((_, reject) => { rejectAbort = reject; });
-  const timer = setTimeout(() => abort(new Error('native qualification deadline exceeded')), options.timeout);
+  const timer = setTimeout(() => abort(new Error('native qualification deadline exceeded'), 'deadline'), options.timeout);
   try {
     await Promise.race([new Promise<void>((resolve, reject) => {
       const collect = (current: string, value: string, assign: (next: string) => void) => {
         if (failure) return;
-        const remaining = outputLimit - current.length;
-        assign(current + value.slice(0, remaining));
-        if (value.length > remaining) abort(new Error('qualification output limit'));
+        const bytes = Buffer.from(value);
+        const remaining = Math.max(0, outputLimit - capturedBytes);
+        capturedBytes += Math.min(remaining, bytes.length);
+        assign(current + bytes.subarray(0, remaining).toString('utf8'));
+        if (bytes.length > remaining) abort(new Error('qualification output limit'), 'output-limit');
       };
       child.stdout.setEncoding('utf8').on('data', value => collect(stdout, value, next => { stdout = next; }));
       child.stderr.setEncoding('utf8').on('data', value => collect(stderr, value, next => { stderr = next; }));
       child.once('error', reject);
-      child.once('close', code => failure ? reject(new Error(`${failure.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`)) : code === 0 ? resolve() : reject(new Error(`native qualification failed (${code}):\nstdout:\n${stdout}\nstderr:\n${stderr}`)));
+      child.once('close', (code, signal) => {
+        childExited = true;
+        childExitCode = code;
+        childExitSignal = signal;
+        if (failure) {
+          if (!abortPromise) reject(Object.assign(new Error(`${failure.message}\nstdout:\n${stdout}\nstderr:\n${stderr}`), { exitCode: code, signal, shutdownReport }));
+        } else if (code === 0) resolve();
+        else reject(Object.assign(new Error(`native qualification failed (${code ?? signal}):\nstdout:\n${stdout}\nstderr:\n${stderr}`), { exitCode: code, signal, shutdownReport }));
+      });
     }), aborted]);
-    return { stdout, stderr };
+    return { stdout, stderr, ...(shutdownReport === undefined ? {} : { shutdownReport }) };
   } finally {
     clearTimeout(timer);
   }
