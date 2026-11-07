@@ -15,13 +15,14 @@ import {
   validateCaptureRequest,
 } from "../src/capture.ts";
 import type {
+  MaterialsDocument,
   CaptureRequest,
   CaptureResponse,
   CaptureTransport,
 } from "../src/capture.ts";
 import { ChildProcessCaptureTransport } from "../src/capture.ts";
 import { ReferenceCapturePeer } from "../src/capture-testing.ts";
-import { validateInteractionFacts } from "../src/capture-documents/facts.ts";
+import { validateFactFile, validateInteractionFacts } from "../src/capture-documents/facts.ts";
 
 // Scripted wire claims exercise SDK validation only; they are not a native peer
 // or capture/readiness evidence and are never exposed by the testing export.
@@ -355,4 +356,27 @@ test("a Saved start replay must name the originally requested bundle", async () 
     if (Object.keys(changed).length) await assert.rejects(client.start(start), /original bundle identity/);
     else assert.equal((await client.start(start)).state, "saved");
   }
+});
+
+// The fixture is emitted by the actual Rust owner/journal/seal test. No native
+// capture is simulated and a missing executable proof is an explicit skip.
+test("Rust original ink seal round-trips through the public SDK reader", { skip: !process.env.APPARENT_TEST_INK_READER_FIXTURE }, async () => {
+  const fixture = JSON.parse(await readFile(process.env.APPARENT_TEST_INK_READER_FIXTURE!, "utf8"));
+  const bytes = Buffer.from(fixture.bytes, "utf8");
+  const fact = JSON.parse(fixture.bytes);
+  const materials = {
+    payload: {
+      identity: fact.identity,
+      clock: { durationMs: 100 },
+      files: [fixture.seal],
+      collection: { acceptedStrokes: "collected" },
+      facts: { acceptedStrokes: { file: fixture.seal.relativePath, schema: fact.schema } },
+    },
+  } as unknown as MaterialsDocument;
+  const result = validateFactFile(fixture.seal, bytes, materials, "acceptedStrokes");
+  assert.deepEqual(result, fact);
+  assert.equal(fact.strokes.length, 1);
+  assert.deepEqual(fact.strokes[0].rgb, [12, 34, 56]);
+  const tampered = Buffer.from(bytes); tampered[tampered.length - 2] ^= 1;
+  assert.throws(() => validateFactFile(fixture.seal, tampered, materials, "acceptedStrokes"));
 });

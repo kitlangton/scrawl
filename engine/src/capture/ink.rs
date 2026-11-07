@@ -1,72 +1,626 @@
-//! Strict accepted-history mapper for the agreed privileged NativeInkSourcePort v1.
-//! Values entering this module are still not OS-attested; the caller must authenticate
-//! the capture owner and privileged source port before constructing a Registration.
+//! Owner-authenticated trusted-native-observer accepted history. This is not OS
+//! attestation: the privileged host joins its native producer before forwarding.
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
-use sha2::{Digest, Sha256};
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
-pub const MAX_POINTS_PER_BATCH: usize = 256;
-pub const MAX_POINTS_PER_GESTURE: usize = 2400;
-pub const MAX_FACT_BYTES: usize = 4 * 1024 * 1024;
-pub const MAX_SURFACES: usize = 8;
-pub const SCALE: f64 = 10_000.0;
-
-#[derive(Clone, Debug)]
+type Result<T> = std::result::Result<T, &'static str>;
+pub const GRACE_NS: u64 = 2_000_000_000;
+const MAX_BYTES: usize = 4 * 1024 * 1024;
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+enum Phase {
+    Collecting,
+    Complete,
+    Unavailable,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Registration {
-    pub token: String, pub boot_id: String, pub admission_ns: u64, pub source: Value,
-    pub surfaces: BTreeMap<String, Surface>, pub next_sequence: u64,
-    pub unavailable: bool, pub completed: bool, pub strokes: Vec<Value>,
-    digests: HashMap<u64, String>, ids: HashSet<String>, active: Option<Gesture>, fact_bytes: usize,
+    pub revision: u64,
+    registration_id: String,
+    token: String,
+    observation: Value,
+    admission_ns: u64,
+    phase: Phase,
+    surfaces: BTreeMap<String, Surface>,
+    current: BTreeMap<String, String>,
+    digests: Vec<String>,
+    ids: HashSet<String>,
+    active: Option<Gesture>,
+    strokes: Vec<Value>,
+    total_points: usize,
+    last_ns: u64,
+    native_revision: u64,
+    finish: Option<Value>,
 }
-#[derive(Clone, Debug)]
-pub struct Surface { pub id:String, pub transform:String, pub incarnation:String, pub target:String, pub x:f64,pub y:f64,pub width:f64,pub height:f64 }
-#[derive(Clone, Debug)]
-struct Gesture { id:String, surface:String, transform:String, start:u64, last:u64, rgb:Option<Value>, points:Vec<Value> }
-
-fn uint(v:&Value)->Option<u64>{let s=v.as_str()?;if s.is_empty()||(s.len()>1&&s.starts_with('0'))||!s.bytes().all(|b|b.is_ascii_digit()){return None}s.parse().ok()}
-fn finite(v:&Value)->Option<f64>{let n=v.as_f64()?; n.is_finite().then_some(n)}
-fn stroke_id(v:&Value)->bool{v.as_str().is_some_and(|s|s.len()==32&&s.bytes().all(|b|b.is_ascii_digit()||(b'a'..=b'f').contains(&b)))}
-fn valid_id(v:&Value)->bool{v.as_str().is_some_and(|s|!s.is_empty()&&s.len()<=128&&s.bytes().all(|b|b.is_ascii_alphanumeric()||b"-_".contains(&b)))}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Surface {
+    value: Value,
+    x: f32,
+    y: f32,
+    width: u32,
+    height: u32,
+}
+#[derive(Clone, Debug, Serialize, Deserialize)]
+struct Gesture {
+    id: String,
+    surface: String,
+    start: u64,
+    last: u64,
+    rgb: Option<[u8; 3]>,
+    points: Vec<i32>,
+}
+fn exact(v: &Value, keys: &[&str]) -> Result<()> {
+    let o = v.as_object().ok_or("malformed_request")?;
+    if o.len() != keys.len() || keys.iter().any(|k| !o.contains_key(*k)) {
+        return Err("malformed_request");
+    }
+    Ok(())
+}
+fn text<'a>(v: &'a Value) -> Result<&'a str> {
+    v.as_str()
+        .filter(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control))
+        .ok_or("malformed_request")
+}
+fn number(v: &Value) -> Result<f64> {
+    v.as_f64()
+        .filter(|n| n.is_finite())
+        .ok_or("malformed_request")
+}
+fn safe(v: &Value) -> Result<u64> {
+    v.as_u64()
+        .filter(|n| *n <= 9_007_199_254_740_991)
+        .ok_or("malformed_request")
+}
+pub fn ns(v: &Value) -> Result<u64> {
+    let s = v.as_str().ok_or("malformed_request")?;
+    if s.is_empty() || (s.len() > 1 && s.starts_with('0')) || !s.bytes().all(|b| b.is_ascii_digit())
+    {
+        return Err("malformed_request");
+    }
+    s.parse().map_err(|_| "malformed_request")
+}
+fn ident(v: &Value) -> Result<&str> {
+    super::id(v).ok_or("malformed_request")
+}
+fn rectangle(v: &Value, scale: bool) -> Result<()> {
+    exact(
+        v,
+        if scale {
+            &["x", "y", "width", "height", "scale"]
+        } else {
+            &["x", "y", "width", "height"]
+        },
+    )?;
+    for k in ["x", "y", "width", "height"] {
+        number(&v[k])?;
+    }
+    if number(&v["width"])? <= 0.0 || number(&v["height"])? <= 0.0 || (scale && v["scale"] != 1) {
+        return Err("source_changed");
+    }
+    Ok(())
+}
+fn key(surface: &Value) -> Result<String> {
+    Ok(format!(
+        "{}\0{}",
+        text(&surface["surfaceId"])?,
+        text(&surface["transformId"])?
+    ))
+}
+fn parse_surface(v: &Value, source: &Value) -> Result<Surface> {
+    exact(
+        v,
+        &[
+            "surfaceId",
+            "transformId",
+            "nativeIncarnation",
+            "target",
+            "pointSpace",
+            "contentRectangle",
+            "plane",
+        ],
+    )?;
+    for k in ["surfaceId", "transformId", "nativeIncarnation"] {
+        text(&v[k])?;
+    }
+    rectangle(&v["contentRectangle"], false)?;
+    exact(&v["plane"], &["width", "height"])?;
+    let w = u32::try_from(safe(&v["plane"]["width"])?).map_err(|_| "source_changed")?;
+    let h = u32::try_from(safe(&v["plane"]["height"])?).map_err(|_| "source_changed")?;
+    if w == 0 || h == 0 {
+        return Err("source_changed");
+    }
+    let (x, y) = match v["target"].as_str() {
+        Some("capture-rectangle") => {
+            let b = &source["bounds"];
+            if v["pointSpace"] != "desktop-physical"
+                || v["contentRectangle"]
+                    != json!({"x":b["x"],"y":b["y"],"width":b["width"],"height":b["height"]})
+                || f64::from(w) != number(&b["width"])?
+                || f64::from(h) != number(&b["height"])?
+            {
+                return Err("source_changed");
+            }
+            (number(&b["x"])? as f32, number(&b["y"])? as f32)
+        }
+        // A resizable Board viewport is NOT its logical paper plane. Coordinates
+        // are already paper-local; movement/resize changes the transform only.
+        Some("whiteboard-canvas")
+            if v["pointSpace"] == "paper-logical" && w == 1600 && h == 1100 =>
+        {
+            (0.0, 0.0)
+        }
+        _ => return Err("source_changed"),
+    };
+    Ok(Surface {
+        value: v.clone(),
+        x,
+        y,
+        width: w,
+        height: h,
+    })
+}
+pub fn limits() -> Value {
+    json!({"maxWireBytes":65536,"maxBatchJsonBytes":16384,"maxPointsPerBatch":256,"maxPointsPerGesture":2400,"maxBatches":4096,"maxSurfaces":8,"maxGestures":4096,"maxTotalPoints":65536,"maxFactBytes":MAX_BYTES,"finishGraceMs":2000})
+}
 impl Registration {
- pub fn new(token:String, boot_id:String, admission_ns:u64, source:&Value, surfaces:&Value)->Result<Self,&'static str>{
-  if !valid_id(&source["id"])||!valid_id(&source["generation"])||source["bounds"]["scale"].as_f64()!=Some(1.0)||source["kind"]!="display" {return Err("unavailable")}
-  let list=surfaces.as_array().ok_or("malformed_request")?; if list.is_empty()||list.len()>MAX_SURFACES{return Err("invalid_materials")}
-  let mut parsed=BTreeMap::new();
-  for s in list {let idv=&s["surfaceId"];let tr=&s["transformId"];let inc=&s["incarnation"];if !valid_id(idv)||!valid_id(tr)||!valid_id(inc){return Err("malformed_request")}
-   let target=s["target"].as_str().ok_or("malformed_request")?;let (x,y,w,h)=if target=="capture-rectangle" {let b=&source["bounds"];(finite(&b["x"]).ok_or("invalid_materials")?,finite(&b["y"]).ok_or("invalid_materials")?,finite(&b["width"]).ok_or("invalid_materials")?,finite(&b["height"]).ok_or("invalid_materials")?)}else if target=="whiteboard-canvas" {(0.0,0.0,1600.0,1100.0)}else{return Err("invalid_materials")};
-   if w<=0.0||h<=0.0{return Err("invalid_materials")} let key=idv.as_str().unwrap().to_owned();if parsed.insert(key,Surface{id:idv.as_str().unwrap().into(),transform:tr.as_str().unwrap().into(),incarnation:inc.as_str().unwrap().into(),target:target.into(),x,y,width:w,height:h}).is_some(){return Err("invalid_materials")}
-  }
-  Ok(Self{token,boot_id,admission_ns,source:source.clone(),surfaces:parsed,next_sequence:0,unavailable:false,completed:false,strokes:vec![],digests:HashMap::new(),ids:HashSet::new(),active:None,fact_bytes:0})
- }
- fn time(&self,v:&Value,cutoff_ns:u64)->Result<u64,&'static str>{let ns=uint(v).ok_or("invalid_materials")?;if ns>cutoff_ns{return Err("invalid_materials")}let rel=ns.checked_sub(self.admission_ns).ok_or("invalid_materials")?;Ok(rel/1_000_000)}
- pub fn submit(&mut self,seq:u64,digest:String,events:&[Value],cutoff_ns:u64)->Result<Value,&'static str>{
-  if self.unavailable||self.completed{return Err("unavailable")} if events.is_empty()||events.len()>MAX_POINTS_PER_BATCH{self.unavailable=true;return Err("invalid_materials")}
-  if seq<self.next_sequence{return if self.digests.get(&seq)==Some(&digest){Ok(json!({"sequence":seq,"duplicate":true}))}else{self.unavailable=true;Err("identity_conflict")}}
-  if seq!=self.next_sequence{self.unavailable=true;return Err("source_mismatch")}
-  for e in events {if self.event(e,cutoff_ns).is_err(){self.unavailable=true;self.active=None;return Err("invalid_materials")}}
-  let bytes=serde_json::to_vec(&self.strokes).map_err(|_|"internal")?;if bytes.len()>MAX_FACT_BYTES{self.unavailable=true;return Err("invalid_materials")}
-  self.fact_bytes=bytes.len();self.digests.insert(seq,digest);self.next_sequence+=1;Ok(json!({"sequence":seq,"duplicate":false}))
- }
- fn event(&mut self,e:&Value,cutoff:u64)->Result<(), &'static str>{let kind=e["kind"].as_str().ok_or("malformed_request")?;match kind{
-  "begin"=>{if self.active.is_some()||!stroke_id(&e["gestureId"]){return Err("invalid_materials")}let id=e["gestureId"].as_str().unwrap().to_owned();if !self.ids.insert(id.clone()){return Err("identity_conflict")}let surface=self.surfaces.get(e["surfaceId"].as_str().ok_or("malformed_request")?).ok_or("source_mismatch")?;if e["transformId"]!=surface.transform||e["incarnation"]!=surface.incarnation{return Err("source_changed")}let t=self.time(&e["timeNs"],cutoff)?;let rgb=e.get("rgb").cloned();if let Some(c)=&rgb{if !c.as_array().is_some_and(|a|a.len()==3&&a.iter().all(|x|x.as_u64().is_some_and(|n|n<=255))){return Err("invalid_materials")}}let p=point(e,surface,t)?;self.active=Some(Gesture{id,surface:surface.id.clone(),transform:surface.transform.clone(),start:t,last:t,rgb,points:vec![p]});}
-  "points"=>{let list=e["points"].as_array().ok_or("malformed_request")?;if list.is_empty()||list.len()>MAX_POINTS_PER_BATCH{return Err("invalid_materials")}let (surface_id,last,count)={let g=self.active.as_ref().ok_or("invalid_materials")?;(g.surface.clone(),g.last,g.points.len())};let surface=self.surfaces.get(&surface_id).ok_or("source_mismatch")?.clone();let mut mapped=Vec::with_capacity(list.len());let mut prior=last;for raw in list{let t=self.time(raw.get("timeNs").ok_or("malformed_request")?,cutoff)?;if t<prior||count+mapped.len()>=MAX_POINTS_PER_GESTURE{return Err("invalid_materials")}mapped.push(point(raw,&surface,t)?);prior=t;}let g=self.active.as_mut().unwrap();g.points.extend(mapped);g.last=prior;}
-  "commit"=>{let g=self.active.take().ok_or("invalid_materials")?;let t=self.time(&e["acceptedAtNs"],cutoff)?;if t<g.last{return Err("invalid_materials")}let surface=&self.surfaces[&g.surface];let points:Vec<i32>=g.points.iter().flat_map(|p|vec![p["x"].as_i64().unwrap() as i32,p["y"].as_i64().unwrap() as i32,(p["timeMs"].as_u64().unwrap().saturating_sub(g.start)) as i32]).collect();let rgb=g.rgb.as_ref().and_then(|v|Some([v[0].as_u64()? as u8,v[1].as_u64()? as u8,v[2].as_u64()? as u8]));let legacy=apparent_capture_engine::ink::Stroke{t0:g.start,t1:g.last,fw:surface.width as u32,fh:surface.height as u32,on:None,pin:None,laser:false,rgb,pts:points};for (index,part) in apparent_capture_engine::ink::clip_recording_ink(&legacy).into_iter().enumerate(){if part.pts.len()<6{continue}let id=if index==0{g.id.clone()}else{split_id(&g.id,index)};if !self.ids.insert(id.clone())&&id!=g.id{return Err("identity_conflict")}let pts:Vec<Value>=part.pts.chunks_exact(3).map(|p|json!({"timeMs":part.t0+p[2] as u64,"x":p[0],"y":p[1]})).collect();let mut value=json!({"id":id,"surface":if surface.target=="capture-rectangle"{"screen"}else{"whiteboard"},"surfaceId":g.surface,"transformId":g.transform,"startMs":part.t0,"endMs":part.t1,"acceptedAtMs":t,"points":pts});if let Some(color)=part.rgb{value["rgb"]=json!(color)}self.strokes.push(value);}}
-  "undo"|"clear"|"surface-state"=>{if kind=="surface-state"&&e["state"]=="replace"{if self.active.as_ref().is_some_and(|g|e["surfaceId"]==g.surface){self.active=None}}}
-  _=>return Err("malformed_request") } Ok(()) }
- pub fn finish(&mut self,final_sequence:u64,drained:bool)->bool{if !drained||final_sequence!=self.next_sequence.saturating_sub(1)||self.active.is_some()||self.unavailable{self.unavailable=true;return false}self.completed=true;true}
- pub fn facts(&self,capture_id:&str,materials_id:&str)->Option<Value>{if !self.completed||self.unavailable{return None}Some(json!({"schema":"apparent.capture-strokes/1","identity":{"captureId":capture_id,"materialsId":materials_id},"coordinates":"target-normalized-10000","surfaces":self.surfaces.values().map(|s|json!({"surfaceId":s.id,"transformId":s.transform,"width":s.width as u64,"height":s.height as u64,"target":s.target})).collect::<Vec<_>>(),"strokes":self.strokes}))}
+    pub fn new(req: &Value, source: &Value, admission_ns: u64, boot: &str) -> Result<Self> {
+        if req["ingressVersion"] != 1
+            || req["source"] != json!({"id":source["id"],"generation":source["generation"]})
+            || source["kind"] != "display"
+            || number(&source["bounds"]["scale"])? != 1.0
+        {
+            return Err("source_changed");
+        }
+        let o = &req["observation"];
+        exact(
+            o,
+            &[
+                "host",
+                "producerId",
+                "generation",
+                "bootId",
+                "clock",
+                "output",
+                "surfaces",
+            ],
+        )?;
+        ident(&o["producerId"])?;
+        safe(&o["generation"])?;
+        if o["bootId"] != boot || o["clock"] != "linux-clock-monotonic-observation" {
+            return Err("source_changed");
+        }
+        let host = &o["host"];
+        exact(host, &["processEpoch", "revision", "pid", "startTicks"])?;
+        text(&host["processEpoch"])?;
+        safe(&host["revision"])?;
+        if safe(&host["pid"])? == 0 {
+            return Err("malformed_request");
+        }
+        ns(&host["startTicks"])?;
+        let output = &o["output"];
+        exact(output, &["name", "physical", "compositor"])?;
+        rectangle(&output["physical"], false)?;
+        rectangle(&output["compositor"], true)?;
+        let b = &source["bounds"];
+        let expected = json!({"x":b["x"],"y":b["y"],"width":b["width"],"height":b["height"]});
+        if output["name"] != source["name"]
+            || output["physical"] != expected
+            || output["compositor"] != *b
+        {
+            return Err("source_changed");
+        }
+        let surfaces = o["surfaces"].as_array().ok_or("malformed_request")?;
+        if surfaces.is_empty() || surfaces.len() > 8 {
+            return Err("invalid_materials");
+        }
+        let mut r = Self {
+            revision: 1,
+            registration_id: super::new_id().map_err(|_| "internal")?,
+            token: format!(
+                "{}{}",
+                super::new_id().map_err(|_| "internal")?,
+                super::new_id().map_err(|_| "internal")?
+            ),
+            observation: o.clone(),
+            admission_ns,
+            phase: Phase::Collecting,
+            surfaces: BTreeMap::new(),
+            current: BTreeMap::new(),
+            digests: vec![],
+            ids: HashSet::new(),
+            active: None,
+            strokes: vec![],
+            total_points: 0,
+            last_ns: admission_ns,
+            native_revision: 0,
+            finish: None,
+        };
+        for s in surfaces {
+            let p = parse_surface(s, source)?;
+            let k = key(s)?;
+            let id = text(&s["surfaceId"])?.to_owned();
+            if r.current.insert(id, k.clone()).is_some() {
+                return Err("identity_conflict");
+            }
+            r.surfaces.insert(k, p);
+        }
+        Ok(r)
+    }
+    pub fn receipt(&self, capture: &str) -> Value {
+        json!({"ingressVersion":1,"captureId":capture,"producerId":self.observation["producerId"],"generation":self.observation["generation"],"registrationId":self.registration_id,"producerToken":self.token,"nextSequence":0,"clock":{"kind":"linux-clock-monotonic-observation","bootId":self.observation["bootId"],"admissionMonotonicNs":self.admission_ns.to_string()},"limits":limits()})
+    }
+    pub fn matches(&self, req: &Value) -> bool {
+        self.observation == req["observation"]
+    }
+    pub fn authenticate(&self, req: &Value) -> Result<()> {
+        if req["ingressVersion"] != 1
+            || req["registrationId"] != self.registration_id
+            || req["producerToken"] != self.token
+        {
+            return Err("permission_denied");
+        }
+        Ok(())
+    }
+    pub fn collecting(&self) -> bool {
+        self.phase == Phase::Collecting
+    }
+    pub fn invalidate(&mut self) {
+        self.phase = Phase::Unavailable;
+        self.active = None;
+        self.revision += 1;
+    }
+    fn stamp(&mut self, v: &Value, cutoff: u64) -> Result<u64> {
+        let n = ns(v)?;
+        if n < self.admission_ns || n < self.last_ns || n > cutoff {
+            return Err("invalid_materials");
+        }
+        self.last_ns = n;
+        Ok((n - self.admission_ns) / 1_000_000)
+    }
+    fn active_id(&self, e: &Value) -> Result<()> {
+        if self.active.as_ref().is_none_or(|g| e["gestureId"] != g.id) {
+            return Err("identity_conflict");
+        }
+        Ok(())
+    }
+    fn event(&mut self, e: &Value, cutoff: u64, source: &Value) -> Result<usize> {
+        match e["kind"].as_str() {
+            Some("begin") => {
+                let mut fields = vec![
+                    "kind",
+                    "gestureId",
+                    "surfaceId",
+                    "transformId",
+                    "nativeIncarnation",
+                    "timeNs",
+                    "x",
+                    "y",
+                ];
+                if e.get("rgb").is_some() {
+                    fields.push("rgb")
+                }
+                exact(e, &fields)?;
+                if self.active.is_some() || self.ids.len() >= 4096 {
+                    return Err("invalid_materials");
+                }
+                let id = ident(&e["gestureId"])?.to_owned();
+                if !self.ids.insert(id.clone()) {
+                    return Err("identity_conflict");
+                }
+                let k = key(e)?;
+                if self.current.get(text(&e["surfaceId"])?) != Some(&k) {
+                    return Err("source_changed");
+                }
+                let s = self.surfaces.get(&k).ok_or("source_changed")?.clone();
+                if e["nativeIncarnation"] != s.value["nativeIncarnation"] {
+                    return Err("source_changed");
+                }
+                let t = self.stamp(&e["timeNs"], cutoff)?;
+                let (x, y) = point(e, &s)?;
+                let rgb = if let Some(v) = e.get("rgb") {
+                    let c = v
+                        .as_array()
+                        .filter(|v| v.len() == 3)
+                        .ok_or("invalid_materials")?;
+                    Some([
+                        u8::try_from(safe(&c[0])?).map_err(|_| "invalid_materials")?,
+                        u8::try_from(safe(&c[1])?).map_err(|_| "invalid_materials")?,
+                        u8::try_from(safe(&c[2])?).map_err(|_| "invalid_materials")?,
+                    ])
+                } else {
+                    None
+                };
+                self.active = Some(Gesture {
+                    id,
+                    surface: k,
+                    start: t,
+                    last: t,
+                    rgb,
+                    points: vec![x, y, 0],
+                });
+                Ok(1)
+            }
+            Some("points") => {
+                exact(e, &["kind", "gestureId", "points"])?;
+                self.active_id(e)?;
+                let p = e["points"]
+                    .as_array()
+                    .filter(|p| !p.is_empty() && p.len() <= 256)
+                    .ok_or("invalid_materials")?;
+                let g = self.active.as_ref().unwrap();
+                if g.points.len() / 3 + p.len() > 2400 {
+                    return Err("invalid_materials");
+                }
+                let s = self
+                    .surfaces
+                    .get(&g.surface)
+                    .ok_or("source_changed")?
+                    .clone();
+                let start = g.start;
+                for v in p {
+                    exact(v, &["timeNs", "x", "y"])?;
+                    let t = self.stamp(&v["timeNs"], cutoff)?;
+                    let (x, y) = point(v, &s)?;
+                    let dt = i32::try_from(t - start).map_err(|_| "invalid_materials")?;
+                    let g = self.active.as_mut().unwrap();
+                    g.points.extend([x, y, dt]);
+                    g.last = t;
+                }
+                Ok(p.len())
+            }
+            Some("commit") => {
+                exact(e, &["kind", "gestureId", "acceptedAtNs"])?;
+                self.active_id(e)?;
+                let accepted = self.stamp(&e["acceptedAtNs"], cutoff)?;
+                let g = self.active.take().unwrap();
+                let s = &self.surfaces[&g.surface];
+                let donor = apparent_capture_engine::ink::Stroke {
+                    t0: g.start,
+                    t1: g.last,
+                    fw: s.width,
+                    fh: s.height,
+                    on: None,
+                    pin: None,
+                    laser: false,
+                    rgb: g.rgb,
+                    pts: g.points,
+                };
+                for (index, part) in apparent_capture_engine::ink::clip_recording_ink(&donor)
+                    .into_iter()
+                    .enumerate()
+                {
+                    let id = if index == 0 {
+                        g.id.clone()
+                    } else {
+                        let id =
+                            super::sha(format!("{}:{index}", g.id).as_bytes())[..32].to_owned();
+                        if !self.ids.insert(id.clone()) {
+                            return Err("identity_conflict");
+                        }
+                        id
+                    };
+                    let points: Vec<Value> = part
+                        .pts
+                        .chunks_exact(3)
+                        .map(|p| json!({"timeMs":part.t0+p[2] as u64,"x":p[0],"y":p[1]}))
+                        .collect();
+                    if points.is_empty() {
+                        continue;
+                    }
+                    let mut stroke = json!({"id":id,"surface":if s.value["target"]=="capture-rectangle"{"screen"}else{"whiteboard"},"surfaceId":s.value["surfaceId"],"transformId":s.value["transformId"],"startMs":part.t0,"endMs":part.t1,"acceptedAtMs":accepted,"points":points});
+                    if let Some(rgb) = part.rgb {
+                        stroke["rgb"] = json!(rgb)
+                    }
+                    self.strokes.push(stroke);
+                }
+                Ok(0)
+            }
+            Some("discard") => {
+                exact(e, &["kind", "gestureId", "observedAtNs", "reason"])?;
+                self.active_id(e)?;
+                if ![
+                    "undo-active",
+                    "clear-active",
+                    "source-changed",
+                    "input-sealed",
+                ]
+                .contains(&text(&e["reason"])?)
+                {
+                    return Err("malformed_request");
+                }
+                self.stamp(&e["observedAtNs"], cutoff)?;
+                self.active = None;
+                Ok(0)
+            }
+            Some("undo" | "clear") => {
+                exact(
+                    e,
+                    &[
+                        "kind",
+                        "surfaceId",
+                        "transformId",
+                        "nativeIncarnation",
+                        "observedAtNs",
+                        "nativeRevision",
+                    ],
+                )?;
+                let k = key(e)?;
+                let s = self.surfaces.get(&k).ok_or("source_changed")?;
+                if e["nativeIncarnation"] != s.value["nativeIncarnation"]
+                    || self.current.get(text(&e["surfaceId"])?) != Some(&k)
+                    || self.active.is_some()
+                {
+                    return Err("source_changed");
+                }
+                self.control_stamp(e, cutoff)?;
+                Ok(0)
+            }
+            Some("surface-state") => {
+                exact(
+                    e,
+                    &["kind", "state", "surface", "observedAtNs", "nativeRevision"],
+                )?;
+                let s = &e["surface"];
+                let p = parse_surface(s, source)?;
+                let k = key(s)?;
+                let id = text(&s["surfaceId"])?.to_owned();
+                if self
+                    .active
+                    .as_ref()
+                    .is_some_and(|g| self.surfaces[&g.surface].value["surfaceId"] == id)
+                {
+                    return Err("source_changed");
+                }
+                match text(&e["state"])? {
+                    "closed" => {
+                        if self.current.remove(&id) != Some(k) {
+                            return Err("source_changed");
+                        }
+                    }
+                    "opened" | "replaced" => {
+                        if self.current.len() >= 8 && !self.current.contains_key(&id) {
+                            return Err("invalid_materials");
+                        }
+                        if self.surfaces.get(&k).is_some_and(|old| old.value != *s) {
+                            return Err("identity_conflict");
+                        }
+                        self.current.insert(id, k.clone());
+                        self.surfaces.insert(k, p);
+                    }
+                    _ => return Err("malformed_request"),
+                }
+                self.control_stamp(e, cutoff)?;
+                Ok(0)
+            }
+            _ => Err("malformed_request"),
+        }
+    }
+    fn control_stamp(&mut self, e: &Value, cutoff: u64) -> Result<()> {
+        let revision = safe(&e["nativeRevision"])?;
+        if revision < self.native_revision {
+            return Err("source_changed");
+        }
+        self.stamp(&e["observedAtNs"], cutoff)?;
+        self.native_revision = revision;
+        Ok(())
+    }
+    pub fn submit(&mut self, req: &Value, cutoff: u64, source: &Value) -> Result<Value> {
+        self.authenticate(req)?;
+        let seq = safe(&req["sequence"])?;
+        let raw = req["eventsJson"].as_str().ok_or("malformed_request")?;
+        if raw.len() > 16384 || req["batchSha256"] != super::sha(raw.as_bytes()) {
+            return Err("invalid_materials");
+        }
+        let digest = text(&req["batchSha256"])?;
+        if (seq as usize) < self.digests.len() {
+            if self.phase == Phase::Unavailable || self.digests[seq as usize] != digest {
+                return Err("identity_conflict");
+            }
+            return Ok(self.batch_receipt(req, "replayed"));
+        }
+        let result = (|| {
+            if self.phase != Phase::Collecting || seq != self.digests.len() as u64 || seq >= 4096 {
+                return Err("source_mismatch");
+            }
+            let events: Vec<Value> = serde_json::from_str(raw).map_err(|_| "malformed_request")?;
+            if events.is_empty() || events.len() > 256 {
+                return Err("invalid_materials");
+            }
+            let mut points = 0;
+            for e in &events {
+                points += self.event(e, cutoff, source)?;
+                if points > 256 {
+                    return Err("invalid_materials");
+                }
+            }
+            self.total_points += points;
+            if self.total_points > 65536 || self.surfaces.len() > 4096 || self.strokes.len() > 4096
+            {
+                return Err("invalid_materials");
+            }
+            if serde_json::to_vec(&self.fact_value(
+                "00000000000000000000000000000000",
+                "00000000000000000000000000000000",
+            ))
+            .map_err(|_| "internal")?
+            .len()
+                > MAX_BYTES
+            {
+                return Err("invalid_materials");
+            }
+            self.digests.push(digest.to_owned());
+            self.revision += 1;
+            Ok(self.batch_receipt(req, "accepted"))
+        })();
+        if result.is_err() {
+            self.invalidate()
+        }
+        result
+    }
+    fn batch_receipt(&self, req: &Value, outcome: &str) -> Value {
+        json!({"ingressVersion":1,"captureId":req["captureId"],"registrationId":self.registration_id,"sequence":req["sequence"],"batchSha256":req["batchSha256"],"nextSequence":req["sequence"].as_u64().unwrap()+1,"outcome":outcome})
+    }
+    pub fn finish(&mut self, req: &Value, now: u64) -> Result<Value> {
+        self.authenticate(req)?;
+        if let Some(prior) = &self.finish {
+            if prior != req {
+                return Err("identity_conflict");
+            }
+            return Ok(self.finish_receipt(req));
+        }
+        exact(&req["seal"], &["state", "observedAtNs", "nativeRevision"])?;
+        let expected = if self.digests.is_empty() {
+            Value::Null
+        } else {
+            json!(self.digests.len() - 1)
+        };
+        let stamp = ns(&req["seal"]["observedAtNs"])?;
+        let revision = safe(&req["seal"]["nativeRevision"])?;
+        if self.phase != Phase::Collecting
+            || req["finalSequence"] != expected
+            || req["seal"]["state"] != "sealed-and-drained"
+            || stamp < self.last_ns
+            || stamp > now
+            || revision < self.native_revision
+            || self.active.is_some()
+        {
+            self.invalidate()
+        } else {
+            self.phase = Phase::Complete;
+            self.revision += 1
+        }
+        self.finish = Some(req.clone());
+        Ok(self.finish_receipt(req))
+    }
+    fn finish_receipt(&self, req: &Value) -> Value {
+        json!({"ingressVersion":1,"captureId":req["captureId"],"registrationId":self.registration_id,"finalSequence":req["finalSequence"],"state":if self.phase==Phase::Complete{"complete"}else{"unavailable"}})
+    }
+    fn fact_value(&self, capture: &str, materials: &str) -> Value {
+        json!({"schema":"apparent.capture-strokes/1","identity":{"captureId":capture,"materialsId":materials},"coordinates":"target-normalized-10000","surfaces":self.surfaces.values().map(|s|json!({"surfaceId":s.value["surfaceId"],"transformId":s.value["transformId"],"width":s.width,"height":s.height,"target":s.value["target"]})).collect::<Vec<_>>(),"strokes":self.strokes})
+    }
+    pub fn facts(&self, capture: &str, materials: &str) -> Option<Value> {
+        (self.phase == Phase::Complete).then(|| self.fact_value(capture, materials))
+    }
 }
-fn point(v:&Value,s:&Surface,time:u64)->Result<Value,&'static str>{let x=finite(&v["x"]).ok_or("invalid_materials")?;let y=finite(&v["y"]).ok_or("invalid_materials")?;let nx=((x-s.x)/s.width*SCALE).round() as i64;let ny=((y-s.y)/s.height*SCALE).round() as i64;Ok(json!({"timeMs":time,"x":nx,"y":ny}))}
-fn split_id(base:&str,index:usize)->String{let mut h=Sha256::new();h.update(base.as_bytes());h.update((index as u64).to_be_bytes());let digest=h.finalize();digest[..16].iter().map(|b|format!("{b:02x}")).collect()}
-
-#[cfg(test)] mod tests {use super::*;pub(super) fn reg()->Registration{let s=json!({"id":"source","generation":"gen","kind":"display","bounds":{"x":10,"y":20,"width":100,"height":50,"scale":1.0}});let surfaces=json!([{"surfaceId":"screen","transformId":"t1","incarnation":"i1","target":"capture-rectangle"}]);Registration::new("secret".into(),"boot".into(),1_000_000,&s,&surfaces).unwrap()}#[test]fn maps_native_clock_and_normalizes(){let mut r=reg();let ev=vec![json!({"kind":"begin","gestureId":"0123456789abcdef0123456789abcdef","surfaceId":"screen","transformId":"t1","incarnation":"i1","timeNs":"2000000","x":10,"y":20}),json!({"kind":"points","points":[{"timeNs":"3000000","x":110,"y":70}]}),json!({"kind":"commit","acceptedAtNs":"4000000"})];r.submit(0,"d".into(),&ev,10_000_000).unwrap();assert!(r.finish(0,true));let f=r.facts("0123456789abcdef0123456789abcdef","0123456789abcdef0123456789abcdef").unwrap();assert_eq!(f["strokes"][0]["points"][1]["x"],10000);assert_eq!(f["strokes"][0]["points"][1]["timeMs"],2);}
-#[test]fn foreign_transform_future_time_and_sequence_gap_invalidate(){for bad in ["foreign","future"]{let mut r=reg();let time=if bad=="future"{20_000_000}else{2_000_000};let tr=if bad=="foreign"{"t2"}else{"t1"};let ev=vec![json!({"kind":"begin","gestureId":"0123456789abcdef0123456789abcdef","surfaceId":"screen","transformId":tr,"incarnation":"i1","timeNs":time.to_string(),"x":10,"y":20})];assert!(r.submit(0,"d".into(),&ev,10_000_000).is_err());assert!(r.unavailable)}let mut r=reg();assert!(r.submit(1,"d".into(),&[json!({"kind":"clear"})],10_000_000).is_err());assert!(r.unavailable);}}
-
-#[cfg(test)] mod clipping_clock_tests {
- use super::*;
- #[test] fn outside_excursion_is_core_split_and_large_clock_remains_exact(){
-  let n=9_007_199_254_740_993u64; let mut r=super::tests::reg(); r.admission_ns=n;
-  let ev=vec![json!({"kind":"begin","gestureId":"0123456789abcdef0123456789abcdef","surfaceId":"screen","transformId":"t1","incarnation":"i1","timeNs":n.to_string(),"x":20,"y":30}),json!({"kind":"points","points":[{"timeNs":(n+1_000_000).to_string(),"x":150,"y":30},{"timeNs":(n+2_000_000).to_string(),"x":20,"y":30}]}),json!({"kind":"commit","acceptedAtNs":(n+3_000_000).to_string()})];
-  r.submit(0,"d".into(),&ev,n+9_000_000).unwrap();assert!(r.finish(0,true));let f=r.facts("0123456789abcdef0123456789abcdef","fedcba9876543210fedcba9876543210").unwrap();assert_eq!(f["strokes"].as_array().unwrap().len(),2);assert_eq!(f["strokes"][0]["points"][0]["timeMs"],0);assert_ne!(f["strokes"][0]["id"],f["strokes"][1]["id"]);
- }
+fn point(v: &Value, s: &Surface) -> Result<(i32, i32)> {
+    // Match the donor f32 arithmetic, rejecting overflow before narrowing. Raw
+    // excursions survive until Core clips/splits; never clamp to the viewport.
+    let normalize = |v: &Value, origin: f32, size: u32| -> Result<i32> {
+        let input = number(v)?;
+        let value = ((input as f32 - origin) / size as f32 * 10_000.0).round();
+        if !value.is_finite()
+            || f64::from(value) < f64::from(i32::MIN)
+            || f64::from(value) > f64::from(i32::MAX)
+        {
+            return Err("invalid_materials");
+        }
+        Ok(value as i32)
+    };
+    Ok((
+        normalize(&v["x"], s.x, s.width)?,
+        normalize(&v["y"], s.y, s.height)?,
+    ))
 }
+#[cfg(test)]
+#[path = "ink_tests.rs"]
+mod tests;

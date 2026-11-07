@@ -22,7 +22,9 @@ export interface InkSurface {
    * native paper-local observations after the donor's 64-point toolbar offset. */
   pointSpace: 'desktop-physical' | 'paper-logical';
   /** Desktop-physical content rectangle; Board means PAPER content excluding
-   * the 64-point toolbar. Initial scale1 mapping must agree with native layout. */
+   * the 64-point toolbar: actual viewport, independently resizable from the
+   * full paper plane. Never rescale paper-local points to this rectangle.
+   * Initial scale1 mapping must agree with native layout. */
   contentRectangle: InkRectangle;
   /** Screen: original physical source size. Board: exactly1600x1100. */
   plane: { width: number; height: number };
