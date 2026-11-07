@@ -1,6 +1,9 @@
 //! The existing 16 kHz mono PCM16 WAV codec.
 //! No microphone selection, recording policy or speech-selection policy.
 
+#[cfg(feature = "local-speech")]
+pub mod speech;
+
 use anyhow::{Result, ensure};
 use std::io::Cursor;
 

@@ -50,6 +50,9 @@ export function selectFrameTimes(from: string, to: string, fps: number): FrameSe
 export async function savedKeyframes(bundleInput: string, selection: FrameSelection) {
   const bundlePath = await resolveBundle(bundleInput);
   await assertNoSymlinkPath(bundlePath);
+  const pending = await lstat(join(bundlePath, '.media-pending')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
+  if (pending) throw new Error('Bundle media is still pending (.media-pending)');
+  await isEvidenceOnlySnapshot(bundlePath);
   const { value } = await readManifest(bundlePath);
   const margin = Math.floor(Math.ceil(1_000 / selection.fps) / 2);
   const lower = Math.max(0, selection.fromMs - margin), upper = selection.toMs + margin;
@@ -101,8 +104,7 @@ export async function hasSourceVideo(bundleInput: string): Promise<boolean> {
   await assertNoSymlinkPath(bundlePath);
   const pending = await lstat(join(bundlePath, '.media-pending')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
   if (pending) throw new Error('Bundle media is still pending (.media-pending)');
-  const evidence = await lstat(join(bundlePath, '.evidence-only.json')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
-  if (evidence) throw new Error('Evidence-only bundle has no local source video');
+  if (await isEvidenceOnlySnapshot(bundlePath)) return false;
   const { value } = await readManifest(bundlePath);
   const reference = value.video ?? (await existsRegular(join(bundlePath, 'recording.mp4')) ? 'recording.mp4' : 'recording.mov');
   if (!safeReference(reference)) throw new Error('Bundle has unsafe video metadata');
@@ -112,6 +114,40 @@ export async function hasSourceVideo(bundleInput: string): Promise<boolean> {
   if (!info) return false;
   if (!info.isFile()) throw new Error('Bundle source video is not a regular no-follow file');
   return true;
+}
+
+/** Validate the producer receipt without granting it authority beyond local evidence-only status. */
+async function isEvidenceOnlySnapshot(bundlePath: string): Promise<boolean> {
+  const path = join(bundlePath, '.evidence-only.json');
+  const expected = await lstat(path, { bigint: true }).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
+  if (!expected) return false;
+  if (!expected.isFile() || expected.isSymbolicLink()) throw new Error('Evidence-only receipt is not a regular no-follow file');
+  const file = await open(path, constants.O_RDONLY | constants.O_NONBLOCK | constants.O_NOFOLLOW).catch(() => undefined);
+  if (!file) throw new Error('Evidence-only receipt could not be opened safely');
+  try {
+    const stat = await file.stat({ bigint: true });
+    if (!stat.isFile() || stat.dev !== expected.dev || stat.ino !== expected.ino || stat.size <= 0n || stat.size > 16_384n)
+      throw new Error('Evidence-only receipt has an unsupported size or identity');
+    const bytes = Buffer.alloc(Number(stat.size));
+    let offset = 0;
+    while (offset < bytes.length) {
+      const read = await file.read(bytes, offset, bytes.length - offset, offset);
+      if (!read.bytesRead) throw new Error('Evidence-only receipt ended while being read');
+      offset += read.bytesRead;
+    }
+    const after = await file.stat({ bigint: true });
+    if (after.dev !== stat.dev || after.ino !== stat.ino || after.size !== stat.size || after.mtimeNs !== stat.mtimeNs)
+      throw new Error('Evidence-only receipt changed while being read');
+    let receipt: any;
+    try { receipt = JSON.parse(new TextDecoder('utf-8', { fatal: true }).decode(bytes)); } catch { throw new Error('Evidence-only receipt is invalid JSON'); }
+    const keys = ['version', 'captureId', 'server', 'media', 'guidance'];
+    if (!receipt || typeof receipt !== 'object' || Array.isArray(receipt) || Object.keys(receipt).sort().join(',') !== keys.sort().join(',') ||
+        receipt.version !== 1 || typeof receipt.captureId !== 'string' || !/^[0-9a-f]{32}$/.test(receipt.captureId) ||
+        typeof receipt.server !== 'string' || !/^(?:https:\/\/|http:\/\/(?:localhost|127\.0\.0\.1)(?::[0-9]+)?(?:\/|$))/.test(receipt.server) || receipt.media !== 'not downloaded' ||
+        receipt.guidance !== 'Use apparent fetch <id> --media --out <new-directory> for the complete recording')
+      throw new Error('Evidence-only receipt does not match the published snapshot format');
+    return true;
+  } finally { await file.close(); }
 }
 
 async function assertNoSymlinkPath(path: string, includeLeaf = true): Promise<void> {
@@ -134,8 +170,7 @@ async function sourceFor(bundleInput: string) {
   await assertNoSymlinkPath(bundlePath);
   const marker = await lstat(join(bundlePath, '.media-pending')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
   if (marker) throw new Error('Bundle media is still pending (.media-pending)');
-  const evidence = await lstat(join(bundlePath, '.evidence-only.json')).catch((e: NodeJS.ErrnoException) => e.code === 'ENOENT' ? null : Promise.reject(e));
-  if (evidence) throw new Error('Evidence-only bundle has no local source video');
+  if (await isEvidenceOnlySnapshot(bundlePath)) throw new Error('Evidence-only bundle cannot be decoded; use retained keyframes');
   const { value } = await readManifest(bundlePath);
   const videoRef = value.video ?? (await existsRegular(join(bundlePath, 'recording.mp4')) ? 'recording.mp4' : 'recording.mov');
   if (!safeReference(videoRef)) throw new Error('Bundle has unsafe video metadata');

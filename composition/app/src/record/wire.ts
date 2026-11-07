@@ -174,12 +174,17 @@ function validOutcome(value: unknown): boolean {
 }
 
 function validCapture(value: unknown): boolean {
-  if (!exact(value, ['captureId', 'delivery', 'phase', 'outcomes'], ['invocationId', 'shortcutAdmissionId', 'artifactId'])) return false;
+  if (!exact(value, ['captureId', 'delivery', 'phase', 'outcomes'], ['invocationId', 'shortcutAdmissionId', 'artifactId', 'warnings'])) return false;
   return text(value.captureId, 256, true)
     && (value.invocationId === undefined || text(value.invocationId, 256, true))
     && oneOf(value.delivery, ['local-only', 'host-default', 'unknown'] as const)
     && (value.shortcutAdmissionId === undefined || text(value.shortcutAdmissionId, 256, true))
     && (value.artifactId === undefined || text(value.artifactId, 256, true))
+    // Public Record warning: a padded, unobserved interval is not recorded silence.
+    // Preserve the original interval; transport validation never invents one.
+    && (!Object.hasOwn(value, 'warnings') || (plainArray(value.warnings, 256)
+      && value.warnings.every(warning => exact(warning, ['kind', 'atMs'])
+        && warning.kind === 'audioInitialGap' && revision(warning.atMs))))
     && oneOf(value.phase, ['starting', 'recording', 'processing', 'saved', 'cancelled', 'failed', 'unknown'] as const)
     && plainArray(value.outcomes, 256) && value.outcomes.every(validOutcome);
 }

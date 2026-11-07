@@ -102,10 +102,13 @@ async function main(args: string[]) {
     const refs = [bundle.contactSheet, ...(bundle.autocrop ? [bundle.autocrop.fullContactSheet] : []),
       ...bundle.keyframes.flatMap((frame: any) => [frame.file, ...(bundle.autocrop && frame.file.startsWith('frames/') ? [`${bundle.autocrop.fullFrames}/${frame.file.slice('frames/'.length)}`] : [])])]
       .filter((x) => typeof x === 'string');
-    for (const ref of refs) {
-      await checkImageReference(path, ref);
+    const references = [...new Set(refs)];
+    const paths: string[] = [], missingReferences: string[] = [];
+    for (const ref of references) {
+      if (await checkImageReference(path, ref)) paths.push(resolve(path, ref));
+      else missingReferences.push(ref);
     }
-    process.stdout.write(`${JSON.stringify({ bundle: path, references: [...new Set(refs)] }, null, 2)}\n`);
+    process.stdout.write(`${JSON.stringify({ bundle: path, references, paths, missingReferences }, null, 2)}\n`);
     return 0;
   }
   if (storedSummary) {

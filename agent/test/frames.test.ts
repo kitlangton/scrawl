@@ -7,7 +7,7 @@ import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
 import { MediaClient, type MediaRequest, type MediaResponse, type MediaTransport } from '@apparent/engine-sdk/media';
 import { ReferenceMediaPeer, type MediaTestScenario } from '@apparent/engine-sdk/media/testing';
-import { decodeFrames, parseClockMs, savedKeyframes, selectFrameTimes } from '../dist/frames.js';
+import { decodeFrames, hasSourceVideo, parseClockMs, savedKeyframes, selectFrameTimes } from '../dist/frames.js';
 
 const target = { mode:'display', app:null, bundleId:null, windowTitle:null, windowId:null, displayId:0, frame:{x:0,y:0,width:10,height:10,scale:1} };
 const pngHeader = (w: number, h: number) => { const b=Buffer.alloc(24); Buffer.from('89504e470d0a1a0a','hex').copy(b); b.writeUInt32BE(w,16); b.writeUInt32BE(h,20); return b; };
@@ -82,6 +82,9 @@ test('saved fallback rejects unsafe or corrupt references and empty selections',
   await writeFile(join(frames,'good.png'),pngHeader(1,1)); await writeFile(join(frames,'bad.png'),Buffer.alloc(24));
   const result=await savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4));
   assert.equal(result.frames.length,1); assert.equal(result.frames[0].timestampMs,100);
+  await writeFile(join(bundle,'.media-pending'),'');
+  await assert.rejects(()=>savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4)),/media is still pending/);
+  await rm(join(bundle,'.media-pending'));
   const fifo=join(frames,'fifo.png'); assert.equal(spawnSync('mkfifo',[fifo]).status,0);
   manifest.keyframes.push({t:100,file:'frames/fifo.png'}); await writeFile(join(bundle,'apparent.json'),JSON.stringify(manifest));
   assert.equal((await savedKeyframes(bundle,selectFrameTimes('0.1','0.1',4))).frames.length,1);
@@ -191,6 +194,22 @@ test('media-pending, evidence-only, symlinked media, and changed source are refu
   client=new MediaClient(transport,{allowTestDouble:true});
   await assert.rejects(()=>decodeFrames(client,bundle,runtime,options,()=>false,{allowTestDouble:true}),/identity changed/);
   await client.close();
+}));
+
+test('valid evidence snapshot is never decoded, even when an unexpected video copy exists', async () => fixture(async (_root,bundle,runtime,video) => {
+  await writeFile(join(bundle,'.evidence-only.json'), JSON.stringify({version:1,captureId:'a'.repeat(32),server:'https://connect.example',media:'not downloaded',guidance:'Use apparent fetch <id> --media --out <new-directory> for the complete recording'}));
+  assert.equal(await hasSourceVideo(bundle), false);
+  const client=new MediaClient(new MaterializingPeer(),{allowTestDouble:true});
+  await assert.rejects(()=>decodeFrames(client,bundle,runtime,{fromMs:0,toMs:1,fps:1,requestedBundleMs:[0]},()=>false,{allowTestDouble:true}),/Evidence-only bundle cannot be decoded/);
+  await client.close();
+  await writeFile(video,'unexpected copy');
+  assert.equal(await hasSourceVideo(bundle), false);
+  for (const server of ['http://localhost:8787/connect', 'http://127.0.0.1:8080']) {
+    await writeFile(join(bundle,'.evidence-only.json'),JSON.stringify({version:1,captureId:'a'.repeat(32),server,media:'not downloaded',guidance:'Use apparent fetch <id> --media --out <new-directory> for the complete recording'}));
+    assert.equal(await hasSourceVideo(bundle),false);
+  }
+  const malformed=join(bundle,'.evidence-only.json'); await writeFile(malformed,'{}');
+  await assert.rejects(()=>hasSourceVideo(bundle),/published snapshot format/);
 }));
 
 test('corrupt video metadata and exposed runtime directories fail closed', async () => fixture(async (_root,bundle,runtime) => {

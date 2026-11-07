@@ -117,7 +117,7 @@ try {
     import { readRetainedDerivativeArtifacts, type ReadRetainedDerivativeArtifactsInput } from '@apparent/record/processing/retained-artifacts';
     import { Media2Client, preflightMedia2Dispatch, type Media2JobInput } from '@apparent/engine-sdk/media2';
     import { readFrameVisualObservations, type FrameVisualObservationInput, type FrameVisualObservation, type VisualObservationSource } from '@apparent/engine-sdk/observations';
-    import { assembleCanonicalBundle, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
+    import { assembleCanonicalBundle, projectOriginalAcceptedStrokes, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
     import type { PreparePublicationInput } from '@apparent/record/publication';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
@@ -146,6 +146,8 @@ try {
     };
     const validators: BundleValidators = { materials: validateMaterialsDocument, fact: validateFactFile };
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
+    const projectInk = (materials: MaterialsDocument, fact: BundleAssemblyInput['facts']['acceptedStrokes']): CanonicalStroke[] | undefined => projectOriginalAcceptedStrokes(materials, fact);
+    void projectInk;
     const retainedVideo: BundleAssemblyInput['materialReferences'] = [{ role: 'video', relativePath: 'capture.mp4' }];
     const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
       const loaded = await readCaptureMaterials(input);
@@ -175,7 +177,7 @@ try {
   const bundleRuntime = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import {createRequire} from 'node:module';
-    import { assembleCanonicalBundle } from '@apparent/record/processing/bundle';
+    import { assembleCanonicalBundle, projectOriginalAcceptedStrokes } from '@apparent/record/processing/bundle';
     import { RecordMedia2Job } from '@apparent/record/processing/media2-consumer';
     import { readRetainedDerivativeArtifacts } from '@apparent/record/processing/retained-artifacts';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
@@ -184,6 +186,7 @@ try {
     const {readCaptureMaterials} = await import('@apparent/record/host/materials');
     assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof assembleCanonicalBundle, 'function');
+    assert.equal(typeof projectOriginalAcceptedStrokes, 'function');
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');
     for (const name of ['react','react-dom','electron']) assert.throws(()=>createRequire(import.meta.url).resolve(name));

@@ -5,6 +5,25 @@ import {
   cloneCapabilitySnapshot, cloneCommandResult, cloneJsonDto, cloneRecordCommand,
 } from '../../src/record/wire.ts';
 
+test('preserves exact optional public initial-audio-gap warnings without implying recorded silence', () => {
+  const snapshot = createRecordFixture('unsubscribe-during-recording').driver.current();
+  assert.ok(snapshot.captures.length);
+  const old = structuredClone(snapshot);
+  assert.deepEqual(cloneCapabilitySnapshot(old), old);
+  const current = structuredClone(snapshot) as any;
+  current.captures[0].warnings = [{ kind: 'audioInitialGap', atMs: 140 }];
+  assert.deepEqual(cloneCapabilitySnapshot(current), current);
+  current.captures[0].warnings = [];
+  assert.deepEqual(cloneCapabilitySnapshot(current), current);
+  for (const warnings of [undefined, null, [{ kind: 'audioInitialGap', atMs: -1 }],
+    [{ kind: 'audioInitialGap', atMs: 1.5 }], [{ kind: 'audioInitialGap', atMs: Number.MAX_SAFE_INTEGER + 1 }],
+    [{ kind: 'audioInitialGap', atMs: 3, extra: true }], [{ kind: 'silence', atMs: 3 }],
+    Array.from({ length: 257 }, () => ({ kind: 'audioInitialGap', atMs: 3 }))]) {
+    current.captures[0].warnings = warnings;
+    assert.equal(cloneCapabilitySnapshot(current), undefined);
+  }
+});
+
 test('accepts public fixture snapshots, fixed command variants, and correlated results', async () => {
   const fixture = createRecordFixture();
   const snapshot = fixture.driver.current();
