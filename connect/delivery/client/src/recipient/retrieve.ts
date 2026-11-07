@@ -76,11 +76,15 @@ async function download(transport: RecipientTransport, base: string, file: Asset
 }
 async function delay(milliseconds: number, signal?: AbortSignal): Promise<void> {
   allowed(signal);
-  await new Promise<void>((resolve, reject) => {
-    const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(new RecipientRetrievalError("cancelled")); };
-    const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, milliseconds);
-    signal?.addEventListener("abort", abort, { once: true });
-  });
+  const deadline = performance.now() + Math.max(0, milliseconds);
+  while (performance.now() < deadline) {
+    allowed(signal);
+    await new Promise<void>((resolve, reject) => {
+      const abort = () => { clearTimeout(timer); signal?.removeEventListener("abort", abort); reject(new RecipientRetrievalError("cancelled")); };
+      const timer = setTimeout(() => { signal?.removeEventListener("abort", abort); resolve(); }, Math.ceil(deadline - performance.now()));
+      signal?.addEventListener("abort", abort, { once: true });
+    });
+  }
 }
 
 /** No config/credential mutation or filesystem publication. The caller retains

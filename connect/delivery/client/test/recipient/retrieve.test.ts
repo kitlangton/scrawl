@@ -173,13 +173,18 @@ test("rechecks sender authorization after decrypting and preserves a caller Buff
   assert.equal(calls, 2); assert.deepEqual(signing, saved);
 }));
 
-test("bounds pending/404 waits and cancels polling without downloading files", async () => server(async ({ origin, routes, counts }) => {
+test("bounds pending/404 waits and cancels polling without downloading files", async (t) => server(async ({ origin, routes, counts }) => {
   const input = { credential: credential(origin), captureId: id };
   routes.set(base, { body: { id, status: "pending" } });
   await assert.rejects(retrieveRecipientCapture(input), fail("not_ready"));
   counts.clear(); routes.delete(base);
+  // Timers may wake early; polling must still honor its interval and deadline.
+  const nativeTimeout = globalThis.setTimeout;
+  const timer = t.mock.method(globalThis, "setTimeout", (callback: (...args: unknown[]) => void, milliseconds?: number, ...args: unknown[]) =>
+    nativeTimeout(callback, milliseconds !== undefined && milliseconds > 1 && milliseconds <= 500 ? Math.max(1, milliseconds - 20) : milliseconds, ...args));
   const started = performance.now();
   await assert.rejects(retrieveRecipientCapture({ ...input, waitSeconds: 1 }), fail("not_ready"));
+  timer.mock.restore();
   assert.ok(performance.now() - started < 1500); assert.ok(counts.get(base)! <= 3);
   const c = new AbortController(); setTimeout(() => c.abort(), 20);
   await assert.rejects(retrieveRecipientCapture({ ...input, waitSeconds: 900, signal: c.signal }), fail("cancelled"));

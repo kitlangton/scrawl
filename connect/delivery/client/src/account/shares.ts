@@ -1,34 +1,16 @@
 import { decodeStrictJson } from "../recipient/json.ts";
 import { RecipientTransportError, type RecipientTransportCategory } from "../recipient/transport.ts";
-import { normalizeServer, scopedRequest, checkActive, type ScopedRequestOptions, type ScopedAuthorization } from "../sender/request.ts";
+import { scopedRequest, checkActive } from "../sender/request.ts";
+import { pinAccountRequest, safeTransportCategory, type ShareOptions, type ShareAuthorization } from "./authority.ts";
+export type { ShareOptions, ShareAuthorization } from "./authority.ts";
 
 const ID = /^[a-f0-9]{32}$/;
 const STATES = new Set(["pending", "ready", "paused", "failed", "expired", "revoked", "deleted"]);
-const allowedFailures = new Set<string>(["not_found", "unauthorized", "forbidden", "slow_down", "quota_exceeded", "request_failed",
-  "response_too_large", "invalid_response", "invalid_server", "invalid_request", "redirect_refused", "cancelled", "timeout",
-  "auth_required", "renewal_required", "state_unavailable", "stale_snapshot", "revocation_pending", "offline", "revocation_unverified"]);
-const safeCategory = (value: unknown): RecipientTransportCategory => typeof value === "string" && allowedFailures.has(value) && value !== "revocation_unverified" ? value as RecipientTransportCategory : "request_failed";
 const MAX_ROWS = 10_000, MAX_PAGES = 1_000, MAX_BYTES = 16_000_000;
 export type Share = Readonly<{ id: string; captureId: string; title: string; status: "pending" | "ready" | "paused" | "failed" | "expired" | "revoked" | "deleted"; createdAt: string; expiresAt: string; url: string | null }>;
 export type ShareList = Readonly<{ shares: readonly Share[]; nextCursor: null }>;
-export type ShareAuthorization = ScopedAuthorization & { generation: string };
-export type ShareOptions = Omit<ScopedRequestOptions, "authorize"> & {
-  /** Caller-approved local login incarnation; renewal may change token, never this binding. */
-  generation: string;
-  authorize(server: string, scope: "read" | "upload", signal: AbortSignal): Promise<ShareAuthorization>;
-};
-
 /** Lists are all-or-error: at most 1,000 pages, 10,000 rows and 16 MB raw response bytes; never truncate a management result. */
-function snapshot(options: ShareOptions) {
-  const server = normalizeServer(options.server), scope = options.scope, generation = options.generation, authorize = options.authorize;
-  if (typeof generation !== "string" || !ID.test(generation) || scope !== "read" && scope !== "upload" || typeof options.active !== "function" || typeof options.authorize !== "function") throw new RecipientTransportError("invalid_request");
-  return Object.freeze({ server, scope, generation, signal: options.signal, active: options.active,
-    async authorize(approvedServer: string, requestedScope: "read" | "upload", signal: AbortSignal): Promise<ShareAuthorization> {
-      const auth = await authorize(approvedServer, requestedScope, signal);
-      if (!auth || auth.generation !== generation) throw new RecipientTransportError("stale_snapshot");
-      return { approvedServer: auth.approvedServer, scope: auth.scope, token: auth.token, generation };
-    } });
-}
+const snapshot = pinAccountRequest;
 function invalid(): never { throw new RecipientTransportError("invalid_response"); }
 function object(value: unknown): Record<string, unknown> { if (!value || typeof value !== "object" || Array.isArray(value)) return invalid(); return value as Record<string, unknown>; }
 function timestamp(value: unknown): string {
@@ -82,13 +64,13 @@ async function listSharePages(pinned: ReturnType<typeof snapshot>): Promise<Shar
 
 export async function listShares(options: ShareOptions): Promise<ShareList> {
   try { return await listSharePages(snapshot(options)); }
-  catch (error) { throw new RecipientTransportError(safeCategory(error instanceof RecipientTransportError ? error.category : undefined)); }
+  catch (error) { throw new RecipientTransportError(safeTransportCategory(error instanceof RecipientTransportError ? error.category : undefined)); }
 }
 
 export class ShareRevocationError extends Error {
   readonly effect: "unknown" | "acknowledged_unverified";
   readonly category: RecipientTransportCategory | "revocation_unverified";
-  constructor(effect: "unknown" | "acknowledged_unverified", category: RecipientTransportCategory | "revocation_unverified") { super("share revocation outcome could not be verified"); this.name = "ShareRevocationError"; this.effect = effect; this.category = category === "revocation_unverified" ? category : safeCategory(category); }
+  constructor(effect: "unknown" | "acknowledged_unverified", category: RecipientTransportCategory | "revocation_unverified") { super("share revocation outcome could not be verified"); this.name = "ShareRevocationError"; this.effect = effect; this.category = category === "revocation_unverified" ? category : safeTransportCategory(category); }
 }
 /** DELETE is never retried; an acknowledgement is followed by a complete upload-scope readback. */
 export async function revokeShare(options: ShareOptions, managementId: string): Promise<void> {
