@@ -399,7 +399,10 @@ test("SDK capture/2 records a selected X11 output, seals materials, and releases
     assert.ok(payload.confirmedSource.confirmedAtMs > 0, "source confirmation time is measured after native source revalidation");
     assert.equal(payload.clock.epoch, "capture-admission-monotonic");
     assert.equal(payload.clock.units, "integer-milliseconds");
-    assert.ok(payload.clock.durationMs >= payload.video.durationMs, "capture clock ends at native-source stop while media duration comes from finalized MP4 timing");
+    assert.ok(
+      payload.clock.durationMs >= payload.video.durationMs,
+      `capture clock ends at native-source stop while media duration comes from finalized MP4 timing (clock=${payload.clock.durationMs}ms, videoOffset=${payload.clock.videoOffsetMs}ms, video=${payload.video.durationMs}ms, clockMinusVideo=${payload.clock.durationMs - payload.video.durationMs}ms)`,
+    );
     assert.ok(payload.clock.videoOffsetMs > 0, "video offset is the first native source-buffer arrival, not a fabricated zero");
     assert.ok(Math.abs(payload.clock.durationMs - payload.video.durationMs) < 500, "controlled post-EOS finalization delay is excluded from both capture and encoded-video duration");
     assert.equal(payload.video.width, 1366);
