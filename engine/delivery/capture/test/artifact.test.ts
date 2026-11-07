@@ -46,6 +46,9 @@ test('capture artifact inventory and absolute SDK launch contract', { skip: !art
   assert.deepEqual(manifest.launch.argv, ['--runtime-directory', '<private-runtime-dir>', '--capture-channel', 'capture', '--capture-protocol-version', '2'])
   assert.equal(manifest.launch.pathLookup, false)
   assert.equal(manifest.launch.shutdownTimeoutMs, 40_000)
+  assert.ok(manifest.speechRuntimeLibraries.length > 0)
+  assert.deepEqual(manifest.speechRuntimeLibraries, [...new Set(manifest.speechRuntimeLibraries)].sort())
+  for (const name of manifest.speechRuntimeLibraries) assert.ok(manifest.runtimeFiles.some((item: { path: string }) => item.path === `lib/${name}`), `speech runtime module missing from closure: ${name}`)
   const actual: Array<{ path: string; mode: number; sha256: string }> = []
   const walk = (dir: string) => {
     for (const name of readdirSync(dir).sort()) {

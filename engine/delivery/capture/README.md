@@ -18,6 +18,13 @@ The launcher pins their configuration/module/plugin directories inside the seale
 payload, while retaining the caller's Wayland and session-bus authority. This
 runtime closure alone does not enable or qualify a Wayland capture source.
 
+The Linux capture feature also stages the exact `transcribe.cpp` runtime and
+dlopen-only CPU backend modules into Cargo's profile and `deps` directories with
+an `$ORIGIN` runpath. `apparent-engine-speech-runtime.json` records the sorted
+library names; the closed package seeds ELF closure inspection from every listed
+runtime/module as well as the worker and media plugins. It contains no model and
+does not load a recognizer during build or capture readiness.
+
 Capture/2's supported retained-material path is
 `<canonical-private-runtime>/capture-v2/materials/<original-captureId>`.
 SDK0.4.4's public `capture2MaterialsRoot(runtimeDirectory, captureId)` derives this
