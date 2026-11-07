@@ -21,7 +21,7 @@ export type ShareOptions = Omit<ScopedRequestOptions, "authorize"> & {
 /** Lists are all-or-error: at most 1,000 pages, 10,000 rows and 16 MB raw response bytes; never truncate a management result. */
 function snapshot(options: ShareOptions) {
   const server = normalizeServer(options.server), scope = options.scope, generation = options.generation, authorize = options.authorize;
-  if (!ID.test(generation) || scope !== "read" && scope !== "upload" || typeof options.active !== "function" || typeof options.authorize !== "function") throw new RecipientTransportError("invalid_request");
+  if (typeof generation !== "string" || !ID.test(generation) || scope !== "read" && scope !== "upload" || typeof options.active !== "function" || typeof options.authorize !== "function") throw new RecipientTransportError("invalid_request");
   return Object.freeze({ server, scope, generation, signal: options.signal, active: options.active,
     async authorize(approvedServer: string, requestedScope: "read" | "upload", signal: AbortSignal): Promise<ShareAuthorization> {
       const auth = await authorize(approvedServer, requestedScope, signal);
