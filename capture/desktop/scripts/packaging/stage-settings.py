@@ -72,6 +72,24 @@ def main():
                     ignore=shutil.ignore_patterns("foundation-*"))
     shutil.copy2(frontend / "dist/settings.html", app / "dist/settings.html")
     shutil.copy2(frontend / "dist/onboarding.html", app / "dist/onboarding.html")
+    installer_ui = app / "electron/installer/ui"
+    (installer_ui / "src/installer").mkdir(parents=True)
+    shutil.copy2(frontend / "dist/src/installer/index.html", installer_ui / "src/installer/index.html")
+    shutil.copytree(frontend / "dist/assets", installer_ui / "assets")
+    # Authored hosts stay TypeScript; only generated CJS enters the signed package.
+    subprocess.run(["node", "-e", """
+const fs = require('node:fs'), path = require('node:path'), ts = require('typescript');
+const destination = process.argv[1];
+for (const name of ['main', 'preload']) {
+  const file = path.join('electron/installer', name + '.cts');
+  const result = ts.transpileModule(fs.readFileSync(file, 'utf8'), {
+    fileName: file, reportDiagnostics: true,
+    compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022, esModuleInterop: true}
+  });
+  if (result.diagnostics?.length) throw Error('Installer host transpilation failed');
+  fs.writeFileSync(path.join(destination, name + '.cjs'), result.outputText);
+}
+""", str(app / "electron/installer")], cwd=frontend, check=True)
     (app / "package.json").write_text(json.dumps({"name": "apparent-settings", "version": "0.0.0", "main": "electron/settings.cjs"}) + "\n")
     shutil.copytree(frontend / "node_modules/electron/dist", destination / "runtime", symlinks=True)
     if sys.platform == "darwin":

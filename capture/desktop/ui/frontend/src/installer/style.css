@@ -1,0 +1,35 @@
+@font-face { font-family: 'Host Grotesk'; src: url('../../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf') format('truetype'); font-weight: 100 900; font-display: swap; }
+html, body, #root { min-height: 100%; margin: 0; }
+.installer { min-height: 100vh; padding: 24px; box-sizing: border-box; background: var(--apparent-paper); color: var(--apparent-carbon); font: 400 1.125rem/1.5 'Host Grotesk', sans-serif; }
+.installer header { font-size: 1rem; margin-bottom: 16px; }
+.installer h1 { font-size: 2.25rem; font-weight: 500; line-height: 1.15; margin: 0 0 12px; }
+.installer p { margin: 0; max-width: 60ch; }
+.installer button { min-height: 44px; border-radius: 0; padding: 8px 16px; font: 500 1.125rem/1.5 'Host Grotesk', sans-serif; }
+.installer button:focus-visible { outline: 2px solid var(--apparent-signal); outline-offset: 3px; }
+.installer-journey { position: relative; display: flex; justify-content: space-between; align-items: center; gap: 24px; margin: 16px auto; padding-top: 64px; max-width: 480px; min-height: 176px; }
+.installer-app, .installer-applications { display: flex; flex-direction: column; align-items: center; justify-content: center; width: 128px; min-height: 128px; gap: 8px; text-align: center; }
+.installer .installer-app { padding: 48px 0 0; min-height: 176px; border: 0; background: none; box-shadow: none; cursor: pointer; }
+.installer .installer-app:disabled { opacity: 1; cursor: default; }
+.installer-cargo { position: relative; display: block; width: 72px; height: 72px; flex: none; }
+.installer-app-icon { display: block; width: 72px; height: 72px; }
+.installer-cargo .installer-frog { position: absolute; width: 64px; height: 64px; object-fit: contain; bottom: calc(100% - 18px); left: 50%; transform: translateX(-50%); }
+.installer-applications { border: 2px dashed var(--apparent-signal); background: var(--apparent-stock); }
+.installer-applications svg { width: 72px; height: 64px; fill: var(--apparent-lilac); }
+.installer-folder-front { fill: var(--apparent-stock); }
+.installer-folder-mark { stroke: var(--apparent-signal); stroke-width: 3; stroke-linecap: round; stroke-linejoin: round; fill: none; }
+.installer-journey[data-hopping=true] .installer-app { animation: installer-hop 1000ms ease-in-out both; pointer-events: none; }
+.installer-journey[data-phase=installing] .installer-app, .installer-journey[data-installed=true] .installer-app { visibility: hidden; }
+.installer-actions, .installer footer { display: flex; gap: 16px; flex-wrap: wrap; align-items: center; }
+.installer footer { margin-top: 16px; }
+.installer small { display: block; width: 100%; font-size: 1rem; }
+.installer [role=alert] { border-left: 3px solid var(--apparent-signal); padding-left: 16px; }
+@keyframes installer-hop {
+  0% { transform: translate(0,0); opacity: 1; }
+  12% { transform: translate(0,8px) scale(1.04,.94); }
+  50% { transform: translate(calc(var(--installer-hop-x, 176px) / 2),calc(var(--installer-hop-y, 0px) / 2 - 96px)); opacity: 1; }
+  82% { transform: translate(var(--installer-hop-x, 176px),var(--installer-hop-y, 0px)) scale(.65); opacity: 1; }
+  100% { transform: translate(var(--installer-hop-x, 176px),var(--installer-hop-y, 0px)) scale(.16); opacity: 0; }
+}
+@media (prefers-reduced-motion: reduce) { .installer-journey[data-hopping=true] .installer-app { animation: none; } }
+
+@media (max-width: 600px) { .installer { padding: 24px; } .installer-journey { gap: 16px; } .installer-app, .installer-applications { width: 96px; } }

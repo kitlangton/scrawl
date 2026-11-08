@@ -28,4 +28,21 @@ check "small screen"              0,0,740,600       0,0,740,600 inside
 check "window fills a tiny screen" 0,0,740,300      0,0,740,300 clamped
 check "screen recording covers lower content with room below" 1640,320,740,820 $V inside --screen-recording
 check "screen recording stays inside on small screen" 0,0,740,600 0,0,740,600 inside --screen-recording
+# Exercise the actual helper geometry: the opaque card must span the lower
+# content region while leaving the upper list exposed at standard/small sizes.
+for settings in 1640,320,740,820 0,0,740,600; do
+  out=$($H permission-panel --plan --settings "$settings" --visible "$V" --screen-recording)
+  if ! python3 - "$out" "$settings" <<'PYTEST'
+import json,sys
+x,y,w,h=map(float,sys.argv[2].split(','))
+cx,cy,cw,ch=json.loads(sys.argv[1])['frame']
+assert cy <= y+12, (cy,y)
+assert ch >= h*.5-20, (ch,h)
+assert cy+ch <= y+h*.5, (cy,ch,y,h)
+assert cx <= x+252 and cx+cw >= x+w-20, (cx,cw,x,w)
+PYTEST
+  then
+    failures=$((failures + 1))
+  fi
+done
 exit $failures

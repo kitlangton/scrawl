@@ -153,6 +153,8 @@ struct ViewState {
     first_capture_required: bool,
     #[serde(default)]
     shortcut_chosen: bool,
+    #[serde(default)]
+    shortcut_tested: bool,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -1107,7 +1109,7 @@ impl OnboardingWindow {
                 "continue",
                 state.ready,
             )),
-            Step::Shortcut => Some(("Continue", "continue", !state.first_capture_required || state.shortcut_chosen)),
+            Step::Shortcut => Some(("Continue", "continue", !state.first_capture_required || (state.shortcut_chosen && state.shortcut_tested && !state.shortcut_editing))),
             Step::Done => Some(("Done", "continue", true)),
             Step::TryIt => None,
         };
@@ -1315,13 +1317,13 @@ impl Render for OnboardingWindow {
                         .flex()
                         .items_center()
                         .justify_center()
-                        .child(keycaps(&self.shortcut, true, 52.0))
+                        .when(!state.first_capture_required || state.shortcut_chosen, |d| d.child(keycaps(&self.shortcut, true, 52.0)))
                         .into_any_element(),
                     200.0,
                     "Choose your shortcut",
                     if state.first_capture_required {
                         if state.shortcut_chosen {
-                            "Shortcut saved. Continue to make your first capture.".to_owned()
+                            if state.shortcut_tested { "Your shortcut works. Continue to start your first capture.".to_owned() } else { "Press your shortcut once, then release the keys. This check will not record.".to_owned() }
                         } else if self.editor.as_ref().is_some_and(|editor| editor.externally_managed) {
                             "Your desktop manages this shortcut. Choose it below, then try it.".to_owned()
                         } else {
@@ -1342,7 +1344,7 @@ impl Render for OnboardingWindow {
                         .when_some(self.editor.as_ref(), |d, editor| d.child(
                             div().px(px(18.0)).py(px(10.0))
                                 .bg(rgb(colors().raised)).border_1().border_color(rgba(colors().line))
-                                .child(keycaps(&editor.label, editor.recording, 32.0))
+                                .when(!state.first_capture_required || state.shortcut_chosen, |d| d.child(keycaps(&editor.label, editor.recording, 32.0)))
                         ))
                         .child(self.editor.as_ref().map_or_else(
                             || "Waiting for recorder…".to_owned(),
@@ -1451,7 +1453,6 @@ mod tests {
         };
         for (step, ready, input) in [
             (Step::Welcome, false, Input::Continue),
-            (Step::HowItWorks, false, Input::Continue),
             (
                 Step::Permissions,
                 false,

@@ -37,7 +37,8 @@ class PreviewReleaseTest(unittest.TestCase):
             (root / "capture/desktop/scripts/packaging/stage-settings.py").write_text(
                 "import sys\nfrom pathlib import Path\n"
                 "p = Path(sys.argv[1]) / 'app/dist/settings.html'\np.parent.mkdir(parents=True)\np.write_text('synthetic Settings')\n"
-                "r = Path(sys.argv[1]) / 'runtime/Electron.app/Contents/MacOS/Electron'\nr.parent.mkdir(parents=True)\nr.write_text('synthetic shared runtime')\n")
+                "r = Path(sys.argv[1]) / 'runtime/Electron.app/Contents/MacOS/Electron'\nr.parent.mkdir(parents=True)\nr.write_text('synthetic shared runtime')\n"
+                "i = Path(sys.argv[1]) / 'app/electron/installer/main.cjs'\ni.parent.mkdir(parents=True)\ni.write_text('synthetic installer host')\n")
             (root / "bin/cargo").write_text(
                 '#!/bin/sh\nmkdir -p target/release\n'
                 'printf "test" > target/release/apparent\n'
@@ -46,6 +47,8 @@ class PreviewReleaseTest(unittest.TestCase):
             (root / "bin/node").write_text('#!/bin/sh\nset -eu\ncase "$1" in\n'
                 '*/package-notes.mjs) mkdir -p "$2/dist"; printf synthetic > "$2/dist/index.html" ;;\n'
                 '*) exit 1 ;;\nesac\n')
+            (root / "bin/lipo").write_text('#!/bin/sh\nprintf "arm64\\n"\n')
+            (root / "bin/xcrun").write_text('#!/bin/sh\nset -eu\nwhile [ "$#" -gt 0 ]; do if [ "$1" = -o ]; then shift; printf "fixture native launcher" > "$1"; chmod +x "$1"; fi; shift; done\n')
             (root / "bin/plutil").write_text('#!/bin/sh\nexit 0\n')
             (root / "bin/codesign").write_text('#!/bin/sh\nexit 0\n')
             (root / "bin/hdiutil").write_text(
@@ -54,7 +57,7 @@ class PreviewReleaseTest(unittest.TestCase):
             )
             (root / "bin/ditto").write_text(
                 '#!/bin/sh\n'
-                'if [ "$1" = -c ]; then eval "out=\\${$#}"; printf "fake zip" > "$out"; '
+                'if [ "$1" = -c ]; then eval "out=\\${$#}"; printf "fake zip:%s" "$5" > "$out"; '
                 'else cp -R "$1" "$2"; fi\n'
             )
             for tool in (root / "bin").iterdir():
@@ -84,6 +87,20 @@ class PreviewReleaseTest(unittest.TestCase):
             self.assertTrue((root / "dist/Apparent-Preview-0.123.2-arm64.dmg.sha256").is_file())
             self.assertTrue((root / "dist/Apparent-Preview-0.123.2-arm64.zip").is_file())
             self.assertTrue((root / "dist/preview-staging/Applications").is_symlink())
+            installer = root / "dist/preview-staging/Install Apparent.app"
+            installer_info = plistlib.loads((installer / "Contents/Info.plist").read_bytes())
+            self.assertEqual(installer_info["CFBundleIdentifier"], "dev.simonvanlaak.apparent.preview.installer")
+            self.assertEqual(installer_info["CFBundleVersion"], info["CFBundleVersion"])
+            self.assertTrue((installer / "Contents/MacOS/Installer").is_file())
+            payload = installer / "Contents/SharedSupport/Apparent Preview.app"
+            self.assertEqual(plistlib.loads((payload / "Contents/Info.plist").read_bytes()), info)
+            self.assertEqual((payload / "Contents/MacOS/apparent").read_bytes(), b"test")
+            self.assertTrue((installer / "Contents/Resources/installer-ui/electron/installer/main.cjs").is_file())
+            self.assertIn("does not automatically run", (root / "dist/preview-staging/Start here.txt").read_text())
+            # The updater archive remains the regular app, never the installer container.
+            archive = (root / "dist/Apparent-Preview-0.123.2-arm64.zip").read_text()
+            self.assertEqual(archive, "fake zip:" + str(root / "dist/Apparent Preview.app"))
+
 
     def test_app_icon_uses_the_approved_boxed_a_not_the_wordmark_or_brush(self):
         svg = '{http://www.w3.org/2000/svg}'

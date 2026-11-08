@@ -251,9 +251,9 @@ enum PermissionPanel {
     let below = NSRect(x: clampX(column), y: settings.minY - gap - size.height, width: size.width, height: size.height)
     if !layout.screenRecording && fits(below) { return (below, .below) }
 
-    let insideY = max(settings.minY + layout.insideBottom, visible.minY + 8)
+    let insideY = max(settings.minY + (layout.screenRecording ? 8 : layout.insideBottom), visible.minY + 8)
     let inside = NSRect(x: column, y: insideY, width: size.width, height: size.height)
-    if fits(inside), inside.minX >= settings.minX, inside.maxY <= settings.minY + settings.height * 0.3 {
+    if fits(inside), inside.minX >= settings.minX, inside.maxY <= settings.minY + settings.height * (layout.screenRecording ? 0.5 : 0.3) {
       return (inside, .inside)
     }
 
@@ -279,7 +279,7 @@ enum PermissionPanel {
     guard let settings = option("--settings", in: arguments).flatMap(parseRect),
           let visible = option("--visible", in: arguments).flatMap(parseRect)
     else { fail("permission-panel --plan needs --settings X,Y,W,H --visible X,Y,W,H") }
-    let plan = dock(settings: settings, visible: visible, layout: Layout(settingsWidth: settings.width, screenRecording: arguments.contains("--screen-recording")))
+    let plan = dock(settings: settings, visible: visible, layout: Layout(settingsWidth: settings.width, settingsHeight: settings.height, screenRecording: arguments.contains("--screen-recording")))
     let f = plan.frame
     emit(["dock": plan.dock.rawValue, "frame": [f.minX, f.minY, f.width, f.height].map { Double($0) }])
     exit(0)
@@ -288,6 +288,7 @@ enum PermissionPanel {
   /// Card metrics. The app row matches the Privacy list's column in the Settings window.
   struct Layout: Equatable {
     var screenRecording = false
+    var settingsHeight: CGFloat = 0
     var rowWidth: CGFloat
     let instructionHeight: CGFloat = 28
     /// Less above the instruction than below the row: line height already pads the text.
@@ -305,8 +306,9 @@ enum PermissionPanel {
     let icon: CGFloat = 26
     let iconLeading: CGFloat = 10
 
-    init(settingsWidth: CGFloat, screenRecording: Bool = false) {
+    init(settingsWidth: CGFloat, settingsHeight: CGFloat = 0, screenRecording: Bool = false) {
       self.screenRecording = screenRecording
+      self.settingsHeight = settingsHeight
       let column = settingsWidth - PermissionPanel.settingsListLeading - PermissionPanel.settingsListTrailing
       rowWidth = max(320, min(column, 640))
     }
@@ -314,7 +316,10 @@ enum PermissionPanel {
     var textLeading: CGFloat { iconLeading + icon + 10 }
     var rowY: CGFloat { top + instructionHeight + gap }
     var cardSize: NSSize {
-      NSSize(width: gutter + rowWidth + padding, height: rowY + rowHeight + padding)
+      // Cover the lower content region, not just the draggable app row.
+      // Keep the upper screen-recording list available as the drop destination.
+      let height = screenRecording ? max(rowY + rowHeight + padding, settingsHeight * 0.5 - 16) : rowY + rowHeight + padding
+      return NSSize(width: gutter + rowWidth + padding, height: height)
     }
   }
 }
@@ -807,7 +812,7 @@ extension PermissionPanel {
     private func dock(_ id: CGWindowID, _ frame: CGRect) {
       settingsID = id
       settingsFrame = frame
-      layout = Layout(settingsWidth: frame.width, screenRecording: kind == .screenRecording)
+      layout = Layout(settingsWidth: frame.width, settingsHeight: frame.height, screenRecording: kind == .screenRecording)
       let target = dockFrame(settingsQuartz: frame, layout: layout)
       buildPanel(at: target)
       if reduceMotion || sourceQuartz == nil {
@@ -941,7 +946,7 @@ extension PermissionPanel {
     /// The panel follows Settings 1:1 (the user is moving it) and steps aside while another app
     /// is in front.
     private func track() {
-      guard !finished, let panel else { return }
+      guard !finished, var panel = self.panel else { return }
       var frame = settingsID.flatMap(SettingsWindow.frame(of:))
       if frame == nil, let window = SettingsWindow.main() {
         settingsID = window.id
@@ -955,7 +960,19 @@ extension PermissionPanel {
       missingSince = nil
       if frame != settingsFrame {
         settingsFrame = frame
-        moveDock(to: dockFrame(settingsQuartz: frame, layout: layout))
+        let nextLayout = Layout(settingsWidth: frame.width, settingsHeight: frame.height, screenRecording: kind == .screenRecording)
+        if kind == .screenRecording && nextLayout != layout {
+          layout = nextLayout
+          let previousAlpha = panel.alphaValue
+          panel.close()
+          buildPanel(at: dockFrame(settingsQuartz: frame, layout: layout))
+          guard let replacement = self.panel else { return }
+          panel = replacement
+          panel.alphaValue = previousAlpha
+          panel.orderFrontRegardless()
+        } else {
+          moveDock(to: dockFrame(settingsQuartz: frame, layout: layout))
+        }
       }
       if dropRace == nil, flight == nil {
         let front = NSWorkspace.shared.frontmostApplication

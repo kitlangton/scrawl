@@ -132,14 +132,27 @@ on run argv
         if not frontmost then error "Owned Electron process is not frontmost"
         if operation is "go" then
           keystroke "g" using {command down, shift down}
-          delay 0.4
-          if not frontmost then error "Focus left owned Electron process"
-          -- argv, not script interpolation: spaces, quotes and accents remain data.
-          set goSheets to sheets of picker
-          if (count of goSheets) is not 1 then error "Owned Go to Folder sheet missing or ambiguous"
+          -- NSOpenPanel may animate this sheet after a fixed 0.4 s delay.
+          -- Wait only on this owned picker's immediate sheet and path field;
+          -- do not resend the shortcut or inspect another process/window.
+          repeat 20 times
+            if not frontmost then error "Focus left owned Electron process"
+            set goSheets to sheets of picker
+            if (count of goSheets) > 1 then error "Owned Go to Folder sheet ambiguous"
+            if (count of goSheets) is 1 then exit repeat
+            delay 0.1
+          end repeat
+          if (count of goSheets) is not 1 then error "Owned Go to Folder sheet missing"
           set goSheet to item 1 of goSheets
-          set pathFields to text fields of goSheet
-          if (count of pathFields) is not 1 then error "Owned Go to Folder path field missing or ambiguous"
+          repeat 20 times
+            if not frontmost then error "Focus left owned Electron process"
+            set pathFields to text fields of goSheet
+            if (count of pathFields) > 1 then error "Owned Go to Folder path field ambiguous"
+            if (count of pathFields) is 1 then exit repeat
+            delay 0.1
+          end repeat
+          if (count of pathFields) is not 1 then error "Owned Go to Folder path field missing"
+          -- argv, not script interpolation: spaces, quotes and accents remain data.
           set pathField to item 1 of pathFields
           set value of pathField to (item 2 of argv)
           if (value of pathField as text) is not (item 2 of argv) then error "Go to Folder path readback differs"
@@ -257,9 +270,9 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     throw new Error(`${label}: ${last?.message ?? 'not ready'}`, { cause: last });
   };
   let env;
-  const osa = async (script, args = []) => {
+  const osa = async (script, args = [], cap = 3500) => {
     const { stdout } = await run('/usr/bin/osascript', ['-e', script, ...args], {
-      env, timeout: budget(3500), killSignal: 'SIGKILL', maxBuffer: 32768,
+      env, timeout: budget(cap), killSignal: 'SIGKILL', maxBuffer: 32768,
     });
     return stdout.trim();
   };
@@ -441,7 +454,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
-    await osa(panelScript, [String(electronChild.pid), selected, 'go']);
+    await osa(panelScript, [String(electronChild.pid), selected, 'go'], 6500);
     report.nativeBeforeChoose = await poll(() => panel('inspect'), 'Picker after Go to Folder');
     // Optional evidence: bounded rectangle of our verified Electron window only.
     const bounds = report.nativeBeforeChoose.match(/bounds=(-?\d+),(-?\d+),(\d+),(\d+)$/);

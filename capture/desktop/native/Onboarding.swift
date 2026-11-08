@@ -154,6 +154,7 @@ struct OnboardingState: Decodable, Equatable {
   var shortcutEditing = false
   var firstCaptureRequired = false
   var shortcutChosen = false
+  var shortcutTested = false
   var pickerNote = false
   var speech: SpeechStatus?
   /// The demo on how-it-works: nil, "skipped", "watched" or "practiced".
@@ -616,7 +617,7 @@ struct OnboardingView: View {
     case "done": ("It's on your clipboard", "Press ⌘V in your agent. apparent stays in the menu bar; tap \(s) whenever you want to show something.")
     case "shortcut": ("Choose your shortcut", state.firstCaptureRequired
       ? (state.shortcutChosen
-          ? "Shortcut saved. Continue to make your first capture."
+          ? (state.shortcutTested ? "Your shortcut works. Continue to start your first capture." : "Press your shortcut once, then release the keys. This check will not record.")
           : "Choose a key combination and press it here. You will use it to start and finish recordings.")
       : state.shortcutEditing
       ? (model.shortcutEditor?.recording == true
@@ -630,7 +631,9 @@ struct OnboardingView: View {
       Group {
         switch state.step {
         case "try-it": TryArt(shortcut: s)
-        case "shortcut": Keycaps(shortcut: s, litMods: true, size: 52)
+        case "shortcut":
+          if !state.firstCaptureRequired || state.shortcutChosen { Keycaps(shortcut: s, litMods: true, size: 52) }
+          else { Text("No shortcut selected").font(OnboardingBrand.font(18)) }
         case "done": DoneArt()
         default: brandWordmark
         }
@@ -652,7 +655,7 @@ struct OnboardingView: View {
       if state.step == "shortcut" {
         if state.shortcutEditing, let editor = model.shortcutEditor {
           VStack(spacing: 8) {
-            Keycaps(shortcut: editor.label, litMods: editor.recording, size: 30)
+            Keycaps(shortcut: state.firstCaptureRequired && !state.shortcutChosen ? "" : editor.label, litMods: editor.recording, size: 30)
               .padding(.horizontal, 18)
               .padding(.vertical, 10)
               .background(TourBrand.stock)
@@ -672,7 +675,9 @@ struct OnboardingView: View {
           .padding(.top, 12)
         }
         if !state.shortcutEditing || model.shortcutEditor?.recording == false {
-          QuietButton(title: state.firstCaptureRequired ? "Set shortcut" : "Change shortcut") { model.send("change-shortcut") }
+          QuietButton(title: model.shortcutEditor?.externallyManaged == true ? "Use desktop shortcut" : state.shortcutChosen ? "Change shortcut" : "Choose shortcut") {
+            model.send(model.shortcutEditor?.externallyManaged == true ? "use-desktop-shortcut" : "change-shortcut")
+          }
             .padding(.top, 18)
         }
       }
@@ -807,7 +812,7 @@ struct OnboardingView: View {
     case "how-it-works": return state.tutorialSeen ? ("Continue", "continue", true) : ("Skip", "skip", true)
     case "permissions":
       return (state.fix ? "Done" : "Continue", "continue", state.ready)
-    case "shortcut": return ("Continue", "continue", !state.firstCaptureRequired || state.shortcutChosen)
+    case "shortcut": return ("Continue", "continue", !state.firstCaptureRequired || (state.shortcutChosen && state.shortcutTested && !state.shortcutEditing))
     case "done": return ("Done", "continue", true)
     default: return nil
     }

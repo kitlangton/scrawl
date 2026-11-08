@@ -30,6 +30,21 @@ all later preview releases: replacing it breaks updates for installed copies. Th
 Sparkle key and production appcast are unrelated. Test an actual update between two previews on
 a Mac before announcing it; CI packaging and an appcast alone do not prove installation works.
 
+The DMG also contains **Install Apparent.app**. Double-click it to open the shared
+React/shadcn installer, then click the app or its perched frog, or drag the combined item onto Applications.
+The frog and app hop into the folder together; there is no separate Install button.
+Downloading or mounting the DMG does not automatically execute the installer.
+The native adapter verifies the bundled app signature, identity and build number,
+requires explicit replacement confirmation, refuses running apps and downgrades,
+and preserves the old bundle before an exclusive rename. It never quits an app,
+changes recording permissions or reads captures/config. A previous installation is
+kept in a hidden `.apparent-previous-<UUID>.backup` beside the new app. If Applications
+requires privileges, use Finder; this installer does not request elevated access.
+The installer is separately signed/notarized before the DMG; the Sparkle ZIP
+continues to contain only the regular `Apparent Preview.app` with its existing feed.
+Native acceptance must exercise the signed DMG installation and launch on Mac;
+renderer tests and safe-copy fixtures alone do not establish installed behavior.
+
 The app is named `Apparent Preview` with bundle ID `dev.simonvanlaak.apparent.preview`, so it
 does not overwrite `Apparent.app` or follow Kit's Sparkle feed. Release
 [0.11.1](https://github.com/tryapparent/apparent/releases/tag/preview-mac-11-1) is signed with
