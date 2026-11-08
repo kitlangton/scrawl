@@ -768,9 +768,9 @@ pub(in crate::capture::desktop) fn poll_status_bar() {
     static LAST: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let revision = linux::appearance::revision();
-    if last.is_some_and(|(at, previous)| {
-        at.elapsed() < Duration::from_secs(5) && previous == revision
-    }) {
+    if last
+        .is_some_and(|(at, previous)| at.elapsed() < Duration::from_secs(5) && previous == revision)
+    {
         return;
     }
     *last = Some((Instant::now(), revision));
