@@ -130,10 +130,10 @@ test('startup delay does not consume requested duration and request persistence 
   await assert.rejects(recordWithEngine(broken,'/tmp/fixture.apparent',1,()=>false,async()=>{calls.push('persist');}),/ambiguous start/);
 });
 
-// Preserve original Rust fixtures; only this origin inference is deliberately corrected.
+// Preserve original Rust fixtures; origin and ink-availability inferences are deliberately corrected.
 const originNeutralTelemetry = (text: string) => text.replace(
   "Interaction context: timed CLI video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes. Use the app's recording shortcut for interaction context.",
-  "Interaction context: video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes.",
+  "Interaction context: click telemetry was not collected. A visible click in the video will not appear in events, marks or click keyframes.",
 );
 
 test('existing Rust inspection fixtures preserve current/legacy raw JSON, summaries and mark semantics',async()=>{
