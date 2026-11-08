@@ -22,6 +22,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --experimental-strip-types --test enablement/prerequisites/native.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
@@ -137,6 +141,29 @@ jobs:
       - uses: browser-actions/setup-chrome@v1
         if: needs.select.outputs.browser == 'true'
         id: chrome
+      - name: Prepare private temporary root before first Cargo
+        if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
+        shell: bash
+        run: |
+          verification_tmp="$(mktemp -d "$HOME/.apparent-prerequisites.XXXXXX")"
+          echo "APPARENT_PREREQUISITE_TMP=$verification_tmp" >> "$GITHUB_ENV"
+          echo "TMPDIR=$verification_tmp" >> "$GITHUB_ENV"
+          TMPDIR="$verification_tmp" python3 enablement/verification.py --base unknown --preflight
+      - name: Cache Electron downloads (not installed modules or test receipts)
+        if: needs.select.outputs.root == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/electron-downloads
+          key: electron-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('capture/desktop/ui/frontend/package-lock.json') }}
+      - name: Prepare locked native prerequisites before first Cargo
+        if: needs.select.outputs.root == 'true'
+        timeout-minutes: 5
+        env:
+          electron_config_cache: ${{ runner.temp }}/electron-downloads
+        run: |
+          npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
+          node capture/desktop/ui/frontend/node_modules/electron/install.js
+          node --experimental-strip-types enablement/prerequisites/native.ts
       - name: Verify the independent Connect client package
         if: needs.select.outputs.root == 'true'
         run: |
@@ -174,10 +201,7 @@ jobs:
         if: needs.select.outputs.root == 'true'
         shell: bash
         run: |
-          npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
-          # Electron 45 downloads lazily. Resolve it once before the test;
-          # do not capture its download log as part of an executable pathname.
-          node -e "require('./capture/desktop/ui/frontend/node_modules/electron')"
+          # Installation/download and executable readiness passed before Cargo.
           if [ "$RUNNER_OS" = macOS ]; then
             electron="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
           else
@@ -271,6 +295,13 @@ jobs:
             ${{ runner.temp }}/apparent-storage-native/*.log
           if-no-files-found: error
           retention-days: 7
+      - name: Clean private prerequisite temporary root
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${APPARENT_PREREQUISITE_TMP:-}" ]; then
+            rm -rf -- "$APPARENT_PREREQUISITE_TMP"
+          fi
 
       - name: Retain observation-only timings, including failures
         if: always() && steps.timing.outcome != 'skipped' && steps.timing.outcome != ''
