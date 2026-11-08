@@ -1,10 +1,12 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('apparentSettingsMounted', async () => {
+  // React has committed its DOM. Do not hold that fact behind hidden-page
+  // animation scheduling: Chromium may already have supplied first paint.
+  await ipcRenderer.invoke('apparent:settings-mounted');
   // The hidden page gets a render opportunity between these callbacks. Keep
   // this in the isolated preload, independent of the page's animation helpers.
   await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
-  await ipcRenderer.invoke('apparent:settings-mounted');
   await ipcRenderer.invoke('apparent:settings-frame-ready');
 });
 

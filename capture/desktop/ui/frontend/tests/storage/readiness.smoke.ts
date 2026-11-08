@@ -43,8 +43,9 @@ test('missing Settings renderer stays hidden and exits for native fallback', { t
 });
 
 // Hidden documents may defer animation callbacks even after React commits.
-// Load the shipped renderer while modelling that scheduling constraint only.
-test('mounted Settings becomes visible without hidden animation callbacks', { timeout: 25000 }, async t => {
+// Cover both worlds: pausing page callbacks does not pause the isolated preload.
+for (const world of ['page', 'preload']) {
+test(`mounted Settings becomes visible without ${world}-world animation callbacks`, { timeout: 25000 }, async t => {
   const frontend = fileURLToPath(new URL('../..', import.meta.url));
   const fixture = await fs.mkdtemp(path.join(os.tmpdir(), 'ap-mounted-'));
   let app: Awaited<ReturnType<typeof _electron.launch>> | undefined;
@@ -56,10 +57,15 @@ test('mounted Settings becomes visible without hidden animation callbacks', { ti
   await fs.cp(path.join(frontend, 'dist'), path.join(fixture, 'dist'), { recursive: true });
   await fs.symlink(path.join(frontend, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
   await fs.writeFile(path.join(fixture, 'package.json'), JSON.stringify({ main: 'electron/main.cjs' }));
-  const html = path.join(fixture, 'dist/settings.html');
-  await fs.writeFile(path.join(fixture, 'dist/paused-animation.js'),
-    'window.requestAnimationFrame = () => 1; window.cancelAnimationFrame = () => {};');
-  await fs.writeFile(html, (await fs.readFile(html, 'utf8')).replace('<head>', '<head><script src="./paused-animation.js"></script>'));
+  const paused = 'globalThis.requestAnimationFrame = () => 1; globalThis.cancelAnimationFrame = () => {};';
+  if (world === 'page') {
+    const html = path.join(fixture, 'dist/settings.html');
+    await fs.writeFile(path.join(fixture, 'dist/paused-animation.js'), paused);
+    await fs.writeFile(html, (await fs.readFile(html, 'utf8')).replace('<head>', '<head><script src="./paused-animation.js"></script>'));
+  } else {
+    const preload = path.join(fixture, 'electron/storage-preload.cjs');
+    await fs.writeFile(preload, paused + '\n' + await fs.readFile(preload, 'utf8'));
+  }
   app = await _electron.launch({ args: [fixture, '--settings-storage'],
     env: { ...process.env, HOME: fixture, XDG_CONFIG_HOME: path.join(fixture, 'config') } });
   const page = await app.firstWindow();
@@ -68,6 +74,7 @@ test('mounted Settings becomes visible without hidden animation callbacks', { ti
   await expect.poll(() => app!.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
   await expect(page.getByText('CAPTURE SETTINGS', { exact: true })).toBeVisible();
 });
+}
 
 test('parent EOF with broken stdout exits quietly instead of opening an error dialog', { timeout: 15000 }, async t => {
   const frontend = fileURLToPath(new URL('../..', import.meta.url));
