@@ -11,7 +11,7 @@ pub(crate) mod launch_instance;
 pub(crate) mod launch_url;
 pub(crate) mod page;
 pub(crate) mod shutdown;
-mod storage_preferences;
+pub(in crate::capture::desktop) mod storage_preferences;
 pub(crate) mod notes;
 
 pub(crate) mod electron;

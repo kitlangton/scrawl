@@ -87,11 +87,11 @@
       "id": "adaptive-mac-menu-bar-icon",
       "added": "2026-11-02",
       "group": "platforms",
-      "name": "Adaptive Mac menu bar icon",
-      "says": "The Mac menu bar keeps the Apparent a in purple: Lilac on Carbon in dark appearance, darker purple on Paper in light appearance. It follows live menu bar appearance changes without restarting. The app icon and Linux tray are unchanged.",
+      "name": "Adaptive menu bar and tray icon",
+      "says": "The Mac menu bar and Linux tray keep the Apparent a in purple: Lilac on Carbon in Dark mode, darker purple on Paper in Light mode. They follow live system appearance changes without restarting. The boxed glyph stays readable on independently themed panels. Linux requires a tray host. The app icon is unchanged.",
       "status": "main",
-      "platforms": ["mac"],
-      "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon"]
+      "platforms": ["mac", "linux"],
+      "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon", "capture/desktop/docs/linux/linux.md#tray-appearance"]
     },
     {
       "id": "typed-capture-notes",
@@ -203,7 +203,7 @@
       "id": "connect-settings",
       "group": "delivery",
       "name": "Connect account controls in General Settings",
-      "says": "General Settings uses a benefit-led Connect card above Launch at login, with explicit upload consent, browser approval and verified local activation. Account controls include upload disable/re-enable, connection checks and confirmed disconnect; functional colors distinguish success, progress, caution and failure. Cancel, disable uploads and disconnect preserve local capture; account connection does not create public links.",
+      "says": "General Settings uses a benefit-led Connect card above Launch at login, with explicit upload consent, browser approval and verified local activation. The account control shows a bounded verified email initial or a neutral person icon, with readable light/dark contrast. Account controls include upload disable/re-enable, connection checks and confirmed disconnect; functional colors distinguish success, progress, caution and failure. Cancel, disable uploads and disconnect preserve local capture; account connection does not create public links.",
       "status": "experiment:connectSettings",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],
@@ -1118,7 +1118,7 @@
       "status": "main",
       "platforms": ["mac", "linux"],
       "added": "2026-10-22",
-      "note": "In installed native Settings, Change… is Mac only; elsewhere set capturesDir. The separate default-off Electron experiment below adds a Linux picker, not native Settings parity.",
+      "note": "Linux Settings keeps Storage in the same native frame, including Change/Reset through the desktop folder picker. Effective location, overrides and fallback are shown; existing captures are not moved. macOS retains its installed Storage presentation and native fallback.",
       "pr": 86,
       "docs": ["README.md#settings"],
       "config": [{ "key": "capturesDir", "value": "\"~/Apparent\"", "does": "Where captures are written" }]
@@ -1146,12 +1146,12 @@
         "mac",
         "linux"
       ],
-      "note": "Default on; experiments.electronCaptureLocation=false restores native Storage on reopen. Missing packaged assets or an Electron crash also use native Storage. Other Settings pages retain native presentation. Existing worker timing and usage-scan limits are unchanged. Candidate installed routing and platform acceptance are tracked in #291; prior foundation evidence does not prove this routing change.",
+      "note": "On macOS, default on; experiments.electronCaptureLocation=false restores native Storage on reopen. Missing packaged assets or an Electron crash also use native Storage. Linux installed Settings keeps all panes in one native frame with working folder, retention and usage controls; the opt-in Electron development window and its bridge remain available. Existing cleanup timing and usage-scan limits are unchanged.",
       "config": [
         {
           "key": "experiments.electronCaptureLocation",
           "value": "true by default; false opts out",
-          "does": "Use Electron Storage Settings and admit its Rust bridge; false restores native Storage"
+          "does": "Admit the Electron Storage bridge; on macOS also select its installed Storage presentation. Linux installed Settings stays native."
         }
       ],
       "docs": [

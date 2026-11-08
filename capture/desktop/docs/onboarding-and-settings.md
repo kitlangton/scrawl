@@ -5,17 +5,20 @@
 The Mac status item keeps the approved lowercase “a” at 18 points. It uses Lilac
 on Carbon in dark appearance and the website's darker purple (`#7a58c7`) on
 Paper (`#faf9f6`) in light appearance. The latter has 4.93:1 internal contrast.
-It follows the actual status button's effective appearance through AppKit KVO,
-including live changes, rather than checking the app's theme only at launch.
+It follows the application's inherited system appearance through AppKit KVO,
+including live changes. A full-screen menu bar can stay dark in both system
+modes, so the status button's own appearance must not select the icon variant.
 There is no app appearance setting or restart requirement. The Dock/app icon
-keeps its Carbon/Lilac colors. Linux's tray is unchanged.
+keeps its Carbon/Lilac colors. The Linux tray uses the same boxed variants; see
+[Linux tray appearance](linux/linux.md#tray-appearance).
 This is an OS adapter change, not a new Settings workflow;
 the development Electron Settings window does not create a second tray icon.
 
 Regenerate the light variant from the approved menu bar raster with
 `swift capture/desktop/scripts/native/make-menu-bar-light.swift`; append
 `--check` to verify shape, colors and contrast. Native acceptance still needs the running
-candidate's status item on light and dark menu bars, a live transition, and an
+candidate's status item in Light and Dark mode, in full-screen and normal windows,
+a live transition without restarting the app, and an
 open menu. An asset check or successful build alone is not that proof.
 
 Read this before changing `capture/desktop/settings/onboarding.rs`, `capture/desktop/settings/settings.rs`, `composition/command_line.rs` or the helper's `Onboarding.swift`, `PermissionPanel.swift` and `Settings.swift`.
@@ -145,9 +148,10 @@ raw errors, tokens and device secrets never enter its presentation contract.
 
 Connect uses the accepted Paper card and the shared frog artwork, without a separate
 section heading. The invitation reads “Help others see what you mean.”; successful
-local activation becomes a compact confirmation. The top-right A opens connection
-controls, not an asserted account identity: the current Desktop contract has no
-verified email. Disable and disconnect first show a local confirmation; declining
+local activation becomes a compact confirmation. The top-right account control shows
+the initial derived from the verified email on the active local grant, without
+exposing the email to Desktop. Older credentials and unavailable identity use a
+neutral person icon. Disable and disconnect first show a local confirmation; declining
 it does not revoke or cancel anything. Confirmed commands retain the existing
 revocation and pending-login cancellation semantics. Shared-link management is
 available only through its existing feature gate and validated credential site.
@@ -203,6 +207,17 @@ Storage now opens the branded Electron Settings page by default; other Settings 
 Recording › Language shows under Transcription while it's Apple Speech: Automatic, then the helper's supported `locales` by name. It writes `appleLocale` (Automatic removes the key) and returns `Effect::SpeechModel`, which restarts the model check for the new language (see `capture/engine/docs/keyframes-and-text.md`).
 
 The sidebar is the helper's alone: a row selects on mouse-down and its pane replaces the last on the next frame, with no transition (keep it that way; a fade read as lag; the level meter starts after the Recording pane has drawn). Rust's `state` never carries the pane (only `show` does, when Settings is opened again), so a reply can't move the selection.
+
+On Linux all Settings panes, including Storage, stay inside the same GPUI window.
+Navigation preserves its frame, position and focus. Storage has a native folder
+picker, Change/Reset, effective-location readback, retention presets/reset and
+Refresh Storage for folder usage. These use the existing Rust preference
+transactions; picker Cancel writes nothing and existing captures are never moved.
+An environment override or unusable saved folder is shown explicitly. Usage is a
+bounded background scan on open or refresh, not continuous scanning. A folder
+change affects new captures; an active capture keeps its original destination.
+Restart after changing folders so the existing cleanup worker follows that folder.
+macOS keeps its existing Electron Storage route and native fallback.
 
 About shows the package version and the running binary's build-time commit, for example `Version 0.3.13 · ad8d4b1`. Tracked local edits add `+modified`; builds without Git metadata or a valid CI revision say `build unknown`. This identifies the compiled build, not the selected update channel or an update staged for the next launch. Both the Mac helper and Linux GPUI Settings use the same label.
 

@@ -166,6 +166,35 @@ class InspectionTests(unittest.TestCase):
         self.assertEqual(run.call_count, 1)
         self.assertFalse(snapshots[0].exists())
 
+    def test_connect_accepts_symlinked_temp_root_without_weakening_bundle_guards(self):
+        real = Path(self.temp.name).resolve() / "real-scratch"
+        real.mkdir(mode=0o700)
+        alias = real.parent / "scratch-alias"
+        alias.symlink_to(real, target_is_directory=True)
+        snapshots = []
+
+        def cli(command, args, **kwargs):
+            if args[0] == "fetch":
+                destination = Path(args[args.index("--out") + 1])
+                # The full CLI refuses any symlink component in its output path.
+                self.assertEqual(destination.parent, destination.parent.resolve())
+                self.assertEqual(destination.parent.parent, real)
+                self.assertEqual(destination.parent.stat().st_mode & 0o777, 0o700)
+                snapshots.append(destination.parent)
+                destination.mkdir()
+                Image.new("RGB", (20, 20), "red").save(destination / "contact-sheet.png")
+                return ""
+            return json.dumps(self.manifest) if "--json" in args else "Fix the red button"
+
+        with patch.object(tempfile, "tempdir", str(alias)), patch("apparent_plugin.adapter.execute", side_effect=cli):
+            value = self.adapter.inspect("a" * 32)
+        self.assertTrue(value["_multimodal"])
+        self.assertFalse(snapshots[0].exists())
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual(list(real.iterdir()), [])
+        (self.bundle / "linked.png").symlink_to(self.bundle / "contact-sheet.png")
+        self.assertIn("Visual evidence unavailable", result("Instructions", self.bundle, "linked.png"))
+
     def test_registration_is_side_effect_free_and_handler_validates_arguments(self):
         context = Context()
         with patch("apparent_plugin.adapter.execute") as run:

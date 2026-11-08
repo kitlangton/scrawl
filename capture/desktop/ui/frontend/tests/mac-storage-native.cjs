@@ -454,6 +454,11 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     // explicitly asks for Refresh; exercise that real control before the picker.
     await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget() });
     await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+    // Refresh mounts Retention, which reads policy and then scans usage on
+    // Rust's single Storage worker. Observe completion before one Change;
+    // retrying a mutation cannot substitute for the native picker receipt.
+    await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
+      .toBeEnabled({ timeout: budget() });
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.

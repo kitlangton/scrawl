@@ -41,9 +41,12 @@ async function tokens(env:Env,g:Grant,response:Response) {
 async function issued(env:Env,g:Grant,accessToken:string,refreshToken:string){
  const expiry=await stmt(env,'SELECT a.expiresAt AS access_expiry,r.expiresAt AS refresh_expiry FROM oauthAccessToken a JOIN oauthRefreshToken r ON a.clientId=r.clientId AND a.userId=r.userId WHERE a.token=? AND r.token=? AND a.clientId=? AND a.userId=? AND a.revoked IS NULL',await hash(accessToken),await hash(refreshToken),g.client_id,g.user_id).first<{access_expiry:string;refresh_expiry:string}>();
  if(!expiry)fail('auth_unavailable',503);
+ const user=await stmt(env,'SELECT email FROM auth_user WHERE id=? AND emailVerified=1',g.user_id).first<{email:string}>();
  const live=await stmt(env,'SELECT id FROM auth_grants WHERE id=? AND revoked_at IS NULL',g.id).first();if(!live)fail('reauthorization_required',401);
  const seconds=(date:string)=>Math.max(0,Math.floor((Date.parse(date)-Date.now())/1000));
- return {accessToken,refreshToken,expiresIn:seconds(expiry.access_expiry),refreshExpiresIn:seconds(expiry.refresh_expiry),scope:g.scope,grantId:g.id};
+ const first=user?.email.trim()[Symbol.iterator]().next().value as string|undefined;
+ const accountInitial=first&&/[\p{L}\p{N}]/u.test(first)?first.toLocaleUpperCase('und'):undefined;
+ return {accessToken,refreshToken,expiresIn:seconds(expiry.access_expiry),refreshExpiresIn:seconds(expiry.refresh_expiry),scope:g.scope,grantId:g.id,...(accountInitial?{accountInitial}: {})};
 }
 export async function authRoutes(request:Request,env:Env,url:URL) {
  const p=url.pathname,m=request.method;

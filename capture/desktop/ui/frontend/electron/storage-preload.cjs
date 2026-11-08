@@ -1,5 +1,13 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
+contextBridge.exposeInMainWorld('apparentSettingsMounted', async () => {
+  // The hidden page gets a render opportunity between these callbacks. Keep
+  // this in the isolated preload, independent of the page's animation helpers.
+  await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+  await ipcRenderer.invoke('apparent:settings-mounted');
+  await ipcRenderer.invoke('apparent:settings-frame-ready');
+});
+
 // Installed Storage has no Connect, reporting, clipboard or runtime capabilities.
 contextBridge.exposeInMainWorld('apparent', Object.freeze({
   readCaptureLocation: () => ipcRenderer.invoke('apparent:read-capture-location'),

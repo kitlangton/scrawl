@@ -28,6 +28,13 @@ zoom or a separate vision tool, use `apparent fetch <id> --out <new-private-path
 finished. Do not use a removed snapshot path. Follow the normal read-approval
 flow when needed; never enable uploads or copy credentials just to read.
 
+For a CLI fallback, choose an absolute output path under a new private, writable
+directory and resolve its parent to a canonical path first. The backend's
+working directory may be unwritable and a profile-home alias may be a symlink.
+If fetch reaches Connect but returns `not_found`, check the recording computer's
+upload queue and the configured origin/read account; changing output paths
+cannot repair a failed upload. Do not infer the cause from `not_found` alone.
+
 If images are unavailable, act on clear transcript instructions and explain
 remaining visual uncertainty. A filename or successful tool call alone does
 not prove vision. Local image paths can be opened by an existing vision tool

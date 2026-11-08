@@ -67,7 +67,7 @@ export function ConnectSettingsCard() {
   return <section aria-label="Apparent Connect" className="apparent-connect-workflow">
     <style>{`@font-face { font-family: 'Connect Host Grotesk'; src: url('${font}'); }`}</style>
     {p?.accountMenu && <div className="flex justify-end pb-4">
-      <DisclosureMenu label="Account and connection options" trigger="A">
+      <DisclosureMenu label="Account and connection options" trigger={p?.accountInitial ?? <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" aria-hidden="true"><circle cx="12" cy="8" r="4" /><path d="M4 22v-2a8 8 0 0 1 16 0v2" /></svg>}>
         {close => <>
           <p className="menu-context">This computer{view?.server && <><br />{view.server}</>}</p>
           {controls.map(button => renderButton(button, close))}

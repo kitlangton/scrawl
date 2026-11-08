@@ -166,7 +166,7 @@ effective path. Loading/error states hide old totals, and Retry never starts
 Rust. A slow filesystem syscall can outlive client expiry; the existing single
 Storage worker stays busy rather than spawning unbounded scans.
 
-The Rust Settings session owns navigation and the Electron child. The installed
+On macOS the Rust Settings session owns navigation and the Electron child. The installed
 page contains Storage only, with the existing Settings sidebar and system-following
 light/dark Paper/Carbon/Signal palette. Other sidebar pages return to their native
 presentation. Retired windows cannot send commands or close the current page.
@@ -174,13 +174,37 @@ Closing Settings cancels the session; an Electron crash restores native Storage.
 Missing packaged assets also fall back to native Storage. Reopen Settings after
 editing the opt-out. Saved preferences remain readable by both presentations.
 
+Electron Storage uses the native Mac Settings' 720×530 frame and 210px black
+sidebar. macOS centers after applying its inset titlebar and accepts the first
+inactive click; content scrolls inside the frame to keep lower controls reachable.
+The other Settings pages keep their native routing.
+The Linux parent supplies the X11 backend option before Electron starts when it
+has selected XWayland; a live native-Wayland opt-in keeps its existing selection.
+
+Storage starts hidden, including when its parent requests Show early. React
+acknowledges its committed DOM in a layout effect; the isolated preload waits
+two animation callbacks before sending the mount and first-frame acknowledgements.
+`paintWhenInitiallyHidden` keeps those callbacks moving while hidden. The host
+requires both the mount and either Chromium's `ready-to-show` or the validated
+first-frame acknowledgement, recovering when Electron omits that native event.
+Missing renderer startup exits unsuccessfully after 15 seconds without a
+user-dismiss signal, allowing the existing native fallback. Load failure/crash
+also fail; close/parent EOF retires the window so late readiness cannot reopen it.
+Parent retirement emits no user-dismiss event. A broken parent output pipe also
+retires quietly instead of opening an Electron error dialog.
+The readiness bridge admits only the owned local main frame and no arguments.
+The broader intermittent blanking reported in #562 remains unconfirmed.
+
 `stage-settings.py` builds the locked frontend/runtime into Linux AppImage and Mac
 installer/release packages. Installed packages contain no development dashboard or
 synthetic examples. Node/npm are build prerequisites, not runtime dependencies.
 macOS stages and signs nested Electron code before the enclosing app is signed.
-The old Storage presentation is retained solely for the explicit opt-out and
-startup/crash fallback. Remove it only after exact-candidate installed Mac/Linux
-acceptance and a deliberate retirement of that fallback contract. Functional
+Linux keeps every installed Settings pane inside one native GPUI frame, including
+the folder picker, retention and usage controls. Switching to Storage does not
+replace the window. The Electron development harness and Rust bridge remain
+available on Linux; the installed macOS route retains its explicit opt-out and
+startup/crash fallback. Remove a native presentation only after applicable native
+acceptance and a deliberate retirement of its fallback contract. Functional
 transport tests and synthetic backend fixtures remain verification tooling.
 
 `tests/retention-smoke.cjs` exercises production Electron with a **synthetic**
@@ -243,9 +267,10 @@ physical-device or performance acceptance.
 
 ## Experimental Storage card
 
-The installed Storage bridge is on unless `experiments.electronCaptureLocation`
+The Electron Storage bridge is on unless `experiments.electronCaptureLocation`
 is explicitly false in the Rust app's `~/.config/apparent/config.json`. File edits
-apply at the next request; reopen Settings to change presentation routing. The
+apply at the next request; on macOS reopen Settings to change presentation routing. Linux
+installed Settings always uses its continuous native frame. The
 separate `npm start` window remains a developer harness; it is not installed or
 used by the Settings route. Browser preview has no Storage bridge.
 

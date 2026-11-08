@@ -12,7 +12,7 @@ fn revision(raw: &serde_json::Value) -> String {
     format!("{:016x}", hash.finish())
 }
 
-pub(super) fn read(config: &Path) -> Result<serde_json::Value, &'static str> {
+pub(in crate::capture::desktop) fn read(config: &Path) -> Result<serde_json::Value, &'static str> {
     let raw = capture_location::read_raw(config).map_err(|_| "config_read_failed")?;
     let policy: Policy = serde_json::from_value(raw["retention"].clone()).unwrap_or_default();
     Ok(serde_json::json!({
@@ -22,7 +22,7 @@ pub(super) fn read(config: &Path) -> Result<serde_json::Value, &'static str> {
     }))
 }
 
-pub(super) fn save(
+pub(in crate::capture::desktop) fn save(
     config: &Path,
     preset: Option<&str>,
     expected: &str,
@@ -76,7 +76,7 @@ pub(super) fn save(
     read(config)
 }
 
-pub(super) fn usage(
+pub(in crate::capture::desktop) fn usage(
     config: &Path,
     admit: impl Fn() -> bool,
 ) -> Result<serde_json::Value, &'static str> {

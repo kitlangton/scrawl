@@ -47,7 +47,10 @@ class Adapter:
             # The current full CLI separates fetch from inspect. Keep the complete
             # snapshot only while assembling this response, including on failure.
             with tempfile.TemporaryDirectory(prefix="apparent-hermes-") as workspace:
-                root = Path(workspace) / (source + ".apparent")
+                # Hermes profiles and macOS temp roots can contain symlinks. Give
+                # the CLI the canonical private directory we just created; its
+                # output-path and bundle-image symlink guards remain unchanged.
+                root = Path(workspace).resolve(strict=True) / (source + ".apparent")
                 execute(self.command, ["fetch", source, "--out", str(root), "--wait", "120"])
                 return self._inspect(root, source, frame, temporary=True)
         path = Path(source).expanduser()

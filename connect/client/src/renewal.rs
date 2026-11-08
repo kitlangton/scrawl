@@ -3,6 +3,17 @@
 use super::*;
 
 const AUTH_REQUIRED: &str = "auth_required: approve this device again with apparent connect login";
+pub(super) fn valid_account_initial(value: &str) -> bool {
+    let count = value.chars().take(4).count();
+    (1..=3).contains(&count) && value.chars().all(char::is_alphanumeric)
+}
+// Display metadata must never make otherwise valid authorization unusable.
+pub(super) fn deserialize_account_initial<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> std::result::Result<Option<String>, D::Error> {
+    let value = Value::deserialize(deserializer)?;
+    Ok(value.as_str().filter(|value| valid_account_initial(value)).map(str::to_owned))
+}
 fn opaque(value: &str) -> bool {
     !value.is_empty() && value.len() <= 8192 && value.bytes().all(|b| b.is_ascii_graphic())
 }
@@ -76,6 +87,8 @@ impl Credential {
         self.token = access.into();
         self.refresh_token = Some(refresh.into());
         self.grant_id = Some(grant.into());
+        self.account_initial = reply["accountInitial"].as_str()
+            .filter(|value| valid_account_initial(value)).map(str::to_owned);
         self.auth_required = false;
         self.validate()
     }

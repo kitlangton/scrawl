@@ -164,27 +164,36 @@ pub(in crate::capture::desktop) fn open_overlay(
 
 /// The app icon, box-filtered down to `size`, as RGBA.
 fn icon_rgba(size: usize) -> Option<Vec<u8>> {
-    let decoder = png::Decoder::new(std::io::Cursor::new(
-        &include_bytes!("../../../capture/desktop/assets/app-icon.png")[..],
-    ));
+    scaled_icon_rgba(
+        include_bytes!("../../../capture/desktop/assets/app-icon.png"),
+        size,
+    )
+}
+
+fn scaled_icon_rgba(bytes: &[u8], size: usize) -> Option<Vec<u8>> {
+    let decoder = png::Decoder::new(std::io::Cursor::new(bytes));
     let mut reader = decoder.read_info().ok()?;
     let mut buffer = vec![0; reader.output_buffer_size()?];
     let info = reader.next_frame(&mut buffer).ok()?;
-    if info.color_type != png::ColorType::Rgba {
-        return None;
-    }
+    let channels = match info.color_type {
+        png::ColorType::Rgb => 3,
+        png::ColorType::Rgba => 4,
+        _ => return None,
+    };
     let (sw, sh) = (info.width as usize, info.height as usize);
     let mut out = vec![0_u8; size * size * 4];
     for y in 0..size {
         for x in 0..size {
-            let (x0, x1) = (x * sw / size, (x + 1) * sw / size);
-            let (y0, y1) = (y * sh / size, (y + 1) * sh / size);
+            let x0 = x * sw / size;
+            let x1 = ((x + 1) * sw / size).max(x0 + 1);
+            let y0 = y * sh / size;
+            let y1 = ((y + 1) * sh / size).max(y0 + 1);
             let mut acc = [0_u64; 4];
             let mut n = 0_u64;
             for sy in y0..y1 {
                 for sx in x0..x1 {
-                    let p = &buffer[(sy * sw + sx) * 4..][..4];
-                    let a = u64::from(p[3]);
+                    let p = &buffer[(sy * sw + sx) * channels..][..channels];
+                    let a = if channels == 4 { u64::from(p[3]) } else { 255 };
                     acc[0] += u64::from(p[0]) * a;
                     acc[1] += u64::from(p[1]) * a;
                     acc[2] += u64::from(p[2]) * a;
@@ -565,6 +574,7 @@ struct ApparentTray {
     actions: flume::Sender<MenuAction>,
     status: Option<String>,
     inbox: usize,
+    dark: bool,
 }
 
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
@@ -598,13 +608,13 @@ impl ksni::Tray for ApparentTray {
     }
 
     fn icon_pixmap(&self) -> Vec<ksni::Icon> {
-        static ICONS: OnceLock<Vec<(usize, Vec<u8>)>> = OnceLock::new();
-        ICONS
-            .get_or_init(|| {
+        static ICONS: OnceLock<[Vec<(usize, Vec<u8>)>; 2]> = OnceLock::new();
+        let icons = ICONS.get_or_init(|| {
+            [false, true].map(|dark| {
                 [22_usize, 32, 48]
                     .into_iter()
                     .filter_map(|size| {
-                        let mut argb = icon_rgba(size)?;
+                        let mut argb = scaled_icon_rgba(super::status_icon(dark), size)?;
                         // RGBA → ARGB, in network byte order.
                         for p in argb.chunks_exact_mut(4) {
                             p.rotate_right(1);
@@ -613,6 +623,8 @@ impl ksni::Tray for ApparentTray {
                     })
                     .collect()
             })
+        });
+        icons[usize::from(self.dark)]
             .iter()
             .map(|(size, data)| ksni::Icon {
                 width: *size as i32,
@@ -724,10 +736,13 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
                 let _ = open_sender.try_send(MenuAction::Settings);
             }
         });
+    linux::appearance::initialize();
+    linux::appearance::watch();
     let tray = ApparentTray {
         actions: sender,
         status: None,
         inbox: 0,
+        dark: linux::appearance::is_dark(),
     };
     match tray.spawn() {
         Ok(handle) => TRAY.with(|slot| *slot.borrow_mut() = Some(handle)),
@@ -750,15 +765,18 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
 /// Called from the UI loop: refreshes the menu now and then (the record shortcut's label and the
 /// export item can change while Apparent runs).
 pub(in crate::capture::desktop) fn poll_status_bar() {
-    static LAST: Mutex<Option<Instant>> = Mutex::new(None);
+    static LAST: Mutex<Option<(Instant, u64)>> = Mutex::new(None);
     let mut last = LAST.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    if last.is_some_and(|at| at.elapsed() < Duration::from_secs(5)) {
+    let revision = linux::appearance::revision();
+    if last
+        .is_some_and(|(at, previous)| at.elapsed() < Duration::from_secs(5) && previous == revision)
+    {
         return;
     }
-    *last = Some(Instant::now());
+    *last = Some((Instant::now(), revision));
     TRAY.with(|slot| {
         if let Some(handle) = slot.borrow().as_ref() {
-            handle.update(|_| {});
+            handle.update(|tray| tray.dark = linux::appearance::is_dark());
         }
     });
 }
@@ -837,6 +855,53 @@ mod export_menu_tests {
     use ksni::Tray as _;
 
     #[test]
+    fn tray_icon_stays_readable_through_light_dark_light() {
+        let (actions, _) = flume::bounded(1);
+        let mut tray = ApparentTray {
+            actions,
+            status: None,
+            inbox: 0,
+            dark: false,
+        };
+        let light = tray.icon_pixmap();
+        tray.dark = true;
+        let dark = tray.icon_pixmap();
+        tray.dark = false;
+        let light_again = tray.icon_pixmap();
+        assert_eq!(light.len(), 3);
+        for ((light, dark), again) in light.iter().zip(&dark).zip(&light_again) {
+            let size = light.width as usize;
+            assert_eq!(light.data.len(), size * size * 4);
+            assert_eq!(
+                light.data, again.data,
+                "returning to Light must restore the icon"
+            );
+            for (icon, background, glyph) in [
+                (light, [255, 250, 249, 246], [255, 122, 88, 199]),
+                (dark, [255, 2, 1, 2], [255, 183, 165, 216]),
+            ] {
+                assert_eq!(
+                    &icon.data[..4],
+                    &background,
+                    "tray must use the matching boxed brand icon"
+                );
+                assert!(
+                    icon.data.chunks_exact(4).all(|p| p[0] == 255),
+                    "no transparent holes at any tray size"
+                );
+                assert!(
+                    icon.data.chunks_exact(4).filter(|p| *p == glyph).count() > size * size / 10,
+                    "the recognizable purple glyph must survive resizing"
+                );
+            }
+            assert_ne!(
+                light.data, dark.data,
+                "a live appearance change must change the pixmap"
+            );
+        }
+    }
+
+    #[test]
     fn export_progress_and_failure_are_visible_menu_rows() {
         let (actions, _) = flume::bounded(1);
         for status in [
@@ -847,6 +912,7 @@ mod export_menu_tests {
                 actions: actions.clone(),
                 status: Some(status.into()),
                 inbox: 0,
+                dark: true,
             };
             assert!(
                 tray.menu().iter().any(|item| matches!(item,
