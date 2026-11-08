@@ -17,6 +17,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   let saved = '/saved';
   let revision = 'a'.repeat(16);
   let holdRead = false;
+  let initialLocationBusy = true;
   let releaseRead;
   let rejectReset = false;
   const snapshot = () => ({ savedPath: saved, effectivePath: saved ?? '/builtin', displayPath: saved ?? '/builtin',
@@ -33,6 +34,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
       rejectReset = false;
       return socket.end('{"error":"app_busy"}\n');
     }
+    if (request.storage === 'read' && initialLocationBusy) return socket.end('{"error":"app_busy"}\n');
     if (request.storage === 'read' && holdRead) {
       holdRead = false;
       const old = snapshot();
@@ -55,7 +57,14 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     await fs.rm(home, { recursive: true, force: true });
   });
   const page = await application.firstWindow();
+  const card = page.getByRole('region', { name: 'Capture location', exact: true });
+  await expect(card.getByText('Another location request is still running. Refresh when it finishes.', { exact: true })).toBeVisible();
+  await expect(card.getByRole('button', { name: 'Change…', exact: true })).toBeDisabled();
+  const readsBeforeRefresh = requests.filter(r => r.storage === 'read').length;
+  initialLocationBusy = false;
+  await card.getByRole('button', { name: 'Refresh location', exact: true }).click();
   await page.getByText('/saved', { exact: true }).waitFor();
+  assert.equal(requests.filter(r => r.storage === 'read').length, readsBeforeRefresh + 1);
   assert.equal((await page.evaluate(() => window.apparent.readCaptureLocation())).storage.revision, undefined);
   assert.equal((await page.evaluate(() => window.apparent.readCaptureLocation())).storage.secret, undefined);
   await application.evaluate(({ dialog, BrowserWindow }) => {

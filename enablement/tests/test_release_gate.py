@@ -2,6 +2,7 @@
 import copy
 import re
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,24 @@ spec.loader.exec_module(gate)
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_linux_packaging_compiles_the_published_release_identity(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/release-linux.yml').read_text()
+        step = workflow.split('      - name: Build with PostHog error reporting\n', 1)[1].split('      - name:', 1)[0]
+        script = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        # Exercise the shipped selection shell, replacing only the heavy compiler.
+        script = script.replace('GITHUB_SHA="$CANDIDATE_SHA" cargo build --release --locked',
+                                'printf "%s\\n" "$APPARENT_RELEASE_VERSION" "$APPARENT_RELEASE_CHANNEL" "$APPARENT_REPORTING_ENVIRONMENT"')
+        sha = 'a' * 40
+        for tag, verify, expected in [
+            ('v1.2.3', 'false', ['v1.2.3', 'stable', 'production']),
+            ('', 'false', ['linux-main-v2-' + sha, 'preview', 'production']),
+            ('', 'true', ['linux-main-v2-' + sha, 'preview', 'synthetic']),
+        ]:
+            result = subprocess.run(['bash', '-eu', '-c', script], capture_output=True, text=True,
+                                    env=dict(os.environ, TAG=tag, VERIFY_ONLY=verify, CANDIDATE_SHA=sha))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), expected)
+
     def test_baseline_restoration_does_not_publish_or_start_full_platform_runs(self):
         root = Path(__file__).resolve().parents[2] / '.github/workflows'
         for name in ('verification.yml', 'verification-mac.yml',
