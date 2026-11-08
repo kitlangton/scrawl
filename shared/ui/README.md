@@ -42,8 +42,9 @@ The installed routing/rollback stays unchanged: native surfaces remain native,
 and existing Electron routing selects its existing surfaces. No legacy native
 renderer is removed by theme adoption.
 
-Every frontend build and repository PR verification runs
-`python3 shared/ui/scripts/check-theme.py`. The per-file legacy color inventory
+Repository PR verification runs `python3 shared/ui/scripts/check-theme.py`.
+Public builds use `--owner public` to check Public and shared inputs independently;
+the default remains a check of every frontend. The per-file legacy color inventory
 reserves existing demo/artwork and unmigrated literals; new files have no
 allowance. Reduce it when migrating an old surface. New exceptions require a
 reviewed explanation; it is a ratchet, not proof of visual correctness.
@@ -54,7 +55,7 @@ After building Desktop, Connect web/service and Public, run
 actual packaged surfaces in Chromium and Firefox through live light/dark/light
 switches and writes synthetic screenshots to `THEME_EVIDENCE` (or a new temp
 directory). `PUBLIC_THEME_ARTIFACT=public/site/dist-apparent` tests the final
-Pages snapshot plus its deterministic color-only appearance adapter. Web delivery
+source-built Pages homepage. Web delivery
 runs this check before publishing; Desktop CI runs the Electron appearance smoke
 and shared contract tests. `THEME_SURFACES` and `THEME_BROWSERS` select available
 consumers/engines for those jobs. This is browser evidence; macOS and isolated Linux native theme

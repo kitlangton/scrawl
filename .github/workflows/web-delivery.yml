@@ -1,4 +1,4 @@
-name: Website and Connect — checks & deploy
+name: Connect — checks & deploy
 
 on:
   workflow_dispatch:
@@ -104,14 +104,6 @@ jobs:
           PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.ts
           node scripts/pages/prepare-pages-video.mjs
           SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts
-      - uses: actions/upload-artifact@v4
-        with:
-          name: website-${{ needs.admit.outputs.sha }}
-          path: public/site/dist-apparent/
-          if-no-files-found: error
-          # The checked public demos use .local-media; do not drop their assets.
-          include-hidden-files: true
-          retention-days: 7
       - name: Verify Connect browser behavior across credentialed origins
         working-directory: public/site
         env:
@@ -135,42 +127,6 @@ jobs:
           name: synthetic-connect-evidence
           path: ${{ runner.temp }}/connect-evidence/
           retention-days: 3
-          if-no-files-found: ignore
-
-  website:
-    needs: [admit, verify]
-    if: github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
-    environment:
-      name: website-production
-      url: https://app.tryapparent.com
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          persist-credentials: false
-          ref: ${{ needs.admit.outputs.sha }}
-      - uses: actions/download-artifact@v4
-        with:
-          name: website-${{ needs.admit.outputs.sha }}
-          path: public/site/dist-apparent
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.0'
-      - uses: oven-sh/setup-bun@v2
-        with:
-          bun-version: '1.3.10'
-      - run: bun install --frozen-lockfile
-        working-directory: public/site
-      - name: Publish checked main to Cloudflare Pages (never Clanker or the Worker)
-        env:
-          WEBSITE_PAGES_API_TOKEN: ${{ secrets.WEBSITE_PAGES_API_TOKEN }}
-        run: GITHUB_SHA="${{ needs.admit.outputs.sha }}" python3 public/site/scripts/cd/publish_pages.py
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: website-deployment-receipt
-          path: website-receipt.json
           if-no-files-found: ignore
 
   hosted:

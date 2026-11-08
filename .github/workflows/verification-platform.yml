@@ -34,7 +34,7 @@ jobs:
       - name: Validate workflow syntax and job dependencies
         uses: docker://rhysd/actionlint:1.7.12
         with:
-          args: -shellcheck= -pyflakes= .github/workflows/verification.yml .github/workflows/verification-mac.yml .github/workflows/verification-platform.yml .github/workflows/release-linux.yml .github/workflows/release-mac-preview.yml .github/workflows/web-delivery.yml
+          args: -shellcheck= -pyflakes= .github/workflows/verification.yml .github/workflows/verification-mac.yml .github/workflows/verification-platform.yml .github/workflows/release-linux.yml .github/workflows/release-mac-preview.yml .github/workflows/web-delivery.yml .github/workflows/stream-public.yml
       - name: Release admission contracts
         run: python3 -m unittest discover -s enablement/tests -p 'test_release_gate.py'
       - name: Advisory owner dependency report (does not select execution)

@@ -48,7 +48,7 @@ explicitly. Preview publication stays on `macos-latest` for arm64 packaging; Int
 CI is not Apple Silicon runtime proof. An image change must still pass the same
 checks before Mac publication.
 
-Linux and web delivery are manual-only. Their admission job reads trusted-main
+Linux and Connect delivery are manual-only. Their admission job reads trusted-main
 code and requires that exact commit's
 successful Linux/shared receipt. Mac preview publication requires both the
 Linux/shared and Mac receipts for the same commit. A queued/failed Mac run cannot
@@ -73,36 +73,44 @@ last published version available; fix or revert main and verify the next candida
 CodeQL managed setup is disabled by Simon's explicit instruction; it is not a
 release gate.
 
-`.github/workflows/web-delivery.yml` retains the existing independent website and
-hosted production environments and activation variables. This policy does not
-enable a disabled publisher, provision resources or apply migrations.
+`.github/workflows/stream-public.yml` checks Public on relevant PRs/main pushes
+and publishes only after its own successful web/shared verification during a
+manual main dispatch. It does not require Linux/Rust, Desktop or Connect proof.
+The same-run sealed Public-only artifact, current-main guard, deployment ordering
+and canonical readback protect publication. This is the bounded Public exception
+to full-platform admission; native and Connect gates remain unchanged.
+
+`.github/workflows/web-delivery.yml` retains Connect's existing verification and
+hosted deployment gate, with no Pages publisher. The existing `website-production`
+and `hosted-production` environments and activation variables are retained. This
+policy does not enable a disabled publisher, provision resources or apply migrations.
 
 ## Checks and artifact identity
 
-The credential-free verification job runs:
+Public's credential-free job runs `cd public/site && npm run verify`: its source
+build, allowlisted resource graph, browser and shared appearance/analytics checks,
+publication contracts, compiled movie worker in workerd, and Public-only Pages
+preparation. It seals `.build/website` with the run SHA and every file's checksum.
+The deploy job downloads only that workflow run's SHA-named artifact and validates
+it before uploading. PR/push jobs have no production credentials and cannot deploy.
 
-- `python3 -m unittest discover -s scripts/cd -p 'test_*.py'`;
-- the complete hosted TypeScript build and real local workerd/D1/R2 suite;
-- the website's frozen Bun install, public build, allowlisted `dist-apparent`
-  packaging, and public website/browser suite;
-- Connect's browser scenarios against a synthetic credentialed cross-origin API.
+Connect's credential-free job retains its publication contracts, full hosted
+TypeScript/workerd/D1/R2 suite, independent browser build, composed website checks
+and credentialed cross-origin synthetic browser scenarios. Its production gate
+still requires full Linux/shared verification for the same commit. Its local
+composition is an integration fixture, not a Public publication prerequisite.
 
-Node 22.23.0 and Bun 1.3.10 are pinned. Browser installation uses the version of
-`playwright-core` in the website lockfile. Production is built with
-`VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com`. The production artifact
-is saved **before** a separate loopback-configured browser build. The loopback
-package is never uploaded for deployment. Artifact download is scoped to the
-same workflow run and named with its event SHA. Production runs are serialized
-without canceling a deployment halfway through; each publisher also refuses a
-candidate that is no longer current `main`. Pages treats a revision superseded
-after admission as a successful skip, without uploading or issuing a deployment
-receipt; remote lookup, upload and readback errors still fail the job. A relevant
-later push supplies the replacement; otherwise dispatch the workflow on `main` after reviewing it.
+Node 22.23.0 and Bun 1.3.10 remain pinned. Browsers use the website lockfile's
+`playwright-core`. Public and Connect production publication use separate locks
+that never cancel an upload. Public rejects a candidate that is no longer current
+main or would overwrite an equal/newer deployed website. Superseded candidates
+skip without upload or a new receipt; transport, auth and integrity failures remain
+failures. Dispatch current main to publish a replacement when appropriate.
 
 ## Website activation: Cloudflare Pages
 
-The active website job now publishes only `public/site/dist-apparent` to the isolated
-`apparent-capture` Pages project, using `public/site/scripts/cd/publish_pages.py` and
+The Public deploy job publishes only the sealed `dist-apparent` to the isolated
+`apparent-capture` Pages project, using `public/site/scripts/cd/publish-pages.ts` and
 `public/site/wrangler.pages.jsonc`. It does not execute `public/site/wrangler.jsonc`, deploy the
 hosted Worker, or connect to Clanker. See
 [`../public/site/docs/pages-deploy.md`](../public/site/docs/pages-deploy.md) for the current build,
@@ -229,7 +237,7 @@ Cargo dependencies). Lanes are `capture` (whole root build/test), `engine-staged
 Cargo build/test), `connect-web` (existing package build/browser fixtures),
 `connect-service` (build and real synthetic workerd tests), `public-site`
 (standalone build/package and website/publication contracts), and `desktop-ui`
-(JS and synthetic Electron smoke). Use the existing web workflow for complete
+(JS and synthetic Electron smoke). Use the Connect workflow for complete
 composed-site and cross-origin acceptance, and platform workflow for real Rust
 bridge/native checks. Entrypoints require the same toolchains, browser and system
 dependencies as those workflows; they do not install OS dependencies or grant
@@ -238,7 +246,8 @@ native acceptance. Run heavy local commands through the existing build runner.
 Client edits also select Capture: root tests intentionally reuse client scenarios
 with the real AppConfig provider. Renderer edits select Capture for Rust bridge
 integration. Shared UI feeds Desktop and service recipient UI. Connect web feeds
-Public composition and consumes five explicit Public assets. Service API changes
+its retained composition fixtures and consumes five explicit Public assets. It is
+not an input to Public publication. Service API changes
 include root/browser consumers. Production Engine/Desktop/Agent remain root
 modules with reverse dependencies; no lane claims their isolation. Shared,
 unclassified, newly added, deleted, renamed or type-changed inputs and missing

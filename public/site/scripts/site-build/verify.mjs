@@ -1,5 +1,5 @@
-// Standalone Public verification. Composed Connect/cross-origin and Pages
-// preparation remain in web-delivery.yml; this is not a publication command.
+// Standalone Public verification and Pages preparation. Connect integration
+// stays in web-delivery.yml; this command uses no Connect implementation.
 import { spawnSync } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 
@@ -23,10 +23,13 @@ const tests = [
   'browser-proof/test-og-stage-redirect.mjs', 'browser-proof/test-og-video-stage-browser.mjs',
 ]
 run('node', ['--test', ...tests.map(path => `scripts/${path}`)])
-run('node', ['--test', 'scripts/pages/test-pages-package.ts', '../../shared/analytics/config.test.ts'])
+run('node', ['--test', 'scripts/artifact/public.test.ts', 'scripts/cd/publish-pages.test.ts',
+  'scripts/pages/test-pages-video.mjs', '../../shared/analytics/config.test.ts'])
+run('python3', ['-m', 'unittest', 'discover', '-s', '../../shared/ui/test', '-p', 'test_*.py'])
 run('node', ['../../shared/ui/test/appearance.mjs'], { PUBLIC_THEME_ARTIFACT: 'public/site/dist-apparent', THEME_SURFACES: 'public' })
 run('npm', ['run', 'build:pages-worker'])
 run('node', ['--test', 'scripts/pages/test-pages-video-runtime.ts'], { PAGES_WORKER: 'dist-apparent/_worker.js' })
 run('node', ['scripts/pages/verify-prepared.ts'])
 run('node', ['scripts/cd/analytics-smoke.ts'])
-run('python3', ['-m', 'unittest', 'discover', '-s', 'scripts/cd', '-p', 'test_*.py'])
+run('node', ['scripts/artifact/prepare.ts'])
+run('node', ['scripts/pages/prepare-pages-video.mjs'])
