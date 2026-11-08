@@ -124,6 +124,22 @@ test('command failure stops subsequent tests and absent required package fails',
   assert.throws(() => execute([{ argv: [process.execPath, '-e', ''], cwd: 'missing' }], dir));
 }));
 
+test('hook Git routing cannot redirect a selected test into the caller repository', () => fixture((dir, env) => {
+  for (const name of ['parent', 'child']) {
+    mkdirSync(join(dir, name));
+    assert.equal(spawnSync('git', ['init', '-q'], { cwd: join(dir, name), env }).status, 0);
+    assert.equal(spawnSync('git', ['config', 'user.name', name], { cwd: join(dir, name), env }).status, 0);
+  }
+  process.env.GIT_DIR = join(dir, 'parent/.git');
+  process.env.GIT_WORK_TREE = join(dir, 'parent');
+  try {
+    execute([{ argv: ['git', 'config', 'user.name', 'selected-test'], cwd: 'child' }], dir);
+    const name = (repo: string) => spawnSync('git', ['config', 'user.name'], { cwd: join(dir, repo), env, encoding: 'utf8' }).stdout.trim();
+    assert.equal(name('parent'), 'parent');
+    assert.equal(name('child'), 'selected-test');
+  } finally { delete process.env.GIT_DIR; delete process.env.GIT_WORK_TREE; }
+}));
+
 test('actual feature push runs selected package tests and rejects their failure', () => fixture((dir, env) => {
   const git = (...args: string[]) => {
     const result = spawnSync('git', args, { cwd: dir, env, encoding: 'utf8' });

@@ -99,9 +99,16 @@ export function contractTests(cwd = root): Command[] {
 }
 
 export function execute(plan: Command[], cwd = root): void {
+  // Git exports repository-local routing into hooks. Test fixtures and package
+  // subprocesses must resolve their own cwd rather than mutate the caller's Git
+  // config/index. Preserve identity/credentials and all non-local environment.
+  const local = spawnSync('git', ['rev-parse', '--local-env-vars'], { cwd, encoding: 'utf8' });
+  if (local.error || local.status !== 0) throw Error('Cannot isolate hook Git environment');
+  const env = { ...process.env };
+  for (const name of local.stdout.trim().split('\n')) delete env[name];
   for (const { argv, cwd: directory } of plan) {
     console.error(`pre-push: [${directory}] ${argv.join(' ')}`);
-    const result = spawnSync(argv[0], argv.slice(1), { cwd: resolve(cwd, directory), stdio: 'inherit' });
+    const result = spawnSync(argv[0], argv.slice(1), { cwd: resolve(cwd, directory), env, stdio: 'inherit' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw Error(`Local test command failed (${result.signal || result.status}): ${argv.join(' ')}`);
   }
