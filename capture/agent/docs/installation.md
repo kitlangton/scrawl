@@ -2,7 +2,7 @@
 
 The CLI can read a capture on a headless machine without launching the desktop app.
 Installing an agent skill installs instructions, **not** the `apparent` executable.
-Start here if a received capture asks you to run `apparent fetch`.
+Start here if a received capture asks you to run `apparent inspect <id>` or `apparent fetch`.
 
 ## Linux (Ubuntu 24.04+, x86_64 or aarch64)
 
@@ -73,6 +73,16 @@ that forbids executing downloaded binaries remains unsupported by these commands
 installation success does not prove ChatGPT fetch compatibility.
 
 ## Read a remote capture
+
+With an updated CLI that supports capture-ID inspection, run `apparent inspect <32hex-id>`.
+Only a bare lowercase 32-hex ID fetches remotely, to `./<id>.apparent`, waiting up
+to 120 seconds for readiness before printing the existing summary. It reuses the
+configured server and separate read authorization. Existing output is never
+overwritten: inspect `./<id>.apparent` to read a previous download. Explicit
+`fetch` remains available for custom output paths and wait times.
+
+The pinned preview above predates bare-ID inspection; use its explicit two-command
+flow below, or update to a release containing that capability.
 
 Use the server origin and capture ID supplied by the sender (the values below
 are placeholders). Login prints a verification URL/code for a human to approve:
