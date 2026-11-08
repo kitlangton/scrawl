@@ -391,6 +391,15 @@ time. No measured whole-run savings or queue reduction is established by local
 routing tests. Linux selection now takes longer before native jobs become
 eligible; candidate timings must assess that latency tradeoff separately.
 
+The disposable Mac Storage fixture waits for real Storage/Retention read receipts
+before its single Change click. Its TypeScript CI driver separates the owned
+Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
+operation. The initial picker and nested Go sheet are distinct readiness phases;
+no mutation, keyboard shortcut or preference write is retried. Existing exact
+PID/window/sheet/control checks, Choose/Cancel/Reset assertions, native consent,
+process cleanup and test deadlines remain required. This is test orchestration,
+not a change to installed Desktop routing or application persistence policy.
+
 ## Reporter API budgets and recovery
 
 The trusted reporter uses the workflow's Actions credential throughout; another
