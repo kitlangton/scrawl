@@ -243,6 +243,12 @@ impl OverlayView {
 }
 
 #[cfg(target_os = "linux")]
+fn note_screen_point(local: [f32; 2], origin: [f64; 2], paint_scale: f32) -> [f64; 2] {
+    [origin[0] + f64::from(local[0] * paint_scale),
+     origin[1] + f64::from(local[1] * paint_scale)]
+}
+
+#[cfg(target_os = "linux")]
 fn screen_to_view_scale(viewport_scale: f32) -> f32 {
     1.0 / viewport_scale
 }
@@ -474,10 +480,13 @@ fn paint_scene(scene: &Scene, bounds: Bounds<Pixels>, window: &mut Window) {
 impl Render for OverlayView {
     fn render(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let size = window.viewport_size();
-        let scene = self.scene([f32::from(size.width), f32::from(size.height)], window.scale_factor());
+        let scene = self.scene(
+            [f32::from(size.width), f32::from(size.height)],
+            window.scale_factor(),
+        );
         // Telemetry changes on other threads; follow it every frame while the overlay is up.
         window.request_animation_frame();
-        canvas(
+        let content = canvas(
             |_, _, _| {},
             move |bounds, (), window: &mut Window, _: &mut App| {
                 if let Some(scene) = scene {
@@ -485,14 +494,79 @@ impl Render for OverlayView {
                 }
             },
         )
-        .size_full()
+        .size_full();
+        #[cfg(target_os = "linux")]
+        {
+            // Bind callback closures to the capture that rendered this overlay.
+            let epoch = self.telemetry.native_note_epoch();
+            let down_t = Arc::clone(&self.telemetry);
+            let up_t = Arc::clone(&self.telemetry);
+            let down_p = Arc::clone(&self.placement);
+            let up_p = Arc::clone(&self.placement);
+            let finish = move |event: &gpui::MouseUpEvent, window: &mut Window, _: &mut App| {
+                let p = up_p.lock().unwrap();
+                let scale = window.scale_factor();
+                if let Some(id) = crate::capture::desktop::linux::x11::window_id(window) {
+                    let mods = event.modifiers;
+                    let point = note_screen_point(
+                        [event.position.x.into(), event.position.y.into()],
+                        [p.rect[0], p.rect[1]],
+                        scale,
+                    );
+                    up_t.native_note_button(
+                        id,
+                        epoch,
+                        false,
+                        point,
+                        mods.shift && !mods.control && !mods.alt && !mods.platform,
+                    );
+                }
+            };
+            gpui::div()
+                .size_full()
+                .on_mouse_down(gpui::MouseButton::Left, move |event, window, _| {
+                    let p = down_p.lock().unwrap();
+                    let scale = window.scale_factor();
+                    if let Some(id) = crate::capture::desktop::linux::x11::window_id(window) {
+                        let mods = event.modifiers;
+                        let point = note_screen_point(
+                            [event.position.x.into(), event.position.y.into()],
+                            [p.rect[0], p.rect[1]],
+                            scale,
+                        );
+                        down_t.native_note_button(
+                            id,
+                            epoch,
+                            true,
+                            point,
+                            mods.shift && !mods.control && !mods.alt && !mods.platform,
+                        );
+                    }
+                })
+                .on_mouse_up(gpui::MouseButton::Left, finish.clone())
+                .on_mouse_up_out(gpui::MouseButton::Left, finish)
+                .child(content)
+        }
+        #[cfg(not(target_os = "linux"))]
+        {
+            content
+        }
     }
 }
 
 #[cfg(test)]
 mod tests {
     #[cfg(target_os = "linux")]
-    use super::screen_to_view_scale;
+    use super::{note_screen_point, screen_to_view_scale};
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn note_events_use_actual_paint_scale_and_overlay_origin() {
+        let point = note_screen_point([441.4804, 284.21484], [-1920.0, 1440.0], 1.5833334);
+        assert!((point[0] - (-1220.9893)).abs() < 0.01);
+        assert!((point[1] - 1890.0068).abs() < 0.01);
+        assert_eq!(note_screen_point([0.0, 0.0], [512.0, 1440.0], 1.25), [512.0, 1440.0]);
+    }
 
     #[cfg(target_os = "linux")]
     #[test]
