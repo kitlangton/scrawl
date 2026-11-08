@@ -11,6 +11,6 @@ Read this before changing `capture/engine/runtime/phone.rs`, `shared/routing.rs`
 
 ## Dev-site routing (`shared/routing.rs`, `capture/desktop/web.rs`, `capture/desktop/sdk.js`)
 
-Screen and Window captures are saved and copied, without looking up an OpenCode session or sending anywhere. Old routing code and `/sdk.js` remain for local dev-page registration, but nothing calls the capture-routing entry point. The app binds the browser SDK server to `127.0.0.1:47777`; it does not accept phone uploads.
+Screen and Window captures are saved and copied, without looking up an OpenCode session or sending anywhere. The retired routing implementation has been removed. `/sdk.js` remains for local dev-page registration and event context. The app binds the browser SDK server to `127.0.0.1:47777`; it does not accept phone uploads.
 
 The old `smartRouting` experiment has no effect on capture delivery.
