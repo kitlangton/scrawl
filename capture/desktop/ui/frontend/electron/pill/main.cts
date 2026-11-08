@@ -185,7 +185,12 @@ app.whenReady().then(()=>{
   // Hyprland assigns even override-redirect XWayland windows to a workspace.
   // Rust's existing native adapter pins only this exact child/window identity.
   if(process.platform==='linux'){
-    for(const event of ['show','move','resize'])window.on(event,()=>emit({pin:true}));
+    for(const event of ['show','move','resize'])window.on(event,()=>{
+      const visible=window.isVisible();
+      // Hidden placement between captures must not spend native admission retries.
+      if(activated && rendererReady && current && current.phase!=='hidden' && visible)
+        emit({pin:true,phase:current.phase,activated,rendererReady,visible});
+    });
   }
   window.on('move',()=>{
     const b=window.getBounds(),a=screen.getDisplayMatching(b).workArea;
