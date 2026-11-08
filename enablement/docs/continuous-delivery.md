@@ -337,3 +337,27 @@ cancelled or missing required jobs cannot pass. Candidate policy is parsed as da
 it is never executed with the reporter credential. Writers serialize and re-read
 candidates and evidence before posting, but a later change requires another manual
 refresh. API failures remain operational errors, never successful verification.
+
+### Reporter API budgets and targeted recovery
+
+Manual reporting retains the trusted Actions credential, live-main freshness
+checks and bounded API client. A targeted dispatch uses a 60-request hard budget
+and requires 70 remaining requests; a blank/global dispatch uses a 200-request
+budget and requires 210 remaining. Immutable content is cached within the run;
+mutable refs, permissions and final evidence remain fresh. Status writes are
+spaced by one second. Quota exhaustion, the five-request reserve or budget
+exhaustion halts the run immediately, without retries or credential substitution.
+
+Manual dispatches have unique workflow concurrency keys. Targeted recovery jobs
+serialize per PR, separately from global scans, so unrelated manual requests
+cannot evict one another before job admission. API failures report reset/Retry-After
+times and request IDs without exposing credentials or response bodies. After the
+reported reset time, one targeted recovery can be requested from trusted main:
+
+```sh
+gh workflow run checks.yml --ref main -f pull_request=1094
+```
+
+Its own Actions-token quota preflight must pass before status writes. A user-token
+quota check or rerunning application/native verification does not repair reporter
+delivery. If quota remains insufficient, retain the hold until the reported reset.

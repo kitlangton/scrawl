@@ -15,7 +15,10 @@ test('only one automatic workflow; verification/publication and status reporting
   });
   assert.deepEqual(automatic, ['checks.yml']);
   const ci = workflow('checks.yml');
-  assert.deepEqual(ci.on, {pull_request: {branches: ['main']}, push: {branches: ['main']}, workflow_dispatch: null});
+  assert.deepEqual(Object.keys(ci.on), ['pull_request', 'push', 'workflow_dispatch']);
+  assert.deepEqual(ci.on.pull_request, {branches: ['main']});
+  assert.deepEqual(ci.on.push, {branches: ['main']});
+  assert.equal(ci.on.workflow_dispatch.inputs.pull_request.type, 'string');
   assert.equal(ci.jobs['verification-status'].if, "github.event_name == 'workflow_dispatch'");
   assert.equal(ci.permissions.contents, 'read');
   assert.equal(ci.jobs.public.uses, './.github/workflows/stream-public.yml');
