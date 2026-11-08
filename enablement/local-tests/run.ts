@@ -7,7 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const owners = ['capture', 'engine', 'desktop', 'capture-tools', 'client', 'web', 'service', 'public', 'hermes', 'tooling'] as const;
 type Owner = typeof owners[number];
-export type Command = { argv: string[]; cwd: string };
+export type Command = { argv: string[]; cwd: string; env?: Record<string, string> };
 
 export function select(paths: string[], known = true): Owner[] {
   const selected = new Set<Owner>();
@@ -46,7 +46,8 @@ export function captureToolTests(cwd = root): Command[] {
   const result = spawnSync('git', ['ls-files', '-z', '--', 'capture/desktop/scripts/', 'capture/agent/scripts/'], { cwd, encoding: 'utf8' });
   if (result.error || result.status !== 0) throw Error('Cannot enumerate capture tooling tests');
   return result.stdout.split('\0').filter(path => /\/test[-_][^/]*\.py$/.test(path)).sort()
-    .map(path => ({ argv: ['python3', '-m', 'unittest', path], cwd: '.' }));
+    .map(path => ({ argv: ['python3', '-m', 'unittest', path], cwd: '.',
+      ...(path.endsWith('/test_issue_cli.py') ? {env: {APPARENT_BIN: resolve(cwd, process.env.CARGO_TARGET_DIR || 'target', 'debug/apparent')}} : {}) }));
 }
 
 export function commands(selected: Owner[], base: string, head: string, platform = process.platform): Command[] {
@@ -54,6 +55,8 @@ export function commands(selected: Owner[], base: string, head: string, platform
   const add = (argv: string[], cwd = '.') => result.push({ argv, cwd });
   // These cheap contracts were previously missing from feature pushes.
   add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--pr']);
+  const tools = selected.includes('capture-tools') ? captureToolTests() : [];
+  result.push(...tools.filter(command => !command.env?.APPARENT_BIN));
   if (selected.includes('tooling')) add(['python3', '-m', 'unittest', 'discover', '-s', 'enablement/directory-width/tests', '-p', 'test_*.py']);
   if (selected.includes('hermes')) add(['python3', '-m', 'unittest', 'discover', '-s', 'hermes/tests', '-p', 'test_*.py']);
   if (selected.includes('capture') || selected.includes('engine')) {
@@ -61,6 +64,10 @@ export function commands(selected: Owner[], base: string, head: string, platform
     // For mixed inputs it broadens to root + staged Engine rather than omit tests.
     add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--run']);
   }
+  // This real CLI suite needs the exact executable the preceding root check
+  // rebuilt. Its existing APPARENT_BIN contract supports private target dirs.
+  if (tools.some(command => command.env?.APPARENT_BIN) && !selected.includes('capture')) throw Error('CLI tests require root build coverage');
+  result.push(...tools.filter(command => command.env?.APPARENT_BIN));
   if (selected.includes('client')) {
     add(['python3', 'enablement/verification.py', '--base', base, '--preflight']);
     const cargo = platform === 'darwin' ? ['taskpolicy', '-c', 'utility', 'cargo'] : ['cargo'];
@@ -106,9 +113,9 @@ export function execute(plan: Command[], cwd = root): void {
   if (local.error || local.status !== 0) throw Error('Cannot isolate hook Git environment');
   const env = { ...process.env };
   for (const name of local.stdout.trim().split('\n')) delete env[name];
-  for (const { argv, cwd: directory } of plan) {
+  for (const { argv, cwd: directory, env: extra } of plan) {
     console.error(`pre-push: [${directory}] ${argv.join(' ')}`);
-    const result = spawnSync(argv[0], argv.slice(1), { cwd: resolve(cwd, directory), env, stdio: 'inherit' });
+    const result = spawnSync(argv[0], argv.slice(1), { cwd: resolve(cwd, directory), env: {...env, ...extra}, stdio: 'inherit' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw Error(`Local test command failed (${result.signal || result.status}): ${argv.join(' ')}`);
   }
@@ -127,7 +134,6 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   try { paths = changedPaths(base, head); } catch { known = false; }
   const selected = select(paths, known);
   const plan = commands(selected, base, head);
-  if (selected.includes('capture-tools')) plan.splice(1, 0, ...captureToolTests());
   console.log(JSON.stringify({ paths, historyKnown: known, selected, commands: plan }));
   if (args.includes('--run')) execute(plan);
 }

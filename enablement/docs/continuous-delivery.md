@@ -48,7 +48,8 @@ client, browser, Public and root consumers. Desktop frontend changes run npm tes
 synthetic Electron smokes (Xvfb on Linux) and conservative root verification.
 Capture script changes also load every tracked Python contract file explicitly
 under Desktop/Agent scripts, including nested packaging and hyphenated Linux tests;
-these run before expensive suites. New enablement test filenames are discovered
+these run before expensive suites except the CLI integration, which follows the
+root rebuild and receives its exact executable through `APPARENT_BIN`. New enablement test filenames are discovered
 automatically. Other capture changes retain the broad Rust/Engine verifier. Shared UI
 also selects Desktop, service and root integration. Package manifests/lockfiles
 select the entire owner, with locked installs and ordinary build prerequisites.

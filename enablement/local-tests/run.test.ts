@@ -45,6 +45,10 @@ test('package gates execute complete canonical suites including browser and Elec
   assert.ok(plan.some(command => command.argv.includes('--run')));
   assert.ok(!commands(['desktop'], 'base', 'head', 'darwin').some(command => command.argv.includes('xvfb-run')));
   assert.ok(commands(['client'], 'base', 'head', 'darwin').some(command => command.argv[0] === 'taskpolicy'));
+  const build = plan.findIndex(command => command.argv.includes('--run'));
+  const cli = plan.findIndex(command => command.argv.at(-1)?.endsWith('/test_issue_cli.py'));
+  assert.ok(cli > build && build >= 0, 'rebuilt application must precede CLI integration');
+  assert.ok(plan[cli].env?.APPARENT_BIN.endsWith('/debug/apparent'));
 });
 
 function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
