@@ -1,4 +1,4 @@
-//! Installed Storage presentation. Policy and settings persistence stay in Rust.
+//! Installed Electron presentations. Policy and settings persistence stay in Rust.
 use std::{path::PathBuf, process::{Command, Stdio}, sync::Arc};
 use super::settings::{Action, Event, Transport};
 
@@ -37,10 +37,7 @@ pub(super) fn assets() -> Option<(PathBuf, PathBuf)> {
 pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<Transport> {
     use std::io::BufRead;
     let (app, runtime) = assets().ok_or_else(|| anyhow::anyhow!("Packaged Storage Settings unavailable"))?;
-    // Electron selects its display backend before loading main.cjs. Match the
-    // Linux parent's XWayland choice while preserving a live Wayland opt-in.
-    let x11 = cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none();
-    let mut child = command(runtime, app, x11)
+    let mut child = command(runtime, app)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -62,10 +59,27 @@ pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<T
     Ok(Transport::Helper { child, stdin })
 }
 
-fn command(runtime: PathBuf, app: PathBuf, x11: bool) -> Command {
+/// Electron selects its display backend before loading the application entry.
+/// GPUI hides WAYLAND_DISPLAY on Linux; every Electron surface must follow that
+/// XWayland choice, while preserving an explicitly retained Wayland display.
+fn renderer_command(runtime: PathBuf, app: PathBuf) -> Command {
     let mut command = Command::new(runtime);
-    if x11 { command.arg("--ozone-platform=x11"); }
-    command.arg(app).arg("--settings-storage").arg("--settings-parent");
+    if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+        command.arg("--ozone-platform=x11");
+    }
+    command.arg(app);
+    command
+}
+
+fn command(runtime: PathBuf, app: PathBuf) -> Command {
+    let mut command = renderer_command(runtime, app);
+    command.arg("--settings-storage").arg("--settings-parent");
+    command
+}
+
+pub(super) fn onboarding_command(runtime: PathBuf, app: PathBuf) -> Command {
+    let mut command = renderer_command(runtime, app);
+    command.arg("--onboarding");
     command
 }
 
@@ -74,14 +88,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn settings_child_gets_its_native_backend_before_the_application_entry() {
-        for x11 in [false, true] {
-            let child = command("/runtime/electron".into(), "/settings/app".into(), x11);
+    fn renderer_children_follow_the_parent_display_backend() {
+        // Child processes exercise the real environment policy without changing
+        // this multi-threaded test process's environment.
+        for display in [None, Some("wayland-test")] {
+            let mut child = Command::new(std::env::current_exe().unwrap());
+            child.args(["--exact", "capture::desktop::settings::presentation::tests::renderer_child_arguments", "--nocapture"])
+                .env("APPARENT_TEST_RENDERER_ARGS", "1")
+                .env("XDG_SESSION_TYPE", "wayland")
+                .env_remove("WAYLAND_DISPLAY");
+            if let Some(display) = display { child.env("WAYLAND_DISPLAY", display); }
+            let output = child.output().unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+        }
+    }
+
+    #[test]
+    fn renderer_child_arguments() {
+        if std::env::var_os("APPARENT_TEST_RENDERER_ARGS").is_none() { return; }
+        for (child, mode) in [
+            (command("/runtime/electron".into(), "/settings/app".into()), vec!["--settings-storage", "--settings-parent"]),
+            (onboarding_command("/runtime/electron".into(), "/settings/app".into()), vec!["--onboarding"]),
+        ] {
             assert_eq!(child.get_program(), "/runtime/electron");
             let args: Vec<_> = child.get_args().map(|arg| arg.to_str().unwrap()).collect();
             let mut expected = vec![];
-            if x11 { expected.push("--ozone-platform=x11"); }
-            expected.extend(["/settings/app", "--settings-storage", "--settings-parent"]);
+            if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() {
+                expected.push("--ozone-platform=x11");
+            }
+            expected.push("/settings/app");
+            expected.extend(mode);
             assert_eq!(args, expected);
         }
     }

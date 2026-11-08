@@ -1407,7 +1407,7 @@
       "status": "main",
       "added": "2026-10-29",
       "platforms": ["mac", "linux"],
-      "note": "Release-baseline candidate; installed Mac audio, focus, packaging and workflow acceptance remain required. Pen color persists and is carried into saved ink and export.",
+      "note": "Release-baseline candidate; installed Mac audio, focus, packaging and workflow acceptance remain required. Pen color persists and is carried into saved ink and export. Linux packaged onboarding follows the parent X11/XWayland backend instead of falling back solely because the session is Wayland.",
       "config": [{ "key": "penColor", "value": "coral|purple|blue|green", "does": "Saved drawing pigment; read at app startup or changed immediately by onboarding" }, { "key": "onboarding", "value": "{…}", "does": "Tour progress; delete it to replay the tour" }],
       "docs": ["README.md#welcome-and-permissions", "capture/desktop/docs/onboarding-and-settings.md"]
     },
