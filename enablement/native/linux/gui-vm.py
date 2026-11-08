@@ -281,6 +281,86 @@ def wait_for_desktop(prefix, process, seconds):
     raise error
 
 
+def guest_roots_command(roots, expected=None):
+    """Create exclusive private roots, or verify their original identities.
+
+    Runs as the existing SSH account, never chmods/reuses a pre-existing root.
+    Diagnostics identify the failing role and observed metadata without reading
+    any guest files. The scenario keeps its own independent privacy checks.
+    """
+    source = '''import json,os,stat,sys
+roots=json.loads(sys.argv[1]); expected=json.loads(sys.argv[2]); uid=os.geteuid()
+def refuse(role,stage,value=None):
+ raise RuntimeError('guest-root-privacy '+json.dumps({'role':role,'stage':stage,'observed':value},sort_keys=True))
+def metadata(st):
+ return {'dev':st.st_dev,'ino':st.st_ino,'uid':st.st_uid,'mode':stat.S_IMODE(st.st_mode)}
+if set(roots)!={'bin','output'} or len(set(roots.values()))!=2: refuse('pair','invalid-paths')
+for role,path in roots.items():
+ if not os.path.isabs(path) or os.path.realpath(path)!=path: refuse(role,'noncanonical-path')
+ parent=os.lstat(os.path.dirname(path))
+ if not stat.S_ISDIR(parent.st_mode) or parent.st_uid!=uid: refuse(role,'parent',metadata(parent))
+ if expected is None and os.path.lexists(path): refuse(role,'already-exists',metadata(os.lstat(path)))
+if expected is None:
+ os.umask(0o077)
+ for path in roots.values(): os.mkdir(path,0o700)
+result={}
+for role,path in roots.items():
+ st=os.lstat(path)
+ if not stat.S_ISDIR(st.st_mode) or st.st_uid!=uid or stat.S_IMODE(st.st_mode)!=0o700: refuse(role,'type-owner-mode',metadata(st))
+ fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_NONBLOCK)
+ try:
+  opened=os.fstat(fd); value=metadata(opened)
+  if not stat.S_ISDIR(opened.st_mode) or opened.st_uid!=uid or stat.S_IMODE(opened.st_mode)!=0o700: refuse(role,'opened-type-owner-mode',value)
+  if value!=metadata(st) or value!=metadata(os.lstat(path)): refuse(role,'identity-changed',value)
+  result[role]={'path':path,**value}
+ finally: os.close(fd)
+if expected is not None:
+ for role in roots:
+  if result[role]!=expected.get(role): refuse(role,'original-identity-changed',result[role])
+print(json.dumps(result,sort_keys=True))
+'''
+    return ' '.join(shlex.quote(value) for value in
+                    ['/usr/bin/python3', '-IBS', '-c', source,
+                     json.dumps(roots), json.dumps(expected)])
+
+
+def stage_guest_inputs(args, prefix, port, directory, digest, call, *, guest_home=None):
+    """Existing flat staging and scenario environment, before product execution."""
+    home = guest_home if guest_home is not None else '/home/' + args.ssh_user
+    remote = home + '/scrawl-gui-scenario-' + uuid.uuid4().hex + '.sh'
+    guest_output = home + '/scrawl-gui-output-' + uuid.uuid4().hex
+    guest_bin = home + '/scrawl-gui-bin-' + uuid.uuid4().hex
+    files = [args.binary.resolve()] + sorted(args.binary.parent.glob('lib*.so*')) + [path.resolve() for path in args.fixture_file]
+    if len({path.name for path in files}) != len(files):
+        raise RuntimeError('fixture filenames must not replace candidate inputs')
+    roots = {'bin': guest_bin, 'output': guest_output}
+    created = json.loads(call(prefix + [guest_roots_command(roots)], timeout=10).stdout)
+    transfer = ['scp', '-q', '-P', str(port), '-i', str(args.ssh_key.resolve()),
+                '-o', 'StrictHostKeyChecking=accept-new',
+                '-o', 'UserKnownHostsFile=' + str(directory / 'known_hosts')]
+    call(transfer + [*[str(path) for path in files],
+                    f'{args.ssh_user}@127.0.0.1:{guest_bin}/'], timeout=120)
+    guest_binary = guest_bin + '/' + args.binary.name
+    actual = call(prefix + ['sha256sum ' + shlex.quote(guest_binary)]).stdout.split()[0]
+    if actual != digest:
+        raise RuntimeError('staged executable hash differs from candidate')
+    call(transfer + [str(args.scenario), f'{args.ssh_user}@127.0.0.1:{remote}'])
+    audio_file = ''
+    if args.audio_file:
+        audio_file = guest_output + '/stimulus.wav'
+        call(transfer + [str(args.audio_file.resolve()),
+                        f'{args.ssh_user}@127.0.0.1:{audio_file}'], timeout=120)
+    verified = json.loads(call(prefix + [guest_roots_command(roots, created)], timeout=10).stdout)
+    if verified != created:
+        raise RuntimeError('guest staging roots changed before scenario')
+    command = prefix + ['SCRAWL_GUI_OUTPUT=' + shlex.quote(guest_output) +
+                        ' SCRAWL_GUI_BINARY=' + shlex.quote(guest_binary) +
+                        ' SCRAWL_GUI_AUDIO_FILE=' + shlex.quote(audio_file) +
+                        ' LD_LIBRARY_PATH=' + shlex.quote(guest_bin) +
+                        ' bash ' + shlex.quote(remote)]
+    return command, verified, transfer
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("--template", type=Path, required=True, help="offline, standalone qcow2 disk")
@@ -419,42 +499,14 @@ def main():
             status['environment'] = 'ready'
             stage('staging')
             staging_deadline = min(deadline - 25, time.monotonic() + args.staging_timeout) if args.staging_timeout is not None else None
-            remote = "/home/" + args.ssh_user + "/scrawl-gui-scenario-" + uuid.uuid4().hex + ".sh"
-            guest_output = "/home/" + args.ssh_user + "/scrawl-gui-output-" + uuid.uuid4().hex
-            guest_bin = "/home/" + args.ssh_user + "/scrawl-gui-bin-" + uuid.uuid4().hex
-            call(prefix + ["mkdir -p " + shlex.quote(guest_bin)], timeout=10)
-            files = [args.binary.resolve()] + sorted(args.binary.parent.glob("lib*.so*")) + [path.resolve() for path in args.fixture_file]
-            if len({path.name for path in files}) != len(files):
-                raise RuntimeError('fixture filenames must not replace candidate inputs')
-            transfer = ["scp", "-q", "-P", str(port), "-i", str(args.ssh_key.resolve()),
-                        "-o", "StrictHostKeyChecking=accept-new",
-                        "-o", "UserKnownHostsFile=" + str(directory / "known_hosts")]
-            call(transfer + [*[str(path) for path in files],
-                            f"{args.ssh_user}@127.0.0.1:{guest_bin}/"], timeout=120)
-            digest = status['candidate_sha256']
-            guest_binary = guest_bin + "/" + args.binary.name
-            actual = call(prefix + ["sha256sum " + shlex.quote(guest_binary)]).stdout.split()[0]
-            if actual != digest:
-                raise RuntimeError("staged executable hash differs from candidate")
-            scp = transfer + [str(args.scenario), f"{args.ssh_user}@127.0.0.1:{remote}"]
-            call(scp)
-            audio_file = ""
-            if args.audio_file:
-                call(prefix + ["mkdir -p " + shlex.quote(guest_output)], timeout=10)
-                audio_file = guest_output + "/stimulus.wav"
-                call(transfer + [str(args.audio_file.resolve()),
-                                 f"{args.ssh_user}@127.0.0.1:{audio_file}"], timeout=120)
+            scenario_command, status['guest_roots'], transfer = stage_guest_inputs(
+                args, prefix, port, directory, status['candidate_sha256'], call)
+            guest_output = status['guest_roots']['output']['path']
             try:
                 staging_deadline = None
                 stage('scenario')
                 status['unrun'] = []
                 status['product'] = 'unknown'
-                scenario_command = prefix + ["mkdir -p " + shlex.quote(guest_output) +
-                                            " && SCRAWL_GUI_OUTPUT=" + shlex.quote(guest_output) +
-                                            " SCRAWL_GUI_BINARY=" + shlex.quote(guest_binary) +
-                                            " SCRAWL_GUI_AUDIO_FILE=" + shlex.quote(audio_file) +
-                                            " LD_LIBRARY_PATH=" + shlex.quote(guest_bin) +
-                                            " bash " + shlex.quote(remote)]
                 # Files keep full private output without buffering a long recipe in RAM.
                 with (directory / 'scenario.log').open('w') as output, (directory / 'scenario.stderr').open('w') as errors:
                     try:

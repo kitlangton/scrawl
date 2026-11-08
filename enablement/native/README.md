@@ -143,6 +143,14 @@ inspection. The runner supplies `SCRAWL_GUI_BINARY`, `SCRAWL_GUI_OUTPUT`, option
 stimulus and the candidate library path to a single Bash-invoked scenario.
 Successful transport is not product acceptance.
 
+Guest binary and output roots are created exclusively as `0700` by the SSH
+account before any transfer, independently of its default umask. Existing files,
+directories and symlinks are refused; the runner never repairs their permissions.
+After staging, both roots must still match their original device/inode, owner
+and private mode before the scenario environment is returned. `guest_roots` in
+the private result records those identities; refusal diagnostics name the root
+role and observed metadata. Scenarios retain their independent privacy checks.
+
 `--retain-cold-state` explicitly opts one job into preserving its cold
 `disk.qcow2` and matching final `OVMF_VARS.fd`. Default verified-success deletion
 is unchanged. Normal cleanup and the copied expiry sibling share the same

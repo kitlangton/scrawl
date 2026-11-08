@@ -9,6 +9,8 @@ import io
 import json
 import os
 from pathlib import Path
+import shlex
+import shutil
 import signal
 import socket
 import subprocess
@@ -507,6 +509,12 @@ if operation == 'ssh':
     command = sys.argv[-1]
     if command.startswith('sha256sum '):
         print(hashlib.sha256((root / 'candidate').read_bytes()).hexdigest())
+    elif command.startswith('/usr/bin/python3 -IBS -c '):
+        import json, os, shlex
+        roots = json.loads(shlex.split(command)[4])
+        print(json.dumps({role: {'path': path, 'dev': 1, 'ino': index + 1,
+                                'uid': os.geteuid(), 'mode': 0o700}
+                          for index, (role, path) in enumerate(roots.items())}))
     elif command.startswith('python3 -c '):
         import shlex
         script = shlex.split(command)[2]
@@ -1118,6 +1126,199 @@ class HostFDObservationTests(unittest.TestCase):
                     with self.assertRaises((RuntimeError, FileNotFoundError)):
                         reaper.host_fd_payload(directory, resources)
                     call.assert_not_called()
+
+
+class GuestRootPrivacyTests(unittest.TestCase):
+    def local_call(self, command, timeout=30, check=True):
+        # Only the existing remote-shell transport is replaced. The emitted
+        # creation/verification commands and scenario environment run for real
+        # against tiny owned local fixtures, never SSH/QEMU or a product app.
+        return runner.execute(['bash', '-c', command[-1]], timeout=timeout,
+                              check=check, umask=0o002)
+
+    def test_fresh_creation_and_scenario_validation_ignore_remote_default_umask(self):
+        for with_audio in (False, True):
+            for mask in (0o002, 0o022):
+                with self.subTest(audio=with_audio, umask=mask), tempfile.TemporaryDirectory() as root:
+                    root = Path(root).resolve()
+                    home = root / "owned guest 'é"
+                    home.mkdir(mode=0o700)
+                    source = root / 'source'
+                    source.mkdir()
+                    binary = source / 'apparent'
+                    binary.write_bytes(b'INERT candidate; never executed')
+                    binary.chmod(0o755)
+                    extra = source / "fixture 'é.txt"
+                    extra.write_bytes(b'INERT fixture')
+                    audio = source / 'reference.wav'
+                    audio.write_bytes(b'INERT synthetic reference; never played')
+                    scenario = source / 'scenario.sh'
+                    scenario.write_text('''set -eu
+/usr/bin/python3 -IBS - <<'PY'
+import json,os,stat
+from pathlib import Path
+binary=Path(os.environ['SCRAWL_GUI_BINARY']); output=Path(os.environ['SCRAWL_GUI_OUTPUT'])
+for path in (binary.parent,output):
+ st=os.lstat(path)
+ assert stat.S_ISDIR(st.st_mode) and st.st_uid==os.geteuid() and stat.S_IMODE(st.st_mode)==0o700
+assert os.environ['LD_LIBRARY_PATH']==str(binary.parent)
+assert binary.read_bytes()==b'INERT candidate; never executed'
+assert (binary.parent/"fixture 'é.txt").read_bytes()==b'INERT fixture'
+audio=os.environ['SCRAWL_GUI_AUDIO_FILE']
+if audio: assert Path(audio).read_bytes()==b'INERT synthetic reference; never played'
+(output/'scenario-private-roots-passed').write_text('synthetic transport/privacy only')
+print(json.dumps({'binary':str(binary),'output':str(output),'audio':audio}))
+PY
+''')
+                    args = SimpleNamespace(binary=binary, fixture_file=[extra], scenario=scenario,
+                                           audio_file=audio if with_audio else None,
+                                           ssh_user='fixture', ssh_key=source / 'unused-key')
+                    calls = []
+                    def transport(command, timeout=30, check=True):
+                        calls.append(command)
+                        if command[0] == 'scp':
+                            target = command[-1].split(':', 1)[1]
+                            for path in command[10:-1]:
+                                destination = Path(target) / Path(path).name if target.endswith('/') else Path(target)
+                                shutil.copy2(path, destination)
+                            return SimpleNamespace(stdout='', returncode=0)
+                        return runner.execute(['bash', '-c', command[-1]], timeout=timeout,
+                                              check=check, umask=mask)
+                    command, roots, _transfer = runner.stage_guest_inputs(
+                        args, ['INERT-SSH'], 12345, root, runner.file_digest(binary), transport,
+                        guest_home=str(home))
+                    result = transport(command)
+                    observed = json.loads(result.stdout)
+                    self.assertEqual(observed['output'], roots['output']['path'])
+                    self.assertEqual(observed['binary'], roots['bin']['path'] + '/apparent')
+                    self.assertEqual(bool(observed['audio']), with_audio)
+                    self.assertTrue((Path(roots['output']['path']) / 'scenario-private-roots-passed').is_file())
+                    self.assertTrue(all(row['mode'] == 0o700 and row['uid'] == os.geteuid() for row in roots.values()))
+                    self.assertFalse(any('mkdir -p' in part for call in calls for part in call))
+
+    def test_create_refuses_existing_or_symlink_roots_without_changing_them(self):
+        for existing, kind in (('bin', 'directory'), ('output', 'directory'), ('bin', 'file'), ('bin', 'symlink')):
+            with self.subTest(role=existing, kind=kind), tempfile.TemporaryDirectory() as root:
+                root = Path(root).resolve()
+                roots = {role: str(root / role) for role in ('bin', 'output')}
+                path = Path(roots[existing])
+                if kind == 'directory': path.mkdir(mode=0o755)
+                elif kind == 'file': path.write_bytes(b'preserve')
+                else: path.symlink_to(root / 'absent')
+                before = path.lstat()
+                with self.assertRaises(subprocess.CalledProcessError) as refused:
+                    self.local_call(['INERT-SSH', runner.guest_roots_command(roots)])
+                self.assertIn(existing, refused.exception.stderr)
+                after = path.lstat()
+                self.assertEqual((before.st_dev, before.st_ino, before.st_mode),
+                                 (after.st_dev, after.st_ino, after.st_mode))
+                self.assertFalse(Path(roots['output' if existing == 'bin' else 'bin']).exists())
+
+    def test_actual_staging_refuses_tampered_roots_before_returning_scenario(self):
+        for change in ('mode', 'replace'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as root:
+                root = Path(root).resolve()
+                home = root / 'guest'
+                home.mkdir(mode=0o700)
+                source = root / 'source'
+                source.mkdir()
+                binary, scenario = source / 'apparent', source / 'case.sh'
+                binary.write_bytes(b'INERT never executed')
+                scenario.write_text('exit 0')
+                args = SimpleNamespace(binary=binary, fixture_file=[], scenario=scenario,
+                                       audio_file=None, ssh_user='fixture', ssh_key=root / 'unused')
+                created = None
+                def transport(command, timeout=30, check=True):
+                    nonlocal created
+                    if command[0] == 'scp':
+                        target = command[-1].split(':', 1)[1]
+                        for path in command[10:-1]:
+                            shutil.copy2(path, Path(target) / Path(path).name if target.endswith('/') else target)
+                        return SimpleNamespace(stdout='', returncode=0)
+                    if command[-1].startswith('/usr/bin/python3') and created is not None:
+                        target = Path(created['output']['path'])
+                        if change == 'mode': target.chmod(0o755)
+                        else:
+                            target.rename(home / 'preserved-original')
+                            target.mkdir(mode=0o700)
+                    result = self.local_call(command, timeout, check)
+                    if command[-1].startswith('/usr/bin/python3') and created is None:
+                        created = json.loads(result.stdout)
+                    return result
+                with self.assertRaises(subprocess.CalledProcessError) as refused:
+                    runner.stage_guest_inputs(args, ['INERT-SSH'], 12345, root,
+                                              runner.file_digest(binary), transport, guest_home=str(home))
+                self.assertIn('output', refused.exception.stderr)
+                self.assertIsNotNone(created)
+                if change == 'mode':
+                    self.assertEqual(Path(created['output']['path']).stat().st_mode & 0o777, 0o755)
+
+    def test_verify_refuses_mode_or_identity_changes_and_never_repairs_them(self):
+        for change in ('mode', 'replace', 'symlink', 'missing'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as root:
+                root = Path(root).resolve()
+                roots = {role: str(root / role) for role in ('bin', 'output')}
+                created = json.loads(self.local_call(['INERT-SSH', runner.guest_roots_command(roots)]).stdout)
+                target = Path(roots['output'])
+                if change == 'mode': target.chmod(0o755)
+                elif change == 'replace':
+                    target.rename(root / 'preserved-original')
+                    target.mkdir(mode=0o700)
+                elif change == 'symlink':
+                    target.rename(root / 'preserved-original')
+                    target.symlink_to(root / 'preserved-original')
+                else: target.rmdir()
+                with self.assertRaises(subprocess.CalledProcessError) as refused:
+                    self.local_call(['INERT-SSH', runner.guest_roots_command(roots, created)])
+                if change != 'missing': self.assertIn('output', refused.exception.stderr)
+                if change == 'mode':
+                    self.assertIn('493', refused.exception.stderr)  # actual observed0755
+                    self.assertEqual(target.stat().st_mode & 0o777, 0o755)
+
+    def test_foreign_owner_metadata_refuses_before_creation(self):
+        with tempfile.TemporaryDirectory() as root:
+            roots = {role: str(Path(root).resolve() / role) for role in ('bin', 'output')}
+            words = shlex.split(runner.guest_roots_command(roots))
+            with patch.object(os, 'geteuid', return_value=os.getuid() + 1), \
+                 patch.object(sys, 'argv', ['fixed-root-command', *words[4:]]):
+                with self.assertRaisesRegex(RuntimeError, 'parent'):
+                    exec(compile(words[3], '<actual-emitted-guest-roots>', 'exec'), {})
+            self.assertFalse(any(Path(path).exists() for path in roots.values()))
+
+    def test_opened_identity_is_rechecked_not_only_initial_path_metadata(self):
+        with tempfile.TemporaryDirectory() as root:
+            roots = {role: str(Path(root).resolve() / role) for role in ('bin', 'output')}
+            created = json.loads(self.local_call(['INERT-SSH', runner.guest_roots_command(roots)]).stdout)
+            words = shlex.split(runner.guest_roots_command(roots, created))
+            original = os.fstat
+            def changed(fd):
+                row = original(fd)
+                return SimpleNamespace(st_dev=row.st_dev, st_ino=row.st_ino,
+                                       st_uid=row.st_uid + 1, st_mode=row.st_mode)
+            with patch.object(os, 'fstat', side_effect=changed), \
+                 patch.object(sys, 'argv', ['fixed-root-command', *words[4:]]):
+                with self.assertRaisesRegex(RuntimeError, 'opened-type-owner-mode'):
+                    exec(compile(words[3], '<actual-emitted-guest-roots>', 'exec'), {})
+
+    def test_actual_main_uses_staging_roots_for_retention_and_scenario(self):
+        tree = ast.parse(MODULE.read_text())
+        main = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'main')
+        stage_call = next(node for node in ast.walk(main) if isinstance(node, ast.Assign)
+                          and isinstance(node.value, ast.Call) and isinstance(node.value.func, ast.Name)
+                          and node.value.func.id == 'stage_guest_inputs')
+        calls = []
+        roots = {'output': {'path': '/synthetic-owned-output'}}
+        ns = {'args': object(), 'prefix': ['INERT-SSH'], 'port': 1, 'directory': Path('/inert'),
+              'status': {'candidate_sha256': 'synthetic'}, 'call': object(),
+              'stage_guest_inputs': lambda *args: (calls.append(args) or (['INERT-SCENARIO'], roots, ['INERT-TRANSFER']))}
+        output = next(node for node in ast.walk(main) if isinstance(node, ast.Assign)
+                      and any(isinstance(target, ast.Name) and target.id == 'guest_output' for target in node.targets))
+        exec(compile(ast.Module(body=[stage_call, output], type_ignores=[]), '<actual-staging-callsite>', 'exec'), ns)
+        self.assertEqual(len(calls), 1)
+        self.assertIs(calls[0][-1], ns['call'])
+        self.assertEqual(ns['scenario_command'], ['INERT-SCENARIO'])
+        self.assertEqual(ns['transfer'], ['INERT-TRANSFER'])
+        self.assertEqual(ns['guest_output'], '/synthetic-owned-output')
 
 
 if __name__ == "__main__":
