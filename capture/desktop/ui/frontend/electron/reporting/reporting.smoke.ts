@@ -68,11 +68,18 @@ test(`installed ${settings ? 'Settings' : 'foundation'} reporting observes rende
   // Playwright may dispose its application channel as soon as Electron exits.
   // This OS handle remains valid for exit assertions and owned cleanup.
   ownedProcess = application.process();
-  await application.firstWindow();
+  const page = await application.firstWindow();
+  await page.waitForLoadState('load');
+  const devtools = await page.context().newCDPSession(page);
   const rendererExit = settings ? once(ownedProcess, 'exit') : undefined;
-  await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
+  // forcefullyCrashRenderer may report "killed", which production intentionally
+  // excludes. Page.crash exercises a genuine crash on both macOS and Linux.
+  const crash = devtools.send('Page.crash').catch(error => {
+    assert.match(error.message, /closed|crash/i);
+  });
   if (settings) {
     const [code] = await rendererExit!;
+    await crash;
     assert.equal(code, 1, 'Settings preserves native fallback exit status');
     assert.ok(requests.some(request => request.kind === 'renderer_gone'));
     return;
@@ -83,6 +90,7 @@ test(`installed ${settings ? 'Settings' : 'foundation'} reporting observes rende
   const exited = once(ownedProcess, 'exit');
   await application.evaluate(() => { setTimeout(() => { throw Error('private-error-canary'); }, 0); });
   const [code] = await exited;
+  await crash;
   assert.equal(code, 1);
   assert.equal(requests.filter(r => r.kind === 'main_exception').length, 1);
   for (const request of requests) {
