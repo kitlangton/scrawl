@@ -1168,12 +1168,7 @@ impl Session {
             }
         };
         let attempted = electron.and_then(|(app, runtime)| {
-            let mut command = std::process::Command::new(runtime);
-            // GPUI clears WAYLAND_DISPLAY. Match the notes surface and the X11
-            // overlay coordinates instead of Electron's Wayland auto-selection.
-            #[cfg(target_os = "linux")]
-            command.arg("--ozone-platform=x11");
-            Self::spawn_renderer_transport(command.arg(app).arg("--onboarding"), transport_generation, events.clone()).ok()
+            Self::spawn_renderer_transport(&mut super::presentation::onboarding_command(runtime, app), transport_generation, events.clone()).ok()
         });
         let shell = attempted.is_some();
         let (transport, fallback) = match attempted {
