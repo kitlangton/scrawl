@@ -21,8 +21,7 @@ fn main() {
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() != Ok("macos") {
         return;
     }
-    compile_laser_shader();
-    compile_helper();
+    compile_mac_native();
     println!("cargo:rustc-link-arg=-Wl,-rpath,/usr/lib/swift");
     if let Ok(output) = Command::new("xcode-select").arg("-p").output()
         && output.status.success()
@@ -206,131 +205,19 @@ fn watch_desktop_tooling() {
     }
 }
 
-fn compile_laser_shader() {
-    for (src_rel, name) in [
-        ("capture/desktop/native/laser_overlay.metal", "laser_overlay"),
-        ("capture/desktop/native/pill/pill.metal", "pill"),
-    ] {
-        compile_metal_shader(src_rel, name);
-    }
-}
-
-fn compile_metal_shader(src_rel: &str, name: &str) {
-    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    let output_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let source = manifest_dir.join(src_rel);
-    let air = output_dir.join(format!("{name}.air"));
-    let library = output_dir.join(format!("{name}.metallib"));
-    println!("cargo:rerun-if-changed={}", source.display());
-
-    let metal = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metal", "-c", "-mmacosx-version-min=15.0"])
-        .arg(&source)
-        .arg("-o")
-        .arg(&air)
+/// TypeScript owns native build selection/reuse; xcrun remains the compiler.
+fn compile_mac_native() {
+    let root = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
+    let output = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
+    let script = root.join("enablement/native-build/build.ts");
+    println!("cargo:rerun-if-changed={}", script.display());
+    let status = Command::new("node")
+        .arg("--experimental-strip-types")
+        .arg(script)
+        .arg(&root)
+        .arg(output)
+        .arg(std::env::var("CARGO_CFG_TARGET_ARCH").expect("Mac target architecture"))
         .status()
-        .expect("xcrun metal is required to build Metal shaders");
-    assert!(metal.success(), "Metal shader compilation failed for {src_rel}");
-
-    let metallib = Command::new("xcrun")
-        .args(["--sdk", "macosx", "metallib"])
-        .arg(&air)
-        .arg("-o")
-        .arg(&library)
-        .status()
-        .expect("xcrun metallib is required to build Metal shaders");
-    assert!(metallib.success(), "Metal library creation failed for {src_rel}");
-}
-
-/// Builds `apparent-helper` (Swift: SpeechAnalyzer, iPhone capture, movie decoding) beside the
-/// `apparent` binary, where `helper::path` and `scripts/install-app.sh` look for it.
-fn compile_helper() {
-    let manifest_dir = PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
-    // Keep owner-native input lists explicit: new files must not silently enter the helper build.
-    // Sort the merged list by basename to preserve the former helper/*.swift compiler order.
-    let owner_sources: &[&[&str]] = &[
-        &[
-            "capture/engine/native/Export.swift",
-            "capture/engine/native/LiveTranscribe.swift",
-            "capture/engine/native/Media.swift",
-            "capture/engine/native/Mirror.swift",
-            "capture/engine/native/PlaybackVolume.swift",
-            "capture/engine/native/ScreenProbe.swift",
-        ],
-        &[
-            "capture/desktop/native/Onboarding.swift",
-            "capture/desktop/native/OnboardingBrand.swift",
-            "capture/desktop/native/OnboardingDemo.swift",
-            "capture/desktop/native/PermissionPanel.swift",
-            "capture/desktop/native/Settings.swift",
-            "capture/desktop/native/ShortcutKeys.swift",
-        ],
-        &["shared/native/main.swift"],
-    ];
-    let mut sources: Vec<PathBuf> = owner_sources
-        .iter()
-        .flat_map(|group| group.iter())
-        .map(|source| manifest_dir.join(source))
-        .collect();
-    sources.sort_by(|left, right| left.file_name().cmp(&right.file_name()));
-    for source in &sources {
-        println!("cargo:rerun-if-changed={}", source.display());
-    }
-    let plist = manifest_dir.join("shared/native/Info.plist");
-    println!("cargo:rerun-if-changed={}", plist.display());
-    println!("cargo:rerun-if-env-changed=APPARENT_HELPER_BUNDLE_ID");
-    println!("cargo:rerun-if-env-changed=APPARENT_PREVIEW_BUILD");
-    // OUT_DIR is target/<profile>/build/apparent-<hash>/out.
-    let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let plist = if let Ok(bundle_id) = std::env::var("APPARENT_HELPER_BUNDLE_ID") {
-        assert_eq!(bundle_id, "dev.simonvanlaak.apparent.preview.helper");
-        let source = std::fs::read_to_string(&plist).expect("read helper plist");
-        let original = "<string>dev.kitlangton.apparent.helper</string>";
-        assert!(source.contains(original), "helper bundle ID changed");
-        let preview_plist = out_dir.join("preview-helper-Info.plist");
-        std::fs::write(
-            &preview_plist,
-            source.replace(original, &format!("<string>{bundle_id}</string>")),
-        )
-        .expect("write preview helper plist");
-        preview_plist
-    } else {
-        plist
-    };
-    let profile_dir = out_dir
-        .ancestors()
-        .nth(3)
-        .expect("Unexpected OUT_DIR layout");
-    let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
-        Ok("aarch64") => "arm64",
-        Ok(other) => other,
-        Err(_) => "arm64",
-    }
-    .to_owned();
-    let built = out_dir.join("apparent-helper");
-    let status = Command::new("xcrun")
-        .args(["swiftc", "-O", "-swift-version", "5", "-target"])
-        .arg(format!("{arch}-apple-macos15.0"))
-        .args(&sources)
-        .arg("-o")
-        .arg(&built)
-        .args([
-            "-Xlinker",
-            "-sectcreate",
-            "-Xlinker",
-            "__TEXT",
-            "-Xlinker",
-            "__info_plist",
-            "-Xlinker",
-        ])
-        .arg(&plist)
-        .status()
-        .expect("xcrun swiftc is required to build apparent-helper");
-    assert!(
-        status.success(),
-        "apparent-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"
-    );
-    let dest = profile_dir.join("apparent-helper");
-    let _ = std::fs::remove_file(&dest);
-    std::fs::copy(&built, dest).expect("Could not place apparent-helper");
+        .expect("Node 22+ is required for Mac native build tooling");
+    assert!(status.success(), "Mac helper/shader build failed");
 }
