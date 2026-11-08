@@ -24,10 +24,10 @@ def run(*args, cwd, env=None, input=None):
 
 class PrePushGuardTests(unittest.TestCase):
     def setUp(self):
-        # macOS's default /var/folders TMPDIR is long and /var is a symlink;
-        # the production socket preflight intentionally rejects both. Linux
-        # inherits the private per-job Clanker root supplied by the caller.
-        self.tmp = tempfile.TemporaryDirectory(prefix="h", dir="/private/tmp" if sys.platform == "darwin" else None)
+        # A dedicated short, canonical fixture job root is independent of both
+        # CI's long TMPDIR and an untrusted caller TMPDIR. It also keeps Clanker
+        # fixtures in private apparent-dev jobs rather than arbitrary /tmp names.
+        self.tmp = tempfile.TemporaryDirectory(prefix="apparent-dev-hook-", dir="/private/tmp" if sys.platform == "darwin" else "/tmp")
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
@@ -67,12 +67,8 @@ class PrePushGuardTests(unittest.TestCase):
         taskpolicy = self.bin / "taskpolicy"
         taskpolicy.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$COMMAND_LOG\"\nexit \"${MOCK_STATUS:-0}\"\n")
         taskpolicy.chmod(0o755)
-        # CI's admitted TMPDIR can be near the Unix socket path budget. Do not
-        # append another fixture name to the child verifier's temporary root.
-        # Mac uses the canonical short root deliberately allocated above.
-        verifier_tmp = self.tmp.name if sys.platform == "darwin" else os.environ.get("TMPDIR", self.tmp.name)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1", TMPDIR=verifier_tmp)
+                        COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1", TMPDIR=self.tmp.name)
         # Default-policy fixtures must not inherit the live build runner's
         # allocation. Exercise explicit allocations separately below.
         self.env.pop("T3_BUILD_JOBS", None)
@@ -88,6 +84,9 @@ class PrePushGuardTests(unittest.TestCase):
             stub = self.bin / tool
             stub.write_text('#!/bin/sh\nexit "${MOCK_STATUS:-0}"\n')
             stub.chmod(0o755)
+        # Root/Engine run through the taskpolicy stub; Linux's independently
+        # selected client invokes Cargo directly. Observe that allocation too.
+        (self.bin / "cargo").write_text('#!/bin/sh\nprintf "cargo %s\\n" "$*" >> "$COMMAND_LOG"\nexit "${MOCK_STATUS:-0}"\n')
         node = self.bin / "node"
         node.write_text('#!/bin/sh\ncase "$1" in scripts/site-build/verify.mjs|scripts/test-browser.mjs) exit "${MOCK_STATUS:-0}";; esac\nexec ' + shutil.which("node") + ' "$@"\n')
         node.chmod(0o755)
@@ -122,6 +121,16 @@ class PrePushGuardTests(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             self.assertIn("Ran 1 test", result.stderr)
 
+    def test_contract_fixture_does_not_admit_the_callers_untrusted_tmpdir(self):
+        parent = Path(self.tmp.name) / "untrusted-parent"
+        parent.mkdir(mode=0o777)
+        parent.chmod(0o777)
+        result = run("python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                     "-p", "test_pre_push_guard.py", "-k", "test_clean_head_requires_build_and_tests",
+                     cwd=HOOK.parents[1], env=dict(os.environ, TMPDIR=str(parent), PYTHONDONTWRITEBYTECODE="1"))
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Ran 1 test", result.stderr)
+
     def test_feature_push_runs_contracts_without_cargo(self):
         run("git", "update-ref", "refs/remotes/origin/main", self.head, cwd=self.repo)
         (self.repo / "README.md").write_text("docs\n")
@@ -152,6 +161,8 @@ class PrePushGuardTests(unittest.TestCase):
             "-c utility cargo test -j 3 --offline -- --test-threads=2",
             "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 3 --offline",
             "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 3 --offline -- --test-threads=2",
+            ("-c utility " if sys.platform == "darwin" else "") + "cargo build --manifest-path connect/client/Cargo.toml -j 3 --offline",
+            ("-c utility " if sys.platform == "darwin" else "") + "cargo test --manifest-path connect/client/Cargo.toml -j 3 --offline -- --test-threads=2",
         ])
 
     def test_failed_verification_rejects_push(self):
@@ -167,6 +178,8 @@ class PrePushGuardTests(unittest.TestCase):
             "-c utility cargo test -j 7 --offline -- --test-threads=2",
             "-c utility cargo build --manifest-path capture/engine/Cargo.toml -j 7 --offline",
             "-c utility cargo test --manifest-path capture/engine/Cargo.toml -j 7 --offline -- --test-threads=2",
+            ("-c utility " if sys.platform == "darwin" else "") + "cargo build --manifest-path connect/client/Cargo.toml -j 7 --offline",
+            ("-c utility " if sys.platform == "darwin" else "") + "cargo test --manifest-path connect/client/Cargo.toml -j 7 --offline -- --test-threads=2",
         ])
 
     def test_document_only_push_avoids_cargo(self):
