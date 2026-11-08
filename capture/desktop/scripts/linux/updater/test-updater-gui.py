@@ -267,11 +267,12 @@ class FixtureTests(unittest.TestCase):
     def test_main_pagination_canonical_assets_and_current_identity(self):
         source = 'a' * 40
         control = {'channel': 'main', 'source_head': source, 'version': '1.2.3', 'mode': 'current'}
-        base = '/repos/tryapparent/apparent/releases?per_page=10&page='
+        base = '/repos/tryapparent/apparent/releases?per_page=100&page='
         first = json.loads(self.fixture.response(control, base + '1', b'x')[1])
+        self.assertEqual(len(first), 100)
         self.assertFalse(first[0]['prerelease'])
         release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]
-        self.assertEqual(release['tag_name'], 'linux-main-' + source)
+        self.assertEqual(release['tag_name'], 'linux-main-v2-' + source)
         self.assertTrue(release['prerelease'])
         self.assertFalse(release['draft'])
         self.assertTrue(release['published_at'])
@@ -279,7 +280,7 @@ class FixtureTests(unittest.TestCase):
         for mode in ['available', 'bad-checksum', 'diverged']:
             control['mode'] = mode
             release = json.loads(self.fixture.response(control, base + '2', b'x')[1])[0]
-            self.assertEqual(release['tag_name'], 'linux-main-' + 'b' * 40)
+            self.assertEqual(release['tag_name'], 'linux-main-v2-' + 'b' * 40)
             for asset in release['assets']:
                 self.assertEqual(asset['browser_download_url'],
                                  'https://github.com/tryapparent/apparent/releases/download/'
@@ -302,8 +303,8 @@ class FixtureTests(unittest.TestCase):
         self.assertEqual(json.loads(self.fixture.response(control, forward, b'')[1])['status'], 'diverged')
         self.assertEqual(self.fixture.response(control, base + 'c' * 40 + '...' + 'b' * 40, b'')[0], 404)
         control['mode'] = 'error'
-        self.assertEqual(self.fixture.response(control, '/repos/tryapparent/apparent/releases?per_page=10&page=1', b'')[0], 503)
-        self.assertEqual(self.fixture.response(control, '/repos/tryapparent/apparent/releases?per_page=10&page=0', b'')[0], 404)
+        self.assertEqual(self.fixture.response(control, '/repos/tryapparent/apparent/releases?per_page=100&page=1', b'')[0], 503)
+        self.assertEqual(self.fixture.response(control, '/repos/tryapparent/apparent/releases?per_page=100&page=0', b'')[0], 404)
 
     def test_release_contract_and_digest_are_exact(self):
         import hashlib

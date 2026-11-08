@@ -89,7 +89,7 @@ jobs:
           if [[ "$VERIFY_ONLY" == "true" ]]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           elif [[ "$PUBLISH_MAIN" == "true" && -z "$TAG" ]] && \
-             [[ "$(gh release view "linux-main-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
+             [[ "$(gh release view "linux-main-v2-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"

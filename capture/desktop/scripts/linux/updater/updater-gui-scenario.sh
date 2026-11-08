@@ -258,7 +258,7 @@ from collections import Counter
 import json,os,sys
 requests=[json.loads(line) for line in open(sys.argv[1])]
 main=os.environ['UPDATER_CHANNEL']=='main'
-metadata='/repos/tryapparent/apparent/releases?per_page=10&page=1' if main else '/repos/tryapparent/apparent/releases/latest'
+metadata='/repos/tryapparent/apparent/releases?per_page=100&page=1'
 counts=Counter(r['control']['serial'] for r in requests if r['control']['gate'] and r['path']==metadata)
 assert counts == ({2:1,3:1,4:1,5:1,6:1,7:1,9:1} if main else {2:1,3:1,4:1,5:1,6:1}), counts
 downloads=[r for r in requests if r['path'].endswith('.AppImage')]
