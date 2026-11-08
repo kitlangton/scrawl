@@ -87,11 +87,11 @@
       "id": "adaptive-mac-menu-bar-icon",
       "added": "2026-11-02",
       "group": "platforms",
-      "name": "Adaptive Mac menu bar icon",
-      "says": "The Mac menu bar keeps the Apparent a in purple: Lilac on Carbon in dark appearance, darker purple on Paper in light appearance. It follows live menu bar appearance changes without restarting. The app icon and Linux tray are unchanged.",
+      "name": "Adaptive menu bar and tray icon",
+      "says": "The Mac menu bar and Linux tray keep the Apparent a in purple: Lilac on Carbon in Dark mode, darker purple on Paper in Light mode. They follow live system appearance changes without restarting. The boxed glyph stays readable on independently themed panels. Linux requires a tray host. The app icon is unchanged.",
       "status": "main",
-      "platforms": ["mac"],
-      "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon"]
+      "platforms": ["mac", "linux"],
+      "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon", "capture/desktop/docs/linux/linux.md#tray-appearance"]
     },
     {
       "id": "typed-capture-notes",
