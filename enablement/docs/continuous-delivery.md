@@ -302,3 +302,59 @@ forwarded and exit status is preserved. Artifact upload is guarded by the timing
 step outcome, runs after failures, and missing diagnostics only warn. Diagnostics
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
+
+## PR verification status (bootstrap required)
+
+The `verification-status` job in `checks.yml` is a credentialed, event-driven default-branch reporter.
+It publishes the commit status **Verification complete**, independent of the cheap
+Repository checks. It never dispatches native work. PR changes, main pushes and
+manual verification lifecycle events reconcile open main PRs under one serialized
+writer. Candidate code is read as data, never executed with the reporter token.
+
+Native changes require both manual exact-head workflows, their latest run and
+latest attempt, the complete current or parallel job union, and successful Mac
+native assertions. Feature-only skipped release receipts are excluded. Unknown
+inventories, missing history, fork candidates and policy mismatches stay pending;
+failed/cancelled runs and skipped/missing required jobs fail. Successful evidence
+is retained across unrelated owner-documentation changes on main; other new base
+inputs require integration. Owner documentation alone needs no platform run.
+Public-only changes require manual Public verification at the exact head (PR merge
+checks do not substitute); they require neither Mac nor Rust. This PR status never
+admits publication or replaces native product acceptance outside CI.
+
+Bootstrap in order: merge reviewed reporter code into main under existing gates;
+open/update the authorized probe PR; inspect pending in `gh pr view --json
+statusCheckRollup`; dispatch only approved manual verification, demonstrate real
+failure and success transitions with Actions/status links; then add precisely
+`Verification complete` to required checks while preserving all live protections.
+No protection should be enabled on an unproven reporter. Initial read-only inspection
+found no main branch protection and no rulesets. This workflow cannot receive its
+own default-branch events before merge. Parent delivery ownership must retain the
+live transition proof and protection activation steps. A direct hand-written green
+status is not reporter proof. No polling, watchdog or expensive automatic run is
+part of this mechanism.
+
+Policy-changing PRs are evaluated as data using Bun 1.3.10 YAML parsing.
+The supported current/parallel job union must be present; each required command
+step must succeed in its owning job and candidate order. Mac assertions are
+required only on Mac. The manual run's triggering actor must retain repository
+write/maintain/admin access, checked again before status publication. Changed
+workflow policy is parsed as data and must preserve the trusted required job
+union and successful candidate command evidence. This completion status does
+not authenticate source-code correctness: independent source/security review
+remains part of delivery under the existing repository policy, without adding
+a second human GitHub approver requirement. It never authorizes publication.
+
+GitHub status writes have no compare-and-swap: final candidate/evidence re-reads
+and serialized writers reduce the race window; later lifecycle events reconcile
+concurrent external changes. Live bootstrap and required-check activation remain
+unverified until performed after merge under existing gates.
+
+The reporter writes pending before reading a known PR's evidence and isolates
+per-PR API failures so later candidates still reconcile. A PR lifecycle event
+can invalidate its known head even if PR enumeration fails. GitHub outages that
+prevent status writes, or prevent discovery of otherwise unknown heads during
+a global scan, cannot be made fail-closed by commit statuses alone. Reporter
+workflow failures remain operational errors; no green is proof of API freshness
+during such an outage. Public command steps, including verification and sealing,
+must succeed in the owning verify job; tolerated failures are rejected.
