@@ -19,6 +19,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   let holdRead = false;
   let initialLocationBusy = true;
   let releaseRead;
+  let rejectReset = false;
   const snapshot = () => ({ savedPath: saved, effectivePath: saved ?? '/builtin', displayPath: saved ?? '/builtin',
     custom: saved !== null, source: saved ? 'configured' : 'builtin', revision, secret: 'hidden' });
   const server = net.createServer((socket) => socket.once('data', (data) => {
@@ -29,6 +30,10 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     if (request.reference) return socket.end('{"error":"feature_disabled"}\n');
     if (!['read', 'set', 'reset'].includes(request.storage)) return socket.end('{"error":"invalid_request"}\n');
     requests.push(request);
+    if (request.storage === 'reset' && rejectReset) {
+      rejectReset = false;
+      return socket.end('{"error":"app_busy"}\n');
+    }
     if (request.storage === 'read' && initialLocationBusy) return socket.end('{"error":"app_busy"}\n');
     if (request.storage === 'read' && holdRead) {
       holdRead = false;
@@ -94,10 +99,17 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   assert.deepEqual(await page.evaluate(() => window.oldRead), { status: 'cancelled' });
   assert.equal(mutations(), 1);
   assert.equal(requests.find((r) => r.storage === 'set').expected, 'a'.repeat(16));
+  rejectReset = true;
+  await page.getByRole('button', { name: 'Reset', exact: true }).click();
+  await expect(page.getByText('Another location request is still running. Refresh when it finishes.', { exact: true })).toBeVisible();
+  assert.equal(saved, '/new é captures', 'Unadmitted Reset must leave the location unchanged');
+  assert.equal(mutations(), 2, 'Exactly one refused Reset was sent');
+  await page.getByRole('button', { name: 'Refresh location', exact: true }).click();
+  await page.getByText('/new é captures', { exact: true }).waitFor();
   await page.getByRole('button', { name: 'Reset', exact: true }).click();
   await page.getByText('/builtin', { exact: true }).waitFor();
   await expect(page.getByRole('button', { name: 'Reset', exact: true })).toBeDisabled();
-  assert.equal(mutations(), 2);
+  assert.equal(mutations(), 3);
 
   await page.getByRole('button', { name: 'Change…', exact: true }).click();
   await waitPicker(3);
@@ -105,7 +117,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   await page.getByText('/builtin', { exact: true }).waitFor();
   await application.evaluate(() => global.resolvePicker({ canceled: false, filePaths: ['/must-not-save'] }));
   await expect(page.getByRole('button', { name: 'Change…', exact: true })).toBeEnabled();
-  assert.equal(mutations(), 2);
+  assert.equal(mutations(), 3);
   assert.equal(await page.getByText('/must-not-save', { exact: true }).count(), 0);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(640, 760));
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
@@ -156,7 +168,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     global.resolvePicker({ canceled: false, filePaths: ['/must-not-save-after-navigation'] });
     return await global.lifecycleMutation;
   }), { status: 'cancelled' });
-  assert.equal(mutations(), 2);
+  assert.equal(mutations(), 3);
   await beginLifecyclePicker();
   await waitPicker(5);
   assert.deepEqual(await application.evaluate(async ({ BrowserWindow }) => {
@@ -167,5 +179,5 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     global.resolvePicker({ canceled: false, filePaths: ['/must-not-save-after-close'] });
     return await global.lifecycleMutation;
   }), { status: 'cancelled' });
-  assert.equal(mutations(), 2);
+  assert.equal(mutations(), 3);
 });

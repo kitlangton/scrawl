@@ -132,14 +132,27 @@ on run argv
         if not frontmost then error "Owned Electron process is not frontmost"
         if operation is "go" then
           keystroke "g" using {command down, shift down}
-          delay 0.4
-          if not frontmost then error "Focus left owned Electron process"
-          -- argv, not script interpolation: spaces, quotes and accents remain data.
-          set goSheets to sheets of picker
-          if (count of goSheets) is not 1 then error "Owned Go to Folder sheet missing or ambiguous"
+          -- NSOpenPanel may animate this sheet after a fixed 0.4 s delay.
+          -- Wait only on this owned picker's immediate sheet and path field;
+          -- do not resend the shortcut or inspect another process/window.
+          repeat 20 times
+            if not frontmost then error "Focus left owned Electron process"
+            set goSheets to sheets of picker
+            if (count of goSheets) > 1 then error "Owned Go to Folder sheet ambiguous"
+            if (count of goSheets) is 1 then exit repeat
+            delay 0.1
+          end repeat
+          if (count of goSheets) is not 1 then error "Owned Go to Folder sheet missing"
           set goSheet to item 1 of goSheets
-          set pathFields to text fields of goSheet
-          if (count of pathFields) is not 1 then error "Owned Go to Folder path field missing or ambiguous"
+          repeat 20 times
+            if not frontmost then error "Focus left owned Electron process"
+            set pathFields to text fields of goSheet
+            if (count of pathFields) > 1 then error "Owned Go to Folder path field ambiguous"
+            if (count of pathFields) is 1 then exit repeat
+            delay 0.1
+          end repeat
+          if (count of pathFields) is not 1 then error "Owned Go to Folder path field missing"
+          -- argv, not script interpolation: spaces, quotes and accents remain data.
           set pathField to item 1 of pathFields
           set value of pathField to (item 2 of argv)
           if (value of pathField as text) is not (item 2 of argv) then error "Go to Folder path readback differs"
@@ -245,7 +258,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.ok(remaining > 0, 'Native Storage overall deadline exceeded');
     return Math.min(cap, remaining);
   };
-  let home, backend, application, electronChild, page, logHandle, failure;
+  let home, backend, application, electronChild, page, logHandle, failure, pendingNativeChange;
   const sleep = () => new Promise(resolve => setTimeout(resolve, 150));
   const poll = async (fn, label, cap = 8000) => {
     const tick = performance.now();
@@ -269,9 +282,9 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     }
   };
   let env;
-  const osa = async (script, args = []) => {
+  const osa = async (script, args = [], cap = 3500) => {
     const { stdout } = await run('/usr/bin/osascript', ['-e', script, ...args], {
-      env, timeout: budget(3500), killSignal: 'SIGKILL', maxBuffer: 32768,
+      env, timeout: budget(cap), killSignal: 'SIGKILL', maxBuffer: 32768,
     });
     return stdout.trim();
   };
@@ -435,6 +448,20 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const locationStatus = card.locator(':scope > [role="status"]');
     const change = card.getByRole('button', { name: 'Change…', exact: true });
     const reset = card.getByRole('button', { name: 'Reset', exact: true });
+    const startNativeChange = () => {
+      assert.equal(pendingNativeChange, undefined, 'A native Change is already pending');
+      // AppKit can hold the input acknowledgement while its modal sheet is
+      // open. Start one real click, operate the observed picker, then consume
+      // that same click. Observe rejection immediately without retrying it.
+      pendingNativeChange = change.click({ timeout: budget(30000) }).then(
+        () => ({ ok: true }), error => ({ ok: false, error }));
+    };
+    const settleNativeChange = async () => {
+      assert.ok(pendingNativeChange, 'No native Change was dispatched');
+      const result = await pendingNativeChange;
+      pendingNativeChange = undefined;
+      if (!result.ok) throw result.error;
+    };
     const assertFiles = async (savedPath) => {
       const raw = JSON.parse(await fs.readFile(config, 'utf8'));
       if (savedPath === null) assert.equal(Object.hasOwn(raw, 'capturesDir'), false);
@@ -456,10 +483,15 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     await expect(refreshLocation).toBeEnabled({ timeout: budget() });
     await refreshLocation.click({ timeout: budget() });
     await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
-    await change.click({ timeout: budget() });
+    // Refresh mounts Retention, which reads policy and then scans usage on
+    // Rust's single Storage worker. Observe completion before one Change;
+    // retrying a mutation cannot substitute for the native picker receipt.
+    await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
+      .toBeEnabled({ timeout: budget() });
+    startNativeChange();
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
-    await osa(panelScript, [String(electronChild.pid), selected, 'go']);
+    await osa(panelScript, [String(electronChild.pid), selected, 'go'], 6500);
     report.nativeBeforeChoose = await poll(() => panel('inspect'), 'Picker after Go to Folder');
     // Optional evidence: bounded rectangle of our verified Electron window only.
     const bounds = report.nativeBeforeChoose.match(/bounds=(-?\d+),(-?\d+),(\d+),(\d+)$/);
@@ -471,6 +503,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       } catch (error) { report.nativePickerScreenshotUnavailable = error.message; }
     }
     await panel('choose');
+    await settleNativeChange();
     const changed = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, selected);
@@ -485,9 +518,10 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.retention = await require('./native-retention.cjs')(page, { config, captures: selected, output });
     const beforeCancel = await fs.readFile(config);
     const beforeCancelStat = await fs.stat(config, { bigint: true });
-    await change.click({ timeout: budget() });
+    startNativeChange();
     report.nativeBeforeCancel = await poll(() => panel('inspect'), 'Reopened native picker');
     await panel('cancel');
+    await settleNativeChange();
     await expect(change).toBeEnabled({ timeout: budget() });
     assert.deepEqual(await fs.readFile(config), beforeCancel, 'Cancel changed config bytes');
     const afterCancelStat = await fs.stat(config, { bigint: true });
@@ -495,13 +529,32 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.equal(afterCancelStat.mtimeNs, beforeCancelStat.mtimeNs, 'Cancel rewrote config');
     // Cancel remounts Retention, which reads policy and then scans usage on
     // Rust's single Storage worker. Wait for that real receipt before the
-    // fixture's direct socket probe and one Reset; do not retry mutations.
+    // fixture's direct socket probe and Reset; never retry an unknown outcome.
     await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
       .toBeEnabled({ timeout: budget() });
     report.cancel = { ...await snapshot(), files: await assertFiles(selected),
       bytesUnchanged: true, inodeUnchanged: true, mtimeUnchanged: true };
     assert.deepEqual(report.cancel.location, report.change.location);
     await reset.click({ timeout: budget() });
+    // The single Rust Settings worker can explicitly refuse admission. That
+    // response guarantees this Reset did not run; exercise the visible Refresh
+    // recovery once. Never repeat a timeout, unknown outcome or other error.
+    const busyMessage = 'Another location request is still running. Refresh when it finishes.';
+    const resetOutcome = await poll(async () => {
+      const text = await locationStatus.innerText({ timeout: budget() });
+      if (text.includes(busyMessage)) return 'busy';
+      assert.ok(text.includes(report.before.location.storage.displayPath), 'Waiting for Reset result');
+      return 'reset';
+    }, 'Rendered Reset result');
+    if (resetOutcome === 'busy') {
+      assert.deepEqual(await fs.readFile(config), beforeCancel, 'Unadmitted Reset changed config');
+      report.resetBusyRecovery = { response: 'app_busy', unchangedConfig: true, refreshes: 1, retries: 1 };
+      await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget() });
+      await locationStatus.getByText(report.change.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+      await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
+        .toBeEnabled({ timeout: budget() });
+      await reset.click({ timeout: budget() });
+    }
     const resetRead = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, null);
@@ -557,6 +610,12 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     for (const [label, child, group] of [['electron', electronChild, false], ['rust', backend, true]]) {
       try { report.cleanup[label] = await stopOwned(child, label, group); }
       catch (error) { report.cleanup[label] = { error: error.message }; failure ??= error; report.passed = false; }
+    }
+    if (pendingNativeChange) {
+      try {
+        const result = await within(pendingNativeChange, 2000, 'Retired native Change');
+        report.cleanup.pendingNativeChange = result.ok ? 'completed' : 'rejected after retirement';
+      } catch (error) { report.cleanup.pendingNativeChange = error.message; failure ??= error; report.passed = false; }
     }
     if (logHandle) await logHandle.close();
     // Keep failed fixtures and evidence. A successful run removes only its own HOME.
