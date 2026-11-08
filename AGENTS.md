@@ -42,6 +42,14 @@ Production sources and owner materials have physically relocated: Engine code/do
 
 For repo-owned source, assets, docs and tooling, target at most 10 immediate files and 10 immediate directories per directory. Count hidden repo-owned entries; exclude generated output, dependencies, build caches and Git internals. Keep tool-required exceptions (such as root Cargo manifests, `.github`, `.githooks`, `.cargo`) visible and explicitly bounded; do not hide or misclassify overfull directories. Keep docs minimal and beside their owner; retain non-obvious constraints, avoid duplication, and do not add `root/docs/` material.
 
+## Temporary artifacts on Clanker
+
+Put new agent-created development files outside repository source in a private per-job directory directly under `/tmp`: `/tmp/apparent-dev-<job>-<run>/` (for example, `mktemp -d /tmp/apparent-dev-<job>-XXXXXX`). This includes helper scripts, diagnostics, reports, generated build/test output, screenshots, proof media, synthetic fixtures and disposable VM runs/overlays. Point temporary/output paths there; do not accumulate these artifacts under home, `~/.local/share`, `~/.local/state`, `Projects` or `/srv`. Keep each job in its own direct child of `/tmp`, matching the installed cleanup depth.
+
+These artifacts may be cleaned during active verification. Regenerate missing output; activity, verification needs and expensive recreation do not create retention exemptions. This supersedes older disposable-development-artifact location examples in owner guides or skills.
+
+Canonical repositories and Git metadata, provider histories, credentials, required runtime/application data and configuration, installed tools, existing bounded shared caches, reusable VM templates and their backing dependencies, and real private user captures keep their proper locations. Durable development evidence outside `/tmp` requires an explicit user retention request; preserve existing exact retention requests and their release conditions. This governs new files, not relocation/deletion of existing data or changes to cleanup/service configuration.
+
 ## Understand, change and verify
 
 Read the relevant owner docs before changing a subsystem. Keep `Cargo.toml` and `Cargo.lock` stable unless explicitly required. After Rust changes, rebuild before running `target/debug/apparent` (`cargo test` does not rebuild it). For broad root checkpoints use `cargo build -j 3 --offline` and `cargo test -j 3 --offline -- --test-threads=2` (on macOS add `taskpolicy -c utility`); on Clanker run each heavy command or hook-backed push once through `/home/simon/.local/bin/t3-build`, never nested, honoring `T3_BUILD_JOBS`.
