@@ -258,7 +258,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.ok(remaining > 0, 'Native Storage overall deadline exceeded');
     return Math.min(cap, remaining);
   };
-  let home, backend, application, electronChild, page, logHandle, failure;
+  let home, backend, application, electronChild, page, logHandle, failure, pendingNativeChange;
   const sleep = () => new Promise(resolve => setTimeout(resolve, 150));
   const poll = async (fn, label, cap = 8000) => {
     const until = Date.now() + budget(cap);
@@ -436,6 +436,20 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const locationStatus = card.locator(':scope > [role="status"]');
     const change = card.getByRole('button', { name: 'Change…', exact: true });
     const reset = card.getByRole('button', { name: 'Reset', exact: true });
+    const startNativeChange = () => {
+      assert.equal(pendingNativeChange, undefined, 'A native Change is already pending');
+      // AppKit can hold the input acknowledgement while its modal sheet is
+      // open. Start one real click, operate the observed picker, then consume
+      // that same click. Observe rejection immediately without retrying it.
+      pendingNativeChange = change.click({ timeout: budget(30000) }).then(
+        () => ({ ok: true }), error => ({ ok: false, error }));
+    };
+    const settleNativeChange = async () => {
+      assert.ok(pendingNativeChange, 'No native Change was dispatched');
+      const result = await pendingNativeChange;
+      pendingNativeChange = undefined;
+      if (!result.ok) throw result.error;
+    };
     const assertFiles = async (savedPath) => {
       const raw = JSON.parse(await fs.readFile(config, 'utf8'));
       if (savedPath === null) assert.equal(Object.hasOwn(raw, 'capturesDir'), false);
@@ -459,7 +473,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     // retrying a mutation cannot substitute for the native picker receipt.
     await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
       .toBeEnabled({ timeout: budget() });
-    await change.click({ timeout: budget() });
+    startNativeChange();
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
     // Only the OS picker receives the path. Never pass it through renderer/IPC.
     await osa(panelScript, [String(electronChild.pid), selected, 'go'], 6500);
@@ -474,6 +488,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       } catch (error) { report.nativePickerScreenshotUnavailable = error.message; }
     }
     await panel('choose');
+    await settleNativeChange();
     const changed = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, selected);
@@ -488,9 +503,10 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.retention = await require('./native-retention.cjs')(page, { config, captures: selected, output });
     const beforeCancel = await fs.readFile(config);
     const beforeCancelStat = await fs.stat(config, { bigint: true });
-    await change.click({ timeout: budget() });
+    startNativeChange();
     report.nativeBeforeCancel = await poll(() => panel('inspect'), 'Reopened native picker');
     await panel('cancel');
+    await settleNativeChange();
     await expect(change).toBeEnabled({ timeout: budget() });
     assert.deepEqual(await fs.readFile(config), beforeCancel, 'Cancel changed config bytes');
     const afterCancelStat = await fs.stat(config, { bigint: true });
@@ -560,6 +576,12 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     for (const [label, child, group] of [['electron', electronChild, false], ['rust', backend, true]]) {
       try { report.cleanup[label] = await stopOwned(child, label, group); }
       catch (error) { report.cleanup[label] = { error: error.message }; failure ??= error; report.passed = false; }
+    }
+    if (pendingNativeChange) {
+      try {
+        const result = await within(pendingNativeChange, 2000, 'Retired native Change');
+        report.cleanup.pendingNativeChange = result.ok ? 'completed' : 'rejected after retirement';
+      } catch (error) { report.cleanup.pendingNativeChange = error.message; failure ??= error; report.passed = false; }
     }
     if (logHandle) await logHandle.close();
     // Keep failed fixtures and evidence. A successful run removes only its own HOME.
