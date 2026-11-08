@@ -209,8 +209,34 @@ try {
     import assert from 'node:assert/strict';
     import React from 'react';
     import { renderToString } from 'react-dom/server';
-    import { RecordingPill } from '@apparent/record/ui';
+    import { RecordingPill, createRecordClientPillHost, disposeWorkflowPillHost } from '@apparent/record/ui';
+    import { createRecordFixture } from '@apparent/record/fixtures';
     assert.match(renderToString(React.createElement(RecordingPill)), /Connecting/);
+    let snapshot = createRecordFixture().driver.current();
+    let observe;
+    const commands = [];
+    const client = {
+      observe(listener) { observe = listener; listener(snapshot); return () => {}; },
+      async execute(command) { commands.push(command); return { status: 'accepted', requestId: command.requestId, snapshot }; },
+    };
+    const host = createRecordClientPillHost(client, { createRequestId: () => 'packed-cancel-copy' });
+    const saved = { captureId: 'previous', artifactId: 'previous-artifact', phase: 'saved', delivery: 'unknown', outcomes: [],
+      transcriptStatus: { state: 'collected', content: 'nonempty', segmentCount: 2 } };
+    const current = { captureId: 'current', phase: 'recording', delivery: 'unknown', outcomes: [] };
+    snapshot = { ...snapshot, revision: snapshot.revision + 1, captures: [saved, current] }; observe(snapshot);
+    await host.act((await host.read()).revision, 'cancel');
+    assert.equal((await host.read()).label, 'Recording', 'dispatch alone is not cancellation');
+    snapshot = { ...snapshot, revision: snapshot.revision + 1, captures: [saved, { ...current, phase: 'cancelled' }] }; observe(snapshot);
+    const cancelled = await host.read();
+    assert.equal(cancelled.label, 'Capture cancelled');
+    assert.match(cancelled.notice, /Current capture cancelled. Previous recording remains saved./);
+    assert.match(cancelled.notice, /Transcript collected; 2 segments/);
+    assert.deepEqual(cancelled.actions.map(action => action.id), ['copy', 'record']);
+    await host.act(cancelled.revision, 'copy');
+    assert.equal(commands.at(-1).type, 'copy-local');
+    assert.equal(commands.at(-1).captureId, saved.captureId);
+    assert.deepEqual(snapshot.captures[0], saved);
+    disposeWorkflowPillHost(host);
     console.log('React UI packed consumer passed');
   `], { cwd: ui });
   process.stdout.write(uiResult.stdout);
