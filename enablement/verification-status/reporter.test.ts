@@ -62,8 +62,8 @@ test('reconciliation preserves docs exemption and discards moved candidates', as
    if(path.includes('/compare/')) return {merge_base_commit:{sha:'b'},files:[{filename:'enablement/docs/continuous-delivery.md'}]};
    throw Error(path);
   },1);
-  assert.equal(writes.length,moved?0:1);
-  if(!moved) assert.equal(writes[0].state,'success');
+  assert.equal(writes.length,moved?1:2);
+  if(!moved) assert.equal(writes.at(-1).state,'success');
  }
 });
 test('latest attempt, newer run, relevant base invalidation and docs base reuse', async () => {
@@ -93,7 +93,7 @@ test('latest attempt, newer run, relevant base invalidation and docs base reuse'
    if(path.includes('/actions/runs/')) {runReads++;return result(id);}
    throw Error(path);
   },1);
-  assert.equal(writes[0].state,mode==='failed'?'failure':['success','base-docs','policy-approved'].includes(mode)?'success':'pending',mode);
+  assert.equal(writes.at(-1).state,mode==='failed'?'failure':['success','base-docs','policy-approved'].includes(mode)?'success':'pending',mode);
  }
 });
 test('policy maintenance admits additions without byte equality and requires real command anchors', async () => {
@@ -120,4 +120,38 @@ test('manual dispatch authority is authenticated without requiring an extra appr
  for(const permission of ['read','triage','none']) assert.throws(()=>dispatchAuthority(()=>({permission}),run));
  assert.throws(()=>dispatchAuthority(()=>({permission:'write'}),{...run,triggering_actor:undefined}));
  assert.throws(()=>dispatchAuthority(()=>({permission:'write'}),{...run,event:'pull_request'}));
+});
+
+test('Public command steps must succeed and cannot tolerate failures', async () => {
+ const {publicPolicy}=await import('./reporter.ts');
+ const source='jobs:\n  verify:\n    steps:\n      - name: Public assertions\n        run: npm run verify\n';
+ const expected=publicPolicy(source);
+ const publicRun={...run,path:'.github/workflows/stream-public.yml'};
+ const publicIdentity={...identity,path:publicRun.path};
+ const proof={...job,name:'verify',steps:[{name:'Public assertions',conclusion:'success'}]};
+ assert.equal(evaluate(publicRun,[proof],publicIdentity,['verify'],expected),'success');
+ for(const conclusion of ['skipped','failure']) assert.equal(evaluate(publicRun,[{...proof,steps:[{name:'Public assertions',conclusion}]}],publicIdentity,['verify'],expected),'failure');
+ assert.throws(()=>publicPolicy(source.replace('run: npm run verify','continue-on-error: true\n        run: npm run verify')));
+});
+test('known old green becomes pending on initial and final read failure; later PRs still reconcile', async () => {
+ const {reconcileAll}=await import('./reporter.ts');
+ const make=(number:number)=>({number,state:'open',html_url:`https://github.com/${repo}/pull/${number}`,base:{ref:'main',sha:'base',repo:{full_name:repo}},head:{sha:`head${number}`,ref:'feature',repo:{full_name:repo}}});
+ for(const failAt of [1,2,3]) {
+  const states=new Map([['head1','success'],['head2','success']]); let reads=0;
+  assert.throws(()=>reconcileAll((path,body)=>{
+   if(body){states.set(path.split('/').at(-1)!,body.state);return {};}
+   if(path.includes('/pulls?')) return [make(1),make(2)];
+   if(path.endsWith('/pulls/1')) {if(++reads===failAt) throw Error('API unavailable');return make(1);}
+   if(path.endsWith('/pulls/2')) return make(2);
+   if(path.includes('/compare/')) return {merge_base_commit:{sha:'base'},files:[{filename:'enablement/docs/check.md'}]};
+   throw Error(path);
+  }));
+  assert.equal(states.get('head1'),'pending');
+  assert.equal(states.get('head2'),'success');
+ }
+});
+test('PR lifecycle hint clears old green even when PR enumeration fails', async () => {
+ const {reconcileAll}=await import('./reporter.ts');let state='success';
+ assert.throws(()=>reconcileAll((path,body)=>{if(body){state=body.state;return {};}throw Error('listing unavailable');}, {pull_request:{head:{sha:'head'},base:{ref:'main',repo:{full_name:repo}},html_url:'https://github.com'}}));
+ assert.equal(state,'pending');
 });

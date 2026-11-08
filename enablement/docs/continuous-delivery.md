@@ -349,3 +349,12 @@ GitHub status writes have no compare-and-swap: final candidate/evidence re-reads
 and serialized writers reduce the race window; later lifecycle events reconcile
 concurrent external changes. Live bootstrap and required-check activation remain
 unverified until performed after merge under existing gates.
+
+The reporter writes pending before reading a known PR's evidence and isolates
+per-PR API failures so later candidates still reconcile. A PR lifecycle event
+can invalidate its known head even if PR enumeration fails. GitHub outages that
+prevent status writes, or prevent discovery of otherwise unknown heads during
+a global scan, cannot be made fail-closed by commit statuses alone. Reporter
+workflow failures remain operational errors; no green is proof of API freshness
+during such an outage. Public command steps, including verification and sealing,
+must succeed in the owning verify job; tolerated failures are rejected.

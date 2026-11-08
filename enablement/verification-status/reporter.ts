@@ -56,6 +56,13 @@ export function policy(source: string, runner: string): {names: string[], steps:
   }
   return {names, steps};
 }
+export function publicPolicy(source: string): Record<string, string[]> {
+  const job = YAML.parse(source).jobs?.verify;
+  if (!job || job['continue-on-error'] || !Array.isArray(job.steps) || !job.steps.some((s: any) => s.run?.includes('npm run verify'))) throw Error('Unsupported Public verification policy');
+  const steps = job.steps.filter((s: any) => s.run && !s.if?.includes('always()'));
+  if (steps.some((s: any) => s['continue-on-error'])) throw Error('Public verification tolerates failure');
+  return {verify: steps.map((s: any) => s.name || `Run ${s.run.split('\n')[0]}`)};
+}
 export function evaluate(run: any, jobs: any[], identity: any, required: string[], expected: Record<string, string[]> = {}): string {
   if (run.repository?.full_name !== repo || run.head_repository?.full_name !== repo || run.path !== identity.path || run.head_sha !== identity.sha || run.head_branch !== identity.branch || run.event !== 'workflow_dispatch' || !Number.isInteger(run.run_attempt) || run.run_attempt < 1) return 'failure';
   if (run.status !== 'completed') return 'pending';
@@ -100,11 +107,15 @@ export function dispatchAuthority(fetch: API, run: any): string {
   if (!['admin', 'maintain', 'write'].includes(permission)) throw Error('Manual verification actor lacks repository write access');
   return JSON.stringify([login, permission]);
 }
-export function reconcile(fetch: API, number: number): void {
+export function reconcile(fetch: API, number: number, listed?: any): void {
+  // Invalidate known old green before any per-candidate evidence/API reads.
+  const pending = (p: any) => fetch(`${prefix}/statuses/${p.head.sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking current verification evidence', target_url: p.html_url});
+  if (listed) pending(listed);
   const read = () => fetch(`${prefix}/pulls/${number}`);
   const candidate = read();
   if (candidate.state !== 'open' || candidate.base.ref !== 'main' || candidate.base.repo.full_name !== repo) return;
   const sha = candidate.head.sha;
+  if (!listed || listed.head.sha !== sha) pending(candidate);
   const fingerprint = (p: any) => JSON.stringify([p.state, p.head.sha, p.head.ref, p.head.repo?.full_name, p.base.sha, p.base.ref]);
   let state = 'pending';
   let description = 'Manual exact-candidate verification required';
@@ -121,15 +132,14 @@ export function reconcile(fetch: API, number: number): void {
     }
     if (kind === 'public') {
       const path = '.github/workflows/stream-public.yml';
-      const publicPolicy = YAML.parse(content(fetch, path, sha));
-      if (!publicPolicy.jobs?.verify?.steps?.some((s: any) => s.run?.includes('npm run verify')) || publicPolicy.jobs.verify['continue-on-error']) throw Error('Unsupported Public verification policy');
+      const expected = publicPolicy(content(fetch, path, sha));
       const runs = pages(fetch, `${prefix}/actions/workflows/stream-public.yml/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
       const latest = runs.sort((a, b) => b.id - a.id)[0];
       if (!latest) throw Error('Dispatch Public checks on exact head for Public-only proof');
       const run = fetch(`${prefix}/actions/runs/${latest.id}`);
       evidence.push({...run, authority: dispatchAuthority(fetch, run)});
       const jobs = pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
-      state = evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, ['verify']);
+      state = evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, ['verify'], expected);
     }
     if (kind === 'docs') state = 'success';
     if (kind === 'native') {
@@ -171,9 +181,22 @@ export function reconcile(fetch: API, number: number): void {
   if (fingerprint(read()) !== fingerprint(candidate)) return;
   fetch(`${prefix}/statuses/${sha}`, {state, context: 'Verification complete', description, target_url: candidate.html_url});
 }
+export function reconcileAll(fetch: API, event: any = {}): void {
+  // A lifecycle event supplies a known target even if listing all PRs fails.
+  const hint = event.pull_request;
+  if (hint?.head?.sha && hint.base?.repo?.full_name === repo && hint.base.ref === 'main') {
+    fetch(`${prefix}/statuses/${hint.head.sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking current verification evidence', target_url: hint.html_url});
+  }
+  const prs = pages(fetch, `${prefix}/pulls?state=open&base=main`);
+  let failed = false;
+  for (const pr of prs) {
+    try { reconcile(fetch, pr.number, pr); }
+    catch { failed = true; console.error(`Verification reconciliation incomplete for PR #${pr.number}`); }
+  }
+  if (failed) throw Error('One or more PR reconciliations failed; known heads remain pending');
+}
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
-  JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, 'utf8')); // Refuse malformed event payloads.
+  const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, 'utf8'));
   if (process.env.GITHUB_REPOSITORY !== repo) throw Error('Unexpected repository');
-  const prs = pages(api, `${prefix}/pulls?state=open&base=main`);
-  for (const pr of prs) reconcile(api, pr.number);
+  reconcileAll(api, event);
 }
