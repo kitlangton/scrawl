@@ -3,6 +3,7 @@ import importlib.util
 import io
 import json
 import os
+import subprocess
 from pathlib import Path
 import sys
 import tempfile
@@ -233,6 +234,40 @@ class InspectionTests(unittest.TestCase):
             with self.subTest(code=code), self.assertRaises(AdapterError) as error:
                 execute(sys.executable, args, **options)
             self.assertEqual(error.exception.code, code)
+
+    def test_group_is_signalled_before_its_ownership_anchor_is_reaped(self):
+        original_wait, original_kill = subprocess.Popen.wait, os.killpg
+        for script, options in [("print('done')", {}), ("print('x'*100000)", {"limit": 1024}),
+                                ("import time; time.sleep(10)", {"timeout": 0.1})]:
+            events = []
+            def wait(child, *args, **kwargs):
+                events.append(("wait", child.pid))
+                return original_wait(child, *args, **kwargs)
+            def kill(group, signal):
+                events.append(("kill", group))
+                self.assertEqual(os.getpgid(group), group)
+                return original_kill(group, signal)
+            with patch("apparent_plugin.process.subprocess.Popen.wait", wait), patch("apparent_plugin.process.os.killpg", kill):
+                try:
+                    execute(sys.executable, ["-c", script], **options)
+                except AdapterError:
+                    pass
+            self.assertEqual([event for event, _ in events], ["kill", "wait"])
+            self.assertEqual(events[0][1], events[1][1])
+
+    def test_missing_cli_preserves_unavailable_result(self):
+        with self.assertRaises(AdapterError) as error:
+            execute("/nonexistent/apparent-test-cli", [])
+        self.assertEqual(error.exception.code, "cli_unavailable")
+
+    def test_supervisor_launch_failure_closes_both_status_descriptors(self):
+        descriptors = os.pipe()
+        with patch("apparent_plugin.process.os.pipe", return_value=descriptors), patch("apparent_plugin.process.subprocess.Popen", side_effect=ValueError("invalid launch")):
+            with self.assertRaises(ValueError):
+                execute(sys.executable, [])
+        for fd in descriptors:
+            with self.assertRaises(OSError):
+                os.fstat(fd)
 
 
 if __name__ == "__main__":
