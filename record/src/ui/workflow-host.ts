@@ -77,10 +77,17 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
   let disposed = false;
   let view: PillView | null = null;
   let copyFeedback: { captureId: string; artifactId: string; message: string } | undefined;
+  // Presentation correlation only; the matching terminal fact remains authoritative.
+  let currentCaptureId: string | undefined;
   const observers = new Set<(value: PillView) => void>();
-  const publish = (next: CapabilitySnapshot) => {
-    if (disposed || retiredEpochs.has(next.providerEpoch) || (snapshot && next.providerEpoch === snapshot.providerEpoch && next.revision < snapshot.revision)) return;
-    if (snapshot && next.providerEpoch !== snapshot.providerEpoch) { retiredEpochs.add(snapshot.providerEpoch); copyFeedback = undefined; }
+  const publish = (next: CapabilitySnapshot, localFeedback = false) => {
+    if (disposed || retiredEpochs.has(next.providerEpoch) || (snapshot && next.providerEpoch === snapshot.providerEpoch &&
+      (next.revision < snapshot.revision || (next.revision === snapshot.revision && !localFeedback)))) return;
+    if (snapshot && next.providerEpoch !== snapshot.providerEpoch) { retiredEpochs.add(snapshot.providerEpoch); copyFeedback = undefined; currentCaptureId = undefined; }
+    const active = next.captures.filter(item => ["starting", "recording", "processing", "unknown"].includes(item.phase));
+    if (next.connection !== "connected" || active.length > 1) currentCaptureId = undefined;
+    else if (active.length === 1) currentCaptureId = active[0]!.phase !== "unknown" || active[0]!.captureId === currentCaptureId ? active[0]!.captureId : undefined;
+    else if (next.captures.find(item => item.captureId === currentCaptureId)?.phase !== "cancelled") currentCaptureId = undefined;
     snapshot = structuredClone(next);
     view = presentClient(snapshot, ++revision, options);
     const feedback = copyFeedback;
@@ -89,9 +96,16 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
       view.warning = feedback.message; view.notice = null;
       view.pocket = { tone: "warning", title: "Local handoff", description: feedback.message, actionIds: [] };
     }
+    if (currentCaptureId && snapshot.captures.find(item => item.captureId === currentCaptureId)?.phase === "cancelled") {
+      const selectedCaptureId = currentViewCaptureId(snapshot);
+      const previous = snapshot.captures.find(item => item.captureId === selectedCaptureId && item.phase === "saved" && item.artifactId);
+      view.label = "Capture cancelled";
+      view.status = view.label;
+      view.notice = previous ? `Current capture cancelled. Previous recording remains saved.${view.notice ? ` ${view.notice}` : ""}` : "Current capture cancelled.";
+    }
     for (const observer of [...observers]) try { observer(structuredClone(view)); } catch { observers.delete(observer); }
   };
-  const unsubscribe = client.observe(publish);
+  const unsubscribe = client.observe(next => publish(next));
   const host: PillHost = {
     manualDrag: false, read: async () => view && structuredClone(view), layout: async () => {}, beginDrag: async () => {},
     beginPaste: async () => {}, cancelPaste: async () => {},
@@ -113,16 +127,16 @@ export function createRecordClientPillHost(client: RecordClient, options: Record
         try {
           const result = await client.execute(command);
           if (disposed || snapshot?.providerEpoch !== observed.providerEpoch || result.snapshot.providerEpoch !== observed.providerEpoch) return;
-          const latest = result.snapshot.revision >= snapshot.revision ? result.snapshot : snapshot;
+          const latest = result.snapshot.revision > snapshot.revision ? result.snapshot : snapshot;
           const saved = latest.captures.find(item => item.captureId === owned.captureId && item.artifactId === owned.artifactId);
           if (!saved) return;
           copyFeedback = confirmedCopy(saved, command.requestId) ? undefined : { captureId: owned.captureId, artifactId: owned.artifactId,
             message: result.status === "refused" ? result.reason === "too-large" ? "Handoff exceeds the clipboard limit" : "Copy unavailable" : "Copy outcome unknown" };
-          publish(latest);
+          publish(latest, true);
         } catch {
           if (disposed || snapshot?.providerEpoch !== observed.providerEpoch) return;
           copyFeedback = { captureId: owned.captureId, artifactId: owned.artifactId, message: "Copy outcome unknown" };
-          publish(snapshot);
+          publish(snapshot, true);
         }
         return;
       }

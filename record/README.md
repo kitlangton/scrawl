@@ -439,6 +439,14 @@ contains a digest/length, never ambient clipboard contents or a private bundle
 path. A copy receipt does not establish paste, delivery or artifact-open success.
 Disposing the pill unsubscribes its view; native transports remain caller-owned.
 
+The client pill correlates a single observed active capture within its provider
+epoch. Only a newer matching `cancelled` fact shows “Capture cancelled”; a Cancel
+acknowledgement alone does not. If an earlier recording is Saved, the notice says
+that it remains saved and Copy still targets that original capture/artifact,
+including its transcript status. Unknown, stale, unrelated, ambiguous or
+reconnected history does not establish a current cancellation. This is local
+presentation correlation, not a persisted cancellation or publication authority.
+
 ### Separate transient clipboard text readback
 
 Trusted composition can inject `createRecordLocalClipboardTextReadbackPort`

@@ -384,3 +384,69 @@ test("RecordClient pill presents transient text readback without claiming owners
   assert.match(view.warning!,/\[0, 125 ms\).*unobserved.*padded with zeros.*not recorded silence/);assert.equal(view.pocket?.tone,"warning");
   disposeWorkflowPillHost(host);
  });
+
+test("current cancellation requires its observed terminal fact and preserves previous Saved copy identity", async () => {
+  const fixture=recordClientFixture(); const host=createRecordClientPillHost(fixture.client,{createRequestId:()=>"cancel-or-copy"});
+  const previous:CapabilitySnapshot["captures"][number]={captureId:"previous",artifactId:"previous-artifact",phase:"saved",delivery:"unknown",outcomes:[],transcriptStatus:{state:"collected",content:"nonempty",segmentCount:2}};
+  const current:CapabilitySnapshot["captures"][number]={captureId:"current",phase:"recording",delivery:"unknown",outcomes:[]};
+  const unrelated:CapabilitySnapshot["captures"][number]={captureId:"historical-cancel",phase:"cancelled",delivery:"unknown",outcomes:[]};
+  fixture.emit({...fixture.value(),revision:4,captures:[previous,current,unrelated]});
+  await host.act((await host.read())!.revision,"cancel");
+  assert.equal(fixture.commands[0]?.type,"cancel-capture");
+  assert.equal((fixture.commands[0] as {captureId:string}).captureId,"current");
+  assert.equal((await host.read())!.label,"Recording","accepted dispatch is not cancellation");
+  fixture.emit({...fixture.value(),revision:5,captures:[previous,{...current,phase:"unknown"},unrelated]});
+  assert.doesNotMatch((await host.read())!.notice??"",/cancelled/);
+  fixture.emit({...fixture.value(),revision:4,captures:[previous,{...current,phase:"cancelled"}]});
+  assert.notEqual((await host.read())!.label,"Capture cancelled","stale terminal is ignored");
+  fixture.emit({...fixture.value(),revision:6,captures:[previous,{...current,phase:"cancelled"},unrelated]});
+  const view=(await host.read())!;
+  assert.equal(view.label,"Capture cancelled");
+  assert.match(view.notice!,/Current capture cancelled\. Previous recording remains saved\./);
+  assert.match(view.notice!,/Transcript collected; 2 segments/);
+  assert.deepEqual(view.actions.map(action=>action.id),["copy","record"]);
+  assert.deepEqual(fixture.value().captures[0],previous);
+  fixture.client.execute = async command => {
+    fixture.commands.push(command);
+    return { status: "accepted", requestId: command.requestId,
+      snapshot: { ...fixture.value(), captures: [previous, current] } };
+  };
+  await host.act(view.revision,"copy");
+  const copied=fixture.commands.at(-1)!;
+  assert.equal(copied.type,"copy-local");assert.equal("captureId"in copied&&copied.captureId,"previous");
+  assert.match((await host.read())!.notice!,/Current capture cancelled/);
+  assert.equal((await host.read())!.label,"Capture cancelled","equal-revision command reply cannot replace observed cancellation");
+  assert.match((await host.read())!.warning!,/Copy outcome unknown/);
+  fixture.emit({...fixture.value(),revision:7,captures:[previous,{...current,captureId:"next"},{...current,phase:"cancelled"}]});
+  assert.equal((await host.read())!.label,"Recording");
+  assert.doesNotMatch((await host.read())!.notice??"",/cancelled/);
+  disposeWorkflowPillHost(host);
+});
+
+for(const boundary of ["unrelated","ambiguous","epoch","reconnect","same-revision","initial-unknown"] as const) test(`cancellation correlation refuses ${boundary} history`,async()=>{
+  const fixture=recordClientFixture(),host=createRecordClientPillHost(fixture.client,{createRequestId:()=>"action"});
+  const previous:CapabilitySnapshot["captures"][number]={captureId:"previous",artifactId:"artifact",phase:"saved",delivery:"unknown",outcomes:[]};
+  const current:CapabilitySnapshot["captures"][number]={captureId:"current",phase:"recording",delivery:"unknown",outcomes:[]};
+  fixture.emit({...fixture.value(),revision:4,captures:[previous,{...current,phase:boundary==="initial-unknown"?"unknown":"recording"}]});
+  if(boundary==="ambiguous")fixture.emit({...fixture.value(),revision:5,captures:[previous,current,{...current,captureId:"other"}]});
+  if(boundary==="reconnect")fixture.emit({...fixture.value(),revision:5,connection:"disconnected",captures:[previous,current]});
+  fixture.emit({...fixture.value(),revision:boundary==="same-revision"?4:6,providerEpoch:boundary==="epoch"?"provider-b":"provider-a",connection:"connected",captures:[previous,{...current,captureId:boundary==="unrelated"?"unrelated":"current",phase:"cancelled"}]});
+  assert.notEqual((await host.read())!.label,"Capture cancelled");
+  assert.doesNotMatch((await host.read())!.notice??"",/Current capture cancelled/);
+  disposeWorkflowPillHost(host);
+});
+
+test("a single observed capture can cancel without prior Saved output or a local Cancel command", async () => {
+  const fixture = recordClientFixture();
+  const host = createRecordClientPillHost(fixture.client, { createRequestId: () => "unused" });
+  const current: CapabilitySnapshot["captures"][number] = { captureId: "current", phase: "starting", delivery: "unknown", outcomes: [] };
+  fixture.emit({ ...fixture.value(), revision: 4, captures: [current] });
+  fixture.emit({ ...fixture.value(), revision: 5, captures: [{ ...current, phase: "cancelled" }] });
+  const view = (await host.read())!;
+  assert.equal(view.label, "Capture cancelled");
+  assert.equal(view.status, "Capture cancelled");
+  assert.equal(view.notice, "Current capture cancelled.");
+  assert.equal(view.actions.some(action => action.id === "copy"), false);
+  assert.deepEqual(fixture.commands, []);
+  disposeWorkflowPillHost(host);
+});
