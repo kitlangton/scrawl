@@ -40,6 +40,7 @@ class PreviewReleaseTest(unittest.TestCase):
                 "r = Path(sys.argv[1]) / 'runtime/Electron.app/Contents/MacOS/Electron'\nr.parent.mkdir(parents=True)\nr.write_text('synthetic shared runtime')\n")
             (root / "bin/cargo").write_text(
                 '#!/bin/sh\nmkdir -p target/release\n'
+                'printf "%s\\n" "$APPARENT_RELEASE_VERSION" "$APPARENT_RELEASE_CHANNEL" "$APPARENT_REPORTING_ENVIRONMENT" > target/reporting-identity\n'
                 'printf "test" > target/release/apparent\n'
                 'printf "test" > target/release/apparent-helper\n'
             )
@@ -66,6 +67,8 @@ class PreviewReleaseTest(unittest.TestCase):
             result = subprocess.run(["bash", str(root / "capture/desktop/scripts/packaging/build-mac-preview.sh")],
                                     env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "target/reporting-identity").read_text().splitlines(),
+                             ["0.123.2", "preview", "production"])
             info = plistlib.loads((root / "dist/Apparent Preview.app/Contents/Info.plist").read_bytes())
             self.assertEqual(info["CFBundleIdentifier"], "dev.simonvanlaak.apparent.preview")
             self.assertEqual(info["CFBundleShortVersionString"], "0.123.2")

@@ -35,9 +35,44 @@ pub fn label(version: &str, revision: Option<&str>, modified: bool) -> String {
     )
 }
 
+// Build inputs are public labels, never arbitrary CI/runtime environment text.
+pub fn release_identity(
+    release: Option<&str>,
+    channel: Option<&str>,
+    environment: Option<&str>,
+) -> (String, &'static str, &'static str) {
+    let release = release
+        .filter(|value| {
+            !value.is_empty()
+                && value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|b| b.is_ascii_alphanumeric() || b".+-_".contains(&b))
+        })
+        .unwrap_or("unknown");
+    let channel = match channel {
+        Some("stable") => "stable",
+        Some("preview") => "preview",
+        _ => "development",
+    };
+    let environment = match environment {
+        Some("production") => "production",
+        Some("synthetic") => "synthetic",
+        _ => "development",
+    };
+    (release.to_owned(), channel, environment)
+}
+
 pub fn emit() {
     let root = std::path::PathBuf::from(std::env::var_os("CARGO_MANIFEST_DIR").unwrap());
     println!("cargo:rerun-if-env-changed=GITHUB_SHA");
+    for key in [
+        "APPARENT_RELEASE_VERSION",
+        "APPARENT_RELEASE_CHANNEL",
+        "APPARENT_REPORTING_ENVIRONMENT",
+    ] {
+        println!("cargo:rerun-if-env-changed={key}");
+    }
     // Watch the real Git paths, including linked worktrees and packed refs.
     for name in ["HEAD", "index", "packed-refs"] {
         if let Some(path) = git(&root, &["rev-parse", "--git-path", name])
@@ -61,6 +96,22 @@ pub fn emit() {
     let revision = git(&root, &["rev-parse", "HEAD"]).or_else(|| std::env::var("GITHUB_SHA").ok());
     let modified = git(&root, &["status", "--porcelain", "--untracked-files=no"])
         .is_some_and(|status| !status.is_empty());
+    let sha = revision
+        .as_deref()
+        .filter(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()))
+        .unwrap_or("unknown");
+    let (release, channel, environment) = release_identity(
+        std::env::var("APPARENT_RELEASE_VERSION").ok().as_deref(),
+        std::env::var("APPARENT_RELEASE_CHANNEL").ok().as_deref(),
+        std::env::var("APPARENT_REPORTING_ENVIRONMENT")
+            .ok()
+            .as_deref(),
+    );
+    println!("cargo:rustc-env=APPARENT_COMMIT_SHA={sha}");
+    println!("cargo:rustc-env=APPARENT_BUILD_MODIFIED={modified}");
+    println!("cargo:rustc-env=APPARENT_RELEASE_VERSION={release}");
+    println!("cargo:rustc-env=APPARENT_RELEASE_CHANNEL={channel}");
+    println!("cargo:rustc-env=APPARENT_REPORTING_ENVIRONMENT={environment}");
     println!(
         "cargo:rustc-env=APPARENT_VERSION_LABEL={}",
         label(
@@ -74,6 +125,28 @@ pub fn emit() {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn reporting_identity_is_explicit_and_bounded() {
+        assert_eq!(
+            release_identity(Some("0.12.2"), Some("preview"), Some("production")),
+            ("0.12.2".into(), "preview", "production")
+        );
+        assert_eq!(
+            release_identity(None, None, None),
+            ("unknown".into(), "development", "development")
+        );
+        for invalid in ["", "private/path", "secret\nvalue", &"x".repeat(129)] {
+            assert_eq!(
+                release_identity(Some(invalid), Some("invalid"), Some("invalid")),
+                ("unknown".into(), "development", "development")
+            );
+        }
+        assert_eq!(
+            release_identity(Some("v1.2.3-rc.1"), Some("stable"), Some("synthetic")),
+            ("v1.2.3-rc.1".into(), "stable", "synthetic")
+        );
+    }
 
     #[test]
     fn source_archives_do_not_inherit_a_parent_checkouts_revision() {

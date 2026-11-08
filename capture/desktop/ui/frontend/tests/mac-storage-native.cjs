@@ -449,6 +449,12 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.before = { ...await poll(snapshot, 'Initial authoritative read'), files: await assertFiles(null) };
     assert.equal(report.before.location.storage.source, 'builtin');
     assert.equal(report.before.location.storage.effectivePath, builtin);
+    // Reload may read Storage while the restarted backend is still serving
+    // another request. The card intentionally retains app_busy until Refresh;
+    // a successful direct socket probe above does not refresh the renderer.
+    const refreshLocation = card.getByRole('button', { name: 'Refresh location', exact: true });
+    await expect(refreshLocation).toBeEnabled({ timeout: budget() });
+    await refreshLocation.click({ timeout: budget() });
     await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
