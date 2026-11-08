@@ -521,6 +521,25 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       bytesUnchanged: true, inodeUnchanged: true, mtimeUnchanged: true };
     assert.deepEqual(report.cancel.location, report.change.location);
     await reset.click({ timeout: budget() });
+    // The single Rust Settings worker can explicitly refuse admission. That
+    // response guarantees this Reset did not run; exercise the visible Refresh
+    // recovery once. Never repeat a timeout, unknown outcome or other error.
+    const busyMessage = 'Another location request is still running. Refresh when it finishes.';
+    const resetOutcome = await poll(async () => {
+      const text = await locationStatus.innerText({ timeout: budget() });
+      if (text.includes(busyMessage)) return 'busy';
+      assert.ok(text.includes(report.before.location.storage.displayPath), 'Waiting for Reset result');
+      return 'reset';
+    }, 'Rendered Reset result');
+    if (resetOutcome === 'busy') {
+      assert.deepEqual(await fs.readFile(config), beforeCancel, 'Unadmitted Reset changed config');
+      report.resetBusyRecovery = { response: 'app_busy', unchangedConfig: true, refreshes: 1, retries: 1 };
+      await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget() });
+      await locationStatus.getByText(report.change.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+      await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
+        .toBeEnabled({ timeout: budget() });
+      await reset.click({ timeout: budget() });
+    }
     const resetRead = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, null);
