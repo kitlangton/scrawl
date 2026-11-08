@@ -134,6 +134,9 @@ jobs:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           BASE=$(git hash-object -t tree /dev/null)
+          verification_tmp="$(mktemp -d "$RUNNER_TEMP/apparent-browser.XXXXXX")"
+          trap 'rm -rf -- "$verification_tmp"' EXIT
+          export TMPDIR="$verification_tmp"
           python3 enablement/verification.py --base "$BASE" --suite connect-browser --run --online
 
   rust:
