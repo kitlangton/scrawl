@@ -224,3 +224,11 @@ still prevents retention. A complete empty result is only a sequential metadata
 observation, not atomic/future exclusion, standalone equivalence or native proof.
 Existing owned-QEMU drain, retention verification and final identity checks
 remain required. Old failed resources are not retroactively qualified or reused.
+
+For a preassembled case whose original host clock begins before runner startup,
+`--job-start-monotonic` preserves that origin and arms independent expiry at the
+absolute monotonic deadline; it never starts a fresh full lifetime at boot.
+`--staging-timeout` optionally bounds all post-boot transfers within that original
+deadline and checks returned commands for lateness. It ends before scenario
+execution, which retains its own limit. Omit both flags for the ordinary relative
+clock/transfer behavior. Expired origins refuse before resource creation.

@@ -194,7 +194,9 @@ def copy_firmware(template, destination):
     shutil.copyfile(template, destination)
     destination.chmod(0o600)
 
-def arm_expiry(directory, seconds):
+def arm_expiry(directory, seconds, absolute=None):
+    if absolute is not None and not (0 < absolute < float('inf')):
+        raise RuntimeError('positive finite absolute expiry required')
     unit = "scrawl-gui-expire-" + uuid.uuid4().hex
     # Keep the reaper beside its job: a temporary code worktree may disappear
     # after the runner is killed but before the independent timer fires.
@@ -211,7 +213,9 @@ def arm_expiry(directory, seconds):
                       '--property=CPUQuota=100%']
     execute(["systemd-run", "--user", "--quiet", "--collect", *properties,
                     "--timer-property=RemainAfterElapse=no", "--unit=" + unit,
-                    f"--on-active={seconds}s", "/usr/bin/python3",
+                    (f"--on-active={seconds}s" if absolute is None else f"--on-boot={absolute}s"),
+                    *(['--timer-property=AccuracySec=1us'] if absolute is not None else []),
+                    "/usr/bin/python3",
                     str(reaper), str(directory)],
                    timeout=10)
     return unit
@@ -293,6 +297,10 @@ def main():
     parser.add_argument("--retain-cold-state", action="store_true",
                         help="opt in per job to retaining owned cold disk + final OVMF; never retain a live guest")
     parser.add_argument("--boot-timeout", type=int, default=180)
+    parser.add_argument('--staging-timeout', type=float, default=None,
+                        help='separate post-boot transfer limit; bounded by the original job deadline')
+    parser.add_argument('--job-start-monotonic', type=float, default=None,
+                        help='original host monotonic origin; never reset the existing job clock')
     parser.add_argument("--scenario-timeout", type=int, default=300)
     parser.add_argument("--job-timeout", type=int, default=900,
                         help="hard lifetime in seconds; independent systemd timer (default: 900)")
@@ -310,7 +318,11 @@ def main():
     expiry_unit = None
     scenario_completed = False
     start = time.monotonic()
-    deadline = start + args.job_timeout
+    origin = start if args.job_start_monotonic is None else args.job_start_monotonic
+    if not (0 <= origin <= start):
+        raise RuntimeError('invalid original job origin')
+    deadline = origin + args.job_timeout
+    staging_deadline = None
     status = {'version': 1, 'stage': 'preflight', 'progress': ['preflight'],
               'environment': 'unknown', 'driver': 'running', 'product': 'unrun',
               'unrun': ['scenario'], 'scenario_exit': None, 'candidate_sha256': None,
@@ -330,13 +342,18 @@ def main():
             status['secondary_failures'].append(failure_record(status['stage'], error))
 
     def call(command, timeout=30, check=True):
-        remaining = deadline - time.monotonic() - 25  # reserve owned shutdown
+        remaining = min(deadline - 25, staging_deadline if staging_deadline is not None else deadline) - time.monotonic()
         if remaining <= 0:
             raise subprocess.TimeoutExpired(command, args.job_timeout)
-        return execute(command, timeout=min(timeout, remaining), check=check)
+        result = execute(command, timeout=min(timeout, remaining), check=check)
+        if staging_deadline is not None and time.monotonic() >= staging_deadline:
+            raise subprocess.TimeoutExpired(command, args.staging_timeout)
+        return result
 
     try:
         write_result(directory, status)
+        if deadline - time.monotonic() <= 25:
+            raise RuntimeError('original job deadline leaves no owned-shutdown reserve')
         if args.retain_cold_state:
             cold_retention.request_cold_retention(directory)
             if args.host_fd_observation:
@@ -347,6 +364,8 @@ def main():
                 raise RuntimeError(f'missing file: {path}')
         if not re.fullmatch(r'[a-z_][a-z0-9_-]*', args.ssh_user):
             raise RuntimeError('ssh-user must be a simple Unix account name')
+        if args.staging_timeout is not None and not (0 < args.staging_timeout < float('inf')):
+            raise RuntimeError('positive finite staging timeout required')
         if args.memory < 2048 or args.job_timeout < 30 or min(args.boot_timeout, args.scenario_timeout) <= 0:
             raise RuntimeError('require memory >= 2048, job-timeout >= 30 and positive boot/scenario timeouts')
         if any(',' in str(path.resolve()) for path in (directory, args.template, args.ovmf_vars)):
@@ -371,7 +390,9 @@ def main():
         command = qemu_command(overlay, vars_copy, directory, port, args.memory, args.isolated_network)
         # The user manager survives a SIGKILL or OOM kill of this runner.
         # Refuse to boot at all if that independent expiry cannot be armed.
-        expiry_unit = arm_expiry(directory, args.job_timeout)
+        expiry_unit = arm_expiry(directory,
+                                 args.job_timeout if args.job_start_monotonic is None else max(1, int(deadline - time.monotonic())),
+                                 deadline if args.job_start_monotonic is not None else None)
         status['cleanup']['expiry'] = 'armed'
         stage('boot')
         if deadline - time.monotonic() <= 25:
@@ -397,6 +418,7 @@ def main():
             status['boot_seconds'] = boot_seconds
             status['environment'] = 'ready'
             stage('staging')
+            staging_deadline = min(deadline - 25, time.monotonic() + args.staging_timeout) if args.staging_timeout is not None else None
             remote = "/home/" + args.ssh_user + "/scrawl-gui-scenario-" + uuid.uuid4().hex + ".sh"
             guest_output = "/home/" + args.ssh_user + "/scrawl-gui-output-" + uuid.uuid4().hex
             guest_bin = "/home/" + args.ssh_user + "/scrawl-gui-bin-" + uuid.uuid4().hex
@@ -423,6 +445,7 @@ def main():
                 call(transfer + [str(args.audio_file.resolve()),
                                  f"{args.ssh_user}@127.0.0.1:{audio_file}"], timeout=120)
             try:
+                staging_deadline = None
                 stage('scenario')
                 status['unrun'] = []
                 status['product'] = 'unknown'

@@ -915,6 +915,88 @@ m.open_resource_owners({},Proc())
 reaper = load_reaper()
 
 
+class OriginalClockTests(unittest.TestCase):
+    def test_actual_main_expiry_call_preserves_relative_default_and_explicit_origin(self):
+        tree = ast.parse(MODULE.read_text())
+        call = next(n for n in ast.walk(tree) if isinstance(n, ast.Assign) and isinstance(n.targets[0], ast.Name) and n.targets[0].id == 'expiry_unit' and isinstance(n.value, ast.Call))
+        code = compile(ast.Module(body=[call], type_ignores=[]), '<actual-main-expiry>', 'exec')
+        for original, expected in ((None, [90, None]), (10, [40, 100])):
+            calls = []
+            ns = {'args': SimpleNamespace(job_timeout=90, job_start_monotonic=original),
+                  'directory': Path('/inert-owned-job'), 'deadline': 100,
+                  'time': SimpleNamespace(monotonic=lambda: 60),
+                  'arm_expiry': lambda *args: calls.append(args)}
+            exec(code, ns)
+            self.assertEqual(list(calls[0][1:]), expected)
+
+    def test_actual_absolute_expiry_keeps_original_origin_and_opted_in_caps(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory, _ = HostFDObservationTests().setup_job(root)
+            with patch.object(runner, 'execute') as execute:
+                runner.arm_expiry(directory, 40, 12345.25)
+            argv = execute.call_args.args[0]
+            self.assertIn('--on-boot=12345.25s', argv)
+            self.assertNotIn('--on-active=40s', argv)
+            self.assertIn('--timer-property=AccuracySec=1us', argv)
+            for value in ('MemoryMax=5G', 'MemorySwapMax=0', 'CPUQuota=100%'):
+                self.assertIn('--property=' + value, argv)
+            for invalid in (float('nan'), float('inf'), -1, 0):
+                with patch.object(runner, 'execute') as execute:
+                    with self.assertRaises(RuntimeError):
+                        runner.arm_expiry(directory, 40, invalid)
+                    execute.assert_not_called()
+
+    def test_actual_relative_expiry_does_not_gain_absolute_timer_policy(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(runner, 'execute') as execute:
+            runner.arm_expiry(Path(root), 45)
+            argv = execute.call_args.args[0]
+            self.assertIn('--on-active=45s', argv)
+            self.assertFalse(any(v.startswith('--on-boot=') or 'AccuracySec=' in v for v in argv))
+
+    def test_actual_staging_call_clips_request_and_refuses_expired_or_late_return(self):
+        tree = ast.parse(MODULE.read_text())
+        call = next(n for n in ast.walk(tree) if isinstance(n, ast.FunctionDef) and n.name == 'call')
+        clock = [100.0]
+        calls = []
+        def execute(command, timeout, check):
+            calls.append(timeout)
+            return 'inert'
+        ns = {'deadline': 1000.0, 'staging_deadline': 110.0,
+              'time': SimpleNamespace(monotonic=lambda: clock[0]),
+              'args': SimpleNamespace(job_timeout=2100, staging_timeout=180),
+              'subprocess': subprocess, 'execute': execute}
+        exec(compile(ast.Module(body=[call], type_ignores=[]), '<actual-staging-call>', 'exec'), ns)
+        self.assertEqual(ns['call'](['INERT'], timeout=120), 'inert')
+        self.assertEqual(calls, [10.0])
+        clock[0] = 111.0
+        with self.assertRaises(subprocess.TimeoutExpired):
+            ns['call'](['INERT'])
+        self.assertEqual(calls, [10.0])
+        clock[0] = 100.0
+        def late(*args, **kwargs):
+            clock[0] = 111.0
+            return 'late'
+        ns['execute'] = late
+        with self.assertRaises(subprocess.TimeoutExpired):
+            ns['call'](['INERT'])
+
+    def test_expired_original_job_refuses_before_any_resource_creation(self):
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            for name in ('template', 'vars', 'key', 'scenario', 'candidate'):
+                (root / name).write_text('synthetic')
+            argv = ['gui-vm.py', '--template', str(root/'template'), '--ovmf-vars', str(root/'vars'),
+                    '--ssh-key', str(root/'key'), '--ssh-user', 'fixture', '--scenario', str(root/'scenario'),
+                    '--binary', str(root/'candidate'), '--results', str(root/'result'),
+                    '--job-timeout', '30', '--job-start-monotonic', '0']
+            with patch.object(sys, 'argv', argv), patch.object(runner, 'make_overlay') as overlay, \
+                 patch.object(runner, 'arm_expiry') as expiry, patch.object(runner, 'qemu_command') as qemu, \
+                 patch.object(runner, 'qemu_users', return_value=[]), contextlib.redirect_stdout(io.StringIO()):
+                self.assertNotEqual(runner.main(), 0)
+                overlay.assert_not_called(); expiry.assert_not_called(); qemu.assert_not_called()
+            self.assertFalse((root/'result/disk.qcow2').exists())
+
+
 class HostFDObservationTests(unittest.TestCase):
     def test_actual_expiry_command_binds_context_and_copied_reader_keeps_strict_guard(self):
         with tempfile.TemporaryDirectory() as root:
