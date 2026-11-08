@@ -261,13 +261,25 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
   let home, backend, application, electronChild, page, logHandle, failure, pendingNativeChange;
   const sleep = () => new Promise(resolve => setTimeout(resolve, 150));
   const poll = async (fn, label, cap = 8000) => {
+    const tick = performance.now();
     const until = Date.now() + budget(cap);
+    try {
     let last;
     do {
       try { return await fn(); } catch (error) { last = error; }
       await sleep();
     } while (Date.now() < until);
     throw new Error(`${label}: ${last?.message ?? 'not ready'}`, { cause: last });
+    } finally {
+      if (process.env.APPARENT_TIMING_FILE && label.includes('readiness')) {
+        try {
+          await fs.appendFile(process.env.APPARENT_TIMING_FILE, JSON.stringify({
+            schema: 1, label: label.includes('socket') ? 'native-socket-readiness' : 'native-control-readiness',
+            elapsed_ms: Math.round(performance.now() - tick), sha: process.env.GITHUB_SHA,
+          }) + '\n', { mode: 0o600 });
+        } catch { /* Observation preserves the native assertion result. */ }
+      }
+    }
   };
   let env;
   const osa = async (script, args = [], cap = 3500) => {
@@ -514,7 +526,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.equal(afterCancelStat.mtimeNs, beforeCancelStat.mtimeNs, 'Cancel rewrote config');
     // Cancel remounts Retention, which reads policy and then scans usage on
     // Rust's single Storage worker. Wait for that real receipt before the
-    // fixture's direct socket probe and one Reset; do not retry mutations.
+    // fixture's direct socket probe and Reset; never retry an unknown outcome.
     await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
       .toBeEnabled({ timeout: budget() });
     report.cancel = { ...await snapshot(), files: await assertFiles(selected),
