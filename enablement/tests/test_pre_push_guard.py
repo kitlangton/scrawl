@@ -68,8 +68,12 @@ class PrePushGuardTests(unittest.TestCase):
         taskpolicy = self.bin / "taskpolicy"
         taskpolicy.write_text("#!/bin/sh\nprintf '%s\\n' \"$*\" >> \"$COMMAND_LOG\"\nexit \"${MOCK_STATUS:-0}\"\n")
         taskpolicy.chmod(0o755)
+        # CI's admitted TMPDIR can be near the Unix socket path budget. Do not
+        # append another fixture name to the child verifier's temporary root.
+        # Mac uses the canonical short root deliberately allocated above.
+        verifier_tmp = self.tmp.name if sys.platform == "darwin" else os.environ.get("TMPDIR", self.tmp.name)
         self.env = dict(os.environ, PATH=f"{self.bin}:{os.environ['PATH']}",
-                        COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1", TMPDIR=self.tmp.name)
+                        COMMAND_LOG=str(self.log), PYTHONDONTWRITEBYTECODE="1", TMPDIR=verifier_tmp)
         # Default-policy fixtures must not inherit the live build runner's
         # allocation. Exercise explicit allocations separately below.
         self.env.pop("T3_BUILD_JOBS", None)
@@ -103,6 +107,21 @@ class PrePushGuardTests(unittest.TestCase):
         result = run("git", "rev-parse", "--show-toplevel", cwd=self.repo, env=env)
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(result.stdout.strip(), str(self.repo))
+
+    @unittest.skipIf(sys.platform == "darwin", "Mac fixtures allocate their canonical short root separately")
+    def test_ci_length_temp_root_does_not_overflow_nested_verification(self):
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-prepush-ci-long-", dir="/tmp") as parent:
+            env = dict(os.environ, TMPDIR=parent, PYTHONDONTWRITEBYTECODE="1")
+            # Establish the parent is genuinely admitted, then execute the real
+            # hook test below it. The previous extra nesting rejected 113 bytes.
+            admitted = run("python3", str(SELECTOR), "--base", "unknown", "--preflight",
+                           cwd=HOOK.parents[1], env=env)
+            self.assertEqual(admitted.returncode, 0, admitted.stderr)
+            result = run("python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                         "-p", "test_pre_push_guard.py", "-k", "test_clean_head_requires_build_and_tests",
+                         cwd=HOOK.parents[1], env=env)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertIn("Ran 1 test", result.stderr)
 
     def test_feature_push_runs_contracts_without_cargo(self):
         run("git", "update-ref", "refs/remotes/origin/main", self.head, cwd=self.repo)
