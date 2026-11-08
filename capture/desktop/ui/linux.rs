@@ -881,7 +881,8 @@ mod export_menu_tests {
                 (dark, [255, 2, 1, 2], [255, 183, 165, 216]),
             ] {
                 assert_eq!(
-                    &icon.data[..4], &background,
+                    &icon.data[..4],
+                    &background,
                     "tray must use the matching boxed brand icon"
                 );
                 assert!(
