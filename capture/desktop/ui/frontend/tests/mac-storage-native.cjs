@@ -42,136 +42,7 @@ done
 // Resolve only window 1 of the exact owned PID, then descend its sheets. Do not
 // search other processes, use coordinates, or guess which Return commits a picker.
 // Unknown AX shapes fail with bounded diagnostics from this process alone.
-const panelScript = `
-on run argv
-  set targetPID to (item 1 of argv) as integer
-  set operation to item 3 of argv
-  tell application "System Events"
-    set owned to first application process whose unix id is targetPID
-    tell owned
-      if (count of windows) is 0 then error "Owned process has no AX windows"
-      set outerWindow to window 1
-      set picker to outerWindow
-      set depth to 0
-      set trace to ""
-      repeat
-        set panelName to ""
-        try
-          if name of picker is not missing value then set panelName to name of picker as text
-        end try
-        set panelRole to role of picker as text
-        set labels to name of every button of picker
-        set trace to trace & "depth=" & depth & ";role=" & panelRole & ";title=" & panelName & ";buttons="
-        repeat with labelText in labels
-          set trace to trace & (labelText as text) & "|"
-        end repeat
-        set trace to trace & linefeed
-        set childSheets to sheets of picker
-        if (count of childSheets) is 0 then exit repeat
-        if (count of childSheets) is not 1 or depth is 4 then error "Unsupported owned AX sheet tree: " & trace
-        set picker to item 1 of childSheets
-        set depth to depth + 1
-      end repeat
-      -- Failure diagnostics must not depend on the recursive selector succeeding.
-      if operation is "diagnose" then
-        set directChildren to UI elements of picker
-        set trace to trace & "immediate-child-count=" & (count of directChildren) & linefeed
-        set childLimit to count of directChildren
-        if childLimit > 16 then set childLimit to 16
-        repeat with childIndex from 1 to childLimit
-          set directChild to item childIndex of directChildren
-          set trace to trace & "child-role=" & (role of directChild as text) & ";next-roles="
-          set nextRoles to role of every UI element of directChild
-          if (count of nextRoles) > 32 then
-            set trace to trace & "over-32"
-          else
-            repeat with nextRole in nextRoles
-              set trace to trace & (nextRole as text) & "|"
-            end repeat
-          end if
-          set trace to trace & linefeed
-        end repeat
-        return trace
-      end if
-      if depth > 0 and (name of outerWindow as text) is not "Apparent — UI foundation" then error "Picker has unexpected parent: " & trace
-      if panelRole is not "AXSheet" and panelRole is not "AXWindow" then error "Unexpected picker role: " & trace
-      -- A sheet can have no title. A named picker must expose the shipped title.
-      if panelName is not "" and panelName is not "Choose capture location" then error "Unexpected picker title: " & trace
-      -- Observed macOS 26 NSOpenPanel: one AXSplitGroup immediately under the
-      -- sheet, with the footer buttons directly under that group. Do not walk
-      -- the file-browser descendants (which can expose an entire volume).
-      set controls to picker
-      if (count of buttons of controls) is 0 then
-        set containers to UI elements of picker
-        if (count of containers) is not 1 then error "Unsupported picker control containers: " & trace
-        set controls to item 1 of containers
-        if (role of controls as text) is not "AXSplitGroup" then error "Unsupported picker control container role: " & trace
-      end if
-      set chooseMatches to {}
-      set cancelMatches to {}
-      set trace to trace & "footer-buttons="
-      set footerButtons to buttons of controls
-      if (count of footerButtons) > 16 then error "Oversized picker footer: " & trace
-      repeat with foundButton in footerButtons
-        set buttonName to name of foundButton
-        if buttonName is not missing value then
-          set trace to trace & (buttonName as text) & "|"
-          if buttonName is "Choose" then set end of chooseMatches to contents of foundButton
-          if buttonName is "Cancel" then set end of cancelMatches to contents of foundButton
-        end if
-      end repeat
-      set trace to trace & linefeed
-      if (count of chooseMatches) is not 1 or (count of cancelMatches) is not 1 then error "Owned native picker controls missing or ambiguous: " & trace
-      set chooseButton to item 1 of chooseMatches
-      set cancelButton to item 1 of cancelMatches
-      if not (enabled of chooseButton) then error "Native Choose not enabled: " & trace
-      set xy to position of outerWindow
-      set wh to size of outerWindow
-      if operation is "go" or operation is "choose" or operation is "cancel" then
-        set frontmost to true
-        if not frontmost then error "Owned Electron process is not frontmost"
-        if operation is "go" then
-          keystroke "g" using {command down, shift down}
-          -- NSOpenPanel may animate this sheet after a fixed 0.4 s delay.
-          -- Wait only on this owned picker's immediate sheet and path field;
-          -- do not resend the shortcut or inspect another process/window.
-          repeat 20 times
-            if not frontmost then error "Focus left owned Electron process"
-            set goSheets to sheets of picker
-            if (count of goSheets) > 1 then error "Owned Go to Folder sheet ambiguous"
-            if (count of goSheets) is 1 then exit repeat
-            delay 0.1
-          end repeat
-          if (count of goSheets) is not 1 then error "Owned Go to Folder sheet missing"
-          set goSheet to item 1 of goSheets
-          repeat 20 times
-            if not frontmost then error "Focus left owned Electron process"
-            set pathFields to text fields of goSheet
-            if (count of pathFields) > 1 then error "Owned Go to Folder path field ambiguous"
-            if (count of pathFields) is 1 then exit repeat
-            delay 0.1
-          end repeat
-          if (count of pathFields) is not 1 then error "Owned Go to Folder path field missing"
-          -- argv, not script interpolation: spaces, quotes and accents remain data.
-          set pathField to item 1 of pathFields
-          set value of pathField to (item 2 of argv)
-          if (value of pathField as text) is not (item 2 of argv) then error "Go to Folder path readback differs"
-          -- Let NSOpenPanel resolve the edited path before committing navigation.
-          -- Immediate Return can leave the autocomplete sheet open on CI.
-          delay 1
-          if not frontmost then error "Focus left owned Electron process"
-          key code 36
-        else if operation is "choose" then
-          click chooseButton
-        else
-          click cancelButton
-        end if
-      end if
-      return trace & "bounds=" & (item 1 of xy) & "," & (item 2 of xy) & "," & (item 1 of wh) & "," & (item 2 of wh)
-    end tell
-  end tell
-end run
-`;
+const { panelScript, prepareStorageChange } = require('../../../../../enablement/prerequisites/mac-picker.ts');
 
 async function within(promise, ms, label) {
   let timer;
@@ -258,7 +129,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.ok(remaining > 0, 'Native Storage overall deadline exceeded');
     return Math.min(cap, remaining);
   };
-  let home, backend, application, electronChild, page, logHandle, failure, pendingNativeChange;
+  let home, backend, application, electronChild, page, logHandle, failure;
   const sleep = () => new Promise(resolve => setTimeout(resolve, 150));
   const poll = async (fn, label, cap = 8000) => {
     const tick = performance.now();
@@ -282,9 +153,9 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     }
   };
   let env;
-  const osa = async (script, args = [], cap = 3500) => {
+  const osa = async (script, args = []) => {
     const { stdout } = await run('/usr/bin/osascript', ['-e', script, ...args], {
-      env, timeout: budget(cap), killSignal: 'SIGKILL', maxBuffer: 32768,
+      env, timeout: budget(3500), killSignal: 'SIGKILL', maxBuffer: 32768,
     });
     return stdout.trim();
   };
@@ -448,20 +319,6 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const locationStatus = card.locator(':scope > [role="status"]');
     const change = card.getByRole('button', { name: 'Change…', exact: true });
     const reset = card.getByRole('button', { name: 'Reset', exact: true });
-    const startNativeChange = () => {
-      assert.equal(pendingNativeChange, undefined, 'A native Change is already pending');
-      // AppKit can hold the input acknowledgement while its modal sheet is
-      // open. Start one real click, operate the observed picker, then consume
-      // that same click. Observe rejection immediately without retrying it.
-      pendingNativeChange = change.click({ timeout: budget(30000) }).then(
-        () => ({ ok: true }), error => ({ ok: false, error }));
-    };
-    const settleNativeChange = async () => {
-      assert.ok(pendingNativeChange, 'No native Change was dispatched');
-      const result = await pendingNativeChange;
-      pendingNativeChange = undefined;
-      if (!result.ok) throw result.error;
-    };
     const assertFiles = async (savedPath) => {
       const raw = JSON.parse(await fs.readFile(config, 'utf8'));
       if (savedPath === null) assert.equal(Object.hasOwn(raw, 'capturesDir'), false);
@@ -483,16 +340,30 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     await expect(refreshLocation).toBeEnabled({ timeout: budget() });
     await refreshLocation.click({ timeout: budget() });
     await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
-    // Refresh mounts Retention, which reads policy and then scans usage on
-    // Rust's single Storage worker. Observe completion before one Change;
-    // retrying a mutation cannot substitute for the native picker receipt.
-    await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
-      .toBeEnabled({ timeout: budget() });
-    startNativeChange();
-    report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');
-    // Only the OS picker receives the path. Never pass it through renderer/IPC.
-    await osa(panelScript, [String(electronChild.pid), selected, 'go'], 6500);
-    report.nativeBeforeChoose = await poll(() => panel('inspect'), 'Picker after Go to Folder');
+    // Refresh remounts Retention, which performs real reads on Rust's single
+    // Storage worker. Observe those receipts before one Change mutation: an
+    // app_busy reply never opens a picker, regardless of AX polling duration.
+    const waitStorageIdle = async () => {
+      const refreshRetention = card.getByRole('button', { name: 'Refresh retention', exact: true });
+      await expect(change).toBeEnabled({ timeout: budget() });
+      await expect(refreshRetention).toBeEnabled({ timeout: budget() });
+      await refreshRetention.click({ timeout: budget() }); // Read-only, no preference write.
+      await expect(card.getByRole('combobox', { name: 'Keep recordings', exact: true })).toBeEnabled({ timeout: budget() });
+      await expect(card.getByRole('button', { name: 'Refresh usage', exact: true })).toBeEnabled({ timeout: budget() });
+      await expect(card.getByText(/ in captures$/)).toBeVisible({ timeout: budget() });
+    };
+    const prepared = await prepareStorageChange({
+      storageIdle: waitStorageIdle,
+      change: () => change.click({ timeout: budget() }),
+      picker: () => poll(() => panel('inspect'), 'Native Change picker readiness'),
+      openGo: () => panel('open-go'),
+      goSheet: () => poll(() => panel('inspect-go'), 'Owned Go to Folder readiness'),
+      // Only the OS picker receives the path, as argv data, never renderer/IPC.
+      navigate: (target) => osa(panelScript, [String(electronChild.pid), target, 'navigate-go']),
+    }, selected);
+    report.nativeBeforeGo = prepared.beforeGo;
+    report.nativeGoSheet = prepared.goSheet;
+    report.nativeBeforeChoose = prepared.beforeChoose;
     // Optional evidence: bounded rectangle of our verified Electron window only.
     const bounds = report.nativeBeforeChoose.match(/bounds=(-?\d+),(-?\d+),(\d+),(\d+)$/);
     if (bounds && bounds.slice(1).every(v => Number.isSafeInteger(Number(v))) && Number(bounds[3]) > 0 && Number(bounds[4]) > 0) {
@@ -503,7 +374,6 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       } catch (error) { report.nativePickerScreenshotUnavailable = error.message; }
     }
     await panel('choose');
-    await settleNativeChange();
     const changed = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, selected);
@@ -518,10 +388,10 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.retention = await require('./native-retention.cjs')(page, { config, captures: selected, output });
     const beforeCancel = await fs.readFile(config);
     const beforeCancelStat = await fs.stat(config, { bigint: true });
-    startNativeChange();
+    await waitStorageIdle();
+    await change.click({ timeout: budget() });
     report.nativeBeforeCancel = await poll(() => panel('inspect'), 'Reopened native picker');
     await panel('cancel');
-    await settleNativeChange();
     await expect(change).toBeEnabled({ timeout: budget() });
     assert.deepEqual(await fs.readFile(config), beforeCancel, 'Cancel changed config bytes');
     const afterCancelStat = await fs.stat(config, { bigint: true });
@@ -529,32 +399,13 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.equal(afterCancelStat.mtimeNs, beforeCancelStat.mtimeNs, 'Cancel rewrote config');
     // Cancel remounts Retention, which reads policy and then scans usage on
     // Rust's single Storage worker. Wait for that real receipt before the
-    // fixture's direct socket probe and Reset; never retry an unknown outcome.
+    // fixture's direct socket probe and one Reset; do not retry mutations.
     await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
       .toBeEnabled({ timeout: budget() });
     report.cancel = { ...await snapshot(), files: await assertFiles(selected),
       bytesUnchanged: true, inodeUnchanged: true, mtimeUnchanged: true };
     assert.deepEqual(report.cancel.location, report.change.location);
     await reset.click({ timeout: budget() });
-    // The single Rust Settings worker can explicitly refuse admission. That
-    // response guarantees this Reset did not run; exercise the visible Refresh
-    // recovery once. Never repeat a timeout, unknown outcome or other error.
-    const busyMessage = 'Another location request is still running. Refresh when it finishes.';
-    const resetOutcome = await poll(async () => {
-      const text = await locationStatus.innerText({ timeout: budget() });
-      if (text.includes(busyMessage)) return 'busy';
-      assert.ok(text.includes(report.before.location.storage.displayPath), 'Waiting for Reset result');
-      return 'reset';
-    }, 'Rendered Reset result');
-    if (resetOutcome === 'busy') {
-      assert.deepEqual(await fs.readFile(config), beforeCancel, 'Unadmitted Reset changed config');
-      report.resetBusyRecovery = { response: 'app_busy', unchangedConfig: true, refreshes: 1, retries: 1 };
-      await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget() });
-      await locationStatus.getByText(report.change.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
-      await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
-        .toBeEnabled({ timeout: budget() });
-      await reset.click({ timeout: budget() });
-    }
     const resetRead = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, null);
@@ -610,12 +461,6 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     for (const [label, child, group] of [['electron', electronChild, false], ['rust', backend, true]]) {
       try { report.cleanup[label] = await stopOwned(child, label, group); }
       catch (error) { report.cleanup[label] = { error: error.message }; failure ??= error; report.passed = false; }
-    }
-    if (pendingNativeChange) {
-      try {
-        const result = await within(pendingNativeChange, 2000, 'Retired native Change');
-        report.cleanup.pendingNativeChange = result.ok ? 'completed' : 'rejected after retirement';
-      } catch (error) { report.cleanup.pendingNativeChange = error.message; failure ??= error; report.passed = false; }
     }
     if (logHandle) await logHandle.close();
     // Keep failed fixtures and evidence. A successful run removes only its own HOME.
