@@ -319,7 +319,7 @@ pub fn zoom(
             &view.strokes,
             &view.marks,
             &view.events,
-            crate::shared::model::VideoInk::replay(bundle.video_ink),
+            crate::shared::model::VideoInk::replay_video(bundle.video_ink),
         );
         crate::capture::engine::render::draw_time_label(frame, &clock(t), label_scale);
         cells.push((i + 1, t));

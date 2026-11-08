@@ -404,7 +404,7 @@
       "says": "Hold ⇧ and move to draw red ink over any app; saved marks retain their semantic geometry and images preserve recorded ink.",
       "status": "main",
       "platforms": ["mac", "linux"],
-      "note": "On Wayland the Linux preview needs input-device access for ink outside its own windows. macOS and Hyprland 0.56.2 Lua keep live ink fading after release; KDE Wayland hides it immediately to preserve native-app clicks. Unsupported or failed Hyprland fade policy falls back to hiding. Fresh Hyprland screen/area bundles identify captured ink so output does not replay it; older bundles retain legacy replay.",
+      "note": "On Wayland the Linux preview needs input-device access for ink outside its own windows. macOS and Hyprland 0.56.2 Lua keep live ink fading after release; KDE Wayland hides it immediately to preserve native-app clicks. Unsupported or failed Hyprland fade policy falls back to hiding. Fresh Hyprland and KDE Wayland screen/area bundles identify captured movie ink to prevent replay; KDE still images reconstruct saved marks. Older bundles retain legacy replay.",
       "shortcuts": [{ "keys": "⇧ + move", "does": "Draw" }],
       "docs": ["README.md#capture-controls"]
     },

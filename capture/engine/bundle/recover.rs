@@ -623,7 +623,7 @@ mod tests {
     fn recovery_preserves_video_ink_facts_without_guessing_old_sources() {
         use crate::shared::model::VideoInk;
         let captures = temp_dir("video-ink");
-        for (name, source) in [("old", None), ("captured", Some(VideoInk::Captured)), ("excluded", Some(VideoInk::Excluded))] {
+        for (name, source) in [("old", None), ("captured", Some(VideoInk::Captured)), ("captured-video", Some(VideoInk::CapturedVideo)), ("excluded", Some(VideoInk::Excluded))] {
             let dir = orphan(&captures, &format!("{name}.apparent"));
             let mut recipe = unfinished();
             recipe.video_ink = source;

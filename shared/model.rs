@@ -128,13 +128,20 @@ pub enum InteractionTelemetry {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub enum VideoInk {
+    /// Both movie and still-frame source pixels retain the live overlay.
     Captured,
+    /// The movie contains live ink; still images may need reconstructed marks after release.
+    CapturedVideo,
     Excluded,
 }
 
 impl VideoInk {
     pub fn replay(source: Option<Self>) -> bool {
         source != Some(Self::Captured)
+    }
+
+    pub fn replay_video(source: Option<Self>) -> bool {
+        !matches!(source, Some(Self::Captured | Self::CapturedVideo))
     }
 }
 

@@ -2047,12 +2047,15 @@ mod tests {
         let mut frame_key = key(1);
         frame_key.t = 300;
         let mut captured = source.clone();
-        annotate_keyframe_marks_in_place(&mut captured, &frame_key, &strokes, &[], &[], false);
+        annotate_keyframe_marks_in_place(&mut captured, &frame_key, &strokes, &[], &[], crate::shared::model::VideoInk::replay(Some(crate::shared::model::VideoInk::Captured)));
         assert!(captured.rgba == source.rgba, "do not redraw or erase recorded ink");
         assert!(captured.badge_bottom_left, "saved stroke geometry still keeps the badge away from ink");
         let mut excluded = source.clone();
         annotate_keyframe_marks_in_place(&mut excluded, &frame_key, &strokes, &[], &[], true);
         assert_ne!(excluded.rgba, source.rgba, "overlay-excluding and unknown routes still need replay");
+        let mut movie_only = source.clone();
+        annotate_keyframe_marks_in_place(&mut movie_only, &frame_key, &strokes, &[], &[], crate::shared::model::VideoInk::replay(Some(crate::shared::model::VideoInk::CapturedVideo)));
+        assert_eq!(movie_only.rgba, excluded.rgba, "KWin still images retain saved marks after release hides the live overlay");
     }
 
     #[test]

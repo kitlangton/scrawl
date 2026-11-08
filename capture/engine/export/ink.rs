@@ -122,7 +122,7 @@ pub fn plan(bundle: &ApparentBundle, video_px: (u32, u32), layers: Layers) -> In
     };
     let vt = |t: u64| t.saturating_sub(offset);
 
-    if layers.ink && crate::shared::model::VideoInk::replay(bundle.video_ink) {
+    if layers.ink && crate::shared::model::VideoInk::replay_video(bundle.video_ink) {
         // A mark's strokes fade together, after the last of them.
         let mut group_end: Vec<u64> = bundle.strokes.iter().map(|s| s.t1).collect();
         for mark in &bundle.marks {
@@ -384,6 +384,14 @@ mod tests {
         assert!(captured.strokes.is_empty() && captured.pins.is_empty() && captured.lasers.is_empty());
         assert_eq!(captured.ripples, legacy.ripples);
         assert_eq!(reloaded.strokes, semantic);
+        assert!(!VideoInk::replay(b.video_ink));
+        b.video_ink = Some(VideoInk::CapturedVideo);
+        let encoded = serde_json::to_value(&b).unwrap();
+        assert_eq!(encoded["videoInk"], "capturedVideo");
+        let reloaded: ApparentBundle = serde_json::from_value(encoded).unwrap();
+        assert_eq!(plan(&reloaded, (1280, 720), layers), captured);
+        assert_eq!(reloaded.strokes, semantic);
+        assert!(VideoInk::replay(reloaded.video_ink), "KWin still images retain semantic ink replay");
         b.video_ink = Some(VideoInk::Excluded);
         assert_eq!(plan(&b, (1280, 720), layers), legacy);
     }
