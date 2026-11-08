@@ -5,12 +5,13 @@ const path = require('node:path');
 const fs = require('node:fs/promises');
 const os = require('node:os');
 
-test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts and isolates bridge', { timeout: 45000 }, async t => {
+for (const scale of process.platform === 'linux' ? [1, 2] : [1]) {
+test(`shipped Electron note UI focuses, saves, counts, edits, recovers drafts and isolates bridge at ${scale}x`, { timeout: 45000 }, async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'apparent-notes-ui-'));
   const profile = path.join(home, 'owned-profile');
   await fs.mkdir(profile, { mode: 0o700 });
   const child = require('node:child_process').spawn(require('electron'),
-    ['--no-sandbox', '--remote-debugging-port=0', path.resolve(__dirname, '../../electron/notes/main.cjs'), '--capture-frame=0,0,1280,800', '--notes-profile=' + profile],
+    ['--no-sandbox', `--force-device-scale-factor=${scale}`, '--remote-debugging-port=0', path.resolve(__dirname, '../../electron/notes/main.cjs'), '--capture-frame=0,0,1280,800', '--notes-profile=' + profile],
     { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
   let browser;
   let errors = '';
@@ -40,11 +41,15 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   const popup = pages.find(p => p.url().endsWith('#notes-popup')) || pages[0];
   const badge = pages.find(p => p !== popup);
   await popup.waitForFunction(() => !!window.captureNotes);
-  let state = { mode: 'editor', current: 1, position: [600, 280], notes: [], drafts: [{ pin: 1, t: 123, x: .5, y: .35, text: '' }], error: null };
+  let state = { mode: 'editor', current: 1, position: [200, 160], notes: [], drafts: [{ pin: 1, t: 123, x: .5, y: .35, text: '' }], error: null };
   const send = () => child.stdin.write(JSON.stringify(state) + '\n');
   send();
   const field = popup.getByRole('textbox', { name: 'Note text' });
   await expect(field).toBeFocused();
+  if (process.platform === 'linux') {
+    const expected = [200 + 12 * scale, 160 + 12 * scale, 332 * scale, 220 * scale];
+    await expect.poll(() => messages.some(m => m.action === 'surface' && m.focus && JSON.stringify(m.rect) === JSON.stringify(expected))).toBe(true);
+  }
   const { backgroundColor } = require('@apparent/ui/window-theme');
   for (const mode of ['light', 'dark', 'light']) {
     await popup.emulateMedia({ colorScheme: mode });
@@ -66,8 +71,9 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   await expect.poll(() => messages.some(m => m.action === 'list')).toBe(true);
   state.mode = 'list'; state.badgeRect = [450, 36, 380, 40]; send();
   if (process.platform === 'linux') {
-    await expect.poll(() => messages.some(m => m.action === 'surface' && JSON.stringify(m.rect) === '[836,36,150,44]')).toBe(true);
-    await expect.poll(() => messages.some(m => m.action === 'surface' && m.rect[3] === 350)).toBe(true);
+    const expected = [830 + 6 * scale, 36, 150 * scale, 44 * scale];
+    await expect.poll(() => messages.some(m => m.action === 'surface' && JSON.stringify(m.rect) === JSON.stringify(expected))).toBe(true);
+    await expect.poll(() => messages.some(m => m.action === 'surface' && m.rect[3] === 350 * scale)).toBe(true);
   }
   await popup.getByRole('button', { name: /Smaller button/ }).click();
   await expect.poll(() => messages.some(m => m.action === 'edit' && m.pin === 1)).toBe(true);
@@ -99,3 +105,4 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   assert.equal((await fs.stat(profile)).isDirectory(), true, 'the parent owns profile cleanup after reaping');
   assert.doesNotMatch(errors, /Uncaught Exception|ENOTEMPTY/);
 });
+}

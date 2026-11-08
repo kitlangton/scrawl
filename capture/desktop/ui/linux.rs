@@ -1037,7 +1037,7 @@ pub(in crate::capture::desktop) fn prepare_note_surface(id: u32, pid: u32) -> bo
     if !x11::window_info(id as isize).is_some_and(|window| window.pid == pid) { return false; }
     x11::set_title(id, &linux::hyprland::note_title(id));
     x11::accept_pointer(id);
-    x11::prepare_floating(id)
+    x11::prepare_floating(id, linux::hyprland::managed_note_windows())
 }
 
 pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [i32; 4], focus: bool, popup: bool) {

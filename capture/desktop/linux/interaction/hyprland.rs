@@ -408,6 +408,10 @@ pub fn pill_title(xid: u32) -> String {
 
 pub fn note_title(xid: u32) -> String { format!("Apparent notes {xid:x}") }
 
+/// Override-redirect windows can be visible to X11 but absent from Hyprland's
+/// scene when the output has a nonzero origin. Keep these owned toolbars managed.
+pub fn managed_note_windows() -> bool { matches!(syntax(), Ok(Syntax::Lua)) }
+
 pub fn pin_note(xid: u32, pid: u32) -> Result<()> {
     if let Some(command) = owned_pin_command(&request("j/clients")?, pid, &note_title(xid), syntax()?)? {
         run(&command)?;
@@ -415,9 +419,12 @@ pub fn pin_note(xid: u32, pid: u32) -> Result<()> {
     Ok(())
 }
 
-/// X11 geometry can diverge from Hyprland's scene for override-redirect Electron
-/// windows. Reconcile the exact registered child surface in the compositor too.
+/// Reconcile only the exact registered child in compositor layout coordinates.
 pub fn place_note(xid: u32, pid: u32, rect: [i32; 4], focus: bool) -> Result<()> {
+    let layout: Vec<Monitor> = serde_json::from_str(&request("j/monitors")?)?;
+    let x_monitors = super::x11::monitors().into_iter().map(|m| (m.name, m.rect)).collect::<Vec<_>>();
+    let [x, y, width, height] = note_rect_in_layout(rect, &layout, &x_monitors)
+        .context("Notes output cannot be matched to Hyprland")?;
     pin_note(xid, pid)?;
     let clients: Vec<serde_json::Value> = serde_json::from_str(&request("j/clients")?)?;
     let title = note_title(xid);
@@ -426,9 +433,8 @@ pub fn place_note(xid: u32, pid: u32, rect: [i32; 4], focus: bool) -> Result<()>
     anyhow::ensure!(owned.next().is_none(), "Ambiguous notes surface");
     let address = window["address"].as_str().context("Notes surface has no address")?;
     anyhow::ensure!(address.starts_with("0x") && address.len() > 2 && address[2..].bytes().all(|b| b.is_ascii_hexdigit()), "Invalid notes address");
-    let [x,y,width,height] = rect;
     match syntax()? {
-        Syntax::Lua => run(&format!("eval local w = hl.get_windows({{ title = '{title}' }})[1]; assert(w and w.address == '{address}', 'Notes surface changed'); hl.dispatch(hl.dsp.window.resize({{ window = w, x = {width}, y = {height}, relative = false }})); hl.dispatch(hl.dsp.window.move({{ window = w, x = {x}, y = {y}, relative = false }})); {}", if focus { "hl.dispatch(hl.dsp.focus({ window = w }))" } else { "" })),
+        Syntax::Lua => run(&format!("eval local w = hl.get_windows({{ title = '{title}' }})[1]; assert(w and w.address == '{address}', 'Notes surface changed'); hl.dispatch(hl.dsp.window.set_prop({{ window = w, prop = 'border_size', value = '0' }})); hl.dispatch(hl.dsp.window.resize({{ window = w, x = {width}, y = {height}, relative = false }})); hl.dispatch(hl.dsp.window.move({{ window = w, x = {x}, y = {y}, relative = false }})); {}", if focus { "hl.dispatch(hl.dsp.focus({ window = w }))" } else { "" })),
         Syntax::Hyprlang => {
             run(&format!("dispatch resizewindowpixel exact {width} {height},address:{address}"))?;
             run(&format!("dispatch movewindowpixel exact {x} {y},address:{address}"))?;
@@ -609,6 +615,36 @@ impl Monitor {
         };
         (width / scale, height / scale)
     }
+}
+
+/// Notes and X11 use root pixels; compositor dispatchers use layout coordinates.
+/// Match the output by name, since XWayland can arrange outputs differently.
+fn note_rect_in_layout(
+    rect: [i32; 4],
+    layout: &[Monitor],
+    x_monitors: &[(String, [f64; 4])],
+) -> Option<[i32; 4]> {
+    let [x, y, width, height] = rect.map(f64::from);
+    if width <= 0.0 || height <= 0.0 { return None; }
+    let center = [x + width / 2.0, y + height / 2.0];
+    let mut matches = x_monitors.iter().filter(|(_, r)| {
+        r.iter().all(|v| v.is_finite()) && r[2] > 0.0 && r[3] > 0.0 &&
+        center[0] >= r[0] && center[0] < r[0] + r[2] &&
+        center[1] >= r[1] && center[1] < r[1] + r[3]
+    });
+    let (name, pixels) = matches.next()?;
+    if matches.next().is_some() { return None; }
+    let mut matches = layout.iter().filter(|m| &m.name == name);
+    let monitor = matches.next()?;
+    if matches.next().is_some() || !monitor.scale.is_finite() || monitor.scale <= 0.0 { return None; }
+    let (lw, lh) = monitor.layout_size();
+    let sx = lw / pixels[2];
+    let sy = lh / pixels[3];
+    let result = [monitor.x + (x - pixels[0]) * sx, monitor.y + (y - pixels[1]) * sy,
+        width * sx, height * sy].map(f64::round);
+    if !result.iter().all(|v| v.is_finite() && *v >= f64::from(i32::MIN) && *v <= f64::from(i32::MAX)) ||
+        result[2] <= 0.0 || result[3] <= 0.0 { return None; }
+    Some(result.map(|v| v as i32))
 }
 
 #[derive(serde::Deserialize)]
@@ -794,6 +830,44 @@ mod tests {
             to_x_space([500.0, 300.0], &layout, &x_monitors),
             Some((1000.0, 600.0))
         );
+    }
+
+    #[test]
+    fn notes_return_to_compositor_coordinates_on_scaled_outputs() {
+        let layout = vec![monitor("eDP-1", [0.0, 0.0, 1920.0, 1200.0], 1.25, 0)];
+        let pixels = vec![("eDP-1".into(), [0.0, 0.0, 1920.0, 1200.0])];
+        assert_eq!(note_rect_in_layout([1065, 670, 415, 275], &layout, &pixels), Some([852, 536, 332, 220]));
+        // A forced-unscaled XWayland layout must not divide by scale again.
+        let unscaled = vec![("eDP-1".into(), [0.0, 0.0, 1536.0, 960.0])];
+        assert_eq!(note_rect_in_layout([852, 536, 332, 220], &layout, &unscaled), Some([852, 536, 332, 220]));
+    }
+
+    #[test]
+    fn notes_match_output_origins_and_rotated_layouts() {
+        let layout = vec![
+            monitor("left", [-1536.0, -200.0, 1920.0, 1200.0], 1.25, 0),
+            monitor("portrait", [0.0, 0.0, 1920.0, 1080.0], 1.5, 1),
+        ];
+        let pixels = vec![
+            ("portrait".into(), [0.0, 0.0, 1080.0, 1920.0]),
+            ("left".into(), [-1920.0, 0.0, 1920.0, 1200.0]),
+        ];
+        assert_eq!(note_rect_in_layout([-1420, 250, 415, 275], &layout, &pixels), Some([-1136, 0, 332, 220]));
+        assert_eq!(note_rect_in_layout([150, 300, 498, 330], &layout, &pixels), Some([100, 200, 332, 220]));
+    }
+
+    #[test]
+    fn notes_refuse_unmatched_or_ambiguous_output_geometry() {
+        let layout = vec![monitor("main", [0.0, 0.0, 1920.0, 1200.0], 1.0, 0)];
+        let pixels = vec![("main".into(), [0.0, 0.0, 1920.0, 1200.0])];
+        let rect = [200, 300, 332, 220];
+        assert_eq!(note_rect_in_layout(rect, &layout, &pixels), Some(rect));
+        assert_eq!(note_rect_in_layout(rect, &layout, &[]), None);
+        assert_eq!(note_rect_in_layout(rect, &[], &pixels), None);
+        assert_eq!(note_rect_in_layout(rect, &layout, &[pixels[0].clone(), pixels[0].clone()]), None);
+        assert_eq!(note_rect_in_layout(rect, &[layout[0].clone(), layout[0].clone()], &pixels), None);
+        assert_eq!(note_rect_in_layout(rect, &[monitor("main", [0.0, 0.0, 1920.0, 1200.0], 0.0, 0)], &pixels), None);
+        assert_eq!(note_rect_in_layout([200, 300, 0, 220], &layout, &pixels), None);
     }
 
     #[test]
