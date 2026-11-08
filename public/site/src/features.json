@@ -1118,7 +1118,7 @@
       "status": "main",
       "platforms": ["mac", "linux"],
       "added": "2026-10-22",
-      "note": "In installed native Settings, Change… is Mac only; elsewhere set capturesDir. The separate default-off Electron experiment below adds a Linux picker, not native Settings parity.",
+      "note": "Linux Settings keeps Storage in the same native frame, including Change/Reset through the desktop folder picker. Effective location, overrides and fallback are shown; existing captures are not moved. macOS retains its installed Storage presentation and native fallback.",
       "pr": 86,
       "docs": ["README.md#settings"],
       "config": [{ "key": "capturesDir", "value": "\"~/Apparent\"", "does": "Where captures are written" }]
@@ -1146,12 +1146,12 @@
         "mac",
         "linux"
       ],
-      "note": "Default on; experiments.electronCaptureLocation=false restores native Storage on reopen. Missing packaged assets or an Electron crash also use native Storage. Other Settings pages retain native presentation. Existing worker timing and usage-scan limits are unchanged. Candidate installed routing and platform acceptance are tracked in #291; prior foundation evidence does not prove this routing change.",
+      "note": "On macOS, default on; experiments.electronCaptureLocation=false restores native Storage on reopen. Missing packaged assets or an Electron crash also use native Storage. Linux installed Settings keeps all panes in one native frame with working folder, retention and usage controls; the opt-in Electron development window and its bridge remain available. Existing cleanup timing and usage-scan limits are unchanged.",
       "config": [
         {
           "key": "experiments.electronCaptureLocation",
           "value": "true by default; false opts out",
-          "does": "Use Electron Storage Settings and admit its Rust bridge; false restores native Storage"
+          "does": "Admit the Electron Storage bridge; on macOS also select its installed Storage presentation. Linux installed Settings stays native."
         }
       ],
       "docs": [

@@ -207,6 +207,17 @@ Recording › Language shows under Transcription while it's Apple Speech: Automa
 
 The sidebar is the helper's alone: a row selects on mouse-down and its pane replaces the last on the next frame, with no transition (keep it that way; a fade read as lag; the level meter starts after the Recording pane has drawn). Rust's `state` never carries the pane (only `show` does, when Settings is opened again), so a reply can't move the selection.
 
+On Linux all Settings panes, including Storage, stay inside the same GPUI window.
+Navigation preserves its frame, position and focus. Storage has a native folder
+picker, Change/Reset, effective-location readback, retention presets/reset and
+Refresh Storage for folder usage. These use the existing Rust preference
+transactions; picker Cancel writes nothing and existing captures are never moved.
+An environment override or unusable saved folder is shown explicitly. Usage is a
+bounded background scan on open or refresh, not continuous scanning. A folder
+change affects new captures; an active capture keeps its original destination.
+Restart after changing folders so the existing cleanup worker follows that folder.
+macOS keeps its existing Electron Storage route and native fallback.
+
 About shows the package version and the running binary's build-time commit, for example `Version 0.3.13 · ad8d4b1`. Tracked local edits add `+modified`; builds without Git metadata or a valid CI revision say `build unknown`. This identifies the compiled build, not the selected update channel or an update staged for the next launch. Both the Mac helper and Linux GPUI Settings use the same label.
 
 About has a Star on GitHub button below the update control. Its heading, action and caption share one box in the Mac helper and Linux GPUI Settings. It opens `https://github.com/tryapparent/apparent` in the browser; starring remains the user's choice on GitHub.

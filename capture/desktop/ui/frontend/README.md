@@ -166,7 +166,7 @@ effective path. Loading/error states hide old totals, and Retry never starts
 Rust. A slow filesystem syscall can outlive client expiry; the existing single
 Storage worker stays busy rather than spawning unbounded scans.
 
-The Rust Settings session owns navigation and the Electron child. The installed
+On macOS the Rust Settings session owns navigation and the Electron child. The installed
 page contains Storage only, with the existing Settings sidebar and system-following
 light/dark Paper/Carbon/Signal palette. Other sidebar pages return to their native
 presentation. Retired windows cannot send commands or close the current page.
@@ -199,9 +199,12 @@ The broader intermittent blanking reported in #562 remains unconfirmed.
 installer/release packages. Installed packages contain no development dashboard or
 synthetic examples. Node/npm are build prerequisites, not runtime dependencies.
 macOS stages and signs nested Electron code before the enclosing app is signed.
-The old Storage presentation is retained solely for the explicit opt-out and
-startup/crash fallback. Remove it only after exact-candidate installed Mac/Linux
-acceptance and a deliberate retirement of that fallback contract. Functional
+Linux keeps every installed Settings pane inside one native GPUI frame, including
+the folder picker, retention and usage controls. Switching to Storage does not
+replace the window. The Electron development harness and Rust bridge remain
+available on Linux; the installed macOS route retains its explicit opt-out and
+startup/crash fallback. Remove a native presentation only after applicable native
+acceptance and a deliberate retirement of its fallback contract. Functional
 transport tests and synthetic backend fixtures remain verification tooling.
 
 `tests/retention-smoke.cjs` exercises production Electron with a **synthetic**
@@ -264,9 +267,10 @@ physical-device or performance acceptance.
 
 ## Experimental Storage card
 
-The installed Storage bridge is on unless `experiments.electronCaptureLocation`
+The Electron Storage bridge is on unless `experiments.electronCaptureLocation`
 is explicitly false in the Rust app's `~/.config/apparent/config.json`. File edits
-apply at the next request; reopen Settings to change presentation routing. The
+apply at the next request; on macOS reopen Settings to change presentation routing. Linux
+installed Settings always uses its continuous native frame. The
 separate `npm start` window remains a developer harness; it is not installed or
 used by the Settings route. Browser preview has no Storage bridge.
 

@@ -737,6 +737,8 @@ pub struct View {
     /// How much the captures folder takes, once measured.
     pub captures_size: Option<String>,
     pub captures_dir: CapturesDirView,
+    #[cfg(target_os = "linux")]
+    pub storage: super::storage::View,
     pub permissions: Vec<PermissionView>,
     pub updates: bool,
     pub update_check: UpdateCheck,
@@ -1121,6 +1123,8 @@ pub(crate) fn external_record_owned(kind: ShortcutKind) -> bool {
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
     Navigate { pane: Pane },
+    #[cfg(target_os = "linux")]
+    Storage { command: super::storage::Command },
     Connect { command: super::connect::Command },
     /// A settings control: `launchAtLogin`, `errorReporting`, `videoExport`, `lowerPlayback` (bool),
     /// `playbackLevel` (u8), `microphone` ("default" or a device id), `transcriber`
@@ -1187,6 +1191,8 @@ pub enum Effect {
     QuitForUpdate,
     /// The captures folder may have changed size.
     Measure,
+    #[cfg(target_os = "linux")]
+    MeasureStorage,
     /// The Apple Speech language changed.
     SpeechModel,
     Relaunch,
@@ -1217,6 +1223,8 @@ pub struct Panel {
     requested: BTreeSet<Permission>,
     grants: Option<Grants>,
     captures_size: Option<u64>,
+    #[cfg(target_os = "linux")]
+    storage: super::storage::State,
     /// The connected microphones, once listed (`mic::Watch` keeps them fresh).
     inputs: Option<crate::capture::engine::runtime::audio::mic::Inputs>,
     update_check: UpdateCheck,
@@ -1283,6 +1291,13 @@ impl Panel {
             Action::ConnectHosted => Effect::ConnectHosted,
             Action::ManageSharedLinks => Effect::ManageSharedLinks,
             Action::Set { key, value } => self.set(&key, &value, host),
+            #[cfg(target_os = "linux")]
+            Action::Storage { command } => {
+                let refresh = matches!(command, super::storage::Command::Refresh);
+                if !self.storage.command(&host.config_path(), command) { Effect::None }
+                else if refresh { Effect::MeasureStorage }
+                else { Effect::Measure }
+            }
             Action::RecordShortcut { kind } => {
                 if external_record_owned(kind) {
                     return Effect::None;
@@ -1654,6 +1669,8 @@ impl Panel {
             retention: retention_view(&policy),
             captures_size: self.captures_size.map(crate::capture::engine::bundle::retention::format_bytes),
             captures_dir: CapturesDirView::new(&config),
+            #[cfg(target_os = "linux")]
+            storage: self.storage.view(&host.config_path()),
             permissions: order
                 .iter()
                 .filter(|p| p.asked(self.grants.as_ref()))
@@ -1757,6 +1774,8 @@ impl Host for AppHost<'_> {
 /// From the window's helper process and its pollers.
 #[derive(Clone, Debug)]
 pub enum Event {
+    #[cfg(target_os = "linux")]
+    StorageUsage { version: u64, result: Result<serde_json::Value, &'static str> },
     Presentation { generation: u64, event: Box<Event> },
     Connect(super::connect::Event),
     Action(Action),
@@ -1798,9 +1817,17 @@ pub struct Session {
     connect: Option<super::connect::Controller>,
     transport: Transport,
     polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    #[cfg(target_os = "linux")]
+    storage_scan: std::sync::Arc<std::sync::atomic::AtomicU64>,
     events: std::sync::Arc<dyn Fn(Event) + Send + Sync>,
     last_view: String,
     _microphones: crate::capture::engine::runtime::audio::mic::Watch,
+}
+
+fn electron_storage(pane: Option<Pane>, enabled: bool) -> bool {
+    // Linux panes share one GPUI frame. Replacing it for Storage loses the
+    // compositor's position/focus and visibly unmaps Settings during startup.
+    !cfg!(target_os = "linux") && enabled && pane == Some(Pane::Storage)
 }
 
 impl Session {
@@ -1818,16 +1845,30 @@ impl Session {
         let polling = std::sync::Arc::new(AtomicBool::new(true));
         let alive = std::sync::Arc::clone(&polling);
         let poll = std::sync::Arc::clone(&events);
+        #[cfg(target_os = "linux")]
+        let storage_scan = std::sync::Arc::new(std::sync::atomic::AtomicU64::new(0));
+        #[cfg(target_os = "linux")]
+        let scan = storage_scan.clone();
         std::thread::spawn(move || {
             let mut n = 0_u32;
             while alive.load(Ordering::Acquire) {
-                // Hex and the size on open (`hex::watch` keeps Hex fresh) and every 30 s; the
-                // grants and the login item every second.
+                // Hex every 30 s; native Linux usage on open/on demand. Keep
+                // other platforms' size polling and the one-second grant refresh.
                 if n % 30 == 0 {
                     crate::shared::hex::refresh_in_background();
-                    let size =
-                        crate::capture::engine::bundle::retention::captures_size(&crate::shared::handoff::default_captures_dir());
-                    poll(Event::CapturesSize(size));
+                    #[cfg(not(target_os = "linux"))]
+                    {
+                        let size =
+                            crate::capture::engine::bundle::retention::captures_size(&crate::shared::handoff::default_captures_dir());
+                        poll(Event::CapturesSize(size));
+                    }
+                }
+                #[cfg(target_os = "linux")]
+                if n == 0 {
+                    let result = crate::capture::desktop::workflow::storage_preferences::usage(
+                        &crate::shared::handoff::default_config_path(),
+                        || alive.load(Ordering::Acquire) && scan.load(Ordering::Acquire) == 0);
+                    poll(Event::Presentation { generation, event: Box::new(Event::StorageUsage { version: 0, result }) });
                 }
                 // macOS receives the app-wide permission refresh, including with this
                 // window closed. Keep the existing local polling on other platforms.
@@ -1871,6 +1912,8 @@ impl Session {
             connect,
             transport,
             polling,
+            #[cfg(target_os = "linux")]
+            storage_scan,
             events,
             last_view: String::new(),
             _microphones: microphones,
@@ -1886,7 +1929,7 @@ impl Session {
         let events: std::sync::Arc<dyn Fn(Event) + Send + Sync> = std::sync::Arc::new(move |event| {
             target(Event::Presentation { generation, event: Box::new(event) });
         });
-        if allow_storage && pane == Some(Pane::Storage) && crate::shared::handoff::experiment("electronCaptureLocation") {
+        if allow_storage && electron_storage(pane, crate::shared::handoff::experiment("electronCaptureLocation")) {
             match super::presentation::open(events.clone()) {
                 Ok(transport) => return Ok((transport, true)),
                 Err(error) => crate::capture::engine::runtime::apparent_log(format!("Storage Settings fallback: {error:#}")),
@@ -1957,6 +2000,11 @@ impl Session {
         let Some(event) = self.current_event(event) else { return Effect::None; };
         let effect = match event {
             Event::Presentation { .. } => return Effect::None,
+            #[cfg(target_os = "linux")]
+            Event::StorageUsage { version, result } => {
+                self.panel.storage.measured(version, result);
+                Effect::None
+            }
             Event::Action(Action::Navigate { pane }) => {
                 self.panel.on(Action::CancelShortcut, host);
                 self.show(Some(pane));
@@ -2073,9 +2121,17 @@ impl Session {
                 }
                 Effect::None
             }
+            #[cfg(target_os = "linux")]
+            Effect::MeasureStorage => {
+                self.measure_storage(host);
+                Effect::None
+            }
             Effect::Measure => {
                 crate::capture::engine::bundle::retention::nudge();
                 let events = std::sync::Arc::clone(&self.events);
+                #[cfg(target_os = "linux")]
+                self.measure_storage(host);
+                #[cfg(not(target_os = "linux"))]
                 std::thread::spawn(move || {
                     let size =
                         crate::capture::engine::bundle::retention::captures_size(&crate::shared::handoff::default_captures_dir());
@@ -2095,7 +2151,7 @@ impl Session {
 
     pub fn show(&mut self, pane: Option<Pane>) {
         if let Some(pane) = pane {
-            let storage = pane == Pane::Storage && crate::shared::handoff::experiment("electronCaptureLocation");
+            let storage = electron_storage(Some(pane), crate::shared::handoff::experiment("electronCaptureLocation"));
             if storage != self.storage {
                 let generation = super::presentation::generation();
                 match Self::open_presentation(Some(pane), generation, &self.events, true) {
@@ -2111,6 +2167,23 @@ impl Session {
             }
         }
         self.send(&serde_json::json!({"type": "show", "pane": pane}));
+    }
+
+    #[cfg(target_os = "linux")]
+    fn measure_storage(&self, host: &dyn Host) {
+        use std::sync::atomic::Ordering;
+        let generation = self.generation;
+        let version = self.panel.storage.usage_version;
+        self.storage_scan.store(version, Ordering::Release);
+        let scan = self.storage_scan.clone();
+        let alive = self.polling.clone();
+        let events = self.events.clone();
+        let config = host.config_path();
+        std::thread::spawn(move || {
+            let result = crate::capture::desktop::workflow::storage_preferences::usage(
+                &config, || alive.load(Ordering::Acquire) && scan.load(Ordering::Acquire) == version);
+            events(Event::Presentation { generation, event: Box::new(Event::StorageUsage { version, result }) });
+        });
     }
 
     pub fn sync(&mut self, host: &dyn Host) {
@@ -2170,6 +2243,16 @@ impl Drop for Session {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn linux_storage_navigation_never_replaces_the_native_frame() {
+        for enabled in [true, false] {
+            for pane in [None, Some(Pane::General), Some(Pane::Storage), Some(Pane::Recording), Some(Pane::Storage), Some(Pane::Permissions)] {
+                assert!(!electron_storage(pane, enabled), "Linux must keep the existing Settings presentation for {pane:?}");
+            }
+        }
+    }
 
     #[test]
     fn retired_windows_cannot_close_or_restart_a_reopened_settings_session() {

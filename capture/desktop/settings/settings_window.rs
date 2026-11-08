@@ -215,6 +215,8 @@ struct ViewState {
     video_export: bool,
     retention: Retention,
     captures_size: Option<String>,
+    #[cfg(target_os = "linux")]
+    storage: super::storage::View,
     permissions: Vec<PermissionRow>,
     updates: bool,
     update_check: UpdateCheck,
@@ -387,6 +389,10 @@ pub struct SettingsWindow {
     wordmark: Arc<Image>,
     /// The skill command was just copied (the button says Copied for a moment).
     copied: bool,
+    #[cfg(target_os = "linux")]
+    location_picker: bool,
+    #[cfg(target_os = "linux")]
+    location_picker_error: Option<String>,
 }
 
 fn open(request: Request, cx: &mut App) {
@@ -516,6 +522,10 @@ fn open(request: Request, cx: &mut App) {
                         include_bytes!("../../../shared/assets/brand/apparent-wordmark.png").to_vec(),
                     )),
                     copied: false,
+                    #[cfg(target_os = "linux")]
+                    location_picker: false,
+                    #[cfg(target_os = "linux")]
+                    location_picker_error: None,
                 }
             })
         },
@@ -577,6 +587,15 @@ impl SettingsWindow {
     }
 
     fn set(&self, key: &str, value: serde_json::Value) {
+        #[cfg(target_os = "linux")]
+        if key == "retention" {
+            if let Some(expected) = self.state.as_ref().and_then(|state| state.storage.retention_revision.clone()) {
+                self.act(Action::Storage { command: super::storage::Command::Retention {
+                    preset: value.as_str().map(str::to_owned), expected,
+                } });
+            }
+            return;
+        }
         self.act(Action::Set {
             key: key.to_owned(),
             value,
@@ -1012,7 +1031,7 @@ impl SettingsWindow {
                     view.act(Action::CancelShortcut);
                 }
                 view.menu = None;
-                if pane == Pane::Storage {
+                if !LINUX && pane == Pane::Storage {
                     view.act(Action::Navigate { pane });
                     return;
                 }
@@ -1633,6 +1652,7 @@ impl SettingsWindow {
             ))
     }
 
+    #[cfg(not(target_os = "linux"))]
     fn storage(&self, theme: Theme, state: &ViewState, cx: &mut Context<Self>) -> Div {
         let r = &state.retention;
         let current = r
@@ -1704,6 +1724,106 @@ impl SettingsWindow {
                     .into_any_element(),
                 ],
             ))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn storage(&self, theme: Theme, state: &ViewState, cx: &mut Context<Self>) -> Div {
+        use super::storage::Command;
+        let storage = &state.storage;
+        let mut body = div().flex().flex_col();
+        if let Some(location) = &storage.location {
+            let reset_revision = location.revision.clone();
+            let custom = location.custom;
+            let available = !self.location_picker;
+            body = body
+                .child(div().text_size(px(14.0)).font_weight(FontWeight::MEDIUM).child("Capture location"))
+                .child(caption(theme, &location.display_path, false))
+                .when(location.saved_path.as_ref().is_some_and(|saved| saved != &location.effective_path), |d| {
+                    d.child(caption(theme, &format!("Saved preference: {}", location.saved_path.as_deref().unwrap_or_default()), false))
+                })
+                .when(location.source == "environment", |d| d.child(caption(theme,
+                    "APPARENT_CAPTURES_DIR overrides the saved preference for this process.", false)))
+                .when(location.source == "fallback", |d| d.child(caption(theme,
+                    "The saved folder cannot be used. New captures use the built-in location.", false)))
+                .child(div().flex().flex_wrap().gap(px(8.0)).mt(px(8.0))
+                    .child(button(theme, "settings-location-change", if self.location_picker { "Choosing…" } else { "Change…" }, available)
+                        .when(available, |d| d.on_click(cx.listener(|view, _, _, cx| view.choose_capture_location(cx)))))
+                    .child(button(theme, "settings-location-reset", "Reset", available && custom)
+                        .when(available && custom, |d| d.on_click(cx.listener(move |view, _, _, _| {
+                            view.location_picker_error = None;
+                            view.act(Action::Storage { command: Command::Location { path: None, expected: reset_revision.clone() } });
+                        }))))
+                    .child(button(theme, "settings-show-captures", "Show in Files", available)
+                        .when(available, |d| d.on_click(cx.listener(|view, _, _, _| view.act(Action::ShowCaptures))))))
+                .child(caption(theme, "New captures use this location. Existing captures stay where they are. Nothing is moved.", false));
+        }
+        if let Some(error) = self.location_picker_error.as_ref().or(storage.error.as_ref()) {
+            body = body.child(caption(theme, error, false).text_color(theme.negative()));
+        }
+        let current = state.retention.options.iter()
+            .find(|o| Some(&o.id) == state.retention.preset.as_ref()).map_or("Custom", |o| o.label.as_str());
+        let options: Vec<_> = state.retention.options.iter().map(|o| (o.id.clone(), o.label.clone(), true)).collect();
+        let selected = state.retention.preset.clone();
+        let can_save = storage.retention_revision.is_some() && !self.location_picker;
+        let reset_revision = storage.retention_revision.clone();
+        body = body.child(header(theme, "Retention"))
+            .child(group(theme, vec![row(theme, "Keep recordings", can_save,
+                popup(theme, "settings-retention", current)
+                    .when(can_save, |d| d.on_click(cx.listener(move |view, event: &ClickEvent, _, cx| {
+                        view.open_menu("retention", options.clone(), selected.clone(), event);
+                        cx.notify();
+                    })))) .into_any_element()]))
+            .child(caption(theme, &state.retention.note, false))
+            .child(button(theme, "settings-retention-reset", "Reset retention", can_save && storage.retention_custom)
+                .when(can_save && storage.retention_custom, |d| d.on_click(cx.listener(move |view, _, _, _| {
+                    if let Some(expected) = &reset_revision {
+                        view.act(Action::Storage { command: Command::Retention { preset: None, expected: expected.clone() } });
+                    }
+                }))))
+            .child(caption(theme, "Cleanup waits until recording finishes. After changing the capture folder, restart Apparent so cleanup uses the new folder.", false))
+            .child(header(theme, "Capture-folder usage"));
+        if let Some(usage) = &storage.usage {
+            body = body.child(caption(theme, &format!("{} in captures", usage.formatted), false));
+        } else {
+            body = body.child(caption(theme, storage.usage_error.as_deref().unwrap_or("Calculating folder usage…"), false));
+        }
+        let can_refresh = !self.location_picker && (storage.usage.is_some() || storage.usage_error.is_some() || storage.location.is_none());
+        body.child(button(theme, "settings-storage-refresh", "Refresh Storage", can_refresh)
+            .when(can_refresh, |d| d.on_click(cx.listener(|view, _, _, _| {
+                view.location_picker_error = None;
+                view.act(Action::Storage { command: Command::Refresh });
+            }))))
+            .child(caption(theme, "Logical file size at the last scan, not free disk space.", false))
+    }
+
+    #[cfg(target_os = "linux")]
+    fn choose_capture_location(&mut self, cx: &mut Context<Self>) {
+        if self.location_picker { return; }
+        let Some(expected) = self.state.as_ref().and_then(|state| state.storage.location.as_ref()).map(|location| location.revision.clone()) else { return; };
+        self.location_picker = true;
+        self.location_picker_error = None;
+        let selection = cx.prompt_for_paths(gpui::PathPromptOptions {
+            files: false, directories: true, multiple: false, prompt: Some("Choose".into()),
+        });
+        cx.notify();
+        cx.spawn(async move |this, cx| {
+            let selected = selection.await;
+            // The weak entity and session's presentation generation reject a
+            // picker result arriving after this Settings window has closed.
+            let _ = this.update(cx, |view, cx| {
+                view.location_picker = false;
+                match selected {
+                    Ok(Ok(Some(paths))) if paths.len() == 1 => {
+                        if let Some(path) = paths[0].to_str().filter(|_| paths[0].is_absolute()) {
+                            view.act(Action::Storage { command: super::storage::Command::Location { path: Some(path.into()), expected } });
+                        } else { view.location_picker_error = Some("Choose an absolute local folder.".into()); }
+                    }
+                    Ok(Ok(None)) => {} // Cancel never writes the preference.
+                    _ => view.location_picker_error = Some("Could not choose a folder. Check the desktop FileChooser portal and try again.".into()),
+                }
+                cx.notify();
+            });
+        }).detach();
     }
 
     fn permissions(&self, theme: Theme, state: &ViewState, cx: &mut Context<Self>) -> Div {
