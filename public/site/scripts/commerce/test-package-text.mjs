@@ -7,7 +7,7 @@ import { test } from "node:test"
 import { fileURLToPath } from "node:url"
 
 const site = fileURLToPath(new URL("../../", import.meta.url))
-const heading = "Visual feedback gets lost"
+const heading = "Tell your coding agent what to change"
 const belief = "We believe work should be"
 const canonical = '<link rel="canonical" href="https://app.tryapparent.com/">'
 
@@ -45,7 +45,7 @@ function packageFixture(html) {
 }
 
 test("packages real text across inline markup and entities without rewriting HTML or copying private files", () => {
-  const html = `${canonical}<body><h1 style="display: block">Visual feedback gets lo<span>st</span></h1><h2>We believe work should b&#101;</h2></body>`
+  const html = `${canonical}<body><h1 style="display: block">Tell your coding agent what to cha<span>nge</span></h1><h2>We believe work should b&#101;</h2></body>`
   const result = packageFixture(html)
   assert.equal(result.status, 0, result.stderr)
   assert.equal(result.published, html)

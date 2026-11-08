@@ -41,7 +41,7 @@ for (const route of ['connect', 'connect/device', 'connect/shares', 'hosted', 'h
   const graph = await closure(`/${route}/index.html`)
   assert.doesNotMatch(html, /fonts\.bunny\.net|rel="canonical"|property="og:|name="twitter:/)
   for (const [path, text] of graph) {
-    assert.doesNotMatch(text, /Visual feedback gets lost|pond-hero|pond-demo|pond-team/, `${route}: marketing closure in ${path}`)
+    assert.doesNotMatch(text, /Tell your coding agent what to change|Visual feedback gets lost|pond-hero|pond-demo|pond-team/, `${route}: marketing closure in ${path}`)
   }
   connectGraphs.push(graph)
 }
@@ -237,7 +237,7 @@ try {
       assert.equal(geometry.width, test.width >= 760 ? 720 : (test.width || 1100) > 550 ? Math.min(720, (test.width || 1100) - 40) : test.width - 24)
       assert.equal(geometry.radius, '0px'); assert.equal(geometry.ctaRadius, '0px'); assert.equal(geometry.ctaColor, 'rgb(25, 22, 29)')
       assert.equal(geometry.title, test.width <= 550 ? '32px' : '36px'); assert.match(geometry.font, /Host Grotesk/)
-      assert.equal(geometry.textColor, 'rgb(2, 1, 2)', 'preserve the current marketing cascade text colour')
+      assert.equal(geometry.textColor, 'rgb(25, 22, 29)', 'Connect retains its own semantic foreground; Public palette must not bleed into account pages')
       await page.screenshot({ path: `${evidence}/${test.name}-computer.png`, fullPage: true })
       await computer.focus(); await page.keyboard.press('ArrowRight')
       assert.equal(await agent.getAttribute('aria-selected'), 'true'); assert.equal(await agent.evaluate(e => e === document.activeElement), true)

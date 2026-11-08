@@ -69,6 +69,7 @@ class PagesDeliveryTests(unittest.TestCase):
             root = Path(directory)
             for name, data in [('public/site/dist-apparent/404.html', 'not found'),
                                ('public/site/dist-apparent/_routes.json', '{}'),
+                               ('public/site/dist-apparent/_worker.js', 'checked compiled movie worker'),
                                ('public/site/functions/movie.js', 'function source'),
                                ('public/site/lib/metadata.js', 'fixed metadata'),
                                ('public/site/wrangler.pages.jsonc', '{"name":"apparent-capture"}'),
@@ -80,7 +81,10 @@ class PagesDeliveryTests(unittest.TestCase):
                 self.assertEqual(argv[1:3], ['pages', 'deploy'])
                 self.assertIn('apparent-capture', argv)
                 self.assertEqual((cwd / 'wrangler.jsonc').read_text(), '{"name":"apparent-capture"}')
-                self.assertEqual(sorted(p.name for p in cwd.iterdir()), ['dist-apparent', 'functions', 'lib', 'wrangler.jsonc'])
+                self.assertEqual(sorted(p.name for p in cwd.iterdir()), ['dist-apparent', 'wrangler.jsonc'])
+                self.assertEqual((cwd / 'dist-apparent/_worker.js').read_text(), 'checked compiled movie worker')
+                self.assertIn('--no-bundle', argv)
+                self.assertEqual(argv[0], str(root / 'public/site/node_modules/.bin/wrangler'))
                 self.assertFalse((cwd / '.env').exists())
                 self.assertEqual(env['CLOUDFLARE_ACCOUNT_ID'], pages.ACCOUNT)
             with patch.object(pages, 'ROOT', root), patch.dict(pages.os.environ, {'GITHUB_SHA': 'a' * 40, 'GITHUB_REF': 'refs/heads/main', 'WEBSITE_PAGES_API_TOKEN': 'synthetic'}), patch.object(pages, 'current_main') as current, patch.object(pages.subprocess, 'run', side_effect=deploy) as upload, patch.object(pages, 'verify', return_value={'revision': 'a' * 40}):

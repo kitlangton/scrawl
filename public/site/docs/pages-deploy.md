@@ -16,14 +16,19 @@ locked dependencies installed in each package. From the repository root:
 cd public/site
 APPARENT_PUBLIC_SITE=1 npm run build
 node scripts/site-build/package-apparent.mjs
+task_public_input=$(mktemp -d)
+cp -a dist-apparent/. "$task_public_input/"
+export COMPOSE_PUBLIC_INPUT="$task_public_input"
 node scripts/connect/compose-connect.mjs
 node scripts/pages/prepare-pages.mjs
 node scripts/site-build/verify-composed.mjs
+npm run build:pages-worker
+PAGES_WORKER=dist-apparent/_worker.js node --test scripts/pages/test-pages-video-runtime.ts
 node scripts/pages/prepare-pages-video.mjs
+SITE_ARTIFACT=dist-apparent node --test scripts/pages/test-public-homepage.ts
 ```
 
-Upload only `dist-apparent`. Never upload `dist`, this repository, the snapshot
-checksum file, evidence, private prototypes, pitches, internal feature maps or
+Upload only `dist-apparent`. Never upload `dist`, this repository, evidence, private prototypes, pitches, internal feature maps or
 operator metadata. `404.html` disables Pages' implicit SPA fallback. The preparation
 step checks every input path against the former Caddy public boundary, including
 only the three approved hosted illustrations. `_headers` supplies no-store/noindex
@@ -32,40 +37,40 @@ and share-management documents remain packaged. `_redirects` preserves legacy
 hosted routes and their query strings. Anonymous capability recipients and their
 media/manifest/preview/script/styles remain on the hosted Worker origin, not Pages.
 
-**The live homepage was not a fresh build of main.** The migration imported its
-accepted HTML and retained public assets into `published-homepage/`, bound to
-`published-homepage.sha256.json`. Its baseline was Clanker's resolved
-`apparent-connect-64e15d623a67` release (Connect source
-`64e15d623a67aaab67b9d53dcc7f7c10a091a1e9`), with later approved homepage overlays.
-The homepage HTML SHA-256 was
-`91630e87b68f16641fbae22d8ad64261cb6ef317774ab6407bf395359c469ea8`.
-This is now an explicit, source-controlled public homepage input, not an ongoing
-read from Clanker. Public builds no authenticated source. `compose-connect.mjs`
-validates Public's packaged output and the independent `connect/web/dist` before
-changing its destination: exact six route documents, emitted resource closure and
-five canonical assets only; identical collisions pass and differing bytes refuse.
-Symlinks, nonregular files, private/unexpected paths, missing resources and loopback
-configuration refuse without changing the prior destination. The accepted homepage
-is the sole deliberate differing-byte overlay, bound to the unchanged checksum
-inventory. A deterministic color-only system-appearance adapter combines the
-canonical `shared/ui/src/tokens.css` with `src/styles/system-appearance.css` and
-adds one inline stylesheet to the accepted HTML after checksum validation.
-The snapshot source, layout, scripts and media stay byte-identical.
-`verify-composed.mjs` checks the exact HTML transformation, retained hashes and both final resource graphs
-before existing metadata/video publication. Do not assume editing `src/App`
-alone changes the published homepage. For an intentional homepage change, reconcile
-it into the accepted public input and update the checksum contract in the same PR;
-verify desktop/mobile behavior before publication. A future source-only rewrite
-must prove equivalent design and interactions before retiring this snapshot.
+The homepage is now built directly from Public's TypeScript/React sources. The
+recovered source includes the photo layout, mobile examples, responsive movie
+camera, timeline and frog QR interaction. The old checked-in HTML/JS snapshot and
+compiled-bundle overlay tools are retired; editing the source changes the packaged
+homepage. The latest branding candidate remains under the explicit publication
+review hold in `feature-grid.md`; this recovery does not approve or publish it.
 
-The approved movie exceeds Pages' 25 MiB asset ceiling. A **Pages Function**, not a
+To minimize recovery scope, delivery retains main's existing composed Pages
+arrangement and manual release gates. Public imports no Connect implementation.
+`compose-connect.mjs` consumes the independent browser artifact and checks its
+six documents, resource graph, production API origin and five canonical assets.
+It refuses private paths, symlinks, missing resources and differing collisions
+before changing the destination. `verify-composed.mjs` compares every saved Public
+and Connect byte after metadata preparation; there is no homepage overlay exception.
+Keep `COMPOSE_PUBLIC_INPUT` pointed at the saved Public package until verification
+finishes. The synthetic fixture uses the same boundary with its labelled origin.
+No Cloudflare routing cutover, migration-wide delivery framework or service
+activation is part of this source recovery.
+
+Standalone source and browser checks: `cd public/site && npm run verify`.
+The locked website toolchain owns its movie compiler, workerd regression and Pages
+publisher; it does not install Connect's service to obtain those tools. The manual
+combined workflow still verifies Connect separately before publication.
+
+The approved movie exceeds Pages' 25 MiB asset ceiling. A compiled **Pages Function**, not a
 separate Worker deployment or external origin, serves the existing movie URL from
 small static chunks. It preserves the original bytes, audio, duration and range
 seeking. Its `FixedLengthStream` supplies a real wire `Content-Length`: a manual
 header on an ordinary stream is ignored by workerd, which can make the custom-domain
 cache replace byte-range responses with full `200` responses and break seeking.
 The workerd HTTP regression checks this boundary; Node response-header tests alone
-do not. Only that exact movie path invokes the Function; other website assets
+do not. Verification emits `dist-apparent/_worker.js`, exercises that exact compiled worker
+in workerd and in browser playback, and publishes it with `--no-bundle`. Only that
+exact movie path invokes the Function; other website assets
 remain static. The account stays on its existing plan. Function requests consume
 the existing Workers Free daily allowance; no paid service is activated. The project
 is configured fail-closed. At quota exhaustion the movie may be unavailable; static
@@ -166,9 +171,9 @@ site.
 
 ## Verification
 
-Run existing public-site tests before the preservation overlay, then the Pages
-package/video tests, CD Python tests and Connect's credentialed synthetic browser
-suite. On both the immutable deployment and custom hostname run the recorded-video
+Run Public source/browser tests before composition, then preservation checks,
+compiled-worker playback, Pages package/video tests, CD Python tests and Connect's
+credentialed synthetic browser suite. On both the immutable deployment and custom hostname run the recorded-video
 browser verifier and inspect desktop/mobile screenshots, frog jumps/waves, download
 destinations and all lazy feature frames. Check 206 Content-Range and full movie
 SHA-256. Check noindex/no-store on Connect, preserved legacy query strings, no
@@ -176,3 +181,14 @@ private-route fallback, local fonts and all referenced assets. Anonymous live
 session/CORS and sign-in redirects can be checked without accounts. Real Google
 sign-in, authenticated cookies, device approval and logout require human presence;
 never invent accounts or approve a device merely to finish deployment acceptance.
+
+## Website analytics
+
+The recovered website helper preserves its own affirmative visitor choice,
+withdrawal and GPC/DNT handling. Its build uses `PUBLIC_POSTHOG_ENABLED`,
+`PUBLIC_POSTHOG_TOKEN`, `PUBLIC_POSTHOG_HOST` and `PUBLIC_POSTHOG_ENVIRONMENT`.
+Capability defaults enabled, but absent/invalid public ingestion configuration
+fails closed. This recovery does not change repository/provider variables or
+Connect account analytics. Verification uses intercepted synthetic events; no
+fixture event is sent to PostHog. Production configuration and publication remain
+subject to the existing gates.

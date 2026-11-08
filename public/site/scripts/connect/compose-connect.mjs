@@ -110,7 +110,7 @@ export function resourceGraph(files, starts, connect = false) {
     if (!/\.(?:html|js|css)$/.test(file)) continue
     const text = files.get(file).toString('utf8')
     if (sensitive.test(text)) throw Error(`Private content in artifact: ${file}`)
-    if (connect ? /Visual feedback gets lost|pond-hero|pond-demo|pond-team|fonts\.bunny\.net/.test(text) : /X-CSRF-Token|hosted-panel|hosted-page/.test(text)) throw Error(`Wrong resource owner: ${file}`)
+    if (connect ? /Tell your coding agent what to change|Visual feedback gets lost|pond-hero|pond-demo|pond-team|fonts\.bunny\.net/.test(text) : /X-CSRF-Token|hosted-panel|hosted-page/.test(text)) throw Error(`Wrong resource owner: ${file}`)
     if (file.endsWith('.html')) {
       function visit(node) {
         const attrs = Object.fromEntries((node.attrs || []).map(a => [a.name, a.value]))

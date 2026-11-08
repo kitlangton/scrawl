@@ -2,7 +2,7 @@
 // Never copy dist wholesale: it also contains Apparent's update feed, release
 // files, agent instructions, and the unlinked feature map.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
-import { dirname, join } from "node:path"
+import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"
 import { packagePageText } from "./package-page-text.mjs"
 import { hasUpstreamLinks } from "../browser-proof/upstream-link-guard.mjs"
@@ -10,14 +10,18 @@ import { hasExpectedHomepageCanonical } from "./expected-homepage-canonical.mjs"
 
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "../..")
-const dist = join(site, "dist")
-const out = join(site, "dist-apparent")
+const dist = process.env.PUBLIC_BUILD_DIR || join(site, "dist")
+const out = process.env.PUBLIC_PACKAGE_OUTPUT || join(site, "dist-apparent")
+for (const input of [dist, join(site, 'public')]) {
+  const source = resolve(input), destination = resolve(out)
+  if (destination === source || destination.startsWith(source + sep) || source.startsWith(destination + sep)) throw new Error('Public package output overlaps a source input')
+}
 const html = readFileSync(join(dist, "index.html"), "utf8")
 const text = packagePageText(html)
 if (hasUpstreamLinks(html)) {
   throw new Error("Refusing to publish upstream download or canonical links")
 }
-if (!hasExpectedHomepageCanonical(html) || !text.includes("Visual feedback gets lost") || !text.includes("We believe work should be")) {
+if (!hasExpectedHomepageCanonical(html) || !text.includes("Tell your coding agent what to change") || !text.includes("We believe work should be")) {
   throw new Error("Refusing to package a stale or unrelated build")
 }
 rmSync(out, { recursive: true, force: true })

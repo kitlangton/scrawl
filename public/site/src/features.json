@@ -22,11 +22,58 @@
   ],
   "features": [
     {
+      "id": "site-frog-water-qr",
+      "group": "install",
+      "name": "Homepage frog water QR Easter egg",
+      "says": "Two quick clicks, taps or keyboard activations on the greeting frog trigger a backflip, belly-flop and water ripple QR reveal for app.tryapparent.com. A single click still waves. Escape and Back to the pond restore focus and scrolling. Reduced motion reveals the QR immediately.",
+      "status": "main",
+      "added": "2026-11-06",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "docs": [
+        "public/site/docs/feature-grid.md"
+      ]
+    },
+    {
+      "id": "public-website-analytics",
+      "added": "2026-11-08",
+      "group": "settings",
+      "name": "Public website analytics choice",
+      "says": "The website offers a separate affirmative analytics choice when its public EU ingestion configuration is valid. It respects GPC/DNT and withdrawal; no recording content or account identity is sent.",
+      "status": "main",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "note": "Browser helper only. Missing configuration fails closed. No provider settings, production token or Connect account analytics are changed by the source recovery.",
+      "docs": [
+        "public/site/docs/pages-deploy.md#website-analytics"
+      ]
+    },
+    {
+      "id": "public-demo-viewing",
+      "added": "2026-11-06",
+      "group": "agent",
+      "name": "Public recording demo views",
+      "says": "The public homepage has a segmented keyboard-seekable timeline and named chapters. On phones, an enlarged viewport smoothly follows the approved recording’s observed cursor track with captions outside the moving crop. Desktop, reduced-motion and fullscreen playback retain the complete frame. The QR splash wash is 90% opaque while the QR image stays opaque.",
+      "status": "main",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "note": "Public browser presentation only; no desktop capture or platform support change. Local review candidate; not deployment evidence.",
+      "docs": [
+        "public/site/docs/feature-grid.md"
+      ]
+    },
+    {
       "id": "shared-system-appearance",
       "added": "2026-11-02",
       "group": "platforms",
       "name": "System light and dark appearance",
-      "says": "Frontend surfaces share one semantic theme and follow system light/dark appearance while open: Electron frontend, Connect account and recording recipient pages, and public pages. Native legacy surfaces and captured media keep their existing rendering. Browser checks cover Chromium and Firefox; native platform acceptance remains separate.",
+      "says": "Frontend surfaces share one semantic theme and follow system light/dark appearance while open: Electron frontend, Connect account and recording recipient pages, and public pages. Public uses Paper/Carbon with Stock grouped fields in light mode, and Carbon/Paper with muted Lilac/Carbon grouped fields in dark mode. Feature illustration chrome shares those semantic roles; original media keeps its pixels. Native legacy surfaces and captured media keep their existing rendering. Browser checks cover Chromium and Firefox; native platform acceptance remains separate.",
       "status": "main",
       "platforms": [
         "mac",
@@ -102,7 +149,7 @@
       "id": "site-feature-grid",
       "group": "install",
       "name": "Animated homepage feature explanations",
-      "says": "Four illustrative animations after the product video explain whiteboard feedback, the multimedia timeline, clipboard handoff, and an agent showing its changes in a captioned walkthrough. Animations pause offscreen and respect reduced motion.",
+      "says": "Four illustrative explanations after the product video cover whiteboard feedback, the multimedia timeline, clipboard handoff, and an agent showing its changes in a captioned walkthrough. Desktop animations have a visible pause control, pause offscreen and respect reduced motion. Phones use static semantic examples with readable labels instead of scaled desktop canvases.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": [
@@ -201,35 +248,49 @@
       "docs": ["capture/desktop/docs/native-launch.md"]
     },
     {
-      "id": "site-team",
+      "id": "site-homepage-photos",
       "group": "install",
-      "name": "Homepage team",
-      "says": "The public homepage shows Olivia and Simon with uncropped portraits and links each affiliation logo to its organization.",
-      "status": "review:#138",
-      "added": "2026-10-30",
-      "platforms": ["mac", "linux"],
-      "pr": 138,
-      "docs": ["public/site/docs/clanker-deploy.md"]
+      "name": "Homepage photos",
+      "says": "The public homepage shows Simon dancing and Olivia cuddling a dog, with handwritten activity annotations.",
+      "status": "main",
+      "added": "2026-11-03",
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "docs": [
+        "public/site/docs/feature-grid.md"
+      ]
     },
     {
       "id": "site-frog-footer",
       "group": "install",
-      "name": "Frog theatre feedback footer",
-      "says": "Paper fades into the frog theatre behind a feedback invitation. Try first attempts apparent://open, then the same button offers an explicit second-click platform download; no installation detection or automatic download. Hero and footer share a rounded button style. The compact Berlin credit respects reduced motion; the LinkedIn chooser does not record or send feedback.",
+      "name": "Homepage feedback footer",
+      "says": "A playful Try apparent invitation beneath the photos first requests apparent://open, then offers an explicit second-click download using the hero platform/CPU selection. The LinkedIn chooser links directly to both profiles. There is no installation detection, automatic download, capture or feedback submission. Actions use square brand frames.",
       "status": "main",
       "added": "2026-10-30",
-      "platforms": ["mac", "linux"],
-      "docs": ["public/site/docs/footer-release.md"]
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "docs": [
+        "public/site/docs/footer-release.md"
+      ]
     },
     {
-      "id": "site-belief-pond",
+      "id": "site-belief-statement",
       "group": "install",
-      "name": "Interactive homepage belief",
-      "says": "Scroll directly draws and reverses the work circle and enjoyable highlight. Me too sends one frog into a group hug; reduced motion skips travel. Mobile keeps text and controls inset with a compact text-to-frog gap.",
+      "name": "Homepage belief statement",
+      "says": "The belief statement above the photos keeps the original wording, hand-drawn work circle and enjoyable highlight at desktop and mobile sizes.",
       "status": "main",
       "added": "2026-10-30",
-      "platforms": ["mac", "linux"],
-      "docs": ["public/site/docs/belief-release.md"]
+      "platforms": [
+        "mac",
+        "linux"
+      ],
+      "docs": [
+        "public/site/docs/belief-release.md"
+      ]
     },
     {
       "id": "linux-h264-decoder-check",

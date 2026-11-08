@@ -19,9 +19,9 @@ Cloudflare. That container also serves unrelated sites. It and its volumes,
 deployment services remain unchanged except for removing the capture site's
 serving block. Never remove the shared proxy as capture-site cleanup.
 
-The former manual publication and symlink-rollback procedure is intentionally
-removed. The accepted public snapshot is now source-controlled; follow
-`pages-deploy.md` to reconcile an overlay without losing approved homepage bytes.
+The former manual publication and symlink-rollback procedure is retired.
+The homepage is built from reviewed Public source; follow `pages-deploy.md` for
+source/Connect artifact preservation and the existing manual Pages gates.
 
 ## Homepage marker guard
 
@@ -52,16 +52,13 @@ Chapter times are final-export seconds: Start 0, Capture 3.733333, Sketch 15.433
 Handoff 27.92, Result 48.7, Try it 55.7. Controls follow the real video clock.
 
 The Pages package boundary includes only the approved movie, poster and public
-assets. Preserve the accepted snapshot's combined markup and CSS when changing
-it; copying images alone does not preserve a homepage. Record base and overlay
-commits privately and update the source-controlled snapshot checksum contract.
+assets. Verify the source-built desktop/mobile layout and movie interactions
+before publication. The compiled-bundle overlay and snapshot are retired.
 
 After building and packaging, run the source and artifact Node tests with
-`node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.mjs scripts/browser-proof/test-video-demo.mjs`.
-The belief/footer overlay and browser scripts require separate `SITE_BASELINE` or
-`SITE_ARTIFACT`/`SITE_EVIDENCE` inputs; the wildcard is not a standalone suite.
-Against a
-server that supports HTTP byte ranges, run
+`node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.ts scripts/browser-proof/test-video-demo.ts`.
+`npm run verify` runs the standalone source, theme and prepared-movie checks.
+Against a server that supports HTTP byte ranges, run
 `node scripts/browser-proof/verify-video-demo-browser.mjs <URL> <private evidence directory>`.
 `CHROME_PATH` can select an existing Chrome installation. The browser check covers
 first-load chapter seeking, play/pause, replay, all chapters, sound, pointer and
