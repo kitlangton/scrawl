@@ -31,9 +31,7 @@ jobs:
       - name: Test OCR, release fixture and disposable-runner contracts
         run: |
           python3 capture/desktop/scripts/linux/updater/test-updater-gui.py
-          python3 enablement/native/linux/test-gui-vm.py
-          node --experimental-strip-types --experimental-vm-modules --test enablement/native/linux/fixture-closure.test.ts
-          python3 capture/desktop/scripts/linux/gui/test-capture-smoke.py
+          node --experimental-strip-types enablement/native/linux/contracts.ts
       - name: Check driver syntax
         run: |
           python3 -m py_compile enablement/native/linux/gui-vm.py enablement/native/linux/gui-vm-reaper.py capture/desktop/scripts/linux/updater/updater-gui.py capture/desktop/scripts/linux/updater/updater-fixture.py enablement/native/linux/test-gui-vm.py

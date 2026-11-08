@@ -35,7 +35,7 @@ test('actual workflow gate rejects failures, cancellation and unexpected skips',
   assert(step, 'selected-execution gate exists')
   const script = step.split('        run: |\n')[1]?.split('\n').map(line => line.replace(/^          /, '')).join('\n')
   assert(script?.includes('test "$CONTRACTS"'), 'executable gate exists')
-  const env = { ...process.env, CONTRACTS: 'success', HAS_READY: 'true', PRODUCER: 'skipped', PR: 'success', EVENT: 'pull_request' }
+  const env = { ...process.env, CONTRACTS: 'success', NATIVE_DRIVER_CONTRACTS: 'success', HAS_READY: 'true', PRODUCER: 'skipped', PR: 'success', EVENT: 'pull_request' }
   const run = (overrides: Record<string, string>) => spawnSync('bash', ['-e', '-c', script!], { env: { ...env, ...overrides } }).status
   assert.equal(run({}), 0)
   assert.equal(run({ EVENT: 'push', PRODUCER: 'success', PR: 'skipped' }), 0)
@@ -43,6 +43,10 @@ test('actual workflow gate rejects failures, cancellation and unexpected skips',
   for (const PR of ['failure', 'cancelled', 'skipped']) assert.notEqual(run({ PR }), 0)
   for (const PRODUCER of ['failure', 'cancelled', 'skipped']) assert.notEqual(run({ EVENT: 'push', PRODUCER }), 0)
   for (const CONTRACTS of ['failure', 'cancelled', 'skipped']) assert.notEqual(run({ CONTRACTS }), 0)
+  for (const NATIVE_DRIVER_CONTRACTS of ['failure', 'cancelled', 'skipped', '']) {
+    assert.notEqual(run({ NATIVE_DRIVER_CONTRACTS }), 0)
+    assert.notEqual(run({ NATIVE_DRIVER_CONTRACTS, HAS_READY: 'false', PR: 'skipped' }), 0)
+  }
   assert.notEqual(run({ HAS_READY: '' }), 0)
 })
 

@@ -53,6 +53,47 @@ cleanup. Local Paste needs a real receiver when its OS handoff changes. Reuse
 existing valid results; do not edit another owner's active candidate to split its
 tests. Preserve actual output inspection when output changes are exercised.
 
+## Owner proof commands
+
+Install each package's locked dependencies as its owner documentation requires.
+These are maintained entrypoints, not a single all-stream qualification command.
+CI executes the selected package checks; their scope does not expand to native
+effects merely because a job is green.
+
+| Owner | Maintained command from repository root | Claim and relevant invalidation |
+|---|---|---|
+| Enablement | `node --experimental-strip-types enablement/native/linux/contracts.ts` | Launch-free runner, staging, retention and scenario contracts. Recheck changed driver/fixture inputs; no real guest or product claim. |
+| Engine | `npm --prefix engine/sdk run typecheck` and `npm --prefix engine/sdk test`; native producer commands in [capture delivery](../../../engine/delivery/capture/README.md) | SDK/provider/package contracts. Changed capture/audio/input mechanisms need their focused native effect proof; a producer build alone is insufficient. |
+| Record | `npm --prefix record run typecheck`, `npm --prefix record test`, `npm --prefix record run test:package` | Headless workflow, output and package compatibility. Assess changed policy/schema/formatter inputs and separately inspect applicable real original bundles. |
+| Onboarding | `npm --prefix onboarding run typecheck` and `npm --prefix onboarding test` | Journey/progress/persistence contracts. Setup changes need affected installed/window seams; they do not invalidate unchanged Engine audio proof. |
+| Platform | `npm --prefix composition/app run check` and `npm --prefix composition/app run test:electron` | Composition and Electron fixtures. Native permission, focus, clipboard, input and startup effects require the affected real seam. |
+| Agent | `npm --prefix agent test` | Headless consumer/inspection contracts. Assess changed readers/CLI and inspect genuine output separately; no capture effect claim. |
+
+Keep each remaining native claim beside its owner with its executable command,
+candidate/runtime inputs, explicit observations and failed/UNRUN gates. Reuse
+proof when those relevant inputs and coverage remain compatible; a new SHA alone
+does not invalidate it. Private evidence stays private, but the maintained
+scenario and required input contract belong in the repository. A new scenario
+must exercise the actual supported app/provider route; the legacy GUI recipe
+below does not qualify the new assembled Electron app.
+
+For an assembled recording smoke, retain the necessary same-recording chain:
+normal entry (genuinely defer setup if needed), screen/microphone, one visible
+stroke, Stop, original facts/Saved, explicit Copy and a real isolated receiver,
+then owned normal cleanup. Keep Resume/Replay/remembered setup, Board variants
+and startup refusal as focused cases unless a demonstrated state dependency
+requires a join. Recovery from the original recording still needs that original
+state; splitting cases is not permission to fabricate it or omit acceptance.
+Existing reviewed/frozen cases may finish their accepted contract; reorganizing
+verification does not require restarting them or clearing consumed attempts.
+
+Use actual phase timings to diagnose slowness, keeping enclosing/nested durations
+and timeout ceilings distinct. Reconcile engineering timeouts with the original
+job deadline, expiry and cleanup reserve; ask only for a genuinely uncovered
+human/resource/access/spend decision. Routine cases do not require a private
+execution binder, an ACK protocol or a new supervisor. Review any added mechanism
+against its required observation and the existing runner before extending it.
+
 ## Transition and publication
 
 This is the governing proof-selection policy now, including for in-flight work.
@@ -89,8 +130,8 @@ to this command or substitute the separate timed `record --window` recorder:
 that would test a different path. On Omarchy/Hyprland the normal screen path
 uses ScreenCast/PipeWire and can require native portal consent. X11 window
 capture support elsewhere in the backend does not change this CLI contract.
-See [capture control](../../capture/engine/docs/capture.md#agent-control-of-the-running-gui) and
-[Linux capture limits](linux.md#picker-and-portal-limits).
+See [capture control](../../engine/docs/capture.md#agent-control-of-the-running-gui) and
+[Linux capture limits](linux/linux.md#picker-and-portal-limits).
 
 The scene uses Python's stdlib ctypes and `libX11.so.6`, not Tk, a browser,
 xterm or a package install. It changes background, text and a white block twice

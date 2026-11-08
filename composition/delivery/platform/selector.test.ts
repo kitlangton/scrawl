@@ -21,6 +21,9 @@ test('maps owned inputs, shared inputs, broad inputs and unknown paths', () => {
   assert.deepEqual(selectComponents(['shared/config-native/a.rs']), ['platform-config'])
   assert.deepEqual(selectComponents(['composition/native-host/a.ts']), ['app-shell'])
   assert.deepEqual(selectComponents(['unrelated/file.ts']), [])
+  // These paths trigger Platform's launch-free driver job, not app packaging.
+  for (const path of ['enablement/native/linux/gui-vm.py', 'enablement/native/linux/contracts.ts', 'capture/desktop/scripts/linux/gui/capture-smoke.py'])
+    assert.deepEqual(selectComponents([path]), [], path)
   for (const path of ['LICENSE', 'composition/delivery/cli.ts', 'composition/architecture/a.ts', '.github/actions/runtime-budget/action.yml', 'enablement/verification/workflow-budget.ts', '.github/workflows/stream-platform-config.yml', '.github/workflows/stream-platform.yml', '.github/workflows/stream-app-shell.yml', '.github/actions/delivery-contracts/action.yml', '.github/actions/delivery-component/action.yml'])
     assert.deepEqual(selectComponents([path]), ['platform-config', 'platform-resources', 'app-shell'], path)
 })

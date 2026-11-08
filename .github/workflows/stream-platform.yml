@@ -16,6 +16,8 @@ on:
       - 'LICENSE'
       - 'shared/resources/**'
       - 'enablement/native/owned-processes.ts'
+      - 'enablement/native/linux/**'
+      - 'capture/desktop/scripts/linux/gui/**'
       - '.github/workflows/verification-platform.yml'
       - 'composition/app/**'
       - 'composition/native-host/**'
@@ -37,6 +39,8 @@ on:
       - 'LICENSE'
       - 'shared/resources/**'
       - 'enablement/native/owned-processes.ts'
+      - 'enablement/native/linux/**'
+      - 'capture/desktop/scripts/linux/gui/**'
       - '.github/workflows/verification-platform.yml'
       - 'composition/app/**'
       - 'composition/native-host/**'
@@ -47,6 +51,26 @@ permissions:
 env:
   APPARENT_DELIVERY_WORKFLOW_PATH: '.github/workflows/stream-platform.yml'
 jobs:
+  native-driver-contracts:
+    # The agent whose run hits the limit owns optimization; never raise it.
+    name: Native driver contracts (no GUI execution)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.4'
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install disk-image fixture tools (no KVM required)
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-utils
+      - name: Check maintained runner, staging and scenario contracts
+        run: node --experimental-strip-types enablement/native/linux/contracts.ts
+
   contracts:
     # The agent whose run hits the limit owns optimization; never raise it.
     name: deliver / Delivery contracts
@@ -164,7 +188,7 @@ jobs:
     permissions:
       contents: read
       actions: read
-    needs: [contracts, stream, verify-pr]
+    needs: [native-driver-contracts, contracts, stream, verify-pr]
     if: always()
     runs-on: ubuntu-24.04
     timeout-minutes: 15
@@ -180,8 +204,10 @@ jobs:
           PRODUCER: ${{ needs.stream.result }}
           PR: ${{ needs.verify-pr.result }}
           EVENT: ${{ github.event_name }}
+          NATIVE_DRIVER_CONTRACTS: ${{ needs.native-driver-contracts.result }}
         run: |
           test "$CONTRACTS" = success
+          test "$NATIVE_DRIVER_CONTRACTS" = success
           if [ "$HAS_READY" = true ]; then
             if [ "$EVENT" = pull_request ]; then test "$PR" = success; else test "$PRODUCER" = success; fi
           else
