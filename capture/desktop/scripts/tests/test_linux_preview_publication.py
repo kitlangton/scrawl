@@ -333,10 +333,10 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
         group = concurrency.split("  group: ", 1)[1].splitlines()[0]
 
-        def lane(event, *, verify=False, publish=False, tag='', ref='refs/heads/main'):
+        def lane(event, *, verify=False, publish=False, tag='', ref='refs/heads/main', bridge=''):
             values = {'github.event_name': event, 'github.ref': ref,
                       'inputs.verify_only': verify, 'inputs.publish_main': publish,
-                      'inputs.tag': tag}
+                      'inputs.tag': tag, 'inputs.bridge_commit': bridge}
 
             def evaluate(match):
                 expression = match[1].strip()
@@ -367,6 +367,12 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         verify = lane('workflow_dispatch', verify=True)
         arrive('verify V', verify)
         arrive('verify W', verify)
+        bridge = lane('workflow_dispatch', bridge=OTHER_SHA)
+        self.assertNotEqual(bridge, main)
+        self.assertEqual(lane('workflow_dispatch', bridge=NEW_SHA), bridge,
+                         'all compatibility publishers must serialize together')
+        arrive('bridge A', bridge)
+        arrive('bridge B', bridge)
         self.assertEqual(running[main], 'push A')
         self.assertEqual(pending[main], 'push B')
         self.assertEqual(running[verify], 'verify V')
@@ -375,6 +381,8 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         arrive('manual D', lane('workflow_dispatch', publish=True))
         self.assertEqual(running[main], 'push A')
         self.assertEqual(pending[main], 'manual D')
+        self.assertEqual(running[bridge], 'bridge A')
+        self.assertEqual(pending[bridge], 'bridge B', 'canonical publication cannot evict a pending bridge')
         cancel = concurrency.split('  cancel-in-progress: ', 1)[1].splitlines()[0]
         self.assertEqual(cancel, 'false')
 

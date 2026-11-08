@@ -106,7 +106,7 @@ retain the build/package logs alongside the evidence.
 
 `--channel main` persists Main in the private config and keeps the same loading,
 HTTP failure/retry, checksum, staging, Later, Escape and restart assertions.
-Startup advertises `linux-main-<source HEAD>` matching the embedded revision;
+Startup advertises `linux-main-v2-<source HEAD>` matching the embedded revision;
 no AppImage may be downloaded. The fixture serves the canonical paginated
 GitHub releases API: unrelated stable releases on page 1, the usable Main
 prerelease on page 2. Page 1 has 100 entries; the partial second page ends discovery. Tags use `linux-main-v2-<sha>`. Asset URLs retain the canonical GitHub

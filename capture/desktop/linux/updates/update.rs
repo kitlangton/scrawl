@@ -15,6 +15,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const REPO: &str = "tryapparent/apparent";
+// The pre-signing tip and its last published compatibility bridge. These
+// histories stay out of Main; only exact-tree release bridges may cross them.
+const LEGACY_MAIN: [&str; 2] = ["a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a", "1a55d5ebe05c948211ff74356c00b8dbfe58ecc6"];
 static CHECK: Mutex<()> = Mutex::new(());
 
 pub fn set_channel_in(path: &Path, channel: &str) -> Result<()> {
@@ -471,6 +474,34 @@ fn main_advances(current: Option<&str>, candidate: &Candidate, fetch: &impl Fn(&
     }
 }
 
+/// Legacy updaters record a bridge ID while executing the unchanged canonical
+/// build. Authenticate that exact mapping before checking normal forward ancestry.
+fn main_advances_from_bridge(current: Option<&str>, candidate: &Candidate, compiled: Option<&str>,
+    fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<bool>
+{
+    let ordinary = main_advances(current, candidate, fetch);
+    if ordinary.is_ok() || candidate.channel != "main" { return ordinary }
+    let (Some(current), Some(compiled)) = (current, compiled) else { return ordinary };
+    if current == compiled { return ordinary }
+    ensure!([current, compiled].iter().all(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())),
+        "invalid bridge revision");
+    let commit = |sha: &str| -> Result<serde_json::Value> {
+        let body = fetch(&format!("https://api.github.com/repos/{REPO}/git/commits/{sha}"))?;
+        let value: serde_json::Value = serde_json::from_slice(&body)?;
+        ensure!(value["sha"].as_str() == Some(sha), "unexpected bridge commit identity");
+        Ok(value)
+    };
+    let bridge = commit(current)?;
+    ensure!(bridge["parents"].as_array().is_some_and(|parents| parents.len() == 2)
+        && bridge["parents"][0]["sha"].as_str().is_some_and(|parent| LEGACY_MAIN.contains(&parent))
+        && bridge["parents"][1]["sha"].as_str() == Some(compiled), "not a known Main compatibility bridge");
+    let source = commit(compiled)?;
+    let tree = source["tree"]["sha"].as_str().context("missing bridge source tree")?;
+    ensure!(tree.len() == 40 && tree.bytes().all(|b| b.is_ascii_hexdigit())
+        && bridge["tree"]["sha"].as_str() == Some(tree), "bridge differs from the verified build");
+    main_advances(Some(compiled), candidate, fetch)
+}
+
 fn target() -> Result<Option<PathBuf>> {
     let Some(path) = std::env::var_os("APPIMAGE").map(PathBuf::from) else { return Ok(None) };
     let meta = fs::symlink_metadata(&path)?;
@@ -602,7 +633,7 @@ fn check() -> Result<bool> {
         None => option_env!("GITHUB_SHA").filter(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())),
         _ => None, // An explicit channel switch keeps its existing semantics.
     };
-    if !main_advances(current, &candidate, &|url| get(url, None))? { return Ok(false) }
+    if !main_advances_from_bridge(current, &candidate, option_env!("GITHUB_SHA"), &|url| get(url, None))? { return Ok(false) }
     install(&candidate, &image)?;
     super::super::integration::shell::notify("Apparent updated", "The new version will start the next time you open Apparent. Your previous AppImage is kept beside it.");
     Ok(true)
@@ -695,6 +726,45 @@ mod tests {
         assert!(transaction_lock(&image).is_err());
         assert_eq!(fs::read(&other).unwrap(), b"untouched");
         fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn signing_bridge_recovers_only_the_exact_verified_source() {
+        let bridge = "b".repeat(40);
+        let source = "c".repeat(40);
+        let tree = "d".repeat(40);
+        let next = "e".repeat(40);
+        let candidate = Candidate { id: next.clone(), channel: "main", url: String::new(), sha256: String::new() };
+        for legacy in LEGACY_MAIN {
+            for fault in ["", "parent", "tree", "identity", "offline", "extra-parent", "rollback"] {
+                let fetch = |url: &str| -> Result<Vec<u8>> {
+                    let value = if url.contains("/compare/") {
+                        let base = if url.contains(&format!("/{bridge}...")) { &bridge } else { &source };
+                        serde_json::json!({"base_commit":{"sha":base}, "status":
+                            if base == &bridge { "diverged" } else if fault == "rollback" { "behind" } else { "ahead" }})
+                    } else if url.ends_with(&format!("/git/commits/{bridge}")) {
+                        if fault == "offline" { anyhow::bail!("offline") }
+                        let mut parents = vec![serde_json::json!({"sha":if fault == "parent" { &source } else { legacy }}), serde_json::json!({"sha":source})];
+                        if fault == "extra-parent" { parents.push(serde_json::json!({"sha":next})); }
+                        serde_json::json!({"sha":if fault == "identity" { &source } else { &bridge }, "parents":parents,
+                            "tree":{"sha":if fault == "tree" { &source } else { &tree }}})
+                    } else {
+                        assert!(url.ends_with(&format!("/git/commits/{source}")));
+                        serde_json::json!({"sha":source,"tree":{"sha":tree}})
+                    };
+                    Ok(serde_json::to_vec(&value)?)
+                };
+                let result = main_advances_from_bridge(Some(&bridge), &candidate, Some(&source), &fetch);
+                match fault {
+                    "" => assert!(result.unwrap()),
+                    "rollback" => assert!(!result.unwrap()),
+                    _ => assert!(result.is_err(), "{fault}"),
+                }
+            }
+        }
+        // Once D is staged while bridge C is running, a repeat check must use D.
+        assert!(!main_advances_from_bridge(Some(&next), &candidate, Some(&source), &|_| panic!("staged identity needs no bridge lookup")).unwrap());
+        assert!(main_advances_from_bridge(Some(&bridge), &candidate, None, &|_| anyhow::bail!("no embedded source")).is_err());
     }
 
     #[test]
