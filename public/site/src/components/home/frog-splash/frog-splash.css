@@ -1,0 +1,41 @@
+.pond-lounging-frog{touch-action:manipulation}
+.frog-splash-dialog{position:fixed;inset:0;width:100%;height:100%;max-width:none;max-height:none;margin:0;padding:0;border:0;background:transparent;color:var(--apparent-site-carbon);overflow:hidden;font-family:'Host Grotesk',sans-serif}
+.frog-splash-dialog::backdrop{background:transparent}
+.splash-flying-frog{position:fixed;object-fit:contain;image-rendering:pixelated;pointer-events:none;z-index:2}
+.splash-impact{position:absolute;left:var(--impact-x);top:var(--impact-y);width:300px;height:225px;color:var(--apparent-site-lilac);transform:translate(-50%,-86%) scale(0);transform-origin:50% 88%;opacity:0}
+.splash-flood{position:absolute;left:var(--impact-x);top:var(--impact-y);width:120px;height:80px;margin:-40px -60px;background:var(--apparent-site-lilac);border-radius:48% 52% 42% 58%;transform:scale(0);opacity:0;filter:blur(8px);transition:transform 1400ms,opacity 700ms,filter 1400ms cubic-bezier(.36,.04,.28,1)}
+.splash-drops{position:absolute;left:var(--impact-x);top:var(--impact-y)}
+.splash-drops i{position:absolute;width:12px;height:22px;border-radius:50%;background:var(--apparent-site-lilac);opacity:0}
+.splash-message{position:absolute;inset:0;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:40px;padding:32px;text-align:center;opacity:0;visibility:hidden;transform:translateY(16px);transition:opacity 180ms,transform 180ms}
+.splash-destination{font-size:clamp(36px,8vw,112px);font-weight:700;letter-spacing:-.05em;line-height:1.05;color:inherit;text-decoration:none;max-width:100%}
+.splash-destination:hover{text-decoration:underline;text-decoration-thickness:3px;text-underline-offset:10px}
+.splash-destination span{font-size:.55em;vertical-align:middle}
+.splash-close{font:inherit;font-size:18px;min-height:48px;padding:12px 24px;color:inherit;background:transparent;border:1px solid currentColor;cursor:pointer}
+.splash-close:hover{background:var(--apparent-site-paper)}
+.frog-splash-dialog :focus-visible{outline:3px solid var(--apparent-site-signal);outline-offset:8px}
+.frog-splash-dialog[data-stage=impact] .splash-impact{animation:pond-impact 750ms ease-out both}
+.frog-splash-dialog:is([data-stage=flood],[data-stage=reveal]) .splash-flood{transform:scale(45);opacity:.9;filter:blur(0)}
+.splash-close{background:var(--apparent-site-lilac)}
+.frog-splash-dialog:is([data-stage=impact],[data-stage=flood]) .splash-drops i{animation:pond-droplet 700ms ease-out both;animation-delay:calc(var(--i)*12ms)}
+.frog-splash-dialog[data-stage=reveal] .splash-message{opacity:1;visibility:visible;transform:translateY(0)}
+@keyframes pond-impact{0%{opacity:1;transform:translate(-50%,-86%) scale(.1,.05)}40%{opacity:1;transform:translate(-50%,-86%) scale(1.1,1)}100%{opacity:0;transform:translate(-50%,-66%) scale(1.4,.55)}}
+@keyframes pond-droplet{0%{opacity:1;transform:translate(0,0) scale(.4)}75%{opacity:1}100%{opacity:0;transform:translate(var(--dx),var(--dy)) rotate(35deg) scale(.6)}}
+@media(prefers-reduced-motion:reduce){.frog-splash-dialog *{animation:none!important;transition:none!important}}
+
+.splash-destination{display:flex;flex-direction:column;align-items:center;gap:clamp(8px,2vh,20px);letter-spacing:0;font-weight:500;font-size:18px}.splash-destination img{display:block;width:min(296px,70vw,45vh);height:auto}.splash-destination span{font-size:18px}.splash-message{gap:clamp(12px,3vh,32px);padding:clamp(12px,3vh,32px)}
+
+/* Belly-flop: a flat puddle and concentric shockwaves lead the color wash. */
+.splash-puddle{position:absolute;left:var(--impact-x);top:var(--impact-y);width:180px;height:44px;background:var(--apparent-site-lilac);border:1px solid var(--apparent-site-signal);border-radius:50%;transform:translate(-50%,-25%) scale(.8);opacity:0;transition:opacity 250ms}
+.frog-splash-dialog[data-stage=jump] .splash-puddle{opacity:.6}
+.frog-splash-dialog:is([data-stage=impact],[data-stage=ripple],[data-stage=flood]) .splash-puddle{opacity:1}
+/* Fine paired light/dark wave crests keep a constant stroke as they expand. */
+.water-defs{position:absolute;width:0;height:0;overflow:hidden}
+.splash-ripples{position:absolute;left:var(--impact-x);top:var(--impact-y);width:1px;height:1px;pointer-events:none;overflow:visible}
+.splash-ripples g{opacity:0;transform-origin:0 0;filter:blur(.35px)}
+.splash-ripples ellipse{fill:none;vector-effect:non-scaling-stroke}
+.water-shade{stroke:var(--apparent-site-signal);stroke-width:1.3;stroke-opacity:.38}
+.water-light{stroke:var(--apparent-site-paper);stroke-width:2;stroke-opacity:.95}
+.frog-splash-dialog:is([data-stage=ripple],[data-stage=flood]) .splash-ripples g{animation:pond-water-wave 1800ms cubic-bezier(.12,.32,.3,1) both;animation-delay:var(--delay)}
+@keyframes pond-water-wave{0%{opacity:0;transform:scale(.45,.45)}12%{opacity:.9}65%{opacity:.65}100%{opacity:0;transform:scale(24,32)}}
+.splash-flood{transition-duration:820ms;transition-timing-function:cubic-bezier(.22,.35,.3,1)}
+@keyframes pond-shockwave{0%{opacity:.9;transform:scale(.5)}65%{opacity:.8}100%{opacity:0;transform:scale(20,26)}}

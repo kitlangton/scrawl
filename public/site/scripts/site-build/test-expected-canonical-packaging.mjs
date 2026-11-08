@@ -93,7 +93,7 @@ test("rejects canonical in body instead of head", () => {
   packageHomepage(homepage.replace(canonical, "").replace("<body>", `<body>${canonical}`), false)
 })
 
-for (const phrase of ["Visual feedback gets lost", "We believe"]) {
+for (const phrase of ["Tell your coding agent what to change", "We believe"]) {
   test(`retains existing stale-copy gate for ${phrase}`, () => {
     packageHomepage(homepage.replaceAll(phrase, "outdated copy"), false)
   })

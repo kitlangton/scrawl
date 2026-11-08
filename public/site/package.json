@@ -7,10 +7,12 @@
     "dev": "vite",
     "build": "python3 ../../shared/ui/scripts/check-theme.py && tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/site-build/prerender.ts",
     "preview": "vite preview",
-    "test:video": "node --test scripts/browser-proof/test-video-demo.mjs",
-    "test:try-button": "node scripts/pages/test-try-button-browser.mjs",
+    "test:video": "node --test scripts/browser-proof/test-video-demo.ts",
+    "test:try-button": "node scripts/pages/test-try-button-browser.ts",
     "test:hosted": "node scripts/browser-proof/test-hosted-browser.mjs",
-    "generate:og-video": "node scripts/og-video/capture.mjs"
+    "generate:og-video": "node scripts/og-video/capture.mjs",
+    "verify": "node scripts/site-build/verify.mjs",
+    "build:pages-worker": "esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js"
   },
   "dependencies": {
     "knobs": "npm:@kitlangton/knobs@0.3.0",
@@ -29,6 +31,13 @@
     "parse5": "8.0.1",
     "playwright-core": "1.63.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4"
+    "vite": "^8.3.4",
+    "esbuild": "0.28.2",
+    "miniflare": "4.20260730.0",
+    "wrangler": "4.156.0"
+  },
+  "overrides": {
+    "sharp": "0.35.5",
+    "undici": "7.30.1"
   }
 }

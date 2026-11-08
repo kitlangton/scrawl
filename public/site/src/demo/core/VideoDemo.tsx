@@ -1,10 +1,13 @@
 import { useEffect, useRef, useState } from "react"
 import type { PointerEvent as ReactPointerEvent, KeyboardEvent } from "react"
 import "./video-demo.css"
+import { DEMO_CURSOR, DEMO_CAPTIONS } from "../content/cursor-track"
+import { followCursor } from "./cursor-camera"
 
 const SOURCE = "/Apparent-ghost-demo-v4-lilac.mp4"
 const POSTER = "/Apparent-ghost-demo-v4-lilac-poster.jpg"
 const DURATION = 3589 / 60
+const clock = (seconds: number) => `${Math.floor(seconds / 60)}:${String(Math.floor(seconds % 60)).padStart(2, "0")}`
 // Seconds in the approved final export, not in the original recording.
 const CHAPTERS = [
   { label: "Start", t: 0 },
@@ -27,14 +30,33 @@ export function Demo() {
   const [started, setStarted] = useState(false)
   const [sound, setSound] = useState(false)
   const [error, setError] = useState("")
+  const [camera, setCamera] = useState<"full" | "following">("full")
   // Media clocks round to microseconds; don't select the previous chapter at its first frame.
   const current = CHAPTERS.reduce((index, chapter, i) => time + .001 >= chapter.t ? i : index, 0)
   const ended = started && time >= duration - .08 && !playing
+  const caption = DEMO_CAPTIONS.find(cue => time >= cue.start && time < cue.end)?.text ?? ""
+
+  useEffect(() => {
+    const phone = matchMedia("(max-width: 700px)")
+    const reduced = matchMedia("(prefers-reduced-motion: reduce)")
+    const update = () => setCamera(phone.matches && !reduced.matches ? "following" : "full")
+    update()
+    phone.addEventListener("change", update)
+    reduced.addEventListener("change", update)
+    return () => { phone.removeEventListener("change", update); reduced.removeEventListener("change", update) }
+  }, [])
+
+  useEffect(() => {
+    if (camera === "following" && video.current) return followCursor(video.current, DEMO_CURSOR)
+  }, [camera])
 
   useEffect(() => {
     const element = video.current
+    const fullscreen = () => { if (element) element.controls = document.fullscreenElement === element }
+    document.addEventListener("fullscreenchange", fullscreen)
     return () => {
       playRequest.current++
+      document.removeEventListener("fullscreenchange", fullscreen)
       element?.pause()
     }
   }, [])
@@ -59,7 +81,12 @@ export function Demo() {
     if (!element) return
     const next = Math.max(0, Math.min(duration, seconds))
     setTime(next)
-    if (element.readyState >= 1) element.currentTime = next
+    if (element.readyState >= 1) {
+      // A metadata notification can still be queued after readiness changes.
+      // This newer request supersedes any seek waiting for that notification.
+      pendingSeek.current = null
+      element.currentTime = next
+    }
     else {
       pendingSeek.current = next
       element.load()
@@ -87,10 +114,10 @@ export function Demo() {
   }
 
   return (
-    <div className="demo video-demo">
-      <div className="stage-wrap" tabIndex={0} aria-label="Apparent demo" onKeyDown={onKeyDown}>
+    <div className="demo video-demo" data-camera={camera}>
+      <div className="stage-wrap" tabIndex={0} aria-label="apparent demo" onKeyDown={onKeyDown}>
         <video ref={video} src={SOURCE} poster={POSTER} preload="none" playsInline muted={!sound}
-          aria-label="A real Apparent capture: launch, sketch, handoff and the implemented ghost"
+          aria-label="A real apparent capture: launch, sketch, handoff and the implemented ghost"
           onLoadedMetadata={() => {
             const element = video.current!
             if (Number.isFinite(element.duration) && element.duration > 0) setDuration(element.duration)
@@ -100,6 +127,7 @@ export function Demo() {
           onPlay={() => { setPlaying(true); setStarted(true) }} onPause={() => setPlaying(false)}
           onEnded={() => { setPlaying(false); setTime(video.current?.duration ?? DURATION) }}
           onError={() => setError("The demo could not load. Try again, or open the video directly.")} />
+        {camera === "following" && <p className="video-caption" aria-label="Recording caption">{caption || "\u00a0"}</p>}
         {!started && <button className="stage-play liquid-glass" onClick={() => play(true)}><PlayIcon />Play with sound</button>}
         {started && playing && !sound && <button className="stage-sound-hint liquid-glass" onClick={() => { if (video.current) video.current.muted = false; setSound(true) }}>Tap for sound</button>}
         {ended && <div className="stage-end"><button className="stage-btn liquid-glass" onClick={replay}><ReplayIcon />Replay</button></div>}
@@ -114,8 +142,21 @@ export function Demo() {
             <svg viewBox="0 0 16 16" aria-hidden="true"><path d="M2.5 6h2.2L8 3.2v9.6L4.7 10H2.5z" fill="currentColor" />{sound ? <><path className="sound-wave w1" d="M10.5 5.5a3.5 3.5 0 010 5" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /><path className="sound-wave w2" d="M12.3 3.7a6 6 0 010 8.6" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" /></> : <path d="M10.5 6l4 4M14.5 6l-4 4" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" />}</svg>
             <span className="sound-label">{sound ? "Sound" : "Muted"}</span>
           </button>
+          <button type="button" className="fullscreen-btn" onClick={() => {
+            const element = video.current as (HTMLVideoElement & { webkitEnterFullscreen?: () => void }) | null
+            if (element?.requestFullscreen) {
+              element.controls = true
+              void element.requestFullscreen().catch(() => { element.controls = false; setError("Fullscreen is unavailable. Open the video directly.") })
+            }
+            else if (element?.webkitEnterFullscreen) {
+              try { element.webkitEnterFullscreen() }
+              catch { setError("Fullscreen is unavailable. Open the video directly.") }
+            }
+            else setError("Fullscreen is unavailable. Open the video directly.")
+          }}>Fullscreen</button>
         </div>
         <div className="scrubber">
+          <p className="playback-time" aria-hidden="true">{clock(time)} <span>/ {clock(Math.ceil(duration))}</span></p>
           <div ref={track} className="track" role="slider" tabIndex={0} aria-label="Demo timeline" aria-valuemin={0} aria-valuemax={duration} aria-valuenow={time} aria-valuetext={`${Math.floor(time)} of ${Math.ceil(duration)} seconds`}
             onKeyDown={(event) => {
               if (event.key === "ArrowRight" || event.key === "ArrowLeft") { event.preventDefault(); seek(time + (event.key === "ArrowRight" ? 5 : -5)) }

@@ -26,19 +26,13 @@ source and packaged head metadata, dimensions and byte preservation.
 
 ## Publication and receiver check
 
-Follow `clanker-deploy.md`, preserving the currently deployed homepage and all
-unrelated assets. The live homepage may contain approved overlays absent from
-this checkout; do not replace it wholesale with an older build just to change
-metadata. This candidate does not deploy anything.
-
-Before activation, add the exact `/social-preview-v1.png` path to Caddy's
-`@publicApparent` allowlist if missing. Validate/reload Caddy according to the
-existing deployment procedure. Verify a crawler-style GET of the homepage
-returns the image metadata and a GET of its exact image URL returns HTTP 200,
-`image/png`, and bytes matching the packaged PNG. A local build or merged PR
-does not establish this public-server behavior. When changing the artwork
-later, use a new versioned filename and update metadata, tests and the allowlist
-together so caches cannot retain the old image at the new URL.
+Follow `pages-deploy.md` and the existing publication review hold. The public
+packager includes the exact image bytes; no Clanker/Caddy allowlist or provider
+change is needed. After an authorized Pages deployment, verify that crawler-style
+GETs return the checked homepage metadata and the image's exact PNG bytes. A
+local build or merged PR does not establish live crawler behavior. Use a new
+versioned filename when changing the artwork so caches cannot retain the old
+image at its replacement URL.
 
 Slack and other receivers cache unfurls independently. Test a fresh unfurl after
 publication; an existing message is not guaranteed to update. Any test message

@@ -10,8 +10,8 @@ import { audit, MAP_DIR } from "./feature-audit.ts"
 process.env.NODE_ENV ??= "production"
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "../..")
-const dist = join(site, "dist")
-const ssr = join(site, "dist-ssr")
+const dist = process.env.PUBLIC_BUILD_DIR || join(site, "dist")
+const ssr = process.env.PUBLIC_SSR_DIR || join(site, "dist-ssr")
 
 const { render, mapPage } = await import(join(ssr, "entry-server.js"))
 let html = readFileSync(join(dist, "index.html"), "utf8")

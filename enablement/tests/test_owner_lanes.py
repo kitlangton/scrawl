@@ -90,9 +90,12 @@ class OwnerTests(unittest.TestCase):
             result = subprocess.run([node, str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual(len(calls), 5)
+            self.assertGreaterEqual(len(calls), 5)
             self.assertTrue(all(call[2:] == ['1', 'https://hosted.tryapparent.com'] for call in calls))
             self.assertIn('scripts/site-build/package-apparent.mjs', calls[2][1])
+            self.assertTrue(any('scripts/pages/test-public-homepage.ts' in call[1] for call in calls))
+            self.assertTrue(any('scripts/pages/verify-prepared.ts' in call[1] for call in calls))
+            self.assertEqual(Path(calls[-1][0]).name, 'python3')
             log.unlink()
             result = subprocess.run([node, str(script)], env=dict(env, FAIL_COMMAND='npm'), capture_output=True)
             self.assertEqual(result.returncode, 7)

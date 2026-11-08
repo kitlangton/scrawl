@@ -82,7 +82,7 @@ The credential-free verification job runs:
 - `python3 -m unittest discover -s scripts/cd -p 'test_*.py'`;
 - the complete hosted TypeScript build and real local workerd/D1/R2 suite;
 - the website's frozen Bun install, public build, allowlisted `dist-apparent`
-  packaging, and six-file public website suite;
+  packaging, and public website/browser suite;
 - Connect's browser scenarios against a synthetic credentialed cross-origin API.
 
 Node 22.23.0 and Bun 1.3.10 are pinned. Browser installation uses the version of
@@ -104,7 +104,7 @@ The active website job now publishes only `public/site/dist-apparent` to the iso
 `public/site/wrangler.pages.jsonc`. It does not execute `public/site/wrangler.jsonc`, deploy the
 hosted Worker, or connect to Clanker. See
 [`../public/site/docs/pages-deploy.md`](../public/site/docs/pages-deploy.md) for the current build,
-accepted-homepage reconciliation, video limits, exact hostname cutover and rollback.
+source-built homepage preservation, video limits, exact hostname cutover and rollback.
 Set `WEBSITE_PAGES_API_TOKEN` in `website-production`; the existing
 `WEBSITE_CD_ENABLED=true` gate enables only Pages. Remove obsolete SSH settings
 when present; they are no longer read. The hosted activation gate is unchanged.

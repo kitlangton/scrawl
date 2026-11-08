@@ -1,0 +1,10 @@
+/* Parent-owned semantic roles; original images and document canvases stay intact. */
+@media (prefers-color-scheme: dark) {
+  :root { --purple: var(--demo-primary); --lilac: var(--demo-brand); --paper: var(--demo-background); --stock: var(--demo-surface); }
+  body, .embedded body, .stage { background: var(--demo-surface) !important; color: var(--demo-foreground); }
+  .window, .source, .agent, .composer, .chrome, .site, .chat, .pill { background: var(--demo-background); color: var(--demo-foreground); border-color: var(--demo-border); box-shadow: none; }
+  .label, .stamp, .wave-label, .capture-note, .file-location, .placeholder, .callout, .response-note, .payload p, .chat p, .number, .pill .cancel, .pill .whiteboard { color: var(--demo-foreground) !important; }
+  .tiny-button, .stop, .arrow, .play { background: var(--demo-primary); color: var(--demo-primary-foreground); }
+  .timeline, .connector, .dot { background: var(--demo-border); }
+  .attachment, .media span { background: var(--demo-surface); color: var(--demo-foreground); border-color: var(--demo-border); }
+}

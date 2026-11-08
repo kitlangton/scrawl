@@ -365,28 +365,56 @@ fn get(url: &str, out: Option<&Path>) -> Result<Vec<u8>> {
         cmd.args(["--max-filesize", "1073741824"]);
         cmd.arg("--output").arg(path);
     } else {
-        cmd.args(["--max-filesize", "262144"]);
+        // A page of 100 releases includes component assets and can exceed 256 KiB.
+        // Keep metadata bounded while avoiding dozens of anonymous API requests.
+        cmd.args(["--max-filesize", "4194304"]);
     }
     let result = cmd.output().context("curl is required for updates")?;
     ensure!(result.status.success(), "download failed: {}", String::from_utf8_lossy(&result.stderr));
     Ok(result.stdout)
 }
 
-fn stable_candidate(arch: &str) -> Result<Candidate> {
-    let body = get(&format!("https://api.github.com/repos/{REPO}/releases/latest"), None)?;
-    let release: Release = serde_json::from_slice(&body).context("invalid stable release")?;
-    ensure!(release.tag_name.starts_with('v') && release.tag_name[1..].bytes().all(|b| b.is_ascii_digit() || b == b'.'), "invalid stable tag");
+fn stable_candidate(arch: &str) -> Result<Option<Candidate>> {
+    stable_candidate_with(arch, &|url| get(url, None))
+}
+
+fn stable_candidate_with(arch: &str, fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<Option<Candidate>> {
+    let mut releases = Vec::new();
+    let mut complete = false;
+    for page in 1..=10 {
+        let body = fetch(&format!("https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}"))?;
+        let page_releases: Vec<Release> = serde_json::from_slice(&body).context("invalid stable release list")?;
+        ensure!(page_releases.len() <= 100, "oversized stable release page");
+        complete = page_releases.len() < 100;
+        releases.extend(page_releases);
+        if complete { break; }
+    }
+    ensure!(complete, "stable release discovery exceeded its page limit");
+
+    // GitHub's /latest can name a standalone component instead of the desktop app.
+    // Only published versioned desktop releases belong to the Stable channel.
+    let mut releases: Vec<_> = releases.into_iter().filter_map(|release| {
+        if release.draft || release.prerelease || release.published_at.is_none() { return None; }
+        let version = release.tag_name.strip_prefix('v')?.split('.')
+            .map(str::parse::<u32>).collect::<Result<Vec<_>, _>>().ok()?;
+        let name = format!("Apparent-{}-linux-{arch}.AppImage", &release.tag_name[1..]);
+        (release.assets.iter().any(|asset| asset.name == name)
+            && release.assets.iter().any(|asset| asset.name == format!("{name}.sha256")))
+            .then_some((version, release))
+    }).collect();
+    releases.sort_by(|a, b| b.0.cmp(&a.0));
+    let Some((_, release)) = releases.into_iter().next() else { return Ok(None); };
     let name = format!("Apparent-{}-linux-{arch}.AppImage", &release.tag_name[1..]);
     let image = release.assets.iter().find(|a| a.name == name).context("no Linux AppImage in the stable release yet")?;
     let checksum = release.assets.iter().find(|a| a.name == format!("{name}.sha256")).context("stable release has no checksum")?;
     let prefix = format!("https://github.com/{REPO}/releases/download/{}/", release.tag_name);
     ensure!(image.browser_download_url == format!("{prefix}{name}") && checksum.browser_download_url == format!("{prefix}{name}.sha256"), "unexpected release asset URL");
-    let body = get(&checksum.browser_download_url, None)?;
+    let body = fetch(&checksum.browser_download_url)?;
     let text = std::str::from_utf8(&body)?;
     let (hash, file) = text.trim().split_once(char::is_whitespace).context("invalid release checksum")?;
     ensure!(file.trim() == name, "checksum refers to another file");
     validate_hash(hash)?;
-    Ok(Candidate { id: release.tag_name, channel: "stable", url: image.browser_download_url.clone(), sha256: hash.to_owned() })
+    Ok(Some(Candidate { id: release.tag_name, channel: "stable", url: image.browser_download_url.clone(), sha256: hash.to_owned() }))
 }
 
 fn installed_id(image: &Path) -> Option<(String, String)> {
@@ -558,7 +586,8 @@ fn check() -> Result<bool> {
     let candidate = if status["channel"] == "main" {
         latest_main_candidate(arch)?
     } else {
-        stable_candidate(arch)?
+        let Some(candidate) = stable_candidate(arch)? else { return Ok(false); };
+        candidate
     };
     let name = image.file_name().context("AppImage has no name")?.to_string_lossy();
     let failed = image.with_file_name(format!(".{name}.failed-update.json"));
@@ -708,6 +737,79 @@ mod tests {
         assert!(first_usable_main(vec![draft, unpublished], "aarch64", &|_| panic!("private releases must not fetch")).unwrap().is_none());
         let candidate = first_usable_main(vec![release()], "aarch64", &|_| Ok(format!("{}  {image}", "c".repeat(64)).into_bytes())).unwrap().unwrap();
         assert!(candidate.url.ends_with("-linux-aarch64.AppImage"));
+    }
+
+    fn stable_release_fixture(tag: &str, arch: &str) -> serde_json::Value {
+        let name = format!("Apparent-{}-linux-{arch}.AppImage", tag.strip_prefix('v').unwrap_or(tag));
+        let prefix = format!("https://github.com/{REPO}/releases/download/{tag}/");
+        serde_json::json!({"tag_name": tag, "draft": false, "prerelease": false,
+            "published_at": "2026-11-01T00:00:00Z", "assets": [
+                {"name": name, "browser_download_url": format!("{prefix}{name}")},
+                {"name": format!("{name}.sha256"), "browser_download_url": format!("{prefix}{name}.sha256")}]})
+    }
+
+    #[test]
+    fn stable_discovers_desktop_versions_after_component_release_pages() {
+        let candidate = stable_candidate_with("x86_64", &|url| {
+            if url.ends_with("?per_page=100&page=1") {
+                return Ok(serde_json::to_vec(&vec![stable_release_fixture("recipient-component", "x86_64"); 100])?);
+            }
+            if url.ends_with("?per_page=100&page=2") {
+                return Ok(serde_json::to_vec(&vec![stable_release_fixture("v0.3.9", "x86_64"),
+                    stable_release_fixture("v0.3.14", "x86_64"), stable_release_fixture("v0.3.10", "x86_64")])?);
+            }
+            assert_eq!(url, format!("https://github.com/{REPO}/releases/download/v0.3.14/Apparent-0.3.14-linux-x86_64.AppImage.sha256"));
+            Ok(format!("{}  Apparent-0.3.14-linux-x86_64.AppImage", "c".repeat(64)).into_bytes())
+        }).unwrap().unwrap();
+        assert_eq!(candidate.id, "v0.3.14");
+        assert_eq!(candidate.channel, "stable");
+        assert_eq!(candidate.sha256, "c".repeat(64));
+    }
+
+    #[test]
+    fn stable_with_no_compatible_desktop_release_has_no_update() {
+        let mut preview = stable_release_fixture("v0.3.15", "x86_64");
+        preview["prerelease"] = true.into();
+        let mut draft = stable_release_fixture("v0.3.15", "x86_64");
+        draft["draft"] = true.into();
+        let mut unpublished = stable_release_fixture("v0.3.15", "x86_64");
+        unpublished["published_at"] = serde_json::Value::Null;
+        let mut incomplete = stable_release_fixture("v0.3.15", "x86_64");
+        incomplete["assets"].as_array_mut().unwrap().pop();
+        let mut legacy = stable_release_fixture("v0.3.13", "x86_64");
+        for asset in legacy["assets"].as_array_mut().unwrap() {
+            asset["name"] = asset["name"].as_str().unwrap().replace("Apparent-", "Scrawl-").into();
+        }
+        let releases = vec![preview, draft, unpublished, incomplete, legacy,
+            stable_release_fixture("v0.3.15", "aarch64"),
+            stable_release_fixture("preview-mac-12-2", "x86_64"),
+            stable_release_fixture("recipient-component", "x86_64")];
+        assert!(stable_candidate_with("x86_64", &|url| {
+            assert!(url.ends_with("?per_page=100&page=1"), "no checksum or download may be requested");
+            Ok(serde_json::to_vec(&releases)?)
+        }).unwrap().is_none());
+    }
+
+    #[test]
+    fn stable_network_metadata_and_integrity_failures_remain_errors() {
+        assert!(stable_candidate_with("x86_64", &|_| anyhow::bail!("offline")).is_err());
+        assert!(stable_candidate_with("x86_64", &|_| Ok(b"not JSON".to_vec())).is_err());
+        for checksum in ["invalid".to_owned(), format!("{}  unrelated.AppImage", "c".repeat(64))] {
+            assert!(stable_candidate_with("x86_64", &|url| {
+                if url.contains("/releases?") {
+                    Ok(serde_json::to_vec(&vec![stable_release_fixture("v0.3.14", "x86_64")])?)
+                } else { Ok(checksum.clone().into_bytes()) }
+            }).is_err());
+        }
+        let mut foreign = stable_release_fixture("v0.3.14", "x86_64");
+        foreign["assets"][0]["browser_download_url"] = "https://untrusted.example/app.AppImage".into();
+        assert!(stable_candidate_with("x86_64", &|url| {
+            assert!(url.contains("/releases?"), "foreign asset must be rejected before fetching");
+            Ok(serde_json::to_vec(&vec![foreign.clone()])?)
+        }).is_err());
+        assert!(stable_candidate_with("x86_64", &|_| {
+            Ok(serde_json::to_vec(&vec![stable_release_fixture("recipient-component", "x86_64"); 100])?)
+        }).is_err(), "incomplete discovery cannot be reported as no update");
     }
 
     #[test]

@@ -252,6 +252,18 @@ class FixtureTests(unittest.TestCase):
     def setUp(self):
         self.fixture = load('updater-fixture')
 
+    def test_stable_metadata_separates_components_from_desktop_candidates(self):
+        control = {'channel': 'stable', 'version': '0.3.13', 'mode': 'current'}
+        path = self.fixture.metadata_path(control)
+        self.assertEqual(path, '/repos/tryapparent/apparent/releases?per_page=100&page=1')
+        status, body = self.fixture.response(control, path, b'packaged candidate')
+        self.assertEqual(status, 200)
+        releases = json.loads(body)
+        self.assertEqual([r['tag_name'] for r in releases], ['recipient-component', 'v0.3.13'])
+        self.assertEqual(json.loads(self.fixture.response(control, self.fixture.API, b'')[1])['tag_name'], 'recipient-component')
+        control['mode'] = 'error'
+        self.assertEqual(self.fixture.response(control, path, b'')[0], 503)
+
     def test_main_pagination_canonical_assets_and_current_identity(self):
         source = 'a' * 40
         control = {'channel': 'main', 'source_head': source, 'version': '1.2.3', 'mode': 'current'}
@@ -297,9 +309,9 @@ class FixtureTests(unittest.TestCase):
         import hashlib
         payload = b'test AppImage bytes, not a published release'
         control = {'version': '1.2.3', 'mode': 'available'}
-        status, body = self.fixture.response(control, '/repos/tryapparent/apparent/releases/latest', payload)
+        status, body = self.fixture.response(control, self.fixture.metadata_path(control), payload)
         import json
-        release = json.loads(body)
+        release = json.loads(body)[-1]
         self.assertEqual(status, 200)
         self.assertEqual(release['tag_name'], 'v999.0.0')
         url = release['assets'][1]['browser_download_url']
@@ -309,7 +321,7 @@ class FixtureTests(unittest.TestCase):
 
     def test_only_expected_routes_and_modes(self):
         self.assertEqual(self.fixture.response({'version': '1.2.3', 'mode': 'error'},
-                         '/repos/tryapparent/apparent/releases/latest', b'')[0], 503)
+                         self.fixture.STABLE_API + '1', b'')[0], 503)
         self.assertEqual(self.fixture.response({'version': '1.2.3', 'mode': 'current'},
                          '/unexpected', b'')[0], 404)
         self.assertEqual(self.fixture.response({'version': '1.2.3', 'mode': 'bad-checksum'},
@@ -338,12 +350,12 @@ class FixtureTests(unittest.TestCase):
                     time.sleep(.05)
                 curl = ['curl', '--silent', '--show-error', '--fail', '--max-time', '3',
                         '--proxy', f'http://127.0.0.1:{port}', '--noproxy', '']
-                url = 'https://api.github.com' + self.fixture.API
+                url = 'https://api.github.com' + self.fixture.STABLE_API + '1'
                 untrusted = subprocess.run(curl + [url], capture_output=True)
                 self.assertEqual(untrusted.returncode, 60)
                 trusted = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), url],
                                          check=True, capture_output=True)
-                self.assertEqual(json.loads(trusted.stdout)['tag_name'], 'v1.2.3')
+                self.assertEqual(json.loads(trusted.stdout)[-1]['tag_name'], 'v1.2.3')
                 foreign = subprocess.run(curl + ['--cacert', str(directory / 'cert.pem'), 'https://foreign.invalid/'],
                                          capture_output=True)
                 self.assertNotEqual(foreign.returncode, 0)

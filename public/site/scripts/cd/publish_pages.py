@@ -88,7 +88,7 @@ def main():
     if not re.fullmatch('[0-9a-f]{40}', sha) or os.environ.get('GITHUB_REF') != 'refs/heads/main':
         raise ValueError('Only exact main revisions may publish')
     package = ROOT / 'public' / 'site' / 'dist-apparent'
-    if not (package / '404.html').is_file() or not (package / '_routes.json').is_file():
+    if not all((package / name).is_file() for name in ('404.html', '_routes.json', '_worker.js')):
         raise ValueError('Missing privacy/routing preparation')
     if package.is_symlink() or any(p.is_symlink() or (p.is_file() and p.stat().st_size > 25 * 1024 * 1024) for p in package.rglob('*')):
         raise ValueError('Package has a symlink or oversized asset')
@@ -99,17 +99,15 @@ def main():
     with tempfile.TemporaryDirectory(prefix='apparent-pages-') as directory:
         stage = Path(directory)
         shutil.copytree(package, stage / 'dist-apparent')
-        shutil.copytree(ROOT / 'public/site/functions', stage / 'functions')
-        shutil.copytree(ROOT / 'public/site/lib', stage / 'lib')
         shutil.copyfile(ROOT / 'public/site/wrangler.pages.jsonc', stage / 'wrangler.jsonc')
         try:
             current_main(sha)
         except SupersededMain:
             print('Skipping superseded main candidate; no website published')
             return
-        subprocess.run([str(ROOT / 'connect/service/node_modules/.bin/wrangler'), 'pages', 'deploy',
+        subprocess.run([str(ROOT / 'public/site/node_modules/.bin/wrangler'), 'pages', 'deploy',
                         '--project-name', PROJECT, '--branch', 'main', '--commit-hash', sha,
-                        '--commit-dirty=false'], cwd=stage, env=env, check=True)
+                        '--commit-dirty=false', '--no-bundle'], cwd=stage, env=env, check=True)
     receipt = verify_ready(sha, package)
     (ROOT / 'website-receipt.json').write_text(json.dumps(receipt) + '\n')
     print(json.dumps(receipt))
