@@ -60,7 +60,7 @@ jobs:
           node-version: '22.23.0'
       - name: Verify early native prerequisite contracts
         run: |
-          node --experimental-strip-types --test enablement/prerequisites/native.test.ts
+          node --experimental-strip-types --test enablement/prerequisites/*.test.ts
           node --experimental-strip-types --test enablement/timing/mac-cache.test.ts
       - uses: oven-sh/setup-bun@v2
         with:
