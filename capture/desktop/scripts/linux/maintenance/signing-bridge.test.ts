@@ -82,7 +82,9 @@ if(args[0]==='api'){
  if(p.endsWith('/git/commits/'+bridge)) output({sha:bridge,parents:[{sha:legacy},{sha:source}],tree:{sha:(fault==='wrong-tree'?'e':'d').repeat(40)},author:{email:'32648751+simonvanlaak@users.noreply.github.com'},verification:{verified:true}});
  else if(p.endsWith('/git/commits/'+source)) output({sha:source,tree:{sha:'d'.repeat(40)}});
  else if(p.includes('/releases/tags/linux-main-v2-')) output({draft:false,prerelease:true,published_at:'2026-11-03',target_commitish:source,assets:fault==='bad-digest'?assets.map(a=>({...a,digest:'sha256:'+'0'.repeat(64)})):assets});
- else if(p.includes('/releases/tags/')) output(release());
+ // GitHub's tag endpoint only returns published releases. Authenticated
+ // release listings below still include the private draft before promotion.
+ else if(p.includes('/releases/tags/')){if(state()==='draft')throw Error('Not Found (HTTP 404)');output(release());}
  else if(p.includes('/releases?')) output([state()?[release()]:[]]);
  else if(p.includes('/commits/linux-main-')) output({sha:bridge});
  else throw Error('unexpected API '+p);
