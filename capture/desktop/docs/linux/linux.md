@@ -1,5 +1,23 @@
 # Linux
 
+## Tray appearance
+
+The StatusNotifierItem tray uses the same boxed purple “a” as the Mac menu bar:
+Lilac on Carbon in Dark mode and darker purple on Paper in Light mode. It reads
+the XDG Settings portal's color-scheme at app startup and watches it while
+running, including when Settings has never been opened. A change refreshes the
+tray's pixmaps without restarting Apparent. If the portal is unavailable, the
+initial fallback is Dark; a failed read retains the last known appearance.
+No preference uses Light, matching Settings. The opaque box keeps the glyph
+contrasting even when a panel is themed independently of that preference.
+The app/window icon is unchanged. GNOME still requires a tray host such as
+AppIndicator; without one, relaunching Apparent opens Settings as before.
+
+Native acceptance needs the actual running icon on light and dark panels,
+Light → Dark → Light without restarting, and an open tray menu in each mode.
+Check an independently themed panel as well; pixel/asset tests alone do not
+prove tray-host rendering.
+
 For a reusable disposable-guest capture/save/cancel check, see
 [Native testing](../native-testing.md). Its runner receipts distinguish environment,
 test-driver and product failures from unrun gates; host contract tests are not
