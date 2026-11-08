@@ -6,6 +6,10 @@ on:
       runner:
         required: true
         type: string
+      release_receipt:
+        description: Emit the existing manual publication receipt on eligible refs
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -58,7 +62,7 @@ jobs:
   desktop-ui:
     needs: select
     # Each caller verifies one platform independently.
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: desktop-ui (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 15
@@ -92,7 +96,7 @@ jobs:
 
   rust:
     needs: select
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: rust (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
@@ -334,7 +338,7 @@ jobs:
   release-ready:
     name: Release verification
     needs: [select, desktop-ui, rust]
-    if: github.ref == 'refs/heads/main' || (github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/t3/onboarding-mac-release-baseline' && github.event_name == 'workflow_dispatch')
+    if: inputs.release_receipt && (github.ref == 'refs/heads/main' || (github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/t3/onboarding-mac-release-baseline' && github.event_name == 'workflow_dispatch'))
     runs-on: ubuntu-24.04
     steps:
       - run: echo "Platform checks passed for $GITHUB_SHA"
