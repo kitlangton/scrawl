@@ -440,8 +440,15 @@ use Rust's existing atomic writer and preserve unrelated keys. No setting edit
 interrupts active audio.
 
 On Linux, Electron uses X11/XWayland. Rust checks each XID against this capture's
-child PID and prepares it while hidden; Electron alone shows and hides it. The
-compositor's visible pinned order can diverge from X11's input stack after focus
+child PID and prepares it while hidden; Electron alone shows and hides it.
+On the Hyprland Lua backend, notes remain managed toolbars so their first map
+belongs to a real output even when its layout origin is offset. Other backends
+retain override-redirect preparation. Popup activation restores web-content focus.
+The pipe carries X11 root pixels: Electron converts incoming anchors to DIPs and
+outgoing window bounds back to pixels. Hyprland placement then matches the
+output by name and converts those pixels to its scaled, potentially offset
+layout. Do not send an Electron DIP rectangle directly to either native adapter.
+The compositor's visible pinned order can diverge from X11's input stack after focus
 returns to the recorded app. The notes worker checks that stack at most every
 100 ms and raises its visible surfaces only when needed. Renderer commands cannot
 place windows. Counter/editor clicks are excluded from capture telemetry.

@@ -25,20 +25,13 @@ let finishing = false, finished = false;
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.setActivationPolicy('accessory');
-  // Native Linux capture/placement uses physical pixels; Electron uses DIP.
-  // Mac native coordinates are already points.
-  const toDip = point => process.platform === 'linux' ? screen.screenToDipPoint(point) : point;
-  function logicalRect(rect) {
-    const start = toDip({ x: Math.round(rect[0]), y: Math.round(rect[1]) });
-    const end = toDip({ x: Math.round(rect[0] + rect[2]), y: Math.round(rect[1] + rect[3]) });
-    return [start.x, start.y, Math.max(1, end.x - start.x), Math.max(1, end.y - start.y)];
-  }
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, reply) => reply(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   const page = pathToFileURL(path.join(__dirname, '../../dist/index.html')).href;
   function window(surface, width, height) {
     const win = new BrowserWindow({ title: 'Apparent notes', width, height, show: false, frame: false, transparent: true,
       resizable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false,
+      ...(process.platform === 'linux' && surface === 'badge' ? { focusable: false } : {}),
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true,
         nodeIntegration: false, sandbox: true, spellcheck: false, webSecurity: true } });
     win.webContents.on('page-title-updated', event => event.preventDefault());
@@ -48,14 +41,29 @@ app.whenReady().then(() => {
     win.webContents.on('will-navigate', e => e.preventDefault());
     win.webContents.on('will-attach-webview', e => e.preventDefault());
     win.webContents.on('render-process-gone', () => app.quit());
+    // XWayland activation can arrive after the first state paint.
+    if (process.platform === 'linux' && surface === 'popup') {
+      win.on('focus', () => { if (!finishing && latest?.mode !== 'badge' && win.isVisible()) win.webContents.focus(); });
+    }
     win.loadURL(page + '#notes-' + surface);
     return win;
   }
   popup = window('popup', 332, 200); badge = window('badge', 150, 44);
-  const logicalFrame = logicalRect(frame);
-  const display = screen.getDisplayNearestPoint({ x: Math.round(logicalFrame[0] + logicalFrame[2] / 2), y: Math.round(logicalFrame[1] + logicalFrame[3] / 2) });
+  // Rust's Linux anchors are X11 root pixels; Electron window bounds are DIPs.
+  function desktopPoint(x, y) {
+    const point = { x: Math.round(x), y: Math.round(y) };
+    return process.platform === 'linux' ? screen.screenToDipPoint(point) : point;
+  }
+  function desktopRect([x, y, width, height]) {
+    if (process.platform !== 'linux') return [x, y, width, height];
+    const point = desktopPoint(x, y);
+    const scale = screen.getDisplayNearestPoint(point).scaleFactor;
+    return [point.x, point.y, width / scale, height / scale];
+  }
+  const center = desktopPoint(frame[0] + frame[2] / 2, frame[1] + frame[3] / 2);
+  const display = screen.getDisplayNearestPoint(center);
   const area = display.workArea;
-  badge.setPosition(Math.min(area.x + area.width - 156, Math.round(logicalFrame[0] + logicalFrame[2] / 2 + 150)), area.y + 12);
+  badge.setPosition(Math.min(area.x + area.width - 156, center.x + 150), area.y + 12);
   const placed = new Map();
   const requested = new Map();
   function setRequestedBounds(win, bounds, opening) {
@@ -70,9 +78,9 @@ app.whenReady().then(() => {
   function placeSurface(win, focus, force = false, bounds = win.getBounds()) {
     if (process.platform !== 'linux') return;
     const { x, y, width, height } = bounds;
-    const start = screen.dipToScreenPoint({ x, y });
-    const end = screen.dipToScreenPoint({ x: x + width, y: y + height });
-    const rect = [start.x, start.y, Math.max(1, end.x - start.x), Math.max(1, end.y - start.y)];
+    const point = screen.dipToScreenPoint({ x, y });
+    const scale = screen.getDisplayMatching(bounds).scaleFactor;
+    const rect = [point.x, point.y, Math.round(width * scale), Math.round(height * scale)];
     const key = JSON.stringify(rect);
     if (!force && !focus && placed.get(win) === key) return;
     placed.set(win, key);
@@ -111,13 +119,13 @@ app.whenReady().then(() => {
       let requestedBadge;
       const openingBadge = !badge.isVisible();
       if (state.badgeRect) {
-        const rect = logicalRect(state.badgeRect);
+        const rect = desktopRect(state.badgeRect);
         const work = screen.getDisplayNearestPoint({ x: Math.round(rect[0] + rect[2] / 2), y: Math.round(rect[1] + rect[3] / 2) }).workArea;
         const bounds = badgeBounds(rect, work);
         requestedBadge = { ...bounds, width: 150, height: 44 };
         setRequestedBounds(badge, requestedBadge, openingBadge);
       }
-      const point = toDip({ x: Math.round(state.position[0]), y: Math.round(state.position[1]) });
+      const point = desktopPoint(...state.position);
       if (state.mode !== 'badge') {
         const work = screen.getDisplayNearestPoint(point).workArea;
         const bounds = popupBounds(point, work, state.mode === 'list' ? 350 : 220);
@@ -125,7 +133,7 @@ app.whenReady().then(() => {
         setRequestedBounds(popup, bounds, opening);
         if (opening) popup.show();
         const focus = !previous || previous.mode !== state.mode || previous.current !== state.current;
-        if (focus) popup.focus();
+        if (focus) { popup.focus(); if (process.platform === 'linux') popup.webContents.focus(); }
         placeSurface(popup, focus, opening, bounds);
       } else { popup.hide(); if (previous && previous.mode !== 'badge') send({ action: 'hidden' }); }
       if (openingBadge) badge.showInactive();

@@ -544,12 +544,13 @@ pub fn activate(id: isize) {
 
 // MARK: Apparent's own windows
 
-/// Prepare an Electron surface before its first show. Its owner alone maps/hides
-/// it; unmapping a newly shown XWayland surface can lose its compositor mapping.
-pub fn prepare_floating(id: u32) -> bool {
+/// Prepare before the first show without mapping. On Hyprland's Lua backend,
+/// managed toolbar windows let the compositor assign the correct output first.
+/// Electron alone maps/hides these windows; native placement must not remap them.
+pub fn prepare_floating(id: u32, managed: bool) -> bool {
     let Some(x) = x() else { return false; };
     let Ok(cookie) = x.conn.change_window_attributes(
-        id, &ChangeWindowAttributesAux::new().override_redirect(1),
+        id, &ChangeWindowAttributesAux::new().override_redirect(u32::from(!managed)),
     ) else { return false; };
     if cookie.check().is_err() { return false; }
     let _ = x.conn.change_property32(PropMode::REPLACE, id,
@@ -941,14 +942,15 @@ mod tests {
     fn electron_surface_setup_preserves_owner_visibility() {
         use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
         let x = x().expect("isolated X server");
+        for managed in [false, true] {
         let id = x.conn.generate_id().unwrap();
         x.conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, id, x.root,
             0, 0, 332, 220, 0, WindowClass::INPUT_OUTPUT, x11rb::COPY_FROM_PARENT,
             &CreateWindowAux::new().event_mask(EventMask::STRUCTURE_NOTIFY)).unwrap().check().unwrap();
-        assert!(prepare_floating(id));
+        assert!(prepare_floating(id, managed));
         place_without_remap(id, [150.0, 300.0, 332.0, 220.0]);
         let attributes = x.conn.get_window_attributes(id).unwrap().reply().unwrap();
-        assert!(attributes.override_redirect);
+        assert_eq!(attributes.override_redirect, !managed);
         assert_eq!(attributes.map_state, MapState::UNMAPPED, "native preparation must not show a hidden editor");
         x.conn.map_window(id).unwrap().check().unwrap();
         assert_eq!(x.conn.get_window_attributes(id).unwrap().reply().unwrap().map_state, MapState::VIEWABLE);
@@ -975,6 +977,7 @@ mod tests {
         place_without_remap(id, [100.0, 200.0, 332.0, 220.0]);
         assert_eq!(x.conn.get_window_attributes(id).unwrap().reply().unwrap().map_state, MapState::UNMAPPED, "native placement must not reopen a dismissed editor");
         x.conn.destroy_window(id).unwrap().check().unwrap();
+        }
     }
 
     #[test]
