@@ -1,4 +1,5 @@
 import {execFileSync} from 'node:child_process';
+import {readFileSync} from 'node:fs';
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -42,5 +43,17 @@ test('explicit routing partitions the unchanged local full inventory', () => {
   assert.ok(!platform.some(c => c[0] === 'bun' || c.includes('test_verification.py')));
 });
 test('portable browser failures propagate rather than admitting platform work', () => {
+  const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8');
+  const job = (id: string) => {
+    const body = workflow.split(`\n  ${id}:\n`)[1];
+    assert.ok(body, `Missing ${id} job`);
+    return body.split(/\n  [\w-]+:\n/)[0];
+  };
+  const select = job('select');
+  assert.match(select, /^    runs-on: ubuntu-24\.04$/m);
+  assert.match(select, /python3 enablement\/verification\.py .*--execution portable/);
+  for (const id of ['rust', 'desktop-ui']) {
+    assert.match(job(id), /^    needs: select$/m);
+  }
   assert.throws(() => execFileSync('python3', ['-c', probe, 'portable', 'fail']), {status: 7});
 });
