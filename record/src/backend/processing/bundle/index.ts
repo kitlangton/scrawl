@@ -4,6 +4,8 @@ import { isDeepStrictEqual } from "node:util";
 import type { MaterialsDocument, ContextFacts, InteractionFacts, TranscriptFacts, StrokeFacts } from "@apparent/engine-sdk/capture";
 import { validateMaterialsDocument, validateFactFile } from "@apparent/engine-sdk/capture";
 import { assembleProcessingOutput, type ProcessingInput, type ProcessingWarning, type SelectedFrame } from "../index.js";
+import { readCanonicalRecordOutput, type CanonicalRecordOutput } from "./cold-output.js";
+export { readCanonicalRecordOutput, type CanonicalRecordOutput } from "./cold-output.js";
 
 /** Public host validation seam. Implementations must delegate to the packed Engine SDK. */
 export interface BundleValidators {
@@ -195,7 +197,15 @@ export function assembleCanonicalBundle(input: BundleAssemblyInput, validators: 
   const processingWarnings: ProcessingWarning[] = [...(input.processingWarnings ?? []), ...(gap ? [{ kind: "audioInitialGap" as const, atMs: gap.atMs! }] : []), ...(transcriptUnavailable ? [{ kind: "transcriptUnavailable" as const }] : [])];
   const processing: ProcessingInput={durationMs:m.payload.clock.durationMs,bundlePath:input.admission.bundlePath,target:{app:target.app,windowTitle:target.windowTitle},transcript:{text:transcript.text,segments:transcript.segments.map(s=>({startMs:s.t0,text:s.text}))},transcriptStatus,frames:frameFacts.map(f=>({...f,absolutePath:resolve(input.admission.bundlePath,f.file)})),marks:input.marks as ProcessingInput["marks"],context:context?.values,contextChanges:context?.changes.map(c=>({timeMs:c.timeMs,key:c.key,value:c.value??undefined})),contactSheetPath:resolve(input.admission.bundlePath,sheet.relativePath),videoPath:resolve(input.admission.bundlePath,m.payload.video.file),destination:input.admission.destination,events:events.map(e=>({kind:e.kind,timeMs:e.t,...(e.kind==="note"?{pin:e.pin,text:e.text}:e.kind==="app_event"?{label:e.label}:{})} as never)),warnings:processingWarnings.length ? processingWarnings : input.processingWarnings};
   const strokeFact = strokesDoc ? input.facts.acceptedStrokes! : undefined;
-  if (strokeFact) processing.acceptedStrokeDocument = { path: resolve(input.admission.bundlePath, artifactPath(strokeFact.file.relativePath)), strokeCount: strokesDoc!.strokes.length };
+  processing.acceptedStrokeDocument = strokeFact ? { path: resolve(input.admission.bundlePath, artifactPath(strokeFact.file.relativePath)), strokeCount: strokesDoc!.strokes.length } : null;
+  // Same validated source facts as the durable output; retained inside the existing manifest seal.
+  document.recordOutput = {
+    schema: "apparent.record-output/1", transcriptStatus,
+    warnings: [...(gap ? [{ kind: "audioInitialGap" as const, atMs: gap.atMs! }] : []), ...(transcriptUnavailable ? [{ kind: "transcriptUnavailable" as const }] : [])],
+    acceptedStrokeDocument: strokeFact ? { path: artifactPath(strokeFact.file.relativePath), strokeCount: strokesDoc!.strokes.length,
+      sha256: strokeFact.file.sha256, byteLength: strokeFact.bytes.byteLength } : null,
+  } satisfies CanonicalRecordOutput;
+  readCanonicalRecordOutput(document);
   const summary=utf8(assembleProcessingOutput(processing).summaryMarkdown), apparentJson=utf8(`${JSON.stringify(document,null,2)}\n`);
   const entries=[{path:"apparent.json",role:"manifest",bytes:apparentJson,provenance:"record-generated" as const},{path:"summary.md",role:"summary",bytes:summary,provenance:"record-generated" as const},...input.artifacts.map(a=>({path:artifactPath(a.relativePath),role:a.role,bytes:a.bytes,identity:a.identity,provenance:(a.role==="video"||a.role==="audio"?"material-reference":"caller-attested") as "material-reference"|"caller-attested"}))].map(e=>({path:e.path,role:e.role,sha256:hash(e.bytes),byteLength:e.bytes.byteLength,provenance:e.provenance,...("identity" in e?{identity:e.identity}:{})}));
   for (const [path, reference] of materialReferences) entries.push({path,role:reference.role,sha256:reference.file.sha256,byteLength:reference.file.identity.size,provenance:"material-reference",identity:reference.file.identity});

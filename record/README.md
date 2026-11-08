@@ -510,3 +510,47 @@ duplicate or caller-invented initial-gap warnings fail closed. This does not
 construct/retime audio or establish source PTS, real samples, rounding precision
 or native transcription; those remain Engine producer/native-proof obligations.
 Historical output without this warning is unchanged.
+
+### Cold canonical output metadata
+
+New canonical v1 `apparent.json` documents carry the optional `recordOutput`
+block (`schema: "apparent.record-output/1"`). The existing assembler writes it
+from the same SDK-validated original facts as the durable processing context:
+`transcriptStatus`, only the original `audioInitialGap`/`transcriptUnavailable`
+warnings, and `acceptedStrokeDocument` (relative `path`, `strokeCount`, `sha256`,
+`byteLength`) or explicit `null` when original accepted strokes are unavailable.
+Collected-empty retains a sealed zero-stroke companion. The block adds no file
+or journal; the existing manifest hash and publication plan cover it. It carries
+no absolute path, owner token, lease extension or native progress state.
+
+`readCanonicalRecordOutput(bundle)` and `CanonicalRecordOutput` are public at
+`@apparent/record/processing/bundle`. This pure, IO-free reader returns an isolated
+validated block, `undefined` for legacy absence, and rejects malformed or unsupported
+recognized metadata, unsafe/colliding companion paths, contradictory counts/content
+and duplicate/invalid warnings. It checks consistency with canonical transcript,
+strokes, audio and duration. Do not infer missing legacy fields from filenames,
+empty text, PCM zeros or a stored summary. It does not migrate old bundles/plans.
+
+Cold callers join the relative companion through their existing safe bundle-file
+reader, enforce their finite byte bound and no-follow policy, and verify exact
+length/SHA before reading original identities. Neither this block nor matching
+bytes authenticate native Saved, original collection, a current lease or filesystem
+origin. A copied/edited local bundle remains caller-supplied local data; original
+publication authority must come from its existing native receipt/binding. Do not
+infer erase replay or final canvas from accepted history. Agent adoption and actual
+joined voice/ink native acceptance remain separate consumer gates.
+
+The legacy-named `videoOnlyInteractionTelemetry` warning describes unavailable
+click telemetry only; it does not establish Shift-ink absence. Original accepted
+history may be collected, collected-empty or unavailable independently.
+
+`ProcessingInput.acceptedStrokeDocument` accepts the existing object for collected
+history (including zero strokes), explicit `null` for unavailable and omitted for
+legacy unknown. The assembler persists explicit `null` when original collection is
+unavailable. Cold consumers can pass the reader's null directly, or resolve its
+relative collected path with their existing safe file reader and pass `{path,
+strokeCount}`. No new status field is needed. The formatter renders supplied
+transcript collection status and explicit unavailable accepted history; omitted
+legacy metadata leaves its previous formatting intact. A transcript-unavailable
+warning does not duplicate an explicit unavailable status. These are supplied
+local output facts, not new native collection or Saved assertions.

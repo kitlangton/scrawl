@@ -98,8 +98,8 @@ export interface ProcessingInput {
   autocrop?: { label: string; fullFramesDirectory: string };
   contactSheetPath?: string;
   videoPath?: string;
-  /** Original sealed accepted-stroke document; canonical v1 arrays omit source IDs. */
-  acceptedStrokeDocument?: { path: string; strokeCount: number };
+  /** Original accepted history: null is explicitly unavailable; absent is legacy unknown. */
+  acceptedStrokeDocument?: { path: string; strokeCount: number } | null;
 }
 
 export interface ProcessingOutput {
@@ -282,6 +282,7 @@ function validate(input: ProcessingInput): void {
     if (warning.kind === "audioInitialGap" && (!Number.isSafeInteger(warning.atMs) || warning.atMs < 0 || warning.atMs >= input.durationMs))
       throw new RangeError("Initial audio gap must precede a captured sample within the recording");
   }
+  if (input.transcriptStatus !== undefined && (!input.transcriptStatus || !["collected", "unavailable"].includes(input.transcriptStatus.state))) throw new TypeError("transcript status metadata is invalid");
   if (input.transcriptStatus?.state === "collected" && (!Number.isSafeInteger(input.transcriptStatus.segmentCount) || input.transcriptStatus.segmentCount < 0 ||
       input.transcriptStatus.segmentCount > 100_000 || !["empty", "nonempty"].includes(input.transcriptStatus.content))) throw new TypeError("transcript status metadata is invalid");
   for (const segment of input.transcript.segments) {
@@ -340,13 +341,17 @@ export function assembleProcessingOutput(
   ];
   if (context.length) lines.push(context.join(" · "));
   if (input.note?.trim()) lines.push(`Note: ${input.note.trim()}`);
+  const transcriptStatus = input.transcriptStatus;
+  if (transcriptStatus?.state === "unavailable") lines.push("Transcript unavailable.");
+  else if (transcriptStatus?.state === "collected") lines.push(transcriptStatus.content === "empty" ? "Transcript collected; no words."
+    : transcriptStatus.segmentCount === 0 ? "Transcript collected; untimed text." : `Transcript collected; ${transcriptStatus.segmentCount} ${transcriptStatus.segmentCount === 1 ? "segment" : "segments"}.`);
   for (const warning of input.warnings ?? []) {
     if (warning.kind === "videoOnlyInteractionTelemetry")
-      lines.push("Interaction context: video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes.");
+      lines.push("Interaction context: click telemetry was not collected. A visible click in the video will not appear in events, marks or click keyframes.");
     else if (warning.kind === "imageQuality") lines.push(`Image quality: ${warning.message}`);
     else if (warning.kind === "noMicrophoneAudio") lines.push("No microphone audio was saved. Check the microphone and try again.");
     else if (warning.kind === "audioInitialGap") lines.push(audioInitialGapText(warning.atMs));
-    else if (warning.kind === "transcriptUnavailable") lines.push("Transcript unavailable.");
+    else if (warning.kind === "transcriptUnavailable" && transcriptStatus?.state !== "unavailable") lines.push("Transcript unavailable.");
     else if (warning.kind === "noTranscript") lines.push(`No transcript: ${warning.message}`);
     else if (warning.kind === "noWordsTranscribed") lines.push("No words transcribed. Your audio was saved—check it or try again closer to the microphone.");
   }
@@ -405,7 +410,8 @@ export function assembleProcessingOutput(
       throw new TypeError("videoPath must be absolute and normalized");
     if (!clipboard) lines.push(`Video: ${input.videoPath}`);
   }
-  if (input.acceptedStrokeDocument) {
+  if (input.acceptedStrokeDocument === null) lines.push("Accepted strokes: unavailable.");
+  else if (input.acceptedStrokeDocument) {
     const annotation = input.acceptedStrokeDocument;
     if (!Number.isSafeInteger(annotation.strokeCount) || annotation.strokeCount < 0 || !isAbsolute(annotation.path)
       || relative(input.bundlePath, annotation.path).split(sep).includes("..") || /[\r\n\0]/u.test(annotation.path))
