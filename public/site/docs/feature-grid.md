@@ -28,7 +28,7 @@ and interaction live in `src/footer/`. All are part of the normal source build.
 
 Two activations within 420ms trigger the greeting frog’s backflip, belly-flop, water ripples and QR reveal. The QR encodes `https://app.tryapparent.com/` and is a link for same-device use. Single activation retains the wave. Escape or Back to the pond restores focus and scrolling; reduced motion skips the flight and ripples. The mounted frog owns a React portal dialog with explicit reveal stages. Its effect cleans timers, animation frames and temporary page filters on dismissal, pagehide or unmount. Design tracked in #709.
 
-## Brand review candidate
+## Approved Public branding
 
 Public keeps the capture story, founder photos, frogs and source media. Page-owned
 type uses Host Grotesk at 400/500/700; annotations use the same face and readable red
@@ -42,8 +42,9 @@ Paper text and Lilac actions. The demo, belief, founders and footer share that
 muted field; original media keeps its colors.
 This Public-only inverse mapping does not change Desktop or Connect tokens. Both
 schemes still follow the system while open. No manual or persisted override is
-introduced. The inverse mapping is a review proposal, not a claim of founder
-approval. Publication remains on hold pending review of this candidate.
+introduced. Simon approved publishing the matching live design on 2026-11-08.
+This clears the inherited branding-only publication hold; the normal verification
+and publication gates still apply.
 
 ## Feedback review refinements
 

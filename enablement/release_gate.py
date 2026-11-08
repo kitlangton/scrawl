@@ -42,19 +42,19 @@ def verified_run(repo, sha, platform, run_id, fetch, *, onboarding_candidate=Fal
     prefix = f'repos/{repo}'
     workflow = WORKFLOWS[platform]
     branch = 't3/onboarding-mac-release-baseline' if onboarding_candidate else 'main'
-    event = 'workflow_dispatch' if onboarding_candidate else 'push'
+    events = {'workflow_dispatch'} if onboarding_candidate else {'push', 'workflow_dispatch'}
     if run_id:
         runs = [fetch(f'{prefix}/actions/runs/{run_id}')]
     else:
         filename = workflow.rsplit('/', 1)[1]
-        runs = pages(f'{prefix}/actions/workflows/{filename}/runs?head_sha={sha}&branch={branch}&event={event}', fetch)
+        runs = pages(f'{prefix}/actions/workflows/{filename}/runs?head_sha={sha}&branch={branch}', fetch)
     # Never accept another commit, fork, workflow, branch/event or old attempt.
     for candidate in sorted(runs, key=lambda run: run['id'], reverse=True):
         run = fetch(f'{prefix}/actions/runs/{candidate["id"]}')
         if not (run['repository']['full_name'] == repo
                 and run['head_repository']['full_name'] == repo
                 and run['path'] == workflow and run['head_sha'] == sha
-                and run['head_branch'] == branch and run['event'] == event
+                and run['head_branch'] == branch and run['event'] in events
                 and run['status'] == 'completed' and run['conclusion'] == 'success'):
             continue
         jobs = pages(f'{prefix}/actions/runs/{run["id"]}/attempts/{run["run_attempt"]}/jobs', fetch)

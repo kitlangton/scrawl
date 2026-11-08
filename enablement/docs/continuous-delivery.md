@@ -54,8 +54,10 @@ successful Linux/shared receipt. Mac preview publication requires both the
 Linux/shared and Mac receipts for the same commit. A queued/failed Mac run cannot
 hold Linux publication; Linux success cannot authorize a Mac release.
 `enablement/release_gate.py --platform linux|macos` validates the exact caller
-workflow, upstream run/attempt, repository, main push, SHA and every required job.
-PR/manual checks, skipped jobs, failed/cancelled runs, legacy combined receipts
+workflow, upstream run/attempt, repository, main branch, SHA and every required job.
+Successful exact-main `workflow_dispatch` receipts are admitted alongside historical
+push receipts; this lets the manual-only verification workflow authorize delivery.
+PR/feature-branch checks, skipped jobs, failed/cancelled runs, legacy combined receipts
 and another platform's receipt cannot substitute for the required proof.
 
 Automatic stale candidates are skipped before builds. Every downstream checkout

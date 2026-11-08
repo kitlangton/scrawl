@@ -6,6 +6,7 @@ from pathlib import Path
 import subprocess
 import sys
 import unittest
+from urllib.parse import parse_qs, urlsplit
 
 spec = importlib.util.spec_from_file_location('release_gate', Path(__file__).resolve().parents[1] / 'release_gate.py')
 gate = importlib.util.module_from_spec(spec)
@@ -51,7 +52,9 @@ class AdmissionTests(unittest.TestCase):
             return {'status': self.status}
         if '/workflows/' in path:
             platform = 'macos' if '/verification-mac.yml/' in path else 'linux'
-            return dict(total_count=1, workflow_runs=[copy.deepcopy(self.runs[platform])])
+            event = parse_qs(urlsplit(path).query).get('event', [None])[0]
+            runs = [copy.deepcopy(self.runs[platform])] if event in (None, self.runs[platform]['event']) else []
+            return dict(total_count=len(runs), workflow_runs=runs)
         number = int(path.split('/actions/runs/')[1].split('/')[0])
         platform = 'linux' if number == 42 else 'macos'
         if '/jobs?' in path:
@@ -83,6 +86,28 @@ class AdmissionTests(unittest.TestCase):
         for platform in self.runs:
             with self.assertRaises(ValueError):
                 self.admit(platform)
+
+    def test_exact_successful_manual_main_verification_is_admitted(self):
+        for run in self.runs.values():
+            run['event'] = 'workflow_dispatch'
+        for platform, number in [('linux', '42'), ('macos', '84')]:
+            self.assertEqual(self.admit(platform, number), self.sha)
+            self.assertEqual(self.admit(platform), self.sha)
+
+    def test_manual_main_verification_retains_identity_and_required_job_checks(self):
+        for run in self.runs.values():
+            run['event'] = 'workflow_dispatch'
+        original = copy.deepcopy(self.runs['linux'])
+        for field, value in [('head_sha', 'b' * 40), ('head_branch', 'feature'),
+                             ('head_repository', {'full_name': 'fork/repo'}),
+                             ('path', '.github/workflows/other.yml'),
+                             ('status', 'in_progress'), ('conclusion', 'failure')]:
+            with self.subTest(field=field):
+                self.runs['linux'][field] = value
+                with self.assertRaises(ValueError): self.admit(run_id='42')
+                self.runs['linux'] = copy.deepcopy(original)
+        self.jobs['linux'][-1]['conclusion'] = 'skipped'
+        with self.assertRaises(ValueError): self.admit()
 
     def test_intel_mac_receipt_matches_workflow_and_is_required(self):
         workflow = Path(__file__).resolve().parents[2] / gate.WORKFLOWS['macos']
@@ -118,7 +143,7 @@ class AdmissionTests(unittest.TestCase):
     def test_unrelated_or_unsuccessful_runs_never_admit(self):
         for platform in self.runs:
             for key, value in [('head_sha', 'b'*40), ('head_branch', 'feature'),
-                               ('event', 'pull_request'), ('event', 'workflow_dispatch'),
+                               ('event', 'pull_request'), ('event', 'workflow_run'), ('event', 'schedule'),
                                ('path', '.github/workflows/other.yml'), ('status', 'in_progress'),
                                ('conclusion', 'failure'), ('conclusion', 'cancelled'),
                                ('repository', {'full_name': 'other/repo'}),
