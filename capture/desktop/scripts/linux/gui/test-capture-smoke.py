@@ -20,6 +20,12 @@ spec.loader.exec_module(smoke)
 PEER = r'''#!/usr/bin/env python3
 import json, os, pathlib, socket, sys, time
 root = pathlib.Path(os.environ['SCRAWL_GUI_OUTPUT'])
+if sys.argv[1] == 'decoder-check':
+    if os.environ.get('PEER_NO_DECODER'):
+        print('synthetic missing H.264 decoder', file=sys.stderr)
+        sys.exit(9)
+    print('Decoded 1 full-quality H.264 keyframe(s) (160x90)')
+    sys.exit(0)
 if sys.argv[1:] == ['app']:
     sockets = []
     for relative in ('.config/apparent/agent-control/capture.sock', '.config/apparent/launch/open.sock'):
@@ -184,7 +190,7 @@ class CleanupTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
-    def exercise(self, fail=False, pending=False):
+    def exercise(self, fail=False, pending=False, no_decoder=False):
         # Keep paths short, as required by the real Unix control socket contract.
         with tempfile.TemporaryDirectory(prefix='cs-', dir=os.environ.get('TMPDIR')) as directory:
             root = Path(directory)
@@ -200,15 +206,23 @@ class TransportTests(unittest.TestCase):
             systemctl = tools / 'systemctl'
             systemctl.write_text('#!/bin/sh\nprintf "DISPLAY=:synthetic\\nXDG_RUNTIME_DIR=' + str(runtime) + '\\n"\n')
             systemctl.chmod(0o700)
+            ffmpeg = tools / 'ffmpeg'
+            ffmpeg.write_text('#!/bin/sh\nfor last; do :; done\nprintf "SYNTHETIC NOT MEDIA" > "$last"\n')
+            ffmpeg.chmod(0o700)
             env = {'PATH': str(tools) + os.pathsep + os.environ['PATH'], 'SCRAWL_GUI_OUTPUT': str(out)}
             if fail:
                 env['PEER_FAIL'] = '1'
             if pending:
                 env['PEER_PENDING'] = '1'
+            if no_decoder:
+                env['PEER_NO_DECODER'] = '1'
             with patch.dict(os.environ, env):
                 recipe = SyntheticRecipe(out, binary, 1)
                 try:
-                    if pending:
+                    if no_decoder:
+                        with self.assertRaisesRegex(smoke.Failure, 'H.264 decoder'):
+                            recipe.run()
+                    elif pending:
                         with self.assertRaisesRegex(smoke.Failure, 'consent versus backend failure is unresolved'):
                             recipe.run()
                     elif fail:
@@ -224,7 +238,14 @@ class TransportTests(unittest.TestCase):
             self.assertFalse((out / '.config/apparent/launch/open.sock').exists())
             self.assertEqual(report['gates']['selected_target_pixels'], 'UNRUN')
             self.assertEqual(report['gates']['movie_nonblack_changing'], 'UNRUN')
-            if pending:
+            if no_decoder:
+                self.assertEqual(report['requests'], [])
+                self.assertFalse((out / 'scene.json').exists())
+                self.assertEqual(report['gates']['gui_ready'], 'UNRUN')
+                probe = next(c for c in report['commands'] if 'decoder-check' in c['argv'])
+                self.assertEqual(probe['exit'], 9)
+                self.assertIn('synthetic missing H.264 decoder', (out / probe['stderr']).read_text())
+            elif pending:
                 self.assertEqual(len(report['requests']), 1)
                 peer = json.loads((out / 'peer-state.json').read_text())
                 self.assertEqual(peer['receipts'][recipe.ids[0]]['status'], 'cancelled')
@@ -239,6 +260,7 @@ class TransportTests(unittest.TestCase):
                 peer = json.loads((out / 'peer-state.json').read_text())
                 self.assertEqual(peer['receipts'][recipe.ids[0]]['status'], 'cancelled')
             else:
+                self.assertEqual(report['gates']['h264_decoder'], 'PASS')
                 self.assertEqual(report['gates']['saved_receipt'], 'PASS')
                 self.assertEqual(set(report['removed_private_sockets']), {'.config/apparent/agent-control/capture.sock', '.config/apparent/launch/open.sock'})
                 self.assertEqual(report['gates']['cancelled_receipt'], 'PASS')
@@ -249,6 +271,9 @@ class TransportTests(unittest.TestCase):
 
     def test_whole_recipe_with_real_harmless_transport(self):
         self.exercise()
+
+    def test_missing_decoder_stops_before_scene_gui_or_capture(self):
+        self.exercise(no_decoder=True)
 
     def test_failed_stop_streams_survive_owned_cancel_cleanup(self):
         self.exercise(fail=True)

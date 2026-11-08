@@ -27,6 +27,54 @@ scene process remaining alive are not proof of visible or selected pixels.
 
 ## Preflight (doctor), before spending a guest run
 
+### Prepare the decoder in a new template
+
+The normal Omarchy/Arch GUI template must include **`gst-libav`** for GStreamer
+H.264 decoding, plus **`ffmpeg`** with `libx264` for the smoke sample. Encoding a
+movie successfully does not prove decoding. Install these **inside an owned
+template-preparation guest**, never on the host or during an ordinary test:
+
+```sh
+sudo pacman -Syu --needed gst-libav ffmpeg
+pacman -Q gst-libav gstreamer gst-plugins-base-libs ffmpeg
+gst-inspect-1.0 avdec_h264
+```
+
+For an offline derivative of a pinned template, use its existing coherent
+pacman database to resolve `gst-libav` (`pacman -Si` / `pacman -Sp`). Obtain that
+exact package and detached signature, verify against the guest's Arch keyring,
+and install with `pacman -U` in the owned preparation image. Require all package
+dependencies to be satisfied; do not refresh only the database (`pacman -Sy`),
+skip signatures/dependencies, or mix GStreamer versions. For example, a template
+with `gstreamer` and `gst-plugins-base-libs` 1.28.8-1 needs `gst-libav` 1.28.8-1.
+If unavailable, rebuild a coherent template instead of substituting a newer plugin.
+
+Keep the published template immutable: derive a separately named, private image
+from the stopped sanitized source, install there, stop all preparation writers,
+and publish it as a **standalone** qcow2 with its matching stopped firmware.
+Preserve the source and its hashes; do not replace a shared image or another
+worker's guest. Retain package versions/signature evidence, new disk/firmware
+hashes and the existing sanitization provenance. Keep the test-only account/key,
+clean home and no product autostart. Select the prepared image explicitly with
+`GUI_TEMPLATE`; consumers coordinate adoption rather than changing a live path.
+
+Before accepting that derivative, run the smoke recipe below in a **fresh
+disposable overlay**. Its `h264_decoder` gate generates a 160×90 H.264/YUV420P
+sample and invokes the actual staged candidate's `decoder-check` under the same
+runtime environment as the GUI. It requires native sample dimensions and retains
+both command streams. Missing tools, a failed decode or wrong dimensions stop
+before launching the scene/GUI or requesting a capture. Factory discovery and
+host FFmpeg decoding alone cannot pass this gate.
+
+Keep the original decoder-less template for explicit warning/fallback checks
+in separate disposable runs. Those checks should expect `decoder-check` to fail
+and inspect the warning/fallback; they are not normal smoke passes. Existing
+`decoder_fallback_keeps_moving_target_in_agent_images` and decoder-warning tests
+remain separate product regression coverage. AppImage decoder acceptance remains
+the separate `check-appimage-decoder.sh` packaging check.
+
+### Stage the candidate
+
 Use a sanitized, powered-off, standalone qcow2 template with matching stopped
 OVMF variables, a test-only SSH key and a desktop-autologin test account. It
 must contain no personal material or autostarted Apparent/Scrawl. Do not use
@@ -66,7 +114,8 @@ Vulkan/GStreamer runtime, a working user session bus, Hyprland and ScreenCast
 portal/PipeWire. The scenario imports the desktop environment from
 `systemctl --user show-environment`, checks `DISPLAY`/runtime, refuses an existing
 `apparent.sock` or same-user Apparent/Scrawl process, and waits for real control
-readiness. It does not install codecs or repair a template.
+readiness. It checks actual H.264 decoding before capture, but does not install
+codecs or repair a template.
 
 The private output directory is also `HOME`, with private config/data/cache,
 `APPARENT_CONFIG` and `APPARENT_CAPTURES_DIR`. The real desktop runtime and bus
@@ -166,6 +215,12 @@ observations in a separate parent evidence note tied to the candidate hash and
 exact bundle; preserve the scenario's original report rather than rewriting it
 into a stronger verdict. Audio, shortcuts, picker UI acceptance, ink and
 cross-display correctness remain unrun unless separately exercised.
+
+For normal-decoder acceptance, also require no missing-decoder/fallback warning
+in the app log or `summary.md`, and verify native-sized keyframes against the
+movie (use `frames-full/` when normal autocrop creates cropped frames). Inspect
+the contact sheet and semantic summary together; decoder success alone does not
+prove useful crop content or text. Do not remove the fallback warning to pass.
 
 ## Report vocabulary and failure boundaries
 
