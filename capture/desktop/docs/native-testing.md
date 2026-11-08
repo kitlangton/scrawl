@@ -132,6 +132,19 @@ speaker stimulus is used. This recipe makes no microphone-quality claim.
 
 ## Run and native consent
 
+The runner defaults to `--desktop hyprland`. For a separately prepared GNOME or
+KDE Wayland image, pass `--desktop gnome` or `--desktop kde`. It requires the
+test account's compositor process and exported X11/Wayland/runtime environment,
+Wayland session type and matching desktop identity before staging the candidate.
+A GDM/SDDM greeter or another desktop is not readiness. The selected desktop is
+recorded in `result.json`; this check does not establish product acceptance.
+Use a stopped, sanitized standalone image/firmware pair with its preparation
+provenance and hashes. The Omarchy templates contain neither GNOME Shell nor
+KWin; selecting an option does not install or configure a desktop. The existing
+capture smoke recipe below remains an Omarchy-tested recipe until separately
+verified on those desktops. Keep compositor/version, multi-output and native
+product evidence separate from driver contracts.
+
 ```sh
 python3 capture/desktop/scripts/linux/gui/gui-vm.py \
   --template "$GUI_TEMPLATE/system.qcow2" \
