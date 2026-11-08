@@ -180,6 +180,8 @@ jobs:
           npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
           node capture/desktop/ui/frontend/node_modules/electron/install.js
           node --experimental-strip-types enablement/prerequisites/native.ts
+          # Later clean packaging installs must use the archive prepared here.
+          printf 'electron_config_cache=%s\n' "$electron_config_cache" >> "$GITHUB_ENV"
       - name: Verify the independent Connect client package
         if: needs.select.outputs.root == 'true'
         run: |

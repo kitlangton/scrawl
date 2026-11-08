@@ -323,6 +323,10 @@ dependency compilation after a failed run. Those savings are projected, not a
 measured walltime reduction; successful exact-key hits already skip cache saves.
 No main-only save restriction is used, so isolated feature branches can seed caches.
 
+After native prerequisites pass, the prepared Electron download-cache path is
+exported to subsequent job steps. Clean packaging installs reuse that archive
+while retaining the ordinary installer and its checksum/version checks.
+
 Platform Rust jobs retain seven-day observation-only JSONL spans and Cargo HTML
 compiler timings. Spans report elapsed active command time, never CPU time or
 billed savings. Runner queue time is separate: use Actions job queued/started
