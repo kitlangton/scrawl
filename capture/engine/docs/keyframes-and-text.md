@@ -286,8 +286,8 @@ handoff content and do not survive ending/restarting the capture.
 
 Rust stores submitted text plus the pin's original timestamp and normalized
 position in `notes.json`. Finalization/recovery includes it as typed `note`
-events in `apparent.json` and an explicit Typed note section in `summary.md`,
-with the pin's keyframe link where available. Reprocessing replaces these
+events in `apparent.json` and timed Typed note entries alongside speech in
+`summary.md`, with the pin's keyframe link where available. Reprocessing replaces these
 events from the local notes file rather than duplicating them. The note's
 clock/anchor never moves to the time typing or editing finished. Text stays
 semantic; popup controls are not rasterized captions.

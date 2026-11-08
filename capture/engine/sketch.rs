@@ -706,6 +706,18 @@ pub fn timeline(bundle: &ApparentBundle) -> Vec<String> {
     items.into_iter().map(|item| item.1).collect()
 }
 
+/// Lossless typed feedback shared by the ordinary and interleaved timelines.
+pub(crate) fn typed_note_text(bundle: &ApparentBundle, pin: u32, text: &str) -> String {
+    let frame = bundle.marks.iter().find(|m| m.pin == Some(pin))
+        .and_then(|m| m.frame.as_deref());
+    let mut label = format!("Typed note · pin {pin}{}:",
+        frame.map(|f| format!(" · {f}")).unwrap_or_default());
+    for line in text.lines() {
+        label.push_str(&format!("\n    {line}"));
+    }
+    label
+}
+
 /// Longest app-provided screen name or context value shown in the summary.
 const CONTEXT_VALUE_CHARS: usize = 60;
 
@@ -853,13 +865,6 @@ fn summary_markdown_formatted(
     {
         out.push_str(&format!("Note: {}\n", note.trim()));
     }
-    for event in &bundle.events {
-        if let InteractionEvent::Note { t, pin, text, .. } = event {
-            let frame = bundle.marks.iter().find(|m| m.pin == Some(*pin)).and_then(|m| m.frame.as_deref());
-            out.push_str(&format!("Typed note · pin {pin} · {}{}:\n", format_clock(*t), frame.map(|f| format!(" · {f}")).unwrap_or_default()));
-            for line in text.lines() { out.push_str(&format!("    {line}\n")); }
-        }
-    }
     if bundle.interaction_telemetry == Some(crate::shared::model::InteractionTelemetry::VideoOnly) {
         out.push_str("Interaction context: timed CLI video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes. Use the app's recording shortcut for interaction context.\n");
     }
@@ -895,6 +900,7 @@ fn summary_markdown_formatted(
         .iter()
         .filter_map(|event| match event {
             InteractionEvent::AppEvent { t, label } => Some((*t, format!("app: {label}"))),
+            InteractionEvent::Note { t, pin, text, .. } => Some((*t, typed_note_text(bundle, *pin, text))),
             _ => None,
         })
         .collect();
@@ -906,20 +912,19 @@ fn summary_markdown_formatted(
         };
         (change.t, text)
     }));
+    // Text-only captures still need one timed stream: adding a note must never
+    // suppress speech merely because no keyframe was selected.
+    if bundle.keyframes.is_empty() && !app_events.is_empty() {
+        app_events.extend(bundle.transcript.segments.iter().map(|s| (s.t0, format!("“{}”", s.text))));
+        if bundle.transcript.segments.is_empty() && !bundle.transcript.text.trim().is_empty() {
+            app_events.push((0, format!("“{}”", bundle.transcript.text.trim())));
+        }
+    }
     app_events.sort_by_key(|(t, _)| *t);
     if agent_context && !bundle.keyframes.is_empty() {
         let texts = crate::capture::agent::context::keyframe_texts(bundle);
         let mut shown_screen = start_screen;
         for (frame, text) in bundle.keyframes.iter().zip(texts) {
-            if frame.reason == KeyframeReason::Whiteboard {
-                out.push_str(&format!(
-                    "- #{} ({}) {}\n",
-                    frame.index,
-                    format_clock(frame.t),
-                    frame.event
-                ));
-                continue;
-            }
             let screen = bundle.screen_at(frame.t);
             let screen_marker = match screen {
                 Some(name) if screen != shown_screen => format!(" ⟨{}⟩", context_value(name)),
@@ -2197,6 +2202,57 @@ mod tests {
         assert!(summary.contains("apparent zoom"));
         assert!(summary.contains("- #1 (0:05) “This row is too dense.”"));
         assert!(!summary.contains("No transcript"));
+
+        let mut text_only = bundle.clone();
+        text_only.keyframes.clear();
+        for context in [false, true] {
+            let summary = summary_markdown_with(&text_only, std::path::Path::new("/tmp"), context);
+            assert!(summary.ends_with("“This row is too dense.”\n"));
+            assert!(!summary.contains("· 0:03"));
+        }
+
+        // Typed feedback belongs between the surrounding spoken keyframes, once,
+        // retaining its exact text and the original pin/frame reference.
+        let mut mixed = bundle.clone();
+        mixed.marks[0].pin = Some(1);
+        mixed.events.push(InteractionEvent::Note { t: 6000, pin: 1, x: 0.5, y: 0.5,
+            text: "Exact typed feedback\n  Second line  ".into() });
+        let mut later = mixed.keyframes[0].clone();
+        later.index = 2; later.t = 9000; later.said = Some("Later spoken feedback".into());
+        later.file = "frames/frame-02.png".into(); later.mark_id = None; later.reason = KeyframeReason::SceneChange;
+        mixed.keyframes.push(later);
+        for context in [false, true] {
+            let summary = summary_markdown_with(&mixed, std::path::Path::new("/tmp"), context);
+            assert_eq!(summary.matches("Exact typed feedback").count(), 1);
+            assert!(summary.find("This row").unwrap() < summary.find("Exact typed feedback").unwrap());
+            assert!(summary.find("Exact typed feedback").unwrap() < summary.find("Later spoken feedback").unwrap());
+            assert!(summary.contains("0:06 Typed note · pin 1 · frames/frame-01.png:\n    Exact typed feedback\n      Second line  \n"));
+        }
+
+        mixed.keyframes[0].reason = KeyframeReason::Whiteboard;
+        for context in [false, true] {
+            let whiteboard = summary_markdown_with(&mixed, std::path::Path::new("/tmp"), context);
+            assert_eq!(whiteboard.matches("Exact typed feedback").count(), 1);
+            assert!(whiteboard.contains("This row is too dense."));
+            assert!(whiteboard.contains("Later spoken feedback"));
+        }
+
+        mixed.keyframes.clear();
+        mixed.transcript.segments.push(TranscriptSegment {
+            t0: 9000, t1: 10000, text: "Later spoken feedback".into(),
+        });
+        for context in [false, true] {
+            let summary = summary_markdown_with(&mixed, std::path::Path::new("/tmp"), context);
+            assert_eq!(summary.matches("Exact typed feedback").count(), 1);
+            assert!(summary.find("This row").unwrap() < summary.find("Exact typed feedback").unwrap());
+            assert!(summary.find("Exact typed feedback").unwrap() < summary.find("Later spoken feedback").unwrap());
+        }
+        mixed.transcript.segments.clear();
+        for context in [false, true] {
+            let summary = summary_markdown_with(&mixed, std::path::Path::new("/tmp"), context);
+            assert_eq!(summary.matches("This row is too dense.").count(), 1);
+            assert_eq!(summary.matches("Exact typed feedback").count(), 1);
+        }
 
         // Audio but no speech model yet: the summary says so instead of staying quiet.
         let audio_dir = std::env::temp_dir().join(format!(

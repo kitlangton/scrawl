@@ -51,6 +51,7 @@ enum Item<'a> {
     Event {
         text: String,
     },
+    Note { text: String },
 }
 
 #[derive(Clone, Debug)]
@@ -89,6 +90,16 @@ pub fn keyframe_texts(bundle: &ApparentBundle) -> Vec<FrameText> {
                 item: Item::Mark {
                     mark,
                     number: numbered.then_some(n + 1),
+                },
+            });
+        }
+    }
+    for event in &bundle.events {
+        if let InteractionEvent::Note { t, pin, text, .. } = event {
+            items[owner(*t)].push(Timed {
+                t: *t,
+                item: Item::Note {
+                    text: crate::capture::engine::sketch::typed_note_text(bundle, *pin, text),
                 },
             });
         }
@@ -492,7 +503,7 @@ impl DragRun {
 /// A click, scroll, point or key press without coordinates; `None` for a point nothing names.
 fn event_text(event: &InteractionEvent) -> Option<String> {
     match event {
-        InteractionEvent::Note { .. } => None, // Typed notes have their own lossless summary section.
+        InteractionEvent::Note { .. } => None, // Kept as separate lossless items in keyframe_texts().
         InteractionEvent::Click {
             label,
             button,
@@ -661,7 +672,7 @@ fn mark_label(mark: &Mark, number: Option<usize>) -> String {
 fn label(item: &Timed) -> String {
     match &item.item {
         Item::Mark { mark, number } => mark_label(mark, *number),
-        Item::Event { text } => format!("· {} {text}", format_clock(item.t)),
+        Item::Event { text } | Item::Note { text } => format!("· {} {text}", format_clock(item.t)),
     }
 }
 
@@ -725,7 +736,13 @@ fn interleave(words: &[&WordTiming], items: &[Timed]) -> FrameText {
     let clauses = clause_starts(words);
     let mut splits: Vec<u64> = items
         .iter()
-        .map(|item| split_point(item.t, words, &clauses))
+        .map(|item| {
+            if matches!(item.item, Item::Note { .. }) {
+                item.t
+            } else {
+                split_point(item.t, words, &clauses)
+            }
+        })
         .collect();
     for i in 1..splits.len() {
         splits[i] = splits[i].max(splits[i - 1]);
@@ -742,6 +759,15 @@ fn interleave(words: &[&WordTiming], items: &[Timed]) -> FrameText {
     let mut lines: Vec<String> = Vec::new();
     let mut open: Option<String> = None;
     for (i, item) in items.iter().enumerate() {
+        if matches!(item.item, Item::Note { .. }) {
+            lines.extend(open.take());
+            lines.push(label(item));
+            let said = said_between(Some(splits[i]), splits.get(i + 1).copied());
+            if !said.is_empty() {
+                lines.push(said);
+            }
+            continue;
+        }
         let is_mark = matches!(item.item, Item::Mark { .. });
         let line = match open.take() {
             Some(line) if !is_mark => format!("{line} {}", label(item)),
@@ -846,6 +872,30 @@ mod tests {
                 text: text.into(),
             })
             .collect()
+    }
+
+    #[test]
+    fn multiline_notes_keep_the_next_speech_and_event_outside_their_text() {
+        let mut b = bundle(
+            words(&[(5000, "Before"), (6500, "After."), (7500, "Later.")]),
+            vec![keyframe(1, 5000, KeyframeReason::SceneChange, "Before After. Later.")],
+        );
+        b.events = vec![
+            InteractionEvent::Note { t: 6000, pin: 1, x: 0.5, y: 0.5,
+                text: "First line\nSecond line".into() },
+            InteractionEvent::Click { t: 7000, x: 0.5, y: 0.5, button: None,
+                role: Some("button".into()), label: Some("Save".into()) },
+        ];
+        let texts = keyframe_texts(&b);
+        let text = &texts[0];
+        // A note keeps its exact split time even inside a clause that ordinary
+        // interactions would snap back to the word at 0:05.
+        assert_eq!(text.head, "“Before”");
+        assert_eq!(text.lines, [
+            "· 0:06 Typed note · pin 1:\n    First line\n    Second line",
+            "“After.”",
+            "· 0:07 clicked button “Save” “Later.”",
+        ]);
     }
 
     fn keyframe(index: usize, t: u64, reason: KeyframeReason, said: &str) -> Keyframe {
