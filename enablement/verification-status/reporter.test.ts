@@ -176,3 +176,24 @@ test('base rename cannot hide removed native source behind a documentation desti
  assert.equal(writes.at(-1).state,'pending');
  assert.equal(writes.at(-1).description,'Integrate changed base inputs');
 });
+
+test('portable routing requires Linux select command success, including on Mac callers', async () => {
+ const {readFileSync} = await import('node:fs');
+ const source = readFileSync('.github/workflows/verification-platform.yml', 'utf8');
+ const document = YAML.parse(source);
+ assert.equal(document.jobs.select['runs-on'], 'ubuntu-24.04');
+ for (const id of ['rust','desktop-ui']) assert.equal(document.jobs[id].needs, 'select');
+ assert.ok(document.jobs.rust.steps.some((s:any) => s.run?.includes('--execution platform')));
+ for (const runner of ['ubuntu-24.04', 'macos-15-intel']) {
+  const required = policy(source, runner);
+  const portable = 'Portable contracts and Connect browser fixtures (Linux, no native proof)';
+  assert.ok(required.steps['verify / select'].includes(portable));
+  const selected = {name:'verify / select',run_id:4,status:'completed',conclusion:'success',
+    steps: required.steps['verify / select'].map(name=>({name,conclusion:'success'}))};
+  assert.equal(evaluate(run,[selected],identity,[selected.name],{[selected.name]:required.steps[selected.name]}),'success');
+  for(const conclusion of ['skipped','failure']) {
+   const steps=selected.steps.map(s=>s.name===portable?{...s,conclusion}:s);
+   assert.equal(evaluate(run,[{...selected,steps}],identity,[selected.name],{[selected.name]:required.steps[selected.name]}),'failure');
+  }
+ }
+});
