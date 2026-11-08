@@ -279,3 +279,26 @@ freshness without failing the successful commit. No background worker is started
 other worktrees are untouched. Existing worktrees acquire the hook when they
 integrate this change; frozen evidence checkouts need not be updated. Local hook
 checks do not replace current-main integration and review before merge.
+
+## Verification timing diagnostics
+
+Platform Rust jobs retain seven-day observation-only JSONL spans and Cargo HTML
+compiler timings. Spans report elapsed active command time, never CPU time or
+billed savings. Runner queue time is separate: use Actions job queued/started
+timestamps; it is not included in command spans. No queue estimate is inferred
+from workflow walltime. The exact candidate SHA accompanies spans.
+
+The verifier times contracts, application build, test compilation and test
+execution separately. With timing enabled, an identical Cargo test selection is
+compiled with --no-run first; the original Cargo test command then executes in
+full, including its normal incremental compiler check. Compiler HTML describes
+compilation rather than harness execution. Packaging, bridge integration, native
+assertions and native Storage socket/control readiness have named spans.
+Readiness spans can overlap the enclosing native assertion span; do not sum them.
+
+Missing/endless spans mean incomplete observation, never successful acceptance.
+Started commands retain their start record if interrupted; TERM/INT/HUP are
+forwarded and exit status is preserved. Artifact upload is guarded by the timing
+step outcome, runs after failures, and missing diagnostics only warn. Diagnostics
+record no arguments, environment dump, transcript or application data. Existing
+native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
