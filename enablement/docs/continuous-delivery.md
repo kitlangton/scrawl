@@ -46,8 +46,8 @@ its standalone verifier. Connect web runs its full package suite and Public
 composition; client changes also run root integration; service changes include
 client, browser, Public and root consumers. Desktop frontend changes run npm tests,
 synthetic Electron smokes (Xvfb on Linux) and conservative root verification.
-Capture script changes also discover every tracked Python contract directory
-under Desktop/Agent scripts, including nested packaging and Linux harness tests;
+Capture script changes also load every tracked Python contract file explicitly
+under Desktop/Agent scripts, including nested packaging and hyphenated Linux tests;
 these run before expensive suites. New enablement test filenames are discovered
 automatically. Other capture changes retain the broad Rust/Engine verifier. Shared UI
 also selects Desktop, service and root integration. Package manifests/lockfiles

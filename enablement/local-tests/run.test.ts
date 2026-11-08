@@ -84,7 +84,7 @@ test('real Git delta includes earlier commits and both sides of cross-owner rena
   assert.ok(changedPaths(base, 'HEAD', dir).includes('capture/engine/old.rs'));
 }));
 
-test('capture script changes discover offline contracts including nested and new test files', () => fixture((dir, env) => {
+test('capture script changes execute offline contracts including hyphenated and new test files', () => fixture((dir, env) => {
   for (const path of ['capture/desktop/scripts/packaging/test_installer_guard.py',
     'capture/desktop/scripts/tests/mac/test_setup.py', 'capture/desktop/scripts/linux/gui/test-gui-vm.py',
     'capture/agent/scripts/tests/test_provision_narrator.py', 'capture/desktop/scripts/new/test_new.py']) {
@@ -94,9 +94,13 @@ test('capture script changes discover offline contracts including nested and new
   for (const args of [['init', '-q'], ['add', '.']]) assert.equal(spawnSync('git', args, { cwd: dir, env }).status, 0);
   const suites = captureToolTests(dir);
   assert.equal(suites.length, 5);
-  assert.ok(suites.some(command => command.argv.includes('capture/desktop/scripts/linux/gui')));
-  assert.ok(suites.some(command => command.argv.includes('capture/desktop/scripts/new')));
-  assert.ok(suites.every(command => command.argv.at(-1) === 'test*.py'));
+  assert.ok(suites.some(command => command.argv.includes('capture/desktop/scripts/new/test_new.py')));
+  const hyphenated = suites.find(command => command.argv.includes('capture/desktop/scripts/linux/gui/test-gui-vm.py'))!;
+  assert.ok(hyphenated);
+  const receipt = join(dir, 'executed');
+  writeFileSync(join(dir, hyphenated.argv.at(-1)!), `import unittest\nfrom pathlib import Path\nclass Contract(unittest.TestCase):\n def test_failure(self):\n  Path(${JSON.stringify(receipt)}).write_text('executed')\n  self.fail('hyphenated regression reached')\n`);
+  assert.throws(() => execute([hyphenated], dir), /failed \(1\)/);
+  assert.equal(readFileSync(receipt, 'utf8'), 'executed');
 }));
 
 test('new native prerequisite tests join the mandatory contract inventory automatically', () => fixture((dir) => {

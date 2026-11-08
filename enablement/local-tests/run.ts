@@ -41,13 +41,12 @@ export function changedPaths(base: string, head: string, cwd = root): string[] {
 }
 
 export function captureToolTests(cwd = root): Command[] {
-  // Discover every tracked offline Python contract directory, including hyphenated
-  // Linux harness tests. unittest alone does not recurse into non-package folders.
+  // Load tracked files explicitly: discovery skips hyphenated module filenames
+  // and does not recurse into these non-package test folders.
   const result = spawnSync('git', ['ls-files', '-z', '--', 'capture/desktop/scripts/', 'capture/agent/scripts/'], { cwd, encoding: 'utf8' });
   if (result.error || result.status !== 0) throw Error('Cannot enumerate capture tooling tests');
-  const directories = new Set(result.stdout.split('\0').filter(path => /\/test[-_][^/]*\.py$/.test(path))
-    .map(path => path.slice(0, path.lastIndexOf('/'))));
-  return [...directories].sort().map(directory => ({ argv: ['python3', '-m', 'unittest', 'discover', '-s', directory, '-p', 'test*.py'], cwd: '.' }));
+  return result.stdout.split('\0').filter(path => /\/test[-_][^/]*\.py$/.test(path)).sort()
+    .map(path => ({ argv: ['python3', '-m', 'unittest', path], cwd: '.' }));
 }
 
 export function commands(selected: Owner[], base: string, head: string, platform = process.platform): Command[] {
