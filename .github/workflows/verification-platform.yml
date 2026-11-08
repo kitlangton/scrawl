@@ -92,8 +92,6 @@ jobs:
     name: rust (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
-    env:
-      APPARENT_TIMING_FILE: ${{ runner.temp }}/verification-timings.jsonl
     steps:
       - uses: actions/checkout@v4
         with:
@@ -130,7 +128,8 @@ jobs:
         id: timing
         run: |
           node --experimental-strip-types --test enablement/timing/command.test.ts
-          touch "$APPARENT_TIMING_FILE"
+          echo "APPARENT_TIMING_FILE=$RUNNER_TEMP/verification-timings.jsonl" >> "$GITHUB_ENV"
+          touch "$RUNNER_TEMP/verification-timings.jsonl"
       - uses: oven-sh/setup-bun@v2
         if: needs.select.outputs.browser == 'true'
         with:
