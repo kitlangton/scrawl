@@ -47,8 +47,11 @@ test('shipped controls mount, dispatch allowed actions and reflect parent busy s
   await page.waitForFunction(() => !(document.querySelector('button') as HTMLButtonElement)?.disabled);
   assert.equal(await page.evaluate(() => document.visibilityState), 'visible');
   await record.click();
-  await page.waitForTimeout(100);
-  assert.ok(output.join('').includes('{"action":"record"}'));
+  const deadline = Date.now() + 5000;
+  while (!output.join('').includes('{"action":"record"}')) {
+    assert.ok(Date.now() < deadline, 'Parent did not receive the record action');
+    await new Promise(resolve => setTimeout(resolve, 20));
+  }
   child.stdin.write('busy\n');
   await page.getByRole('status').waitFor();
   assert.equal(await record.isDisabled(), true);
