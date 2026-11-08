@@ -308,7 +308,7 @@ step outcome, runs after failures, and missing diagnostics only warn. Diagnostic
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
 
-## PR verification status (bootstrap required)
+## PR verification status
 
 The `verification-status` job in `checks.yml` is a credentialed, event-driven default-branch reporter.
 It publishes the commit status **Verification complete**, independent of the cheap
@@ -352,8 +352,10 @@ a second human GitHub approver requirement. It never authorizes publication.
 
 GitHub status writes have no compare-and-swap: final candidate/evidence re-reads
 and serialized writers reduce the race window; later lifecycle events reconcile
-concurrent external changes. Live bootstrap and required-check activation remain
-unverified until performed after merge under existing gates.
+concurrent external changes. Main requires `Verification complete` from the
+GitHub Actions app, including for administrators. Live pending/failure/success
+proof and the Actions-token recovery check preceded activation; this status
+does not replace separate product or release acceptance.
 
 The reporter writes pending before reading a known PR's evidence and isolates
 per-PR API failures so later candidates still reconcile. A PR lifecycle event
