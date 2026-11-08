@@ -316,55 +316,6 @@ step outcome, runs after failures, and missing diagnostics only warn. Diagnostic
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
 
-## Manual PR verification status
-
-The `verification-status` job in `checks.yml` runs only on explicit
-`workflow_dispatch`. It reconciles open main PRs using trusted default-branch
-policy and publishes **Verification complete**. It never dispatches native work.
-PR edits and platform/Public workflow lifecycle events no longer start reporters.
-There are no automatic credentialed status writes or global PR scans.
-
-Main requires this Actions-owned status. Under the manual-only design it must be
-explicitly refreshed from trusted main after the candidate's required manual
-workflows finish, and again when the candidate or relevant base evidence changes.
-No automated refresh is implied by a green repository-check run. Preserve the
-required check and existing source review, platform/native acceptance and
-exact-commit publication admission; do not write a status by hand.
-
-The manual reporter retains its evidence rules: native changes require both manual
-exact-head platform workflows, their latest run/attempt and the required successful
-job/command union including Mac native assertions. Public-only changes require
-manual exact-head Public verification. Unknown evidence stays pending and failed,
-cancelled or missing required jobs cannot pass. Candidate policy is parsed as data;
-it is never executed with the reporter credential. Writers serialize and re-read
-candidates and evidence before posting, but a later change requires another manual
-refresh. API failures remain operational errors, never successful verification.
-
-### Reporter API budgets and targeted recovery
-
-Manual reporting retains the trusted Actions credential, live-main freshness
-checks and bounded API client. A targeted dispatch uses a 60-request hard budget
-and requires 70 remaining requests; a blank/global dispatch uses a 200-request
-budget and requires 210 remaining. Immutable content is cached within the run;
-mutable refs, permissions and final evidence remain fresh. Status writes are
-spaced by one second. Quota exhaustion, the five-request reserve or budget
-exhaustion halts the run immediately, without retries or credential substitution.
-
-Manual dispatches have unique workflow concurrency keys. Targeted recovery jobs
-serialize per PR, separately from global scans, so unrelated manual requests
-cannot evict one another before job admission. API failures report reset/Retry-After
-times and request IDs without exposing credentials or response bodies. After the
-reported reset time, one targeted recovery can be requested from trusted main:
-
-```sh
-gh workflow run checks.yml --ref main -f pull_request=1094
-```
-
-Its own Actions-token quota preflight must pass before status writes. A user-token
-quota check or rerunning application/native verification does not repair reporter
-delivery. If quota remains insufficient, retain the hold until the reported reset.
-
-
 The disposable Mac Storage fixture waits for real Storage/Retention read receipts
 before its single Change click. Its TypeScript CI driver separates the owned
 Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
@@ -373,3 +324,12 @@ no mutation, keyboard shortcut or preference write is retried. Existing exact
 PID/window/sheet/control checks, Choose/Cancel/Reset assertions, native consent,
 process cleanup and test deadlines remain required. This is test orchestration,
 not a change to installed Desktop routing or application persistence policy.
+
+## PR verification evidence
+
+The automatic verification status reporter and its `Verification complete` commit
+status have been removed to eliminate repeated GitHub API reconciliation.
+Linux, Mac and Public verification workflows remain available under their existing
+manual triggers. Exact-head verification, independent review, native acceptance
+and publication admission remain required; inspect their workflow evidence
+directly. The retired status is no longer required by branch protection.

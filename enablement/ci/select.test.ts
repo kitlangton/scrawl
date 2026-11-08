@@ -8,18 +8,20 @@ import {select, changedPaths} from './select.ts';
 const root = new URL('../../', import.meta.url);
 const workflow = (name: string) => YAML.parse(readFileSync(new URL(`.github/workflows/${name}`, root), 'utf8')) as any;
 
-test('only one automatic workflow; verification/publication and status reporting stay manual', () => {
+test('only one automatic workflow; platform verification stays manual and reporter stays retired', () => {
   const automatic = readdirSync(new URL('.github/workflows/', root)).filter(name => {
     const events = Object.keys(workflow(name).on);
     return events.some(event => !['workflow_dispatch', 'workflow_call'].includes(event));
   });
   assert.deepEqual(automatic, ['checks.yml']);
   const ci = workflow('checks.yml');
-  assert.deepEqual(Object.keys(ci.on), ['pull_request', 'push', 'workflow_dispatch']);
+  assert.deepEqual(Object.keys(ci.on), ['pull_request', 'push']);
   assert.deepEqual(ci.on.pull_request, {branches: ['main']});
   assert.deepEqual(ci.on.push, {branches: ['main']});
-  assert.equal(ci.on.workflow_dispatch.inputs.pull_request.type, 'string');
-  assert.equal(ci.jobs['verification-status'].if, "github.event_name == 'workflow_dispatch'");
+  assert.equal(ci.jobs['verification-status'], undefined);
+  assert.equal(ci.on.workflow_run, undefined);
+  assert.equal(ci.on.pull_request_target, undefined);
+  assert.equal(readdirSync(new URL('enablement/', root)).includes('verification-status'), false);
   assert.equal(ci.permissions.contents, 'read');
   assert.equal(ci.jobs.public.uses, './.github/workflows/stream-public.yml');
   assert.equal(ci.jobs.public.if, "needs.select.outputs.public == 'true'");
