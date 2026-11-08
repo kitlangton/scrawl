@@ -38,6 +38,13 @@ class SelectionTests(unittest.TestCase):
                     test = next(i for i, c in enumerate(commands) if "test" in c)
                     self.assertLess(build, test)
 
+    def test_exited_cargo_descendant_cannot_hold_stdout_open(self):
+        test = [sys.executable, "-c",
+                'import subprocess,sys; subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"]); '
+                'print(sys.argv[1],flush=True)',
+                '{"reason":"build-finished","success":true}']
+        verification.overlap_cargo_test_and_build(test, [sys.executable, "-c", "pass"])
+
     def test_overlap_root_build_uses_event_gates_and_cleans_processes(self):
         # The harness asserts the build has not begun before the event, then
         # waits on a build-owned marker to prove the two workloads overlap.

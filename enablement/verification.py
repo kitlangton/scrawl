@@ -251,7 +251,15 @@ def overlap_cargo_test_and_build(test_command, build_command):
                         except BlockingIOError:
                             pass
                         raise subprocess.CalledProcessError(status, process.args)
-            for key, _ in selector.select(timeout=0.05):
+            ready = selector.select(timeout=0.05)
+            # Cargo descendants can inherit stdout; do not await their EOF.
+            if not ready and stream_open and test_process.poll() is not None:
+                selector.unregister(test_process.stdout)
+                stream_open = False
+                if buffer:
+                    print(buffer.decode(errors="replace"), end="", flush=True)
+                    buffer = b""
+            for key, _ in ready:
                 chunk = os.read(key.fileobj.fileno(), 65536)
                 if not chunk:
                     selector.unregister(key.fileobj)
