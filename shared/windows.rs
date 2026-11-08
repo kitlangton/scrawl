@@ -146,7 +146,7 @@ pub struct AppMeta {
 pub fn filter_windows(
     raw: &[RawWindow],
     frame: TargetFrame,
-    own_pid: i32,
+    is_owned: impl Fn(i32) -> bool,
     frontmost_pid: Option<i32>,
     dock: Option<[f64; 4]>,
     app_meta: &mut dyn FnMut(i32) -> AppMeta,
@@ -166,7 +166,7 @@ pub fn filter_windows(
             && x + width > frame.x
             && y < frame.y + frame.height
             && y + height > frame.y;
-        if w.pid == own_pid || w.alpha <= 0.01 || width < 24.0 || height < 16.0 || !overlaps {
+        if is_owned(w.pid) || w.alpha <= 0.01 || width < 24.0 || height < 16.0 || !overlaps {
             continue;
         }
         let meta = app_meta(w.pid);
@@ -510,6 +510,12 @@ fn app_meta_of(pid: i32) -> AppMeta {
     }
 }
 
+// Window metadata excludes the same app-owned UI across native and child hosts.
+// Pixel capture retains its separate movable-controls visibility contract.
+fn owned_ui_process(pid: i32) -> bool {
+    pid == std::process::id() as i32 || crate::capture::ui_process::owns(pid)
+}
+
 /// One timed snapshot of the windows overlapping `frame`.
 #[cfg(not(target_os = "macos"))]
 pub fn snapshot(
@@ -522,7 +528,7 @@ pub fn snapshot(
     filter_windows(
         &raw,
         frame,
-        std::process::id() as i32,
+        owned_ui_process,
         front,
         dock,
         &mut |pid| cache.entry(pid).or_insert_with(|| app_meta_of(pid)).clone(),
@@ -598,7 +604,7 @@ pub fn snapshot(
         filter_windows(
             &raw,
             frame,
-            std::process::id() as i32,
+            owned_ui_process,
             front,
             dock,
             &mut |pid| cache.entry(pid).or_insert_with(|| app_meta_of(pid)).clone(),
@@ -712,6 +718,25 @@ fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn window_log_excludes_live_owned_ui_children_but_keeps_foreign_electron() {
+        use std::process::{Command, Stdio};
+        let child = Command::new("sh").args(["-c", "sleep 15"]).stdin(Stdio::null()).stdout(Stdio::null()).spawn().unwrap();
+        let pid = child.id() as i32;
+        let mut child = crate::capture::ui_process::UiChild::new(child);
+        let window = |id, pid| RawWindow { id, pid, owner: "Electron".into(),
+            title: "Recording controls".into(), bounds: [20.0, 20.0, 450.0, 58.0], layer: 0, alpha: 1.0 };
+        let mut foreign = Command::new("sh").args(["-c", "sleep 15"]).stdin(Stdio::null()).stdout(Stdio::null()).spawn().unwrap();
+        let raw = [window(1, pid), window(2, foreign.id() as i32)];
+        let mut meta = |_| AppMeta { bundle_id: Some("electron".into()), regular: true };
+        let entries = filter_windows(&raw, frame(), owned_ui_process, None, None, &mut meta);
+        child.kill().unwrap(); child.wait().unwrap();
+        let retired = filter_windows(&raw, frame(), owned_ui_process, None, None, &mut meta);
+        foreign.kill().unwrap(); foreign.wait().unwrap();
+        assert_eq!(entries.iter().map(|w| w.id).collect::<Vec<_>>(), vec![2]);
+        assert_eq!(retired.iter().map(|w| w.id).collect::<Vec<_>>(), vec![1, 2]);
+    }
 
     fn frame() -> TargetFrame {
         TargetFrame {
@@ -912,7 +937,7 @@ mod tests {
         ];
         let mut lookups = Vec::new();
         let dock = Some([1000.0, 440.0, 1000.0, 60.0]);
-        let out = filter_windows(&windows, capture, 9, Some(13), dock, &mut |pid| {
+        let out = filter_windows(&windows, capture, |pid| pid == 9, Some(13), dock, &mut |pid| {
             lookups.push(pid);
             AppMeta {
                 bundle_id: Some(format!("pid.{pid}")),
@@ -941,7 +966,7 @@ mod tests {
         assert!(!out[3].regular);
         assert_eq!(lookups, vec![10, 11, 12, 13, 14, 13, 13, 14]);
         // A hidden Dock has no strip, so its full-screen window is dropped.
-        let hidden = filter_windows(&windows, capture, 9, Some(13), None, &mut |_| AppMeta {
+        let hidden = filter_windows(&windows, capture, |pid| pid == 9, Some(13), None, &mut |_| AppMeta {
             bundle_id: None,
             regular: true,
         });
