@@ -41,6 +41,11 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Verify early native prerequisite contracts
+        run: node --experimental-strip-types --test enablement/prerequisites/native.test.ts
       - name: Verify theme, push guards, selection and publication admission
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
