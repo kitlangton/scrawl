@@ -2,3 +2,7 @@ node_modules/
 dist/
 playwright-report/
 test-results/
+
+/electron/pill/*.cjs
+/dist
+/tests/pill/*.cjs
