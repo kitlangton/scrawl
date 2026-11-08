@@ -37,7 +37,10 @@ pub(super) fn assets() -> Option<(PathBuf, PathBuf)> {
 pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<Transport> {
     use std::io::BufRead;
     let (app, runtime) = assets().ok_or_else(|| anyhow::anyhow!("Packaged Storage Settings unavailable"))?;
-    let mut child = Command::new(runtime).arg(app).arg("--settings-storage").arg("--settings-parent")
+    // Electron selects its display backend before loading main.cjs. Match the
+    // Linux parent's XWayland choice while preserving a live Wayland opt-in.
+    let x11 = cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none();
+    let mut child = command(runtime, app, x11)
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -57,6 +60,31 @@ pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<T
         events(Event::Exited);
     });
     Ok(Transport::Helper { child, stdin })
+}
+
+fn command(runtime: PathBuf, app: PathBuf, x11: bool) -> Command {
+    let mut command = Command::new(runtime);
+    if x11 { command.arg("--ozone-platform=x11"); }
+    command.arg(app).arg("--settings-storage").arg("--settings-parent");
+    command
+}
+
+#[cfg(all(test, any(target_os = "linux", target_os = "macos")))]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn settings_child_gets_its_native_backend_before_the_application_entry() {
+        for x11 in [false, true] {
+            let child = command("/runtime/electron".into(), "/settings/app".into(), x11);
+            assert_eq!(child.get_program(), "/runtime/electron");
+            let args: Vec<_> = child.get_args().map(|arg| arg.to_str().unwrap()).collect();
+            let mut expected = vec![];
+            if x11 { expected.push("--ozone-platform=x11"); }
+            expected.extend(["/settings/app", "--settings-storage", "--settings-parent"]);
+            assert_eq!(args, expected);
+        }
+    }
 }
 
 pub(super) fn retire(transport: Transport) {

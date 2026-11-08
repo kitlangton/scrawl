@@ -174,6 +174,27 @@ Closing Settings cancels the session; an Electron crash restores native Storage.
 Missing packaged assets also fall back to native Storage. Reopen Settings after
 editing the opt-out. Saved preferences remain readable by both presentations.
 
+Electron Storage uses the native Mac Settings' 720×530 frame and 210px black
+sidebar. macOS centers after applying its inset titlebar and accepts the first
+inactive click; content scrolls inside the frame to keep lower controls reachable.
+The other Settings pages keep their native routing.
+The Linux parent supplies the X11 backend option before Electron starts when it
+has selected XWayland; a live native-Wayland opt-in keeps its existing selection.
+
+Storage starts hidden, including when its parent requests Show early. React
+acknowledges its committed DOM in a layout effect; the isolated preload waits
+two animation callbacks before sending the mount and first-frame acknowledgements.
+`paintWhenInitiallyHidden` keeps those callbacks moving while hidden. The host
+requires both the mount and either Chromium's `ready-to-show` or the validated
+first-frame acknowledgement, recovering when Electron omits that native event.
+Missing renderer startup exits unsuccessfully after 15 seconds without a
+user-dismiss signal, allowing the existing native fallback. Load failure/crash
+also fail; close/parent EOF retires the window so late readiness cannot reopen it.
+Parent retirement emits no user-dismiss event. A broken parent output pipe also
+retires quietly instead of opening an Electron error dialog.
+The readiness bridge admits only the owned local main frame and no arguments.
+The broader intermittent blanking reported in #562 remains unconfirmed.
+
 `stage-settings.py` builds the locked frontend/runtime into Linux AppImage and Mac
 installer/release packages. Installed packages contain no development dashboard or
 synthetic examples. Node/npm are build prerequisites, not runtime dependencies.

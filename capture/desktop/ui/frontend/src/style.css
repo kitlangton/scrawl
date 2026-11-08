@@ -13,16 +13,18 @@
   font-display: swap;
   src: url('../../../../../shared/assets/fonts/HostGrotesk-Variable.ttf') format('truetype');
 }
-.settings-shell { display: flex; min-height: 100vh; background: var(--color-background); color: var(--color-foreground); font-family: 'Host Grotesk', system-ui, sans-serif; }
-.settings-sidebar { width: 210px; flex: none; background: var(--color-surface); color: var(--color-foreground); padding-top: 32px; }
-.settings-brand { padding: 0 24px 30px; }
-.settings-brand img { width: 132px; height: auto; }
+.settings-shell { display: flex; height: 100vh; overflow: hidden; background: var(--color-background); color: var(--color-foreground); font-family: 'Host Grotesk', system-ui, sans-serif; }
+.settings-sidebar { width: 210px; flex: none; overflow-y: auto; background: var(--apparent-carbon); color: var(--apparent-paper); padding-top: 52px; }
+.settings-brand { padding: 0 20px 28px; -webkit-app-region: drag; }
+.settings-brand img { width: 150px; height: auto; }
+.settings-brand p { color: var(--apparent-lilac); font-size: 10px; font-weight: 500; margin-top: 10px; }
 .settings-sidebar nav { display: grid; }
-.settings-sidebar button { min-height: 44px; text-align: left; padding: 10px 24px; border-left: 2px solid transparent; font-size: 14px; }
-.settings-sidebar button:hover { background: var(--color-accent); }
-.settings-sidebar button[aria-current='page'] { background: var(--color-accent); border-color: var(--color-ring); }
-.settings-sidebar button:focus-visible { outline: 2px solid var(--color-ring); outline-offset: -4px; }
-.settings-content { min-width: 0; flex: 1; padding: 30px; }
+.settings-sidebar button { display: flex; align-items: center; gap: 10px; min-height: 44px; text-align: left; padding: 10px 14px; border-left: 3px solid transparent; font-size: 14px; }
+.settings-sidebar button svg { flex: none; color: var(--apparent-lilac); }
+.settings-sidebar button:hover, .settings-sidebar button[aria-current='page'] { background: color-mix(in srgb, var(--apparent-signal) 35%, var(--apparent-carbon)); }
+.settings-sidebar button[aria-current='page'] { border-color: var(--apparent-lilac); }
+.settings-sidebar button:focus-visible { outline: 2px solid var(--apparent-lilac); outline-offset: -4px; }
+.settings-content { min-width: 0; flex: 1; overflow-y: auto; padding: 30px; }
 .settings-content header { margin-bottom: 28px; }
 .settings-content h1 { font-size: 25px; line-height: 1.25; font-weight: 650; margin-bottom: 8px; }
 .settings-content header p { color: var(--color-muted-foreground); font-size: 14px; }

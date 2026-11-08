@@ -142,7 +142,8 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
     const sender = BrowserWindow.getAllWindows()[0].webContents;
     const event = { sender, senderFrame: sender.mainFrame };
     const allowed = new Set(['read-capture-location', 'change-capture-location', 'reset-capture-location',
-      'read-retention', 'save-retention', 'reset-retention', 'read-capture-usage', 'navigate-settings', 'show-capture-folder']);
+      'read-retention', 'save-retention', 'reset-retention', 'read-capture-usage', 'navigate-settings', 'show-capture-folder',
+      'settings-mounted', 'settings-frame-ready']);
     const rejected = [];
     for (const [channel, handler] of ipcMain._invokeHandlers) {
       if (!channel.startsWith('apparent:') || allowed.has(channel.slice('apparent:'.length))) continue;
@@ -158,6 +159,15 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   assert.ok(denied.includes('apparent:set-error-reporting'));
   assert.ok(denied.includes('apparent:copy-capture-reference'));
   assert.ok(denied.includes('apparent:read-runtime-state'));
+  // At the installed frame size the lower controls must scroll into view,
+  // while the sidebar and document stay inside the native window.
+  const content = page.locator('.settings-content');
+  const refreshUsage = page.getByRole('button', { name: 'Refresh usage', exact: true });
+  await refreshUsage.scrollIntoViewIfNeeded();
+  assert.equal(await content.evaluate(element => element.scrollHeight > element.clientHeight && element.scrollTop > 0), true);
+  const refreshBounds = await refreshUsage.boundingBox();
+  assert.ok(refreshBounds && refreshBounds.y >= 0 && refreshBounds.y + refreshBounds.height <= await page.evaluate(() => innerHeight));
+  assert.equal(await page.evaluate(() => document.documentElement.scrollHeight <= innerHeight), true);
   // Real handler origin/arity gates, including the mutation channel.
   assert.equal(await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents;
