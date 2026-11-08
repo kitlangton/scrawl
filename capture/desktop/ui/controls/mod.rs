@@ -22,6 +22,7 @@ pub(super) struct Controls {
     shown_busy: Option<bool>,
     fallback_pending: bool,
     pipe_failed: Option<Instant>,
+    shown_status: Option<Option<String>>,
 }
 
 impl Controls {
@@ -39,6 +40,7 @@ impl Controls {
             shown_busy: None,
             fallback_pending: false,
             pipe_failed: None,
+            shown_status: None,
         }
     }
 
@@ -127,14 +129,17 @@ impl Controls {
         self.ready = false;
         self.shown_busy = None;
         self.pipe_failed = None;
+        self.shown_status = None;
         Ok(())
     }
 
     pub(super) fn poll(&mut self, busy: bool, cx: &mut App) {
+        let status = super::super::current_status_bar_text();
         if let Some(window) = self.native {
             let _ = window.update(cx, |view, _, cx| {
-                if view.busy != busy {
+                if view.busy != busy || view.status != status {
                     view.busy = busy;
+                    view.status = status.clone();
                     cx.notify();
                 }
             });
@@ -195,6 +200,17 @@ impl Controls {
                 self.pipe_failed.get_or_insert_with(Instant::now);
             }
         }
+        let status = super::super::current_status_bar_text();
+        if self.shown_status.as_ref() != Some(&status)
+            && let Some((_, input)) = self.child.as_mut()
+        {
+            if writeln!(input, "status {}", serde_json::to_string(&status).unwrap()).is_ok() {
+                self.shown_status = Some(status);
+                self.pipe_failed = None;
+            } else {
+                self.pipe_failed.get_or_insert_with(Instant::now);
+            }
+        }
         // EOF can precede a clean user-close exit. Give that exit a bounded
         // chance to arrive before interpreting a broken pipe as a crash.
         if self
@@ -232,6 +248,7 @@ impl Controls {
                     cx.new(|_| Native {
                         sender,
                         busy: false,
+                        status: super::super::current_status_bar_text(),
                     })
                 },
             )
@@ -252,6 +269,7 @@ fn action(value: &str) -> Option<MenuAction> {
 struct Native {
     sender: flume::Sender<MenuAction>,
     busy: bool,
+    status: Option<String>,
 }
 impl gpui::Render for Native {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
@@ -264,6 +282,9 @@ impl gpui::Render for Native {
             .bg(gpui::rgb(0xfaf9f6))
             .text_color(gpui::rgb(0x222222))
             .child("Apparent controls");
+        if let Some(status) = &self.status {
+            root = root.child(status.clone());
+        }
         if self.busy {
             return root.child("Capture is busy. Use the recording controls or shortcut.");
         }

@@ -10,6 +10,7 @@ function startControls() {
   nativeTheme.themeSource = 'system';
   let window;
   let busy = false;
+  let status = null;
   let painted = false;
   let mounted = false;
   let retired = false;
@@ -24,6 +25,14 @@ function startControls() {
     } else if (line === 'busy' || line === 'idle') {
       busy = line === 'busy';
       if (window && !window.isDestroyed()) window.webContents.send('apparent:controls-busy', busy);
+    } else if (line.startsWith('status ')) {
+      try {
+        const value = JSON.parse(line.slice(7));
+        if (value === null || typeof value === 'string') {
+          status = value;
+          if (window && !window.isDestroyed()) window.webContents.send('apparent:controls-status', status);
+        }
+      } catch {}
     }
   });
   app.whenReady().then(() => {
@@ -43,7 +52,7 @@ function startControls() {
     ipcMain.handle('apparent:controls-mounted', (event, ...args) => {
       if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame ||
           event.senderFrame.url !== page || args.length !== 0) throw new Error('Forbidden controls request');
-      mounted = true; show(); return busy;
+      mounted = true; show(); return {busy, status};
     });
     ipcMain.handle('apparent:controls-command', (event, ...args) => {
       if (window.isDestroyed() || event.sender !== window.webContents ||

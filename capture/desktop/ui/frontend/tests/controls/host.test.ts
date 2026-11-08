@@ -88,3 +88,14 @@ test('only four explicit actions cross the bridge; busy and foreign frames canno
   assert.equal(h.written.length, 5);
   assert.throws(() => h.handlers.get('apparent:controls-mounted')!(h.event, 'extra'));
 });
+
+test('controls project the parent warning on mount and ignore malformed status', () => {
+  const h = host();
+  h.lines.emit('line', 'status "Typed notes unavailable · recording continues"');
+  h.lines.emit('line', 'busy');
+  const state = h.handlers.get('apparent:controls-mounted')!(h.event);
+  assert.equal(state.busy, true);
+  assert.equal(state.status, 'Typed notes unavailable · recording continues');
+  h.lines.emit('line', 'status {"unexpected":true}');
+  assert.equal(h.handlers.get('apparent:controls-mounted')!(h.event).status, state.status);
+});

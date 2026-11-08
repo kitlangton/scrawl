@@ -10,6 +10,11 @@ if (process.argv.includes('--controls')) {
       ipcRenderer.on('apparent:controls-busy', handler);
       return () => ipcRenderer.removeListener('apparent:controls-busy', handler);
     },
+    onStatus: (listener) => {
+      const handler = (_event, status) => listener(status);
+      ipcRenderer.on('apparent:controls-status', handler);
+      return () => ipcRenderer.removeListener('apparent:controls-status', handler);
+    },
   }));
 } else contextBridge.exposeInMainWorld('apparent', Object.freeze({
   readMicrophoneEnabled: () => ipcRenderer.invoke('apparent:read-microphone-enabled'),
