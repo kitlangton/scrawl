@@ -23,7 +23,7 @@ test('CI explicitly installs Electron before provisioning its sandbox helper', a
   assert(build >= 0 && install > build && sandbox > install && smoke > sandbox,
     'Package installation must precede runtime installation, helper provisioning and Electron execution');
   const metadata = JSON.parse(await readFile(join(root, 'package.json'), 'utf8'));
-  assert.equal(metadata.scripts['prepare:electron'], 'node node_modules/electron/install.js');
+  assert.equal(metadata.scripts['prepare:electron'], 'node --experimental-strip-types scripts/runtime/electron.ts');
   assert.equal(metadata.scripts.prestart, 'npm run prepare:electron');
   const legacy = await readFile(join(root, '../../.github/workflows/verification-platform.yml'), 'utf8');
   assert(!legacy.includes('\n  app-shell-foundation:'), 'Legacy verification must not run App Shell again');

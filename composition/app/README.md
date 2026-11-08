@@ -121,6 +121,11 @@ npm --prefix composition/app start
 Electron's npm package does not automatically install its runtime. `start`
 prepares it explicitly; CI runs `npm run prepare:electron` before provisioning
 the matching sandbox helper. Packaging independently obtains the pinned runtime.
+Both paths validate the archive against the checksums shipped in the pinned
+Electron npm package. If its official release download returns HTTP 5xx, the
+same archive may be fetched through the official GitHub release API; its digest
+must match that pin. The upstream installer still selects and extracts the
+runtime. Packaging uses the verified ZIP without a second checksum download.
 
 `build:shell` compiles the shell. `build` creates the empty default application
 and `assemble` only consumes its shell and any explicitly supplied stream
