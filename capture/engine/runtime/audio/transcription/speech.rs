@@ -3,7 +3,7 @@
 //! (`voice-control/models` in the user's data folder), else Apparent's own copy of Hex's Parakeet
 //! Unified English (`%LOCALAPPDATA%\Apparent\models`, `~/.local/share/apparent/models`), which
 //! `install` downloads once in the background and checks against its SHA-256. Like the Hex
-//! client, it transcribes each speech island on its own; unlike it, every word keeps the time the
+//! client, it transcribes continuous bounded chunks; unlike it, every word keeps the time the
 //! model heard it (`estimated: false`), so spoken cues ("look here") can cut keyframes.
 
 use std::path::{Path, PathBuf};
@@ -16,8 +16,6 @@ use crate::capture::desktop::helper::SpeechModelLine;
 use crate::shared::model::{TranscriptData, TranscriptSegment, WordTiming};
 
 const KHZ: u64 = 16;
-/// Silence kept around each clip, so first and last words aren't clipped.
-const CLIP_PAD_MS: u64 = 200;
 
 /// Reuse one Parakeet session across speech chunks discovered during a recording.
 pub struct Incremental {
@@ -192,11 +190,7 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     let wav =
         std::fs::read(audio).with_context(|| format!("Could not read {}", audio.display()))?;
     let samples = crate::capture::engine::runtime::audio::audio::decode_wav_16k(&wav)?;
-    let duration_ms = samples.len() as u64 / KHZ;
-    let mut clips = crate::shared::hex::plan_clips(&crate::capture::engine::runtime::audio::audio::speech_islands(&samples), duration_ms);
-    if clips.is_empty() && duration_ms >= 480 {
-        clips.push((0, duration_ms));
-    }
+    let clips = crate::shared::hex::plan_clips(&samples);
     let name = model_name(&path);
     let mut transcript = TranscriptData {
         source: format!("parakeet:{name}"),
@@ -218,9 +212,9 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     };
     let mut texts = Vec::new();
     for (start, end) in clips {
-        let from_ms = start.saturating_sub(CLIP_PAD_MS);
+        let from_ms = start;
         let from = (from_ms * KHZ) as usize;
-        let to = (((end + CLIP_PAD_MS) * KHZ) as usize).min(samples.len());
+        let to = ((end * KHZ) as usize).min(samples.len());
         if from >= to {
             continue;
         }

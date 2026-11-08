@@ -11,7 +11,6 @@ pub(crate) mod ink_view;
 pub(crate) mod linux;
 pub(crate) mod native;
 pub(crate) mod playback;
-pub(crate) mod routing;
 pub(crate) mod settings;
 #[cfg(target_os = "macos")]
 pub(crate) mod sparkle;
