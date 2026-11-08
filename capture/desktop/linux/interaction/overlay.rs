@@ -27,6 +27,21 @@ static HIDE_BETWEEN_STROKES: AtomicBool = AtomicBool::new(false);
 static POINTER_TAKEN: AtomicBool = AtomicBool::new(false);
 /// The input poller and the UI tick both change this window's mapping and input shape.
 static OVERLAY_STATE: Mutex<()> = Mutex::new(());
+static POINTER_GENERATION: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
+/// Intended Shift pointer capture, not proof of mapping or acquisition. The
+/// consumer must observe fresh motion on this exact XID after this generation;
+/// desktop-wide absolute positions do not establish overlay acquisition.
+pub fn pointer_request() -> Option<(u32, u64)> {
+    let _state = OVERLAY_STATE.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+    let id = OVERLAY.load(Ordering::Acquire);
+    (id != 0 && POINTER_TAKEN.load(Ordering::Acquire))
+        .then(|| (id, POINTER_GENERATION.load(Ordering::Acquire)))
+}
+
+fn invalidate_pointer_request() {
+    POINTER_GENERATION.fetch_add(1, Ordering::AcqRel);
+}
 
 /// The overlay for one display. Dropping it closes the window.
 pub struct InkOverlay {
@@ -95,6 +110,7 @@ impl InkOverlay {
             x11::set_visible(id, false);
         }
         OVERLAY.store(id, Ordering::Release);
+        invalidate_pointer_request();
         Ok(Self { id, placement })
     }
 
@@ -133,6 +149,7 @@ impl InkOverlay {
                 scale: monitor.scale as f32,
             };
         }
+        invalidate_pointer_request();
         x11::place(self.id, monitor.rect);
         // Hyprland remaps moved override-redirect windows. Restore the same input shape and
         // visibility they had before the move; an idle overlay must not swallow pill clicks.
@@ -155,6 +172,7 @@ impl Drop for InkOverlay {
             .is_ok()
         {
             POINTER_TAKEN.store(false, Ordering::Release);
+            invalidate_pointer_request();
         }
         x11::request_close(self.id);
     }
@@ -168,6 +186,7 @@ pub fn take_pointer(take: bool) {
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let id = OVERLAY.load(Ordering::Acquire);
     if id != 0 {
+        invalidate_pointer_request();
         POINTER_TAKEN.store(take, Ordering::Release);
         x11::set_click_through(id, !take);
         if HIDE_BETWEEN_STROKES.load(Ordering::Acquire) {

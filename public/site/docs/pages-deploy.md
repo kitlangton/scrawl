@@ -162,7 +162,10 @@ The recovered website helper preserves its own affirmative visitor choice,
 withdrawal and GPC/DNT handling. Its build uses `PUBLIC_POSTHOG_ENABLED`,
 `PUBLIC_POSTHOG_TOKEN`, `PUBLIC_POSTHOG_HOST` and `PUBLIC_POSTHOG_ENVIRONMENT`.
 Capability defaults enabled, but absent/invalid public ingestion configuration
-fails closed. This recovery does not change repository/provider variables or
+fails closed. Public verification builds use the existing repository ingestion
+secret `APPARENT_POSTHOG_TOKEN` with the EU host and production environment.
+Pageviews include PostHog's standard URL fields built only from approved routes;
+queries, fragments and private routes are excluded. This does not change
 Connect account analytics. Verification uses intercepted synthetic events; no
 fixture event is sent to PostHog. Production configuration and publication remain
 subject to the existing gates.

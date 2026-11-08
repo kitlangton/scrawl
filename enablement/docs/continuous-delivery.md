@@ -211,8 +211,13 @@ must check their own longer HOME-derived socket paths. Keep hostile/sticky and
 symlink production tests enabled; a friendly preflight environment does not
 replace those assertions.
 
-The CI workflow has separate setup and focused Cargo steps before this verifier;
-those steps are not covered by this verifier entry-point guard. Feature pushes
+The platform workflow checks a private temporary root before its first Cargo
+command. Its Rust/native job also performs the locked frontend install, explicit
+Electron download/resolution and executable/input readiness check before compiling,
+with a five-minute setup deadline. Download archives are cached by OS, architecture
+and frontend lockfile; installed modules and test results are never restored.
+Cold downloads remain required on a cache miss. These prerequisites do not replace
+any Electron/Rust or native GUI assertion. Feature pushes
 and PR CI run its regression tests as part of the cheap contracts; they do not
 require a Rust test environment when no Rust suite is selected. Before any native
 allocation, inspect the exact candidate and real scenario entry point offline:
@@ -279,3 +284,127 @@ freshness without failing the successful commit. No background worker is started
 other worktrees are untouched. Existing worktrees acquire the hook when they
 integrate this change; frozen evidence checkouts need not be updated. Local hook
 checks do not replace current-main integration and review before merge.
+
+## Verification timing diagnostics
+
+Platform Rust jobs retain seven-day observation-only JSONL spans and Cargo HTML
+compiler timings. Spans report elapsed active command time, never CPU time or
+billed savings. Runner queue time is separate: use Actions job queued/started
+timestamps; it is not included in command spans. No queue estimate is inferred
+from workflow walltime. The exact candidate SHA accompanies spans.
+
+The verifier times contracts, application build, test compilation and test
+execution separately. With timing enabled, an identical Cargo test selection is
+compiled with --no-run first; the original Cargo test command then executes in
+full, including its normal incremental compiler check. Compiler HTML describes
+compilation rather than harness execution. Packaging, bridge integration, native
+assertions and native Storage socket/control readiness have named spans.
+Readiness spans can overlap the enclosing native assertion span; do not sum them.
+
+Missing/endless spans mean incomplete observation, never successful acceptance.
+Started commands retain their start record if interrupted; TERM/INT/HUP are
+forwarded and exit status is preserved. Artifact upload is guarded by the timing
+step outcome, runs after failures, and missing diagnostics only warn. Diagnostics
+record no arguments, environment dump, transcript or application data. Existing
+native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
+
+## PR verification status (bootstrap required)
+
+The `verification-status` job in `checks.yml` is a credentialed, event-driven default-branch reporter.
+It publishes the commit status **Verification complete**, independent of the cheap
+Repository checks. It never dispatches native work. PR changes, main pushes and
+manual verification lifecycle events reconcile affected open main PRs. Candidate
+events coalesce per branch; main pushes retain global reconciliation. Candidate code is read as data, never executed with the reporter token.
+
+Native changes require both manual exact-head workflows, their latest run and
+latest attempt, the complete current or parallel job union, and successful Mac
+native assertions. Feature-only skipped release receipts are excluded. Unknown
+inventories, missing history, fork candidates and policy mismatches stay pending;
+failed/cancelled runs and skipped/missing required jobs fail. Successful evidence
+is retained across unrelated owner-documentation changes on main; other new base
+inputs require integration. Owner documentation alone needs no platform run.
+Public-only changes require manual Public verification at the exact head (PR merge
+checks do not substitute); they require neither Mac nor Rust. This PR status never
+admits publication or replaces native product acceptance outside CI.
+
+Bootstrap in order: merge reviewed reporter code into main under existing gates;
+open/update the authorized probe PR; inspect pending in `gh pr view --json
+statusCheckRollup`; dispatch only approved manual verification, demonstrate real
+failure and success transitions with Actions/status links; then add precisely
+`Verification complete` to required checks while preserving all live protections.
+No protection should be enabled on an unproven reporter. Initial read-only inspection
+found no main branch protection and no rulesets. This workflow cannot receive its
+own default-branch events before merge. Parent delivery ownership must retain the
+live transition proof and protection activation steps. A direct hand-written green
+status is not reporter proof. No polling, watchdog or expensive automatic run is
+part of this mechanism.
+
+Policy-changing PRs are evaluated as data using Bun 1.3.10 YAML parsing.
+The supported current/parallel job union must be present; each required command
+step must succeed in its owning job and candidate order. Mac assertions are
+required only on Mac. The manual run's triggering actor must retain repository
+write/maintain/admin access, checked again before status publication. Changed
+workflow policy is parsed as data and must preserve the trusted required job
+union and successful candidate command evidence. This completion status does
+not authenticate source-code correctness: independent source/security review
+remains part of delivery under the existing repository policy, without adding
+a second human GitHub approver requirement. It never authorizes publication.
+
+GitHub status writes have no compare-and-swap: final candidate/evidence re-reads
+and serialized writers reduce the race window; later lifecycle events reconcile
+concurrent external changes. Live bootstrap and required-check activation remain
+unverified until performed after merge under existing gates.
+
+The reporter writes pending before reading a known PR's evidence and isolates
+per-PR API failures so later candidates still reconcile. A PR lifecycle event
+can invalidate its known head even if PR enumeration fails. GitHub outages that
+prevent status writes, or prevent discovery of otherwise unknown heads during
+a global scan, cannot be made fail-closed by commit statuses alone. Reporter
+workflow failures remain operational errors; no green is proof of API freshness
+during such an outage. Public command steps, including verification and sealing,
+must succeed in the owning verify job; tolerated failures are rejected.
+
+
+## Reporter API budgets and recovery
+
+The trusted reporter uses the workflow's Actions credential throughout; another
+user token's quota does not establish recovery. PR lifecycle events reconcile
+only that PR. Manual verification lifecycle events look up matching open PRs by
+head branch and exact SHA; automatic Public runs and first-attempt in-progress
+notifications do no API work. Requested/rerun-start events authenticate the latest
+run and attempt before leaving pending without evaluating complete job evidence.
+Delayed start events reconcile current completed evidence instead of leaving a
+stale pending result. Completed events evaluate the current
+manual runs. Main pushes and blank manual dispatches retain a global scan, with
+all known heads invalidated before evidence reads. Global and candidate work use
+separate job-level coalescing domains, including a separate targeted-recovery
+domain. Reporter events have unique workflow-level keys: rejected events cannot
+evict eligible work before the job condition is evaluated. Non-main PR events
+are filtered both by the trigger and by the reporter.
+
+Every process preflights the same Actions credential. Targeted runs have a
+60-request hard budget and need at least 70 remaining requests; global runs have
+a 200-request budget and need at least 210. Content reads pinned to immutable
+commit SHAs are reused within the run; mutable refs, permissions, run listings
+and final evidence reads are refreshed. Status writes are spaced by one second.
+Quota exhaustion, the five-request reserve, or budget exhaustion halts the whole
+run immediately; no further PR, status or evidence requests are attempted.
+
+There is no polling, automatic retry, credential substitution or manual status
+publication. A rate-limit failure records the response's reset/Retry-After time
+and request ID without dumping response bodies, process environments or tokens.
+After that time, allow a natural relevant lifecycle event or perform one targeted
+recovery from trusted main:
+
+```sh
+gh workflow run checks.yml --ref main -f pull_request=1094
+```
+
+The recovery process must pass its own Actions-token quota preflight before any
+status writes. A successful application suite or user-token rate-limit request
+does not satisfy that condition. If quota is still insufficient, stop and retain
+the gate hold until the newly reported reset; do not rerun application/native
+verification to repair reporter delivery. Status-write/discovery outages retain
+the documented limitation above: the reporter cannot invalidate a previously
+published status when GitHub refuses the write. Reporter repair must be proven
+live before making `Verification complete` required.

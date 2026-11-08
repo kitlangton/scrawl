@@ -22,6 +22,10 @@ jobs:
         with:
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - run: node --experimental-strip-types --test enablement/prerequisites/native.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
           python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
@@ -124,6 +128,12 @@ jobs:
         if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
         with:
           node-version: '22'
+      - name: Timing helper contracts
+        id: timing
+        run: |
+          node --experimental-strip-types --test enablement/timing/command.test.ts
+          echo "APPARENT_TIMING_FILE=$RUNNER_TEMP/verification-timings.jsonl" >> "$GITHUB_ENV"
+          touch "$RUNNER_TEMP/verification-timings.jsonl"
       - uses: oven-sh/setup-bun@v2
         if: needs.select.outputs.browser == 'true'
         with:
@@ -131,11 +141,35 @@ jobs:
       - uses: browser-actions/setup-chrome@v1
         if: needs.select.outputs.browser == 'true'
         id: chrome
+      - name: Prepare private temporary root before first Cargo
+        if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
+        shell: bash
+        run: |
+          verification_tmp="$(mktemp -d "$HOME/.apparent-prerequisites.XXXXXX")"
+          echo "APPARENT_PREREQUISITE_TMP=$verification_tmp" >> "$GITHUB_ENV"
+          echo "TMPDIR=$verification_tmp" >> "$GITHUB_ENV"
+          TMPDIR="$verification_tmp" python3 enablement/verification.py --base unknown --preflight
+      - name: Cache Electron downloads (not installed modules or test receipts)
+        if: needs.select.outputs.root == 'true'
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/electron-downloads
+          key: electron-downloads-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('capture/desktop/ui/frontend/package-lock.json') }}
+      - name: Prepare locked native prerequisites before first Cargo
+        if: needs.select.outputs.root == 'true'
+        timeout-minutes: 5
+        env:
+          electron_config_cache: ${{ runner.temp }}/electron-downloads
+        run: |
+          npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
+          node capture/desktop/ui/frontend/node_modules/electron/install.js
+          node --experimental-strip-types enablement/prerequisites/native.ts
       - name: Verify the independent Connect client package
         if: needs.select.outputs.root == 'true'
         run: |
-          cargo build --manifest-path connect/client/Cargo.toml --locked
-          cargo test --manifest-path connect/client/Cargo.toml --locked -- --test-threads=2
+          node --experimental-strip-types enablement/timing/command.ts client-compilation cargo build --manifest-path connect/client/Cargo.toml --locked --timings
+          node --experimental-strip-types enablement/timing/command.ts client-test-compilation cargo test --manifest-path connect/client/Cargo.toml --locked --timings --no-run
+          node --experimental-strip-types enablement/timing/command.ts client-test-execution cargo test --manifest-path connect/client/Cargo.toml --locked --timings -- --test-threads=2
       - name: Execute the same changed-tree checks (not GUI acceptance)
         env:
           CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
@@ -167,10 +201,7 @@ jobs:
         if: needs.select.outputs.root == 'true'
         shell: bash
         run: |
-          npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
-          # Electron 45 downloads lazily. Resolve it once before the test;
-          # do not capture its download log as part of an executable pathname.
-          node -e "require('./capture/desktop/ui/frontend/node_modules/electron')"
+          # Installation/download and executable readiness passed before Cargo.
           if [ "$RUNNER_OS" = macOS ]; then
             electron="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron"
           else
@@ -182,7 +213,7 @@ jobs:
           trap 'rm -rf -- "$storage_tmp"' EXIT
           TMPDIR="$storage_tmp" APPARENT_STORAGE_TEST_ELECTRON="$electron" \
             APPARENT_CONNECT_TEST_ELECTRON="$electron" \
-            cargo test -j 3 --locked _electron_rust_roundtrip -- --ignored --nocapture
+            node --experimental-strip-types enablement/timing/command.ts bridge-readiness-and-assertions cargo test -j 3 --locked --timings _electron_rust_roundtrip -- --ignored --nocapture
       - name: Native Mac Storage and error-reporting controls against the installed Rust GUI
         id: native_storage
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
@@ -196,11 +227,11 @@ jobs:
           test "$RUNNER_ENVIRONMENT" = github-hosted
           export APPARENT_APP_DIR="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app"
           test ! -e "$APPARENT_APP_DIR"
-          APPARENT_NO_LAUNCH=1 bash capture/desktop/scripts/packaging/install-app.sh
+          APPARENT_NO_LAUNCH=1 node --experimental-strip-types enablement/timing/command.ts packaging bash capture/desktop/scripts/packaging/install-app.sh
           codesign --verify --deep --strict "$APPARENT_APP_DIR"
           npm --prefix capture/desktop/ui/frontend run build
           APPARENT_STORAGE_NATIVE_APP_DIR="$APPARENT_APP_DIR" \
-            node --test capture/desktop/ui/frontend/tests/mac-storage-native.cjs
+            node --experimental-strip-types enablement/timing/command.ts native-storage-assertions node --test capture/desktop/ui/frontend/tests/mac-storage-native.cjs
       - name: Native GPUI Copy capture ID against the same installed App
         id: native_copy_id
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
@@ -219,7 +250,7 @@ jobs:
           mkdir -m 700 "$evidence"
           swiftc capture/desktop/scripts/native/copy-capture-id.swift \
             -o "$evidence/copy-capture-id" > "$evidence/compile.log" 2>&1
-          "$evidence/copy-capture-id" "$app" "$evidence/run"
+          node --experimental-strip-types enablement/timing/command.ts native-copy-assertions "$evidence/copy-capture-id" "$app" "$evidence/run"
       - name: Native Electron selected-reference control against the installed Rust App
         id: native_reference
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
@@ -229,7 +260,7 @@ jobs:
           APPARENT_REFERENCE_OUTPUT: ${{ runner.temp }}/apparent-reference-electron
         run: |
           export APPARENT_REFERENCE_BINARY="$HOME/Applications/Apparent-Storage-$GITHUB_RUN_ID-$GITHUB_RUN_ATTEMPT.app/Contents/MacOS/apparent"
-          node --test capture/desktop/ui/frontend/tests/reference-native.cjs
+          node --experimental-strip-types enablement/timing/command.ts native-reference-assertions node --test capture/desktop/ui/frontend/tests/reference-native.cjs
       - name: Retain synthetic Electron reference evidence, including failures
         if: always() && runner.os == 'macOS' && needs.select.outputs.root == 'true' && steps.native_reference.outcome != 'skipped' && steps.native_reference.outcome != ''
         uses: actions/upload-artifact@v4
@@ -263,6 +294,26 @@ jobs:
             ${{ runner.temp }}/apparent-storage-native/*.png
             ${{ runner.temp }}/apparent-storage-native/*.log
           if-no-files-found: error
+          retention-days: 7
+      - name: Clean private prerequisite temporary root
+        if: always()
+        shell: bash
+        run: |
+          if [ -n "${APPARENT_PREREQUISITE_TMP:-}" ]; then
+            rm -rf -- "$APPARENT_PREREQUISITE_TMP"
+          fi
+
+      - name: Retain observation-only timings, including failures
+        if: always() && steps.timing.outcome != 'skipped' && steps.timing.outcome != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: verification-timings-${{ inputs.runner }}
+          path: |
+            ${{ runner.temp }}/verification-timings.jsonl
+            target/cargo-timings/*.html
+            capture/engine/target/cargo-timings/*.html
+            connect/client/target/cargo-timings/*.html
+          if-no-files-found: warn
           retention-days: 7
 
   release-ready:
