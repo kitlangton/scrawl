@@ -124,7 +124,9 @@ zbus = { version = "5", default-features = false, features = ["async-io", "block
 
 [profile.dev]
 debug = 0
-opt-level = 2
+# Keep the large application crate quick to rebuild; hot dependencies retain
+# their optimized dev settings below. Release builds use their own profile.
+opt-level = 0
 
 [profile.dev.package."*"]
 opt-level = 2
