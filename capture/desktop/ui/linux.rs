@@ -339,7 +339,7 @@ struct PillDrag {
 
 enum PillDragOwner {
     Native,
-    Electron { pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>, position: Arc<Mutex<Option<[f64; 4]>>> },
+    Electron { pid: u32, alive: Arc<AtomicBool>, position: Arc<Mutex<Option<[f64; 4]>>> },
 }
 
 impl PillDragOwner {
@@ -351,15 +351,17 @@ impl PillDragOwner {
                 && x11::window_info(id as isize).is_some_and(|window| window.pid == *pid),
         }
     }
-    fn needs_pin(&self) {
+    fn move_to(&self, id: u32, rect: [f64; 4]) {
         match self {
-            Self::Native => PILL_NEEDS_PIN.store(true, Ordering::Release),
-            Self::Electron { pin, .. } => pin.store(true, Ordering::Release),
-        }
-    }
-    fn moved(&self, rect: [f64; 4]) {
-        if let Self::Electron { position, .. } = self {
-            *position.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rect);
+            Self::Native => {
+                x11::move_origin(id, [rect[0], rect[1]]);
+                PILL_NEEDS_PIN.store(true, Ordering::Release);
+            }
+            Self::Electron { position, .. } => {
+                // The child alone maps/moves its Chromium surface. Two native
+                // window owners can leave X11 mapped but absent from Hyprland.
+                *position.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rect);
+            }
         }
     }
 }
@@ -393,10 +395,10 @@ pub(in crate::capture::desktop) fn begin_pill_drag() {
 }
 
 pub(in crate::capture::desktop) fn begin_electron_pill_drag(
-    id: u32, pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>,
+    id: u32, pid: u32, alive: Arc<AtomicBool>,
     position: Arc<Mutex<Option<[f64; 4]>>>, point: [f64; 2],
 ) {
-    begin_owned_pill_drag(id, PillDragOwner::Electron { pid, alive, pin, position }, Some(point));
+    begin_owned_pill_drag(id, PillDragOwner::Electron { pid, alive, position }, Some(point));
 }
 
 fn begin_owned_pill_drag(id: u32, owner: PillDragOwner, point: Option<[f64; 2]>) {
@@ -455,9 +457,7 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
         }
         PILL_USER_MOVED.store(true, Ordering::Release);
         let rect = [x, y, live[2], live[3]];
-        x11::move_origin(drag.id, [x, y]);
-        drag.owner.moved(rect);
-        drag.owner.needs_pin();
+        drag.owner.move_to(drag.id, rect);
     }
 }
 

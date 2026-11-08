@@ -40,7 +40,7 @@ pub struct Session {
     window_id: Arc<AtomicU32>,
     #[cfg(target_os = "linux")]
     child_pid: u32,
-    #[cfg(target_os = "linux")]
+    #[cfg(all(test, target_os = "linux"))]
     pin: Arc<AtomicBool>,
     #[cfg(target_os = "linux")]
     pin_admission: Arc<Mutex<super::pin::Admission>>,
@@ -263,7 +263,7 @@ impl Session {
             window_id,
             #[cfg(target_os = "linux")]
             child_pid,
-            #[cfg(target_os = "linux")]
+            #[cfg(all(test, target_os = "linux"))]
             pin: pin_request.clone(),
             #[cfg(target_os = "linux")]
             pin_admission: Arc::new(Mutex::new(super::pin::Admission::default())),
@@ -432,7 +432,7 @@ impl Session {
                 )
                 {
                     super::super::linux::begin_electron_pill_drag(
-                        id, self.child_pid, self.alive.clone(), self.pin.clone(), self.drag_position.clone(), point.map(f64::from),
+                        id, self.child_pid, self.alive.clone(), self.drag_position.clone(), point.map(f64::from),
                     );
                 }
                 continue;

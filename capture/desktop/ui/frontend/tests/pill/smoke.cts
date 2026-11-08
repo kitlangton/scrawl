@@ -118,7 +118,7 @@ test('startup placement preserves a fragmented next parent frame',async t=>{
 // compositor movement and held-button admission are covered by the native run.
 test('Linux native drag IPC checks its epoch and converts the OS press point', {skip:process.platform!=='linux'}, async t=>{
  const home=await fs.mkdtemp(path.join(os.tmpdir(),'pill-drag-scale-'));
- const application=await electron.launch({args:['--ozone-platform=x11','--force-device-scale-factor=2',path.resolve(__dirname,'host.cjs'),'--no-sandbox'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config')}});
+ const application=await electron.launch({args:['--ozone-platform=x11','--force-device-scale-factor=2',path.resolve(__dirname,'host.cjs'),'--no-sandbox'],env:{...process.env,HOME:home,XDG_CONFIG_HOME:path.join(home,'config'),HYPRLAND_INSTANCE_SIGNATURE:'synthetic-pill-remap'}});
  t.after(async()=>{await application.close().catch(()=>{});await fs.rm(home,{recursive:true,force:true});});
  const page=await application.firstWindow(),sent=[];let buffer='';
  application.process().stdout.on('data',chunk=>{buffer+=chunk;let end;while((end=buffer.indexOf('\n'))>=0){try{sent.push(JSON.parse(buffer.slice(0,end)));}catch{}buffer=buffer.slice(end+1);}});
@@ -136,9 +136,14 @@ test('Linux native drag IPC checks its epoch and converts the OS press point', {
  await expect.poll(()=>sent.filter(message=>message.action==='drag').length).toBe(1);
  assert.deepEqual(sent.find(message=>message.action==='drag'),{revision:1,action:'drag',target:[point.physical.x,point.physical.y]});
  assert.equal(await page.evaluate(async()=>{try{await window.apparentPill.beginDrag(0);return false;}catch{return true;}}),true);
+ await application.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];w.__mapping=[];for(const e of ['hide','show'])w.on(e,()=>w.__mapping.push(e));});
  const destination=await application.evaluate(({screen})=>screen.screenToDipPoint({x:100,y:150}));
  await application.evaluate(()=>process.stdin.emit('data',JSON.stringify({type:'position',revision:1,point:[100,150]})+'\n'));
  await expect.poll(()=>application.evaluate(({BrowserWindow})=>{const b=BrowserWindow.getAllWindows()[0].getBounds();return {x:b.x,y:b.y};})).toEqual(destination);
+ assert.deepEqual(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].__mapping),['hide','show'],'The child must own the complete remap of its XWayland surface');
+ await application.evaluate(()=>process.stdin.emit('data',JSON.stringify({type:'position',revision:1,point:[100,150]})+'\n'));
+ await application.evaluate(()=>{});
+ assert.deepEqual(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].__mapping),['hide','show'],'Stationary held input must not repeatedly unmap the pill');
  await application.evaluate(()=>process.stdin.emit('data',JSON.stringify({type:'position',revision:0,point:[140,180]})+'\n'));
  assert.deepEqual(await application.evaluate(({BrowserWindow})=>{const b=BrowserWindow.getAllWindows()[0].getBounds();return {x:b.x,y:b.y};}),destination);
  await application.evaluate(({screen})=>{screen.getCursorScreenPoint=globalThis.pillTestCursor;});

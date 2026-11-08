@@ -6,12 +6,13 @@ const {pathToFileURL}=require('node:url');
 const protocol=require('./protocol.cjs');
 const geometry=require('./geometry.cjs');
 if(!['linux','darwin'].includes(process.platform))process.exit(1);
+const hyprland=process.platform==='linux' && (Boolean(process.env.HYPRLAND_INSTANCE_SIGNATURE) || (process.env.XDG_CURRENT_DESKTOP||'').toLowerCase().split(':').includes('hyprland'));
 app.setName('Apparent recording controls');
 app.setPath('userData',path.join(app.getPath('appData'),'apparent-pill'));
 nativeTheme.themeSource='system';
 const page=pathToFileURL(path.join(__dirname,'../../dist/pill/index.html')).href;
 let window,current=null,buffer='',pending=false,loaded=false,placed=false,activated=false,pendingPlace=null;
-let lastInput=Date.now(),hovered=false,expected=null,rendererReady=false,readySent=false,renderDeadline=Date.now()+5000,pasteGesture=null,lastFrame='';
+let lastInput=Date.now(),hovered=false,expected=null,rendererReady=false,readySent=false,renderDeadline=Date.now()+5000,pasteGesture=null,lastFrame='',lastRaise=0;
 function position(bounds){
  const next={...window.getBounds(),...bounds};
  const area=screen.getDisplayMatching(next).workArea;
@@ -62,9 +63,16 @@ process.stdin.on('data',chunk=>{
       else if(message.type==='place' && Array.isArray(message.point) && message.point.length===2 && message.point.every(Number.isFinite)){
         applyPlacement(message.point);
       }else if(message.type==='position' && process.platform==='linux' && Array.isArray(message.point) && message.point.length===2 && message.point.every(Number.isFinite)){
-        if(window && message.revision===current?.revision && current.phase==='recording' && current.draggable){
+        if(window && activated && rendererReady && window.isVisible() && message.revision===current?.revision && current.phase==='recording' && current.draggable){
           const point=screen.screenToDipPoint({x:Math.round(message.point[0]),y:Math.round(message.point[1])});
-          position(point);
+          // Electron owns mapping as well as geometry. A native X11 remap races
+          // Chromium visibility and can orphan the surface in Hyprland.
+          const before=window.getBounds();
+          if(before.x!==point.x || before.y!==point.y){
+            if(hyprland)window.hide();
+            position(point);
+            if(hyprland)window.showInactive();
+          }
         }
       }else throw Error('Invalid parent message');
     }catch{app.exit(1);}
@@ -177,6 +185,11 @@ app.whenReady().then(()=>{
   const pointerTimer=setInterval(()=>{
     if(!loaded || window.isDestroyed())return;
     const inside=window.isVisible() && geometry.contains(screen.getCursorScreenPoint(),window.getBounds());
+    // A focused XWayland app can sit above the visually pinned pill in X11's
+    // input stack. Raise this exact child surface without taking focus.
+    if(process.platform==='linux' && inside && (!hovered || Date.now()-lastRaise>250)){
+      window.moveTop();lastRaise=Date.now();
+    }
     if(inside!==hovered){hovered=inside;emit({hovered});}
     if(pasteGesture && Date.now()>pasteGesture.until)pasteGesture=null;
     if(process.platform==='darwin')window.setIgnoreMouseEvents(!inside && !pasteGesture,{forward:true});

@@ -19,7 +19,10 @@ synthetic parent; it is not native capture acceptance.
 The existing Desktop coordinator owns child startup and readiness. A failed
 launch, expired readiness or child exit restores the native pill without
 stopping capture. Linux warms the hidden child at startup and retains native
-X11/Hyprland dragging and exact-window pinning. macOS retains native caption
+held-button/identity checks, drag clamping and exact-window pinning. The child
+alone moves/remaps its Electron surface; Rust never remaps it concurrently.
+The child also reconciles its X11 input stacking without taking focus.
+macOS retains native caption
 dragging; Glass or explicitly disabled movable controls retain native routing.
 There is one visible pill. Missing packaged assets retain the native route.
 
