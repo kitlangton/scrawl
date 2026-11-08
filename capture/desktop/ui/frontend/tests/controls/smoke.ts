@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {chromium} from '@playwright/test';
 import {spawn} from 'node:child_process';
+import {createRequire} from 'node:module';
 import {mkdtemp, rm} from 'node:fs/promises';
 import path from 'node:path';
 import os from 'node:os';
@@ -11,7 +12,8 @@ import {fileURLToPath} from 'node:url';
 test('shipped controls mount, dispatch allowed actions and reflect parent busy state', {timeout: 30000}, async t => {
   const frontend = fileURLToPath(new URL('../..', import.meta.url));
   const fixture = await mkdtemp(path.join(os.tmpdir(), 'controls-'));
-  const child = spawn(path.join(frontend, 'node_modules/electron/dist/electron'), ['--remote-debugging-port=0', '--ozone-platform=x11', frontend, '--controls'], {env: {
+  const executable = createRequire(import.meta.url)('electron') as string;
+  const child = spawn(executable, ['--remote-debugging-port=0', ...(process.platform === 'linux' ? ['--ozone-platform=x11'] : []), frontend, '--controls'], {env: {
     ...process.env, HOME: fixture, XDG_CONFIG_HOME: path.join(fixture, 'config'),
     XDG_DATA_HOME: path.join(fixture, 'data'),
   }});
