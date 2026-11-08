@@ -204,7 +204,8 @@ pub fn command(command: ConnectCommand) -> Result<()> {
             println!("Hosted uploads disabled; pending uploads cancelled.");
             Ok(())
         }
-        ConnectCommand::Retry => {
+        ConnectCommand::Retry { id: Some(id) } => client.retry_capture(&id),
+        ConnectCommand::Retry { id: None } => {
             client.retry()?;
             client.process_once()
         }

@@ -165,6 +165,12 @@ fn hosted_transport_network_timeout_and_cancellation() {
     test_support::hosted_transport_network_timeout_and_cancellation();
 }
 #[test]
+fn hosted_scoped_retry_preserves_other_jobs_and_refuses_terminal_work() {
+    setup();
+    test_support::hosted_scoped_retry_preserves_other_jobs_and_refuses_terminal_work();
+}
+
+#[test]
 fn hosted_paths_symlinks_oversize_and_unknown_assets() {
     setup();
     test_support::hosted_paths_symlinks_oversize_and_unknown_assets();

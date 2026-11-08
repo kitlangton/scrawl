@@ -143,6 +143,11 @@ One private per-scope advisory renewal lock serializes processes. It is never ac
 
 Completion publishes a random 32-lowercase-hex ID to the disk queue before clipboard construction. Clipboard text starts with `apparent fetch <id> --out ./<id>.apparent --wait 120` and `apparent inspect ./<id>.apparent`, even while upload is pending. A one-line README Agents link handles a missing CLI and leads to the maintained installation guide; image-inspection and the configured video-proof request precede the duration header and timestamped words/marks, which remain last for paste recognition. The prompt omits repeated login instructions, server lines and sender-local paths. The receiving CLI uses its configured server; configure a custom origin separately when required. Sign-in alone does not select this format: a retained, active private hosted job must exist. Without one, the prompt uses a shell-quoted local inspect path and local image/crop guidance. Archived summaries and bundle assets remain unchanged. It includes no bearer token. Hashing, media staging, network requests and retries run outside capture completion/paste. Network, auth, quota and upload errors leave the original capture and local clipboard handoff usable. Queue errors fall back to local-only handoff. `apparent connect status` is local JSON with queue path, status, attempts, next retry and sanitized error codes; `--account` explicitly queries account quota.
 
+For scoped recovery, `apparent connect retry --id <capture-id>` resets and
+processes only that retained pending/failed capture, preserving its ID and
+leaving unrelated queued work unchanged. It cannot revive cancelled, expired,
+ready or previous-sign-in jobs. Without `--id`, Retry retains its bulk behavior.
+
 ## Fetch on an agent's computer
 
 ```
@@ -190,6 +195,14 @@ The `hosted/` directory beside `config.json` is private mode `0700`; `upload.cre
 The allowlist exactly matches the API: summary, metadata, contact sheets including full-sheet originals, numbered `frames/` and `frames-full/` PNGs, recording MP4/MOV, WAV audio, `timeline.json` and `finish-trace.json`. Whiteboard content already becomes numbered frames plus manifest data; no separate whiteboard extension is needed. Unknown assets fail the entire upload with `unsupported_asset`, never silently disappear. Symlinks are not uploaded, even when named like an allowed file. Files are staged and hashed before reservation; retry requires the same manifest. Reordered server manifests are accepted only if their complete path/size/hash sets agree.
 
 The server quota is **500,000,000 bytes per account**. Separately, v1 accepts at most 512 files and **90,000,000 bytes per file**, with a 128KiB manifest request. `file_too_large` is reported in queue status; the capture stays local. There is no multipart/chunk protocol and the client never drops a large recording/audio asset to fit. Real larger recordings therefore need a future coordinated protocol change. Server retention is seven days after reservation, with incomplete reservations reclaimed after 24 hours; a tombstoned ID requires a fresh explicit `apparent connect upload`, not a retry of that ID.
+
+Local machinery is excluded before building either plaintext or encrypted
+snapshots: Engine's empty `.publication.lock` and Desktop's `notes-ui.log`
+(Chromium stderr). Both must be owned regular files with one link and no
+group/other write permission. Neither is an allowed remote asset or evidence
+reference; originals stay local. Unknown files still fail the upload. Known
+asset failures retain their safe queue codes through encryption's snapshot
+context rather than being misreported as an endpoint-key problem.
 
 ## Verification
 
