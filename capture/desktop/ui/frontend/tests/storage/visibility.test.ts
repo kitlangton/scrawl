@@ -7,7 +7,8 @@ import vm from 'node:vm';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
-const require = createRequire(import.meta.url);
+// Resolve unmocked owner modules exactly as the shipped Electron main does.
+const require = createRequire(new URL('../../electron/main.cjs', import.meta.url));
 const filename = fileURLToPath(new URL('../../electron/main.cjs', import.meta.url));
 const source = readFileSync(filename, 'utf8');
 
