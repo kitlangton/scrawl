@@ -25,7 +25,7 @@ test('unknown, missing history and empty deltas cannot silently skip coverage', 
   assert.deepEqual(select(['README.md'], false), [...owners]);
 });
 
-test('prerequisite, selector and timing regressions are mandatory even on docs pushes', () => {
+test('prerequisite, CI routing, selector and timing regressions are mandatory even on docs pushes', () => {
   const plan = commands([], 'base', 'head');
   const args = [...plan, ...contractTests()].flatMap(command => command.argv);
   for (const path of ['enablement/prerequisites/native.test.ts',
@@ -33,6 +33,7 @@ test('prerequisite, selector and timing regressions are mandatory even on docs p
     assert.ok(args.includes(path), path);
   }
   assert.ok(args.includes('--pr'));
+  assert.ok(args.includes('enablement/ci/'));
   assert.ok(!args.includes('cargo'));
   assert.ok(!args.some(arg => arg.includes('verification-status')), 'retired reporter stays absent from local gates');
 });

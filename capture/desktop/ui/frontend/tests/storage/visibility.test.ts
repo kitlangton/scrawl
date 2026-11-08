@@ -216,7 +216,7 @@ test('first-frame acknowledgement refuses another frame and unexpected arguments
   assert.throws(() => ready!({ sender: window.webContents, senderFrame: window.webContents.mainFrame }), /Forbidden bridge/);
 });
 
-test('Settings preloads acknowledge the mount only after two renderer frame callbacks', async () => {
+test('Settings preloads acknowledge committed DOM before waiting for renderer frame callbacks', async () => {
   for (const preload of ['storage-preload.cjs']) {
     const callbacks: (() => void)[] = [];
     const exposed: Record<string, (...args: any[]) => Promise<void>> = {};
@@ -230,9 +230,13 @@ test('Settings preloads acknowledge the mount only after two renderer frame call
       requestAnimationFrame: (callback: () => void) => { callbacks.push(callback); },
     }, { filename: preload });
     const acknowledgement = exposed.apparentSettingsMounted();
-    assert.deepEqual(invoked, [], `${preload}: no readiness IPC before a frame`);
+    assert.deepEqual(invoked, ['apparent:settings-mounted'], `${preload}: committed DOM is independent of frame scheduling`);
+    // Complete the asynchronous IPC reply across the VM boundary without
+    // advancing either renderer callback held by this fixture.
+    await new Promise<void>(resolve => setImmediate(resolve));
+    assert.equal(callbacks.length, 1);
     callbacks.shift()!();
-    assert.deepEqual(invoked, [], `${preload}: first callback is before the paint opportunity`);
+    assert.deepEqual(invoked, ['apparent:settings-mounted'], `${preload}: first callback cannot acknowledge paint`);
     callbacks.shift()!();
     await acknowledgement;
     assert.deepEqual(invoked, ['apparent:settings-mounted', 'apparent:settings-frame-ready'], `${preload}: mount then frame readiness`);

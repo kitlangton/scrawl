@@ -48,7 +48,7 @@ class PrePushGuardTests(unittest.TestCase):
         local_tests.mkdir()
         shutil.copy2(SELECTOR.parent / "local-tests/run.ts", local_tests / "run.ts")
         # Finite TS contract fixtures, just like the Python fixtures above.
-        for name in ("local-tests/run.test.ts", "prerequisites/native.test.ts", "timing/command.test.ts"):
+        for name in ("local-tests/run.test.ts", "prerequisites/native.test.ts", "timing/command.test.ts", "ci/select.test.ts"):
             path = self.repo / "enablement" / name
             path.parent.mkdir(exist_ok=True)
             path.write_text("import {test} from 'node:test'; test('fixture', () => {});\n")
@@ -230,7 +230,7 @@ class PrePushGuardTests(unittest.TestCase):
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
         for tool in ("bun", "npm"):
             stub = self.bin / tool
-            stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "{tool} $*" >> "$COMMAND_LOG"\nexit "${{MOCK_STATUS:-0}}"\n')
+            stub.write_text(f'#!/bin/sh\ncase "$*" in *enablement/ci/*) exit 0;; esac\nprintf "%s\\n" "{tool} $*" >> "$COMMAND_LOG"\nexit "${{MOCK_STATUS:-0}}"\n')
             stub.chmod(0o755)
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)

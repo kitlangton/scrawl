@@ -27,11 +27,20 @@ older client/server source.
 ## Repository checks
 
 `Repository checks` runs automatically on PRs targeting main and main pushes.
-It validates the theme, selector, push-hook, publication-admission contracts and
-workflow syntax with read-only permissions. Every non-deletion push runs cheap
-contracts plus the affected owners' local suites, selected by
-`enablement/local-tests/run.ts` over the full merge-base-to-HEAD delta. Native
-prerequisite, timing and local-selector regressions are included in the
+It is the only automatic workflow: one run per PR open/reopen/commit update
+against main, and one per push to main. It validates the theme, selector,
+push-hook, publication-admission contracts and workflow syntax with read-only
+permissions. Public web verification runs as a reusable job when Public/shared
+web inputs change. The updater harness runs as a reusable job on main pushes
+when its inputs change. Changes to the CI orchestrator select both consumers;
+unavailable diff history selects both rather than skipping checks. Git diffs
+include deleted and renamed source paths. There are no PR-edit or verification
+lifecycle triggers. Superseded PR/main runs coalesce within their own event/ref.
+Neither reusable consumer publishes on an automatic run.
+
+Every non-deletion push runs cheap contracts plus the affected owners' local
+suites, selected by `enablement/local-tests/run.ts` over the full merge-base delta.
+Native-prerequisite, timing, CI routing and local-selector regressions run in the
 cheap contracts in CI and locally. Failed selected commands reject the push.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
@@ -53,8 +62,8 @@ root rebuild and receives its exact executable through `APPARENT_BIN`. New enabl
 automatically. Other capture changes retain the broad Rust/Engine verifier. Shared UI
 also selects Desktop, service and root integration. Package manifests/lockfiles
 select the entire owner, with locked installs and ordinary build prerequisites.
-Missing tools/packages fail rather than silently skip. Use Node 22.23+; selected
-web/Public packages also need Bun 1.3.10. Run hook-backed pushes once through
+Missing tools/packages fail rather than silently skip. Use Node 22.23+ and Bun
+1.3.10 for CI routing and selected web/Public packages. Run hook-backed pushes once through
 `t3-build` on Clanker.
 
 This is owner-level selection, not inferred per-file test coverage. It runs the
@@ -351,8 +360,7 @@ not a change to installed Desktop routing or application persistence policy.
 
 The automatic verification status reporter and its `Verification complete` commit
 status have been removed to eliminate repeated GitHub API reconciliation.
-Repository checks still run on PRs and main pushes. Linux, Mac and Public
-verification workflows remain available under their existing manual triggers.
-Exact-head verification, independent review, native acceptance and publication
-admission requirements remain unchanged; inspect their workflow evidence directly.
-The retired status must not remain a required branch-protection check.
+Linux, Mac and Public verification workflows remain available under their existing
+manual triggers. Exact-head verification, independent review, native acceptance
+and publication admission remain required; inspect their workflow evidence
+directly. The retired status is no longer required by branch protection.
