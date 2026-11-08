@@ -1,4 +1,4 @@
-import { mkdtemp, mkdir, rm, writeFile, symlink } from 'node:fs/promises';
+import { mkdtemp, mkdir, rm, rmdir, writeFile, symlink } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
@@ -6,6 +6,9 @@ import { test } from 'node:test';
 import { strict as assert } from 'node:assert';
 import { hasMicrophoneSamples } from '../dist/bundle.js';
 import { semanticSummary } from '../dist/summary.js';
+import { readManifest } from '../dist/bundle.js';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 
 const fixture = JSON.parse(await (await import('node:fs/promises')).readFile(new URL('./fixtures/semantic.json', import.meta.url),'utf8'));
 function pcm16(sample=0):Buffer {const b=Buffer.alloc(46);b.write('RIFF',0);b.writeUInt32LE(38,4);b.write('WAVEfmt ',8);b.writeUInt32LE(16,16);b.writeUInt16LE(1,20);b.writeUInt16LE(1,22);b.writeUInt32LE(16000,24);b.writeUInt32LE(32000,28);b.writeUInt16LE(2,32);b.writeUInt16LE(16,34);b.write('data',36);b.writeUInt32LE(2,40);b.writeInt16LE(sample,44);return b;}
@@ -65,6 +68,57 @@ test('unavailable click telemetry does not establish absent ink or accepted-hist
     assert.doesNotMatch(text,/Shift ink were not collected|ink was not collected|Accepted strokes:/);
     assert.equal(JSON.stringify(bundle),before);
   }
+});
+
+test('cold Record metadata preserves collection states, gap and sealed companion through inspection and handoff',async()=>{
+  const root=await mkdtemp(join(tmpdir(),'agent-cold-output-'));
+  const cli=new URL('../dist/cli.js',import.meta.url).pathname;
+  try {
+    for(const state of ['collected','empty','unavailable'] as const) {
+      const dir=join(root,state);await mkdir(dir);await mkdir(join(dir,'facts'));
+      const strokes=state==='collected'?fixture.strokes:[];
+      const bytes=Buffer.from(JSON.stringify({strokes}));
+      const companion={path:'facts/accepted-strokes.json',strokeCount:strokes.length,byteLength:bytes.length,sha256:createHash('sha256').update(bytes).digest('hex')};
+      if(state!=='unavailable')await writeFile(join(dir,companion.path),bytes);
+      await writeFile(join(dir,'audio.wav'),pcm16());
+      const bundle={...fixture,strokes,keyframes:[],events:[],marks:[],audio:'audio.wav',transcript:state==='collected'?fixture.transcript:{source:'none',text:'',segments:[]},
+        recordOutput:{schema:'apparent.record-output/1',transcriptStatus:state==='unavailable'?{state:'unavailable'}:{state:'collected',content:state==='empty'?'empty':'nonempty',segmentCount:state==='empty'?0:fixture.transcript.segments.length},warnings:[{kind:'audioInitialGap',atMs:25}],acceptedStrokeDocument:state==='unavailable'?null:companion}};
+      const manifest=JSON.stringify(bundle);await writeFile(join(dir,'apparent.json'),manifest);
+      const run=(args:string[])=>spawnSync(process.execPath,[cli,...args],{encoding:'utf8',env:{...process.env,HOME:root,PATH:''}});
+      const inspect=run(['inspect',dir]);assert.equal(inspect.status,0,inspect.stderr);
+      assert.match(inspect.stdout,/\[0, 25 ms\).*not recorded silence/);
+      assert.doesNotMatch(inspect.stdout,/Recognition did not run|Shift ink were not collected/);
+      if(state==='empty')assert.match(inspect.stdout,/Transcript collected: no words\./);
+      if(state==='unavailable')assert.match(inspect.stdout,/Transcript unavailable\.[\s\S]*Accepted stroke history unavailable\./);
+      else assert(inspect.stdout.includes(join(dir,companion.path)));
+      const copy=run(['copy','--preview',dir]);assert.equal(copy.status,0,copy.stderr);
+      assert.match(copy.stdout,/\[0, 25 ms\).*not recorded silence/);
+      if(state!=='unavailable')assert(copy.stdout.includes(join(dir,companion.path)));
+      if(state==='empty')assert.match(copy.stdout,/Transcript collected; no words\./);
+      if(state==='unavailable') {
+        assert.match(copy.stdout,/Accepted strokes: unavailable\./);
+        assert.equal((copy.stdout.match(/Transcript unavailable\./gu)??[]).length,1);
+      }
+      assert.equal((await readFile(join(dir,'apparent.json'))).toString(),manifest);
+      assert.equal(run(['inspect',dir,'--json']).stdout,manifest);
+      if(state==='collected') {
+        await writeFile(join(dir,companion.path),Buffer.alloc(bytes.length));
+        await assert.rejects(readManifest(dir),/length and SHA-256/);
+        const refused=run(['copy','--preview',dir]);assert.equal(refused.status,2);assert.equal(refused.stdout,'');
+        await rm(join(dir,companion.path));await symlink(join(dir,'audio.wav'),join(dir,companion.path));
+        await assert.rejects(readManifest(dir),/symlink/);
+        await rm(join(dir,companion.path));await rmdir(join(dir,'facts'));
+        const outside=join(root,'outside');await mkdir(outside);await writeFile(join(outside,'accepted-strokes.json'),bytes);
+        await symlink(outside,join(dir,'facts'));
+        await assert.rejects(readManifest(dir),/symlink/);
+        await rm(join(dir,'facts'));
+        await writeFile(join(dir,'apparent.json'),JSON.stringify({...bundle,recordOutput:{...bundle.recordOutput,acceptedStrokeDocument:{...companion,byteLength:64*1024*1024+1}}}));
+        await assert.rejects(readManifest(dir),/64 MiB/);
+      }
+      await writeFile(join(dir,'apparent.json'),JSON.stringify({...bundle,recordOutput:{...bundle.recordOutput,schema:'unsupported'}}));
+      await assert.rejects(readManifest(dir),/Invalid canonical Record output/);
+    }
+  } finally {await rm(root,{recursive:true,force:true});}
 });
 
 test('config agentContext is read-only, defaults off, and explicit experiment enables it',async()=>{

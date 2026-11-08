@@ -1,4 +1,7 @@
 import { keyframeTexts } from './semantic/context.js';
+import { readCanonicalRecordOutput } from '@apparent/record/processing/bundle';
+import { audioInitialGapText } from '@apparent/record/capabilities';
+import { join } from 'node:path';
 
 type Data = Record<string, any>;
 const clock = (ms: number) => `${Math.floor(ms / 60000)}:${String(Math.floor(ms / 1000) % 60).padStart(2, '0')}`;
@@ -66,6 +69,7 @@ function semanticEvents(bundle: Data): Array<{ t: number; text: string }> {
 
 /** Generate inspect text from the manifest only. No media is opened or decoded. */
 export function semanticSummary(bundle: Data, bundleDir: string, agentContext = false, evidenceOnly = false, hasAudio = false): string {
+  const output = readCanonicalRecordOutput(bundle);
   const lines = [`[apparent ${clock(bundle.durationMs)} · ${targetName(bundle)} · ${bundleDir}]`];
   if (bundle.destination) {
     const destination = bundle.destination;
@@ -82,15 +86,22 @@ export function semanticSummary(bundle: Data, bundleDir: string, agentContext = 
   if (clean(bundle.note)) lines.push(`Note: ${String(bundle.note).trim()}`);
   if (bundle.interactionTelemetry === 'videoOnly') lines.push('Interaction context: click telemetry was not collected. A visible click in the video will not appear in events, marks or click keyframes.');
   if (bundle.imageQualityWarning) lines.push(`Image quality: ${clean(bundle.imageQualityWarning)}`);
+  for (const warning of output?.warnings ?? [])
+    if (warning.kind === 'audioInitialGap') lines.push(audioInitialGapText(warning.atMs));
+  if (output?.transcriptStatus.state === 'unavailable') lines.push('Transcript unavailable.');
+  else if (output?.transcriptStatus.content === 'empty') lines.push('Transcript collected: no words.');
+  if (output) lines.push(output.acceptedStrokeDocument
+    ? `Accepted stroke history: ${output.acceptedStrokeDocument.strokeCount}. Original annotation data: ${join(bundleDir, output.acceptedStrokeDocument.path)}. This history does not establish the final canvas.`
+    : 'Accepted stroke history unavailable.');
   if (bundle.autocrop) lines.push(`Cropped to: ${clean(bundle.autocrop.label)} (full frames in ${clean(bundle.autocrop.fullFrames)}/)`);
   if (bundle.source !== 'iphone' && bundle.context?.microphoneCapture !== 'off') {
     const deferredAudio = !!bundle.audio && evidenceOnly;
     if (!hasAudio && !deferredAudio) lines.push('No microphone audio was saved. Check the microphone and try again.');
-    else if (!clean(bundle.transcript.text) && bundle.transcript.missing)
+    else if (!output && !clean(bundle.transcript.text) && bundle.transcript.missing)
       lines.push(`No transcript: ${clean(bundle.transcript.missing.reason)}`);
-    else if (!clean(bundle.transcript.text) && bundle.transcript.source === 'none')
+    else if (!output && !clean(bundle.transcript.text) && bundle.transcript.source === 'none')
       lines.push('No transcript: Recognition did not run. The audio is saved.');
-    else if (!clean(bundle.transcript.text)) lines.push('No words transcribed. Your audio was saved—check it or try again closer to the microphone.');
+    else if (!output && !clean(bundle.transcript.text)) lines.push('No words transcribed. Your audio was saved—check it or try again closer to the microphone.');
   }
 
   if (bundle.keyframes.length) {
