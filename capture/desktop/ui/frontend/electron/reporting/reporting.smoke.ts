@@ -16,6 +16,7 @@ test(`installed ${settings ? 'Settings' : 'foundation'} reporting observes rende
   const directory = path.join(home, '.config/apparent/agent-control');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   let application: Awaited<ReturnType<typeof electron.launch>> | undefined;
+  let ownedProcess: ReturnType<typeof spawn> | undefined;
   const sockets = new Set<net.Socket>();
   const requests: Record<string, unknown>[] = [];
   const server = net.createServer(socket => {
@@ -33,15 +34,22 @@ test(`installed ${settings ? 'Settings' : 'foundation'} reporting observes rende
   });
   t.after(async () => {
     try {
-      if (application && application.process().exitCode === null && application.process().signalCode === null) {
+      if (application && ownedProcess && ownedProcess.exitCode === null && ownedProcess.signalCode === null) {
         let timer: ReturnType<typeof setTimeout> | undefined;
         try {
           await Promise.race([application.close(), new Promise((_, reject) => {
             timer = setTimeout(() => {
-              application?.process().kill('SIGKILL');
+              ownedProcess?.kill('SIGKILL');
               reject(Error('Owned Electron cleanup exceeded five seconds'));
             }, 5000);
           })]);
+        } catch (error) {
+          if (ownedProcess.exitCode === null && ownedProcess.signalCode === null) {
+            const exited = once(ownedProcess, 'exit');
+            ownedProcess.kill('SIGKILL');
+            await exited;
+          }
+          throw error;
         } finally { clearTimeout(timer); }
       }
     } finally {
@@ -57,8 +65,11 @@ test(`installed ${settings ? 'Settings' : 'foundation'} reporting observes rende
     args: [fileURLToPath(new URL('../../', import.meta.url)), ...(settings ? ['--settings-storage'] : [])],
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config'), APPARENT_DESKTOP_REPORTING: '1' },
   });
+  // Playwright may dispose its application channel as soon as Electron exits.
+  // This OS handle remains valid for exit assertions and owned cleanup.
+  ownedProcess = application.process();
   await application.firstWindow();
-  const rendererExit = settings ? once(application.process(), 'exit') : undefined;
+  const rendererExit = settings ? once(ownedProcess, 'exit') : undefined;
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.forcefullyCrashRenderer());
   if (settings) {
     const [code] = await rendererExit!;
@@ -68,8 +79,8 @@ test(`installed ${settings ? 'Settings' : 'foundation'} reporting observes rende
   }
   await expect.poll(() => requests.map(r => r.kind)).toContain('renderer_gone');
   // Keep the owning main process alive; only the renderer crashed above.
-  assert.equal(application.process().exitCode, null);
-  const exited = once(application.process(), 'exit');
+  assert.equal(ownedProcess.exitCode, null);
+  const exited = once(ownedProcess, 'exit');
   await application.evaluate(() => { setTimeout(() => { throw Error('private-error-canary'); }, 0); });
   const [code] = await exited;
   assert.equal(code, 1);
