@@ -6,6 +6,7 @@ on:
   push:
     branches: [main]
   pull_request_target:
+    branches: [main]
     types: [opened, reopened, synchronize, edited, ready_for_review]
   workflow_run:
     workflows: [Linux verification, Mac verification, Public — checks & deploy]
@@ -21,7 +22,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: repository-checks-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && (github.event.pull_request.number || github.ref) || format('status-{0}', github.event.pull_request.head.ref || github.event.workflow_run.head_branch || 'main') }}
+  group: repository-checks-${{ (github.event_name == 'pull_request' || github.event_name == 'push') && (github.event.pull_request.number || github.ref) || format('reporter-event-{0}', github.run_id) }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
@@ -75,6 +76,7 @@ jobs:
   verification-status:
     if: >-
       github.event_name != 'pull_request' &&
+      (github.event_name != 'pull_request_target' || github.event.pull_request.base.ref == 'main') &&
       (github.event_name != 'workflow_run' ||
        (github.event.workflow_run.event == 'workflow_dispatch' &&
         github.event.workflow_run.head_repository.full_name == github.repository &&
@@ -82,7 +84,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 10
     concurrency:
-      group: authoritative-verification-status-${{ github.event.pull_request.head.ref || github.event.workflow_run.head_branch || 'main' }}
+      group: authoritative-verification-status-${{ github.event_name == 'workflow_dispatch' && inputs.pull_request && format('recovery-pr-{0}', inputs.pull_request) || (github.event_name == 'push' || github.event_name == 'workflow_dispatch') && 'global-main' || format('candidate-{0}:{1}', github.event.pull_request.head.repo.full_name || github.event.workflow_run.head_repository.full_name, github.event.pull_request.head.ref || github.event.workflow_run.head_branch) }}
       cancel-in-progress: false
     permissions:
       contents: read

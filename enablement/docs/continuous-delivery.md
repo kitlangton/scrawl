@@ -371,11 +371,16 @@ The trusted reporter uses the workflow's Actions credential throughout; another
 user token's quota does not establish recovery. PR lifecycle events reconcile
 only that PR. Manual verification lifecycle events look up matching open PRs by
 head branch and exact SHA; automatic Public runs and first-attempt in-progress
-notifications do no API work. Requested/rerun-start events invalidate pending
-without evaluating complete job evidence. Completed events evaluate the current
+notifications do no API work. Requested/rerun-start events authenticate the latest
+run and attempt before leaving pending without evaluating complete job evidence.
+Delayed start events reconcile current completed evidence instead of leaving a
+stale pending result. Completed events evaluate the current
 manual runs. Main pushes and blank manual dispatches retain a global scan, with
 all known heads invalidated before evidence reads. Global and candidate work use
-separate coalescing keys so an unrelated PR cannot replace pending global work.
+separate job-level coalescing domains, including a separate targeted-recovery
+domain. Reporter events have unique workflow-level keys: rejected events cannot
+evict eligible work before the job condition is evaluated. Non-main PR events
+are filtered both by the trigger and by the reporter.
 
 Every process preflights the same Actions credential. Targeted runs have a
 60-request hard budget and need at least 70 remaining requests; global runs have

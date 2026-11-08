@@ -62,8 +62,11 @@ export function publicPolicy(source: string): Record<string, string[]> {
   if (steps.some((s: any) => s['continue-on-error'])) throw Error('Public verification tolerates failure');
   return {verify: steps.map((s: any) => s.name || `Run ${s.run.split('\n')[0]}`)};
 }
+export function matchesManual(run: any, identity: any): boolean {
+  return run.repository?.full_name === repo && run.head_repository?.full_name === repo && run.path === identity.path && run.head_sha === identity.sha && run.head_branch === identity.branch && run.event === 'workflow_dispatch' && Number.isInteger(run.run_attempt) && run.run_attempt >= 1;
+}
 export function evaluate(run: any, jobs: any[], identity: any, required: string[], expected: Record<string, string[]> = {}): string {
-  if (run.repository?.full_name !== repo || run.head_repository?.full_name !== repo || run.path !== identity.path || run.head_sha !== identity.sha || run.head_branch !== identity.branch || run.event !== 'workflow_dispatch' || !Number.isInteger(run.run_attempt) || run.run_attempt < 1) return 'failure';
+  if (!matchesManual(run, identity)) return 'failure';
   if (run.status !== 'completed') return 'pending';
   if (run.conclusion !== 'success') return 'failure';
   for (const name of required) {
@@ -201,6 +204,7 @@ export function reconcile(fetch: API, number: number, listed?: any, alreadyPendi
   fetch(`${prefix}/statuses/${sha}`, {state, context: 'Verification complete', description, target_url: report});
 }
 export function eligibleEvent(event: any, name: string): boolean {
+  if (name === 'pull_request_target') return event.pull_request?.base?.ref === 'main' && event.pull_request.base.repo?.full_name === repo;
   if (name !== 'workflow_run') return true;
   const run = event.workflow_run;
   return run?.event === 'workflow_dispatch' && run.head_repository?.full_name === repo &&
@@ -241,7 +245,17 @@ export function reconcileAll(fetch: API, event: any = {}, eventName?: string): v
   // Invalidate the complete known global set before expensive evidence reads.
   // This preserves pending on later per-PR/API failures and avoids duplicate writes.
   for (const pr of prs) pending(pr);
-  if (manual && manual.status !== 'completed') return;
+  if (manual) {
+    // Event delivery can be delayed or reordered. Authenticate current lifecycle
+    // state before taking the pending-only path, including newer attempts/runs.
+    const latest = pages(fetch, `${prefix}/actions/workflows/${manual.path.split('/').at(-1)}/runs?event=workflow_dispatch&head_sha=${manual.head_sha}&branch=${encodeURIComponent(manual.head_branch)}`, 'workflow_runs').sort((a, b) => b.id - a.id)[0];
+    if (!latest || latest.id < manual.id) throw Error('Current manual run not yet discoverable');
+    const current = fetch(`${prefix}/actions/runs/${latest.id}`);
+    if (current.id !== latest.id || !matchesManual(current, {path:manual.path, sha:manual.head_sha, branch:manual.head_branch}) || (current.id === manual.id && current.run_attempt < manual.run_attempt)) throw Error('Current manual run identity or attempt unavailable');
+    if (current.status !== 'completed') return;
+    // A delayed requested/in_progress event must restore completed evidence,
+    // rather than overwriting it with pending and waiting for a nonexistent event.
+  }
   let failed = false;
   for (const pr of prs) {
     try { reconcile(fetch, pr.number, pr, true); }
