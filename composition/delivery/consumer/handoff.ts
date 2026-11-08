@@ -4,6 +4,7 @@ import { chmodSync, existsSync, lstatSync, mkdirSync, readFileSync, readdirSync,
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { sourceDigest, type Owner, type Target } from '../core.ts'
+import { validateArchiveKinds } from './mac-frameworks.ts'
 
 const repository = 'tryapparent/apparent'
 const maxArtifactBytes = 1024 * 1024 * 1024
@@ -45,7 +46,7 @@ function receiptFor(zip: Buffer, owner: Owner, target: Target, admission: Admiss
   } finally { rmSync(tmp, { force: true }) }
 }
 
-function validateTarInventory(archive: Buffer) {
+export function validateTarInventory(archive: Buffer, owner: Pick<Owner, 'id' | 'stage'>, target: Target) {
   const tmp = join(process.env.TMPDIR || '/tmp', `apparent-component-${process.pid}-${Math.random().toString(16).slice(2)}.tar.gz`)
   try {
     writeFileSync(tmp, archive, { mode: 0o600, flag: 'wx' })
@@ -59,7 +60,7 @@ function validateTarInventory(archive: Buffer) {
     }
     const verbose = execFileSync('tar', ['-P', '-tvzf', tmp], { encoding: 'utf8', maxBuffer: 16 * 1024 * 1024, timeout: 30000, stdio: ['ignore', 'pipe', 'pipe'] })
     const entries = verbose.split('\n').filter(Boolean)
-    if (entries.length !== names.length || entries.some(line => !/^[d-][rwxStTs-]{9}/.test(line))) fail('Component archive contains links or unsupported filesystem entries')
+    validateArchiveKinds(names, entries, owner.id, target, owner.stage)
   } finally { rmSync(tmp, { force: true }) }
 }
 
@@ -165,7 +166,7 @@ export async function handoff(root: string, owner: Owner, target: Target, source
     writeFileSync(temporaryArchive, verifiedArchive, { mode: 0o600, flag: 'wx' })
     await api.attest(temporaryArchive, owner, target, sourceSha, runId, runAttempt)
   } finally { rmSync(temporaryArchive, { force: true }) }
-  validateTarInventory(verifiedArchive)
+  validateTarInventory(verifiedArchive, owner, target)
   const key = createHash('sha256').update(JSON.stringify([repository, owner.id, target, sourceSha, admitted.input_digest, receipt.sha256])).digest('hex')
   const cache = atomicCache(cacheDir, key, verifiedArchive, receipt)
   const indexTemp = `${indexPath}.tmp-${process.pid}`

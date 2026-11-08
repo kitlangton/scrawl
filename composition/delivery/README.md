@@ -72,7 +72,12 @@ downloads once; warm and concurrent calls reuse the content after checking its
 receipt/hash, current producer admission, tar inventory and online attestation.
 Corrupt cache entries are discarded and fetched again; unavailable or failed
 GitHub/attestation checks fail closed. The consumer validates archive paths and
-rejects links/special entries without extracting them.
+rejects links/special entries without extracting them. The Mac x64 App Shell
+development bundle alone permits the pinned Electron framework aliases inside
+its `.app`: exact known relative targets, declared version-A endpoints and no
+archive member beneath an alias/file (including case-folded paths). This exception
+requires ASCII paths without case collisions. Unknown links, hardlinks, escaping or
+broken targets remain refused; other owners and targets retain the no-link rule.
 
 `plan` remains a local diagnostic and reports registrations; owner workflows contain checked-in target matrices, so a run cannot schedule unrelated owners. Package source must be covered by a declared input root. `admit` runs on a hosted runner with its `ImageOS` and `ImageVersion` identity set. It looks only at push runs on main from the exact owner workflow path, with the historical owner stream job, `Delivery contracts` and runtime audit all terminal-success, an ancestor source SHA and a matching unexpired artifact. API/auth/identity uncertainty causes a rebuild. Fingerprints use Git tree mode, path and blob IDs for all owner input roots, registration, `LICENSE`, the delivery core, owner workflow and shared component action, and runtime budget checker/action, and include Node, runner image, OS/architecture and exact target identities.
 
