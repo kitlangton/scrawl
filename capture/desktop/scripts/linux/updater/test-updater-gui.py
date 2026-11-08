@@ -26,6 +26,17 @@ class LocatorTests(unittest.TestCase):
     def setUp(self):
         self.gui = load('updater-gui')
 
+    def test_portal_tabs_require_unique_ordered_labels_across_ocr_run_splits(self):
+        for gap in [17, 27]:
+            words = [{'text': text, 'left': x, 'top': 185, 'width': 65, 'height': 16}
+                     for text, x in [('Windows', 178), ('Outputs', 243 + gap), ('Region', 325 + gap)]]
+            self.assertEqual(self.gui.find_portal_outputs(words, ''), (275 + gap, 193))
+            for invalid in [words[:2], words + [words[1]],
+                            [words[1], words[0], dict(words[2], left=20)],
+                            [words[0], dict(words[1], top=250), words[2]]]:
+                with self.subTest(gap=gap, invalid=invalid), self.assertRaises(ValueError):
+                    self.gui.find_portal_outputs(invalid, '')
+
     def test_portal_points_require_the_observed_viewport_and_stay_inside_it(self):
         from PIL import Image
         for viewport, point, accepted in [([1280, 800], [640, 420], True),
@@ -47,7 +58,7 @@ class LocatorTests(unittest.TestCase):
                         events = pointer.call_args_list[0].args[2]['events']
                         self.assertEqual(events[0]['data']['value'], round(640 * 32767 / 1279))
                         self.assertEqual(events[1]['data']['value'], round(420 * 32767 / 799))
-                        locate.assert_called_once_with('Outputs Region', 20)
+                        locate.assert_called_once_with('Outputs Region', 20, finder=self.gui.find_portal_outputs)
                     else:
                         with self.assertRaises(ValueError):
                             evidence.perform(request)

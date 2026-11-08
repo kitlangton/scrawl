@@ -98,6 +98,24 @@ def find_phrase(words, phrase):
     return matches[0]
 
 
+def find_portal_outputs(words, _phrase):
+    # Tesseract can split or join these tabs into different text runs. Require
+    # the complete unique row without relaxing ordinary UI locators.
+    tabs = []
+    for label in ['windows', 'outputs', 'region']:
+        matches = [w for w in words if tokens(w['text']) == [label]]
+        if len(matches) != 1:
+            raise PhraseMatchError('portal tabs', len(matches))
+        tabs.append(matches[0])
+    for left, right in zip(tabs, tabs[1:]):
+        gap = int(right['left']) - int(left['left']) - int(left['width'])
+        if not (0 <= gap <= 40 and abs(int(left['top']) - int(right['top'])) <= 5):
+            raise ValueError('portal tabs are not one ordered row')
+    output = tabs[1]
+    return (int(output['left']) + int(output['width']) // 2,
+            int(output['top']) + int(output['height']) // 2)
+
+
 def qmp(path, command, arguments):
     with socket.socket(socket.AF_UNIX) as sock:
         sock.settimeout(10)
@@ -171,14 +189,14 @@ class Evidence:
         self.last_ocr = result.stdout
         return list(csv.DictReader(io.StringIO(result.stdout), delimiter='\t'))
 
-    def locate(self, phrase, timeout):
+    def locate(self, phrase, timeout, finder=find_phrase):
         deadline = time.monotonic() + timeout
         last = None
         while True:
             path = self.frame()
             words = self.words(path)
             try:
-                position = find_phrase(words, phrase)
+                position = finder(words, phrase)
                 return path, position
             except ValueError as error:
                 last = error
@@ -186,7 +204,7 @@ class Evidence:
                     # Derived OCR input removes outlines; raw evidence is intact.
                     words = self.words(path, cleaned=True)
                     try:
-                        return path, find_phrase(words, phrase)
+                        return path, finder(words, phrase)
                     except ValueError as cleaned_error:
                         last = cleaned_error
             if time.monotonic() >= deadline:
@@ -198,7 +216,10 @@ class Evidence:
         start = time.monotonic() - self.clock
         op = request['op']
         if op in ('click', 'assert', 'click-point'):
-            path, (x, y) = self.locate(request['text'], request.get('timeout', 20))
+            if op == 'click-point':
+                path, (x, y) = self.locate(request['text'], request.get('timeout', 20), finder=find_portal_outputs)
+            else:
+                path, (x, y) = self.locate(request['text'], request.get('timeout', 20))
             if op in ('click', 'click-point'):
                 from PIL import Image
                 with Image.open(path) as image:
