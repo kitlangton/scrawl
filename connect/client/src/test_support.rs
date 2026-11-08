@@ -956,7 +956,9 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
         let request: Value = serde_json::from_slice(&body).unwrap();
         assert!(head.contains("Authorization:") || request["refreshToken"].is_string());
         json!({"ok":true}).to_string().into_bytes()
-    } else if route == "/v1/account" && s.mode == "auth-required" {
+    } else if (route == "/v1/account" && s.mode == "auth-required")
+        || s.mode == "inspect-unauthorized"
+    {
         assert!(head.contains("Authorization: Bearer synthetic-"));
         status = 401;
         json!({"error":{"code":"unauthorized","message":"synthetic-secret"}})
@@ -1075,6 +1077,10 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                     }
                 }
                 b"{}".to_vec()
+            } else if s.mode == "inspect-corrupt" {
+                let mut bytes = s.data.get(&path).unwrap().clone();
+                *bytes.first_mut().expect("nonempty corruption fixture") ^= 0xff;
+                bytes
             } else if s.mode == "corrupt" {
                 b"corrupt".to_vec()
             } else {
@@ -1088,7 +1094,14 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
         } else {
             let mut files = s.files.clone();
             files.reverse();
-            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"files":files,"format":s.format})
+            let pending = if s.mode == "inspect-pending" {
+                assert!(head.contains("Authorization: Bearer synthetic-read-secret"));
+                s.polls += 1;
+                s.polls == 1
+            } else {
+                !s.ready
+            };
+            json!({"id":id,"status":if pending {"pending"} else {"ready"},"files":files,"format":s.format})
                 .to_string()
                 .into_bytes()
         }
@@ -1332,12 +1345,7 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
     let bundle = f.bundle();
     let id = f.client.enqueue(&bundle).unwrap();
     let pointer = f.client.pointer(&bundle).unwrap();
-    assert_eq!(
-        pointer,
-        format!(
-            "apparent fetch {id} --out ./{id}.apparent --wait 120\napparent inspect ./{id}.apparent\n"
-        )
-    );
+    assert_eq!(pointer, format!("apparent inspect {id}\n"));
     assert!(!pointer.contains("login") && !pointer.contains("secret"));
     assert_eq!(server.state.lock().unwrap().requests, 0);
     let restarted = Client::new(f.client.provider.clone());
@@ -1373,6 +1381,133 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
             .contains("secret")
     );
 }
+/// Root adoption exercises the real CLI parser/dispatcher in isolated processes.
+/// The caller supplies an application-readable manifest, not a second formatter.
+pub fn inspect_cli_scenario(
+    manifest: &Value,
+    run: impl Fn(&Path, &Path, &[&str]) -> std::process::Output,
+) {
+    let f = Fixture::new();
+    let server = Server::new("");
+    f.authorize(&server.url);
+    let bundle = f.bundle();
+    fs::write(bundle.join("apparent.json"), serde_json::to_vec(manifest).unwrap()).unwrap();
+    let id = f.client.enqueue(&bundle).unwrap();
+    f.client.process_once().unwrap();
+    server.state.lock().unwrap().mode = "inspect-pending".into();
+    // A receiver needs only a read grant, with no upload experiment or consent.
+    fs::remove_file(f.client.state.join("upload.credential")).unwrap();
+    atomic_json(&f.client.config, &json!({"cloud":{"server":server.url}})).unwrap();
+    let config_before = fs::read(&f.client.config).unwrap();
+    let out = f.root.join(format!("{id}.apparent"));
+    let output = run(&f.client.config, &f.root, &["inspect", &id]);
+    assert!(output.status.success(), "{output:?}");
+    let summary = String::from_utf8(output.stdout).unwrap();
+    assert!(summary.contains("Synthetic inspect transcript"), "{summary}");
+    assert!(summary.contains("[apparent 0:04") && summary.contains("contact-sheet.png")
+        && summary.contains("frames/") && summary.contains(&out.display().to_string()), "{summary}");
+    assert!(!summary.contains("synthetic summary"), "must render the manifest, not echo summary.md");
+    assert!(!summary.contains("secret"));
+    {
+        let state = server.state.lock().unwrap();
+        assert_eq!(state.polls, 2, "must wait through a pending manifest");
+        for (path, bytes) in &state.data {
+            assert_eq!(&fs::read(out.join(path)).unwrap(), bytes, "{path}");
+        }
+    }
+    let requests = server.state.lock().unwrap().requests;
+    let output = run(&f.client.config, &f.root, &["inspect", &id]);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("already exists"), "{output:?}");
+    assert_eq!(server.state.lock().unwrap().requests, requests);
+    let local = format!("./{id}.apparent");
+    let local_summary = run(&f.client.config, &f.root, &["inspect", &local]);
+    assert!(local_summary.status.success());
+    assert_eq!(local_summary.stdout, summary.as_bytes());
+    // Explicit local forms stay local, including the existing extension check.
+    let bare_local = f.root.join(&id);
+    fs::create_dir(&bare_local).unwrap();
+    fs::copy(out.join("apparent.json"), bare_local.join("apparent.json")).unwrap();
+    let captures = f.root.join("captures");
+    fs::create_dir(&captures).unwrap();
+    fs::rename(&bundle, captures.join("local.apparent")).unwrap();
+    for source in [
+        local.clone(), format!("{local}/apparent.json"), "latest".into(),
+    ] {
+        let output = run(&f.client.config, &f.root, &["inspect", &source, "--json"]);
+        assert!(output.status.success(), "{source}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stdout).contains("\"id\": \"synthetic-inspect\""));
+    }
+    for source in [format!("./{id}"), format!("{id}/"), bare_local.display().to_string()] {
+        let output = run(&f.client.config, &f.root, &["inspect", &source]);
+        assert!(!output.status.success(), "{source}: {output:?}");
+        assert!(String::from_utf8_lossy(&output.stderr).contains("Expected a .apparent directory"), "{output:?}");
+    }
+    for flags in [
+        vec!["--marks"], vec!["--marks", "--json"], vec!["--experiment", "agentContext"],
+    ] {
+        let mut args = vec!["inspect", local.as_str()];
+        args.extend(flags);
+        let output = run(&f.client.config, &f.root, &args);
+        assert!(output.status.success(), "{output:?}");
+    }
+    assert_eq!(server.state.lock().unwrap().requests, requests, "local inspection must not use the network");
+    // Options also survive remote resolution on a fresh destination.
+    let json_cwd = f.root.join("json");
+    fs::DirBuilder::new().mode(0o700).create(&json_cwd).unwrap();
+    let output = run(&f.client.config, &json_cwd, &["inspect", &id, "--json"]);
+    assert!(output.status.success(), "{output:?}");
+    assert!(String::from_utf8_lossy(&output.stdout).contains("\"id\": \"synthetic-inspect\""));
+    assert_eq!(fs::read(&f.client.config).unwrap(), config_before);
+    assert!(!f.client.state.join("upload.credential").exists());
+}
+
+pub fn inspect_cli_failure_scenario(
+    manifest: &Value,
+    run: impl Fn(&Path, &Path, &[&str]) -> std::process::Output,
+) {
+    for mode in ["missing-read", "inspect-unauthorized", "inspect-corrupt"] {
+        // A rejected grant is durably auth_required; use an independent receiver
+        // so the corruption case reaches its own integrity boundary.
+        let f = Fixture::new();
+        let server = Server::new("");
+        f.authorize(&server.url);
+        let bundle = f.bundle();
+        fs::write(bundle.join("apparent.json"), serde_json::to_vec(manifest).unwrap()).unwrap();
+        let id = f.client.enqueue(&bundle).unwrap();
+        f.client.process_once().unwrap();
+        let out = f.root.join(format!("{id}.apparent"));
+        let credential = f.client.state.join("read.credential");
+        let saved = f.client.state.join("saved-read.credential");
+        if mode == "missing-read" {
+            fs::rename(&credential, &saved).unwrap();
+        } else {
+            server.state.lock().unwrap().mode = mode.into();
+        }
+        let requests = server.state.lock().unwrap().requests;
+        let output = run(&f.client.config, &f.root, &["inspect", &id]);
+        assert!(!output.status.success(), "{mode}: {output:?}");
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let public_error = stderr.lines().next().unwrap_or_default();
+        assert!(public_error.starts_with("Error: "), "{mode}: {output:?}");
+        if mode != "missing-read" {
+            let diagnostic = if mode == "inspect-unauthorized" { "auth" } else { "integrity" };
+            assert!(public_error.to_lowercase().contains(diagnostic), "{mode}: {output:?}");
+        }
+        assert!(!stderr.contains("secret"), "{mode}: {stderr}");
+        assert!(!String::from_utf8_lossy(&output.stdout).contains("Synthetic inspect transcript"));
+        assert!(!out.exists());
+        assert!(!fs::read_dir(&f.root).unwrap().any(|entry| entry.unwrap().file_name().to_string_lossy().starts_with(".apparent-fetch-")));
+        if mode == "missing-read" {
+            assert_eq!(server.state.lock().unwrap().requests, requests);
+            fs::rename(&saved, &credential).unwrap();
+        } else {
+            assert!(server.state.lock().unwrap().requests > requests);
+        }
+        assert!(bundle.join("recording.mov").exists());
+    }
+}
+
 #[cfg_attr(test, test)]
 pub fn hosted_disable_logout_and_quota_preserve_local() {
     let f = Fixture::new();
