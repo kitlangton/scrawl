@@ -143,6 +143,44 @@ class GuestIsolationTests(unittest.TestCase):
                 runner.wait_for_desktop(['ssh', 'guest'], RunningGuest(), 1)
         self.assertEqual(probe.call_args.kwargs['timeout'], 1)
 
+    def test_desktop_readiness_checks_real_probe_results(self):
+        # Execute the production shell probe against harmless local peers. A
+        # compositor owned by a greeter or an old session's environment cannot
+        # satisfy the explicitly requested desktop.
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            pgrep = root / 'pgrep'
+            pgrep.write_text('#!/bin/sh\n[ "$1" = -u ] && [ "$2" = "$(id -u)" ] && [ "$3" = -x ] && [ "$4" = "$FIXTURE_COMPOSITOR" ]\n')
+            pgrep.chmod(0o700)
+            systemctl = root / 'systemctl'
+            systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$FIXTURE_ENV"\n')
+            systemctl.chmod(0o700)
+            for desktop, compositor, identity in [('gnome', 'gnome-shell', 'GNOME'), ('kde', 'kwin_wayland', 'KDE')]:
+                valid = ['DISPLAY=:0', 'WAYLAND_DISPLAY=wayland-0',
+                         'XDG_RUNTIME_DIR=/run/user/1000', 'XDG_SESSION_TYPE=wayland',
+                         'XDG_CURRENT_DESKTOP=' + identity]
+                for environment, process, ready in [
+                    (valid, compositor, True),
+                    ([line.replace(identity, 'vendor:' + identity) for line in valid], compositor, True),
+                    (valid, 'Hyprland', False),
+                    ([line for line in valid if not line.startswith('WAYLAND_DISPLAY=')], compositor, False),
+                    ([line for line in valid if not line.startswith('XDG_RUNTIME_DIR=')], compositor, False),
+                    ([line.replace('=/run/user/1000', '=relative') for line in valid], compositor, False),
+                    ([line.replace('=wayland', '=x11') for line in valid], compositor, False),
+                    ([line.replace(identity, 'Hyprland') for line in valid], compositor, False),
+                    ([line.replace('DISPLAY=:0', 'DISPLAY=') for line in valid], compositor, False),
+                ]:
+                    with self.subTest(desktop=desktop, environment=environment, process=process):
+                        env = dict(os.environ, PATH=str(root) + ':' + os.environ['PATH'],
+                                   FIXTURE_COMPOSITOR=process, FIXTURE_ENV='\n'.join(environment))
+                        result = subprocess.run(['sh', '-c', runner.desktop_probe(desktop)], env=env,
+                                                capture_output=True, text=True, timeout=5)
+                        self.assertEqual(result.returncode == 0, ready, result.stderr)
+
+    def test_unknown_desktop_is_rejected_before_probe(self):
+        with self.assertRaises(ValueError):
+            runner.desktop_probe('gnome; true')
+
     def test_real_readiness_failure_retains_last_ssh_stderr(self):
         process = SimpleNamespace(poll=lambda: None)
         command = [sys.executable, '-c', 'import sys; print("probe"); sys.stderr.write("SSH diagnostic"); sys.exit(255)']
@@ -211,7 +249,7 @@ class GuestIsolationTests(unittest.TestCase):
 class RunnerFailureTests(unittest.TestCase):
     """Real owned child/streams and disk cleanup; VM/SSH/systemd are inert adapters."""
 
-    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False):
+    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False, desktop=None):
         root = Path(root)
         binary = root / 'candidate'
         binary.write_bytes(b'synthetic candidate')
@@ -276,6 +314,8 @@ elif operation == 'cleanup':
         options = ['gui-vm.py', '--template', str(root / 'template'), '--ovmf-vars', str(root / 'vars'),
                    '--ssh-key', str(root / 'key'), '--ssh-user', 'fixture', '--scenario', str(root / 'scenario'),
                    '--binary', str(binary), '--results', str(results), '--scenario-timeout', '1']
+        if desktop is not None:
+            options.extend(['--desktop', desktop])
         owned_processes = []
         real_popen = runner.subprocess.Popen
 
@@ -298,7 +338,7 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
                  patch.object(runner, 'make_overlay', side_effect=overlay), \
                  patch.object(runner, 'qemu_command', return_value=[sys.executable, '-c', 'import time; time.sleep(30)']), \
                  patch.object(runner, 'arm_expiry', return_value='owned-fixture-expiry'), \
-                 patch.object(runner, 'wait_for_desktop'), \
+                 patch.object(runner, 'wait_for_desktop') as readiness, \
                  patch.object(runner, 'ssh_prefix', return_value=[sys.executable, str(transport), str(root), 'ssh', str(scenario_exit)]), \
                  patch.object(runner, 'execute', side_effect=transport_execute), \
                  patch.object(runner.subprocess, 'Popen', side_effect=track_process), contextlib.redirect_stdout(io.StringIO()):
@@ -317,9 +357,17 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
         if writer is not None:
             self.assertEqual(writer.returncode, 0)
         status = json.loads((results / 'result.json').read_text())
+        self.assertEqual(readiness.call_args.args[-1], desktop or 'hyprland')
+        self.assertEqual(status['desktop'], desktop or 'hyprland')
         self.assertEqual((results / 'result.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(status['candidate_sha256'], hashlib.sha256(binary.read_bytes()).hexdigest())
         return code, status, results
+
+    def test_selected_desktop_reaches_readiness_and_receipt(self):
+        for desktop in ('gnome', 'kde'):
+            with self.subTest(desktop=desktop), tempfile.TemporaryDirectory() as root:
+                code, _, _ = self.exercise(root, scenario_exit=0, desktop=desktop)
+                self.assertEqual(code, 0)
 
     def test_first_real_scenario_failure_survives_transfer_and_cleanup_failures(self):
         with tempfile.TemporaryDirectory() as root:
