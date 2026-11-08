@@ -12,7 +12,7 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.chmod(directory, 0o700);
   const clients = new Set(), requests = [];
-  let closes = 0, stage = 'initial', hold, holdAction;
+  let closes = 0, stage = 'initial', accountInitial = 'S', hold, holdAction;
   const button = (command, title) => ({ command, title, enabled: true });
   const view = () => {
     const buttons = stage === 'initial' ? [button('connect', 'Connect')]
@@ -31,7 +31,7 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
       presentation:{tone:stage === 'connected' ? 'success' : stage === 'approval' ? 'progress' : stage === 'disable-confirm' ? 'warning' : 'neutral',
         headline,detail:stage === 'consent' ? 'Explicit upload consent required.' : 'Synthetic transport fixture.',note:'',
         artwork:['initial','consent','approval','connected'].includes(stage),compact:stage === 'connected',
-        accountMenu:['connected','off'].includes(stage),buttons,
+        accountMenu:['connected','off'].includes(stage),...(accountInitial ? {accountInitial} : {}),buttons,
         menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command)).map(b=>b.command),sharedLinksUrl:null }
     };
   };
@@ -90,7 +90,35 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
   stage = 'connected';
   await expect(card.getByText('You’re connected.', {exact:true})).toBeVisible();
   await expect(card.locator('[data-tone="success"]')).toHaveCSS('border-inline-start-color','rgb(20, 107, 67)');
-  await card.getByRole('button',{name:'Account and connection options'}).click();
+  const account = card.getByRole('button',{name:'Account and connection options'});
+  await expect(account).toContainText('S');
+  await page.emulateMedia({colorScheme:null});
+  for (const mode of ['light','dark']) {
+    await application.evaluate(({nativeTheme},mode)=>{nativeTheme.themeSource=mode;},mode);
+    for (const interaction of ['normal','hover','focus']) {
+      await page.mouse.move(0,0);
+      await account.evaluate(button=>button.blur());
+      if (interaction === 'hover') await account.hover();
+      if (interaction === 'focus') await account.focus();
+      const contrast = await account.evaluate(button=>{
+        const style=getComputedStyle(button);
+        const luminance = color => {
+          const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(x=>{x/=255;return x<=.04045?x/12.92:((x+.055)/1.055)**2.4;});
+          return .2126*rgb[0]+.7152*rgb[1]+.0722*rgb[2];
+        };
+        const a=luminance(style.color),b=luminance(style.backgroundColor);
+        return (Math.max(a,b)+.05)/(Math.min(a,b)+.05);
+      });
+      assert.ok(contrast>=4.5,`${mode} ${interaction}: ${contrast}`);
+    }
+  }
+  await application.evaluate(({nativeTheme})=>{nativeTheme.themeSource='system';});
+  accountInitial='M'; await expect(account).toContainText('M');
+  accountInitial=undefined;
+  await expect(account.locator('svg')).toBeVisible();
+  await expect(account).not.toContainText('M');
+  accountInitial='S'; await expect(account).toContainText('S');
+  await account.click();
   await card.getByRole('button',{name:'Turn off uploads',exact:true}).click();
   await expect(card.getByText('Turn uploads off?',{exact:true})).toBeVisible();
   assert.equal(requests.filter(r=>r.command==='disable').length,0);

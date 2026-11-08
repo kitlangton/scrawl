@@ -741,3 +741,64 @@ fn hosted_renewal_crash_after_response_recovers_without_rotation() {
         "a".repeat(32)
     );
 }
+
+#[test]
+fn account_initial_is_optional_bounded_and_fresh() {
+    let f = Fixture::new();
+    let server = RenewalServer::new("");
+    f.authorize(&server.url);
+    let mut credential = f.client.stored_credential("upload").unwrap();
+    assert!(credential.account_initial.is_none(), "legacy credentials have no identity hint");
+    for value in [json!("S"), json!("SS"), json!("界"), json!("s@example.invalid"), json!("\u{202e}S"), json!("ABCD"), json!(42), Value::Null] {
+        let mut response = reply("upload", "synthetic-grant");
+        response["accountInitial"] = value.clone();
+        credential.apply_reply(&response, now(), false).unwrap();
+        let expected = value.as_str().filter(|s| ["S", "SS", "界"].contains(s));
+        assert_eq!(credential.account_initial.as_deref(), expected);
+        atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+        assert_eq!(f.client.settings_snapshot().unwrap().account_initial.as_deref(), expected);
+        assert!(f.client.settings_snapshot().unwrap().uploads_enabled);
+    }
+    // A replacement response, including an old server's missing hint, replaces
+    // the previous account display without changing authorization semantics.
+    for initial in [Some("S"), Some("M"), None] {
+        let mut response = reply("upload", "replacement-grant");
+        if let Some(initial) = initial { response["accountInitial"] = json!(initial); }
+        credential.apply_reply(&response, now(), false).unwrap();
+        atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+        assert_eq!(f.client.settings_snapshot().unwrap().account_initial.as_deref(), initial);
+    }
+    credential.account_initial = Some("s@example.invalid".into());
+    atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+    assert!(f.client.settings_snapshot().unwrap().account_initial.is_none());
+    credential.account_initial = Some("S".into());
+    credential.auth_required = true;
+    atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+    assert!(f.client.settings_snapshot().unwrap().account_initial.is_none());
+    credential.auth_required = false;
+    credential.refresh_expires_at = Some(now().saturating_sub(1));
+    atomic_json(&f.client.state.join("upload.credential"), &credential).unwrap();
+    assert!(f.client.settings_snapshot().unwrap().account_initial.is_none());
+    f.client.settings_disable(true).unwrap();
+    assert!(f.client.settings_snapshot().unwrap().account_initial.is_none());
+}
+
+#[test]
+fn malformed_optional_initial_never_invalidates_authorization() {
+    let f = Fixture::new();
+    let server = RenewalServer::new("");
+    f.authorize(&server.url);
+    let credential = f.client.stored_credential("upload").unwrap();
+    for hint in [json!(42), json!(false), json!({"email":"sally@example.invalid"}), json!(["S"]), json!("sally@example.invalid"), Value::Null] {
+        let mut value = serde_json::to_value(&credential).unwrap();
+        value["accountInitial"] = hint;
+        atomic_json(&f.client.state.join("upload.credential"), &value).unwrap();
+        let snapshot = f.client.settings_snapshot().expect("optional identity must not change auth");
+        assert!(snapshot.connected && snapshot.uploads_enabled);
+        assert!(snapshot.account_initial.is_none());
+    }
+    let mut invalid = serde_json::to_value(&credential).unwrap();
+    invalid["scope"] = json!("administrator");
+    atomic_json(&f.client.state.join("upload.credential"), &invalid).unwrap();
+    assert!(f.client.settings_snapshot().is_err(), "authorization fields must still fail closed");
+}

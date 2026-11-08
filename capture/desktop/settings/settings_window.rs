@@ -1086,9 +1086,12 @@ impl SettingsWindow {
                             .map(|b| (serde_json::to_value(b.command).unwrap().as_str().unwrap().to_owned(), b.title.clone(), b.enabled))
                             .collect::<Vec<_>>();
                         div().id("settings-connect-account").track_focus(&self.connect_focus).tab_index(0).size(px(44.0)).rounded_full()
-                            .bg(theme.selection()).text_size(px(18.0)).cursor_pointer()
+                            .bg(theme.group()).text_color(theme.text()).text_size(px(18.0)).cursor_pointer()
+                            .hover(|s| s.bg(theme.hover()))
                             .when(self.connect_focus.is_focused(window), |d| d.border_2().border_color(theme.text()))
-                            .flex().items_center().justify_center().child("A")
+                            .flex().items_center().justify_center()
+                            .when_some(connect.presentation.account_initial.clone(), |d, initial| d.child(initial))
+                            .when(connect.presentation.account_initial.is_none(), |d| d.child(icon(crate::capture::desktop::icons::PERSON, 18.0, theme.text())))
                             .on_click(cx.listener(move |view, event, window, cx| {
                                 cx.stop_propagation();
                                 window.focus(&view.connect_focus);
@@ -2719,6 +2722,7 @@ mod tests {
             let theme = Theme { dark };
             assert_eq!(theme.accent(), rgb(crate::capture::desktop::ui::pill_theme::SIGNAL));
             for (surface, text) in [
+                (theme.group(), theme.text()),
                 (theme.hover(), theme.text()),
                 (theme.window(), theme.text()),
                 (theme.window(), theme.negative()),

@@ -68,7 +68,7 @@ fn disconnected(server: Option<&str>) -> Snapshot {
         server: server.map(str::to_owned),
         connected: false,
         uploads_enabled: false,
-        reauthorization_required: false,
+        reauthorization_required: false, account_initial: None,
     }
 }
 
@@ -77,7 +77,7 @@ fn connected() -> Snapshot {
         server: Some(DEFAULT_SERVER.into()),
         connected: true,
         uploads_enabled: true,
-        reauthorization_required: false,
+        reauthorization_required: false, account_initial: None,
     }
 }
 
@@ -213,13 +213,13 @@ fn login_requires_authoritative_enabled_state_not_transport_success() {
             server: Some(DEFAULT_SERVER.into()),
             connected: true,
             uploads_enabled: false,
-            reauthorization_required: false,
+            reauthorization_required: false, account_initial: None,
         }),
         Ok(Snapshot {
             server: Some("https://other.example".into()),
             connected: true,
             uploads_enabled: true,
-            reauthorization_required: false,
+            reauthorization_required: false, account_initial: None,
         }),
     ] {
         let (mut c, backend, events, logins, _, _) = fixture();
@@ -278,7 +278,7 @@ fn failed_disable_retains_retry_and_fresh_read_only_status_without_health_flood(
         server: Some(DEFAULT_SERVER.into()),
         connected: true,
         uploads_enabled: false,
-        reauthorization_required: false,
+        reauthorization_required: false, account_initial: None,
     });
     c.refresh();
     c.refresh();
@@ -463,4 +463,35 @@ fn failed_first_signin_keeps_recovery_actions_reachable() {
         assert!(p.menu_actions.contains(&Command::Check));
         assert!(p.buttons.iter().any(|b| b.command == Command::Check && b.enabled));
     }
+}
+
+#[test]
+fn account_initial_tracks_fresh_identity_without_changing_actions() {
+    let (mut c, backend, _events, _logins, _probes, _disables) = fixture();
+    let mut snapshot = connected();
+    for initial in [Some("S"), Some("M"), None] {
+        snapshot.account_initial = initial.map(str::to_owned);
+        *backend.local.lock().unwrap() = Ok(snapshot.clone());
+        c.refresh();
+        let p = c.view().presentation;
+        assert_eq!(p.account_initial.as_deref(), initial);
+        assert!(p.account_menu);
+        assert!(p.menu_actions.contains(&Command::Check));
+        assert!(p.menu_actions.contains(&Command::RequestDisconnect));
+    }
+    snapshot.account_initial = Some("S".into());
+    *backend.local.lock().unwrap() = Ok(snapshot.clone()); c.refresh();
+    c.health = Some(Health::AuthRequired);
+    assert!(c.view().presentation.account_initial.is_none());
+    c.health = None;
+    c.error = Some(SafeError::AuthRequired);
+    assert!(c.view().presentation.account_initial.is_none());
+    c.error = None;
+    *backend.local.lock().unwrap() = Err(SafeError::LocalState); c.refresh();
+    assert!(c.view().presentation.account_initial.is_none());
+    snapshot.reauthorization_required = true;
+    *backend.local.lock().unwrap() = Ok(snapshot); c.refresh();
+    assert!(c.view().presentation.account_initial.is_none());
+    *backend.local.lock().unwrap() = Ok(disconnected(None)); c.refresh();
+    assert!(c.view().presentation.account_initial.is_none());
 }

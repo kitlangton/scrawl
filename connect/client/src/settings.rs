@@ -9,6 +9,7 @@ pub struct Snapshot {
     pub connected: bool,
     pub uploads_enabled: bool,
     pub reauthorization_required: bool,
+    pub account_initial: Option<String>,
 }
 #[derive(Clone)]
 pub struct Approval {
@@ -148,7 +149,14 @@ impl Client {
         let read = self.settings_grant("read", origin)?;
         let connected = upload.as_ref().is_some_and(Self::settings_usable)
             || read.as_ref().is_some_and(Self::settings_usable);
+        // Prefer the upload grant even when it cannot supply identity: a read
+        // grant may belong to a different account. Never substitute its initial.
+        let account_initial = upload.as_ref().or(read.as_ref())
+            .filter(|grant| grant.usable())
+            .and_then(|grant| grant.account_initial.as_deref())
+            .filter(|value| renewal::valid_account_initial(value)).map(str::to_owned);
         Ok(Snapshot {
+            account_initial,
             uploads_enabled: server.is_some()
                 && !self.revocation_pending()
                 && config.enabled

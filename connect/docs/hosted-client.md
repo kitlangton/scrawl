@@ -28,6 +28,11 @@ plus the candidate's pinned age, ed25519-dalek and zeroize dependencies. It does
 GStreamer, Swift helper or root build script. Runtime curl and system SHA-256
 requirements still apply; supported platforms remain macOS and Linux.
 
+The account control receives only an optional bounded `accountInitial` from verified
+email on device approval/renewal. Old credentials/server responses use a neutral
+icon; full emails and credentials never enter renderer state. Fresh local readback
+replaces or clears the hint on account change, disconnect or unusable state.
+
 ### Explicit public-copy admission
 
 `Client::prepare_public_link` is the compatible client integration contract for

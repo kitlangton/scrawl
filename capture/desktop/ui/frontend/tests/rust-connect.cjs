@@ -108,9 +108,22 @@ async function main() {
     assert.equal(expired.error, 'admission_expired');
     assert.equal(calls.length, count);
     assert.ok(calls.every(url => ['/v1/device/start', '/v1/device/poll'].includes(url)));
+    // Synthetic local grants exercise the actual Rust projection, not account approval.
+    const grant = {server:origin,scope:'upload',token:'synthetic-profile-token',generation:'a'.repeat(32),accountInitial:'M'};
+    const credential = path.join(state, 'upload.credential');
+    await fs.writeFile(credential, JSON.stringify(grant), {mode:0o600});
+    await fs.writeFile(config, JSON.stringify({...original,cloud:{...original.cloud,enabled:true,uploadConsent:true}}), {mode:0o600});
+    const identity = await client.request();
+    assert.equal(identity.view.presentation.accountInitial, 'M');
+    assert.equal(JSON.stringify(identity).includes(grant.token), false);
+    await fs.writeFile(credential, JSON.stringify({...grant,authRequired:true}), {mode:0o600});
+    assert.equal((await client.request()).view.presentation.accountInitial, undefined);
+    await fs.unlink(credential);
+    assert.equal((await client.request()).view.presentation.accountInitial, undefined);
+    assert.equal(calls.length, count, 'Identity display must stay local-only');
     console.log(JSON.stringify({ platform: process.platform, electron: process.versions.electron,
       bridge: 'real Rust listener/controller/production client', http: 'synthetic loopback pending-device fixture, no account approval',
-      checks: 'disabled/local-only/no-consent/public-projection/cancel/EOF/durable-off/preserved-config/expired-frame', requests: calls.length }));
+      checks: 'disabled/local-only/no-consent/public-projection/cancel/EOF/durable-off/preserved-config/expired-frame/account-initial/revoked-identity', requests: calls.length }));
   } catch (error) {
     console.error(JSON.stringify({ fixtureEndpointsObserved: calls }));
     throw error;

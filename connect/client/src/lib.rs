@@ -134,6 +134,8 @@ struct Credential {
     auth_required: bool,
     #[serde(default)]
     encryption_identity: Option<String>,
+    #[serde(default, rename = "accountInitial", deserialize_with = "renewal::deserialize_account_initial")]
+    account_initial: Option<String>,
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq, Eq)]
@@ -1498,6 +1500,7 @@ impl Client {
                         grant_id: None,
                         auth_required: false,
                         encryption_identity: encryption_identity.as_ref().map(|(id, _)| id.clone()),
+                        account_initial: None,
                     };
                     credential.apply_reply(&reply, issued, false)?;
                     break credential;

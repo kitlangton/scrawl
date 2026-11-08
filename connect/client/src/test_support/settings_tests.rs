@@ -8,12 +8,14 @@ fn settings_mixed_grants_follow_upload_precedence() {
     let server = Server::new("");
     f.authorize(&server.url);
     let mut read = f.client.stored_credential("read").unwrap();
+    read.account_initial = Some("R".into());
     read.expires_at = Some(now().saturating_sub(1));
     atomic_json(&f.client.state.join("read.credential"), &read).unwrap();
     let snapshot = f.client.settings_snapshot().unwrap();
     assert!(snapshot.connected && snapshot.uploads_enabled);
     assert!(!snapshot.reauthorization_required);
     let mut upload = f.client.stored_credential("upload").unwrap();
+    upload.account_initial = Some("U".into());
     upload.auth_required = true;
     atomic_json(&f.client.state.join("upload.credential"), &upload).unwrap();
     read.expires_at = None;
@@ -21,6 +23,7 @@ fn settings_mixed_grants_follow_upload_precedence() {
     let snapshot = f.client.settings_snapshot().unwrap();
     assert!(snapshot.connected && !snapshot.uploads_enabled);
     assert!(snapshot.reauthorization_required);
+    assert!(snapshot.account_initial.is_none(), "do not substitute a different read account");
 }
 
 #[test]
@@ -81,7 +84,7 @@ fn settings_snapshot_is_fresh_local_and_read_does_not_enable_upload() {
             server: None,
             connected: false,
             uploads_enabled: false,
-            reauthorization_required: false,
+            reauthorization_required: false, account_initial: None,
         }
     );
     f.authorize(&server.url);

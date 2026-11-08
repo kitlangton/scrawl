@@ -11,22 +11,27 @@ async function authorize(f,a,scope='upload') {
  const response=await f.call('/v1/device/poll',{method:'POST',body:{deviceCode:d.deviceCode}});
  assert.equal(response.status,200);const tokens=await response.json();
  assert.equal(tokens.status,'approved');assert.equal(typeof tokens.refreshToken,'string');
+ assert.equal('email' in tokens,false);
  assert.ok(tokens.expiresIn>0);assert.ok(tokens.refreshExpiresIn>tokens.expiresIn);assert.ok(tokens.grantId);
  return {...tokens,deviceCode:d.deviceCode};
 }
 
 test('device authorization renews immutable scope and grant; revocation isolates sibling grants',async()=>{
  const f=await fixture();try{
- const a=await f.identity('renewal'),one=await authorize(f,a,'read'),two=await authorize(f,a);
+ const a=await f.identity('morgan'),one=await authorize(f,a,'read'),two=await authorize(f,a);
+ assert.equal(one.accountInitial,'M');assert.equal(two.accountInitial,'M');
  const renew=()=>f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:one.refreshToken,scope:'upload'}});
  const response=await renew();assert.equal(response.status,200);const next=await response.json();
  assert.equal(next.scope,'read');assert.equal(next.grantId,one.grantId);assert.notEqual(next.refreshToken,one.refreshToken);
+ assert.equal(next.accountInitial,one.accountInitial);assert.equal('email' in next,false);
  assert.equal((await f.call('/v1/account',{token:next.accessToken})).status,200);
  assert.equal((await f.call('/v1/token/revoke',{token:next.accessToken,method:'POST'})).status,200);
  for(const token of [one.accessToken,next.accessToken])assert.equal((await f.call('/v1/account',{token})).status,401);
  assert.equal((await f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:next.refreshToken}})).status,401);
  assert.equal((await f.call('/v1/account',{token:two.accessToken})).status,200);
- assert.equal((await f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:two.refreshToken}})).status,200);
+ await f.db.prepare('UPDATE auth_user SET emailVerified=0 WHERE id=?').bind('morgan').run();
+ const unverified=await f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:two.refreshToken}});
+ assert.equal(unverified.status,200);assert.equal('accountInitial' in await unverified.json(),false);
  }finally{await f.close();}
 });
 
@@ -82,4 +87,24 @@ test('migration retires only old credentials and preserves incumbent metadata an
  for(const table of ['tokens','devices','sessions','oauth_states'])assert.equal(await db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name=?").bind(table).first(),null);
  await assert.rejects(migrate('0004'));assert.deepEqual(await db.prepare('SELECT * FROM r2_budget').first(),before);
  }finally{await mf.dispose();}
+});
+
+test('account initial comes only from the grant user verified email and stays fresh',async()=>{
+ const f=await fixture();try{
+ const a=await f.identity('avatar'),other=await f.identity('other-avatar');
+ const t=await authorize(f,a);
+ const user=await f.db.prepare('SELECT user_id FROM auth_grants WHERE id=?').bind(t.grantId).first();
+ for(const [email,verified,expected] of [['sally@example.invalid',1,'S'],['ßeta@example.invalid',1,'SS'],['界@example.invalid',1,'界'],['mallory@example.invalid',0,undefined],['@example.invalid',1,undefined],['',1,undefined]]){
+  await f.db.prepare('UPDATE auth_user SET email=?,emailVerified=? WHERE id=?').bind(email,verified,user.user_id).run();
+  await f.db.prepare('UPDATE auth_grants SET last_poll=0 WHERE id=?').bind(t.grantId).run();
+  const response=await f.call('/v1/device/poll',{method:'POST',body:{deviceCode:t.deviceCode,email:'spoof@example.invalid',accountInitial:'X'}});
+  assert.equal(response.status,200);const body=await response.json();
+  assert.equal(body.accountInitial,expected);
+  assert.equal(body.email,undefined);assert.equal(body.user,undefined);
+ }
+ await f.db.prepare('UPDATE auth_user SET email=?,emailVerified=1 WHERE id=?').bind('morgan@example.invalid',user.user_id).run();
+ const renewed=await f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:t.refreshToken,accountInitial:'X'}});
+ assert.equal(renewed.status,200);assert.equal((await renewed.json()).accountInitial,'M');
+ const sibling=await authorize(f,other);assert.equal(sibling.accountInitial,'O');
+ }finally{await f.close();}
 });
