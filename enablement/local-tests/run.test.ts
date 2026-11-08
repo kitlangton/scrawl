@@ -28,7 +28,7 @@ test('unknown, missing history and empty deltas cannot silently skip coverage', 
 test('CI reporter, prerequisite and timing regressions are mandatory even on docs pushes', () => {
   const plan = commands([], 'base', 'head');
   const args = [...plan, ...contractTests()].flatMap(command => command.argv);
-  for (const path of ['enablement/verification-status/reporter.test.ts',
+  for (const path of ['enablement/verification-status/',
     'enablement/prerequisites/native.test.ts', 'enablement/timing/command.test.ts', 'enablement/local-tests/run.test.ts']) {
     assert.ok(args.includes(path), path);
   }

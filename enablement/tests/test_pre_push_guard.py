@@ -199,7 +199,7 @@ class PrePushGuardTests(unittest.TestCase):
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
         for tool in ("bun", "npm"):
             stub = self.bin / tool
-            stub.write_text(f'#!/bin/sh\ncase "$*" in *reporter.test.ts*) exit 0;; esac\nprintf "%s\\n" "{tool} $*" >> "$COMMAND_LOG"\nexit "${{MOCK_STATUS:-0}}"\n')
+            stub.write_text(f'#!/bin/sh\ncase "$*" in *verification-status/*) exit 0;; esac\nprintf "%s\\n" "{tool} $*" >> "$COMMAND_LOG"\nexit "${{MOCK_STATUS:-0}}"\n')
             stub.chmod(0o755)
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
