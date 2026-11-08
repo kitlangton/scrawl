@@ -334,11 +334,21 @@ live transition proof and protection activation steps. A direct hand-written gre
 status is not reporter proof. No polling, watchdog or expensive automatic run is
 part of this mechanism.
 
-Policy-changing PRs deliberately remain pending when their platform/caller workflow
-bytes differ from main. Before making this context required, the integration owner
-must provide a separately reviewed trusted-policy admission path for such changes;
-otherwise future verification-workflow maintenance deadlocks. The initial reporter
-PR can use the existing unmodified merge gates, but must not claim live proof or
-activate enforcement until that bootstrap is resolved. GitHub status writes have
-no compare-and-swap: final candidate/evidence re-reads and serialized writers reduce
-the race window; later lifecycle events reconcile concurrent external changes.
+Policy-changing PRs are evaluated as data using Bun 1.3.10 YAML parsing.
+The supported current/parallel job union must be present; each required command
+step must succeed in its owning job and candidate order. Mac assertions are
+required only on Mac. Changed workflow files additionally require an independent
+exact-head APPROVED GitHub review from a live repository writer/maintainer/admin,
+with no unresolved changes-requested review. Approval and permissions are re-read
+before publication. Author approvals and dismissed/stale approvals do not admit
+policy. After approval or dismissal, manually dispatch Repository checks on main
+to reconcile; review events deliberately do not execute a privileged candidate
+workflow. Source approval authenticates policy maintenance, not successful test
+execution or release admission. This path needs an eligible independent reviewer;
+agent review prose alone is not a GitHub approval. Confirm that prerequisite before
+activating the required status. No privileged label or manual green override exists.
+
+GitHub status writes have no compare-and-swap: final candidate/evidence re-reads
+and serialized writers reduce the race window; later lifecycle events reconcile
+concurrent external changes. Live bootstrap and required-check activation remain
+unverified until performed after merge under existing gates.

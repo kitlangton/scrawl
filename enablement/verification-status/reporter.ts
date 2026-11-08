@@ -1,6 +1,7 @@
 import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
+import {YAML} from 'bun';
 export const repo = 'tryapparent/apparent';
 const prefix = `repos/${repo}`;
 export type API = (path: string, body?: unknown) => any;
@@ -31,26 +32,56 @@ export function inventory(source: string, runner: string): string[] {
   if (![current, parallel].some(set => set.length === ids.length && set.every(id => ids.includes(id)))) throw Error('Unknown platform job inventory');
   return ids.filter(id => id !== 'release-ready').map(id => id === 'select' ? 'verify / select' : `verify / ${id} (${runner})`);
 }
-export function evaluate(run: any, jobs: any[], identity: any, required: string[]): string {
+// This is completion admission, not a sandbox or a source-code security review.
+// Workflow bodies, like the tests they invoke, still require independent review.
+export function policy(source: string, runner: string): {names: string[], steps: Record<string, string[]>} {
+  const names = inventory(source, runner);
+  const document = YAML.parse(source);
+  const steps: Record<string, string[]> = {};
+  for (const name of names) {
+    const id = name === 'verify / select' ? 'select' : name.split(' / ')[1].split(' ')[0];
+    const job = document.jobs[id];
+    if (job['continue-on-error'] || !Array.isArray(job.steps)) throw Error('Unsupported required job');
+    steps[name] = job.steps.filter((s: any) => s.run && !s.if?.includes('always()') && !(runner.startsWith('ubuntu') ? s.if?.includes("runner.os == 'macOS'") : s.if?.includes("runner.os == 'Linux'"))).map((s: any) => {
+      if (s['continue-on-error']) throw Error('Required step tolerates failure');
+      return s.name || (s.uses ? `Run ${s.uses}` : `Run ${s.run.split('\n')[0]}`);
+    });
+  }
+  const rust = document.jobs.rust.steps;
+  for (const command of ['enablement/verification.py', '_electron_rust_roundtrip']) {
+    if (!rust.some((s: any) => s.run?.includes(command))) throw Error(`Missing required command ${command}`);
+  }
+  for (const prefix of ['Native Mac Storage', 'Native GPUI Copy', 'Native Electron selected-reference']) {
+    if (!rust.some((s: any) => s.name?.startsWith(prefix) && s.run)) throw Error(`Missing ${prefix}`);
+  }
+  return {names, steps};
+}
+export function evaluate(run: any, jobs: any[], identity: any, required: string[], expected: Record<string, string[]> = {}): string {
   if (run.repository?.full_name !== repo || run.head_repository?.full_name !== repo || run.path !== identity.path || run.head_sha !== identity.sha || run.head_branch !== identity.branch || run.event !== 'workflow_dispatch' || !Number.isInteger(run.run_attempt) || run.run_attempt < 1) return 'failure';
   if (run.status !== 'completed') return 'pending';
   if (run.conclusion !== 'success') return 'failure';
   for (const name of required) {
     const matches = jobs.filter(j => j.name === name);
     if (matches.length !== 1 || matches[0].status !== 'completed' || matches[0].conclusion !== 'success' || matches[0].run_id !== run.id) return 'failure';
+    for (const stepName of expected[name] ?? []) {
+      const assertions = (matches[0].steps ?? []).filter((s: any) => s.name === stepName);
+      if (assertions.length !== 1 || assertions[0].conclusion !== 'success') return 'failure';
+    }
+    const expectedOrder = (expected[name] ?? []).map(stepName => (matches[0].steps ?? []).findIndex((s: any) => s.name === stepName));
+    if (expectedOrder.some((position, i) => i > 0 && position <= expectedOrder[i - 1])) return 'failure';
     // A green job must not conceal a skipped required native assertion.
     for (const step of matches[0].steps ?? []) {
-      if (/Native Mac Storage|Native GPUI Copy|Native Electron selected-reference/.test(step.name) && step.conclusion !== 'success') return 'failure';
+      if (identity.path.includes('mac') && /Native Mac Storage|Native GPUI Copy|Native Electron selected-reference/.test(step.name) && step.conclusion !== 'success') return 'failure';
     }
   }
   if (identity.path.includes('verification') && required.some(n => n.includes(' / rust '))) {
-    const steps = jobs.flatMap(j => j.steps ?? []);
+    const steps = jobs.filter(j => /verify \/ rust \(/.test(j.name)).flatMap(j => j.steps ?? []);
     for (const pattern of [/Execute the same changed-tree checks/, /(?:Actual Electron to Rust Settings integration|Early Mac Electron to Rust Settings integration)/]) {
       if (!steps.some(s => pattern.test(s.name) && s.conclusion === 'success')) return 'failure';
     }
   }
   if (identity.path.includes('mac')) {
-    const steps = jobs.flatMap(j => j.steps ?? []);
+    const steps = jobs.filter(j => /verify \/ rust(?: \(|$)/.test(j.name)).flatMap(j => j.steps ?? []);
     for (const name of ['Native Mac Storage', 'Native GPUI Copy', 'Native Electron selected-reference']) {
       if (!steps.some(s => s.name.startsWith(name) && s.conclusion === 'success')) return 'failure';
     }
@@ -59,6 +90,18 @@ export function evaluate(run: any, jobs: any[], identity: any, required: string[
 }
 function content(fetch: API, path: string, ref: string): string {
   return Buffer.from(fetch(`${prefix}/contents/${path}?ref=${encodeURIComponent(ref)}`).content, 'base64').toString();
+}
+export function reviewedPolicy(fetch: API, candidate: any): string {
+  const reviews = pages(fetch, `${prefix}/pulls/${candidate.number}/reviews`);
+  const latest = new Map<string, any>();
+  for (const review of reviews.sort((a, b) => a.id - b.id)) {
+    if (['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) latest.set(review.user.login, review);
+  }
+  if ([...latest.values()].some(r => r.state === 'CHANGES_REQUESTED')) throw Error('Workflow policy has unresolved review');
+  const approved = [...latest.values()].filter(r => r.state === 'APPROVED' && r.commit_id === candidate.head.sha && r.user.login !== candidate.user?.login && r.user.type === 'User');
+  const trusted = approved.filter(r => ['admin', 'maintain', 'write'].includes(fetch(`${prefix}/collaborators/${encodeURIComponent(r.user.login)}/permission`).permission));
+  if (!trusted.length) throw Error('Changed workflow policy needs independent exact-head maintainer approval');
+  return JSON.stringify(trusted.map(r => [r.id, r.user.login, r.commit_id]));
 }
 export function reconcile(fetch: API, number: number): void {
   const read = () => fetch(`${prefix}/pulls/${number}`);
@@ -69,11 +112,13 @@ export function reconcile(fetch: API, number: number): void {
   let state = 'pending';
   let description = 'Manual exact-candidate verification required';
   const evidence: any[] = [];
+  let policyReview: string | undefined;
   try {
     if (candidate.head.repo?.full_name !== repo) throw Error('Fork requires trusted verification');
     const comparison = fetch(`${prefix}/compare/${candidate.base.sha}...${sha}`);
     if (comparison.files?.length >= 300 || !comparison.files?.length) throw Error('Incomplete or empty delta');
     const kind = scope(comparison.files.flatMap((f: any) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]));
+    if (comparison.files.some((f: any) => [f.filename, f.previous_filename].some(p => p?.startsWith('.github/workflows/')))) policyReview = reviewedPolicy(fetch, candidate);
     // New relevant base inputs invalidate proof; unrelated documentation does not.
     if (comparison.merge_base_commit.sha !== candidate.base.sha) {
       const baseDelta = fetch(`${prefix}/compare/${comparison.merge_base_commit.sha}...${candidate.base.sha}`);
@@ -81,7 +126,8 @@ export function reconcile(fetch: API, number: number): void {
     }
     if (kind === 'public') {
       const path = '.github/workflows/stream-public.yml';
-      if (content(fetch, path, sha) !== content(fetch, path, candidate.base.sha)) throw Error('Public policy differs from trusted base');
+      const publicPolicy = YAML.parse(content(fetch, path, sha));
+      if (!publicPolicy.jobs?.verify?.steps?.some((s: any) => s.run?.includes('npm run verify')) || publicPolicy.jobs.verify['continue-on-error']) throw Error('Unsupported Public verification policy');
       const runs = pages(fetch, `${prefix}/actions/workflows/stream-public.yml/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
       const latest = runs.sort((a, b) => b.id - a.id)[0];
       if (!latest) throw Error('Dispatch Public checks on exact head for Public-only proof');
@@ -92,18 +138,23 @@ export function reconcile(fetch: API, number: number): void {
     }
     if (kind === 'docs') state = 'success';
     if (kind === 'native') {
-      const source = content(fetch, '.github/workflows/verification-platform.yml', candidate.base.sha);
-      if (content(fetch, '.github/workflows/verification-platform.yml', sha) !== source) throw Error('Platform policy differs from trusted base');
+      const source = content(fetch, '.github/workflows/verification-platform.yml', sha);
       const results = ['verification.yml', 'verification-mac.yml'].map((filename, index) => {
         const path = `.github/workflows/${filename}`;
-        if (content(fetch, path, sha) !== content(fetch, path, candidate.base.sha)) throw Error('Caller differs from trusted base');
+        const caller = YAML.parse(content(fetch, path, sha));
+        const runner = index ? 'macos-15-intel' : 'ubuntu-24.04';
+        if (caller.jobs?.verify?.uses !== './.github/workflows/verification-platform.yml' || caller.jobs.verify.with?.runner !== runner || caller.jobs.verify.if || caller.jobs.verify['continue-on-error']) throw Error('Unsupported verification caller');
+        const admitted = policy(source, runner);
+        const trusted = policy(content(fetch, '.github/workflows/verification-platform.yml', candidate.base.sha), runner);
+        admitted.names = [...new Set([...trusted.names, ...admitted.names])];
+        if (admitted.names.some(name => !Object.hasOwn(admitted.steps, name))) throw Error('Candidate removed a required job');
         const runs = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
         const latest = runs.sort((a, b) => b.id - a.id)[0];
         if (!latest) return 'pending';
         const run = fetch(`${prefix}/actions/runs/${latest.id}`);
         const jobs = pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
         evidence.push(run);
-        return evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, inventory(source, index ? 'macos-15-intel' : 'ubuntu-24.04'));
+        return evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, admitted.names, admitted.steps);
       });
       state = results.includes('failure') ? 'failure' : results.includes('pending') ? 'pending' : 'success';
     }
@@ -112,6 +163,10 @@ export function reconcile(fetch: API, number: number): void {
   // Serialized workflow writers re-read both candidate and evidence. Never publish
   // a terminal answer from an obsolete attempt or an obsolete PR candidate.
   if (fingerprint(read()) !== fingerprint(candidate)) return;
+  if (policyReview !== undefined) {
+    try { if (reviewedPolicy(fetch, candidate) !== policyReview) {state = 'pending'; description = 'Policy approval changed during reconciliation';} }
+    catch {state = 'pending'; description = 'Policy approval no longer valid';}
+  }
   for (const run of evidence) {
     const filename = run.path.split('/').at(-1);
     const latest = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs').sort((a, b) => b.id - a.id)[0];

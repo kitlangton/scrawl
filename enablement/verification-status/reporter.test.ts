@@ -1,6 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {evaluate, inventory, pages, repo, scope} from './reporter.ts';
+import {YAML} from 'bun';
+import {evaluate, inventory, policy, pages, repo, scope} from './reporter.ts';
 const identity = {path: '.github/workflows/verification.yml', sha: 'a'.repeat(40), branch: 'feature'};
 const run = {id: 4, repository: {full_name: repo}, head_repository: {full_name: repo}, path: identity.path, head_sha: identity.sha, head_branch: identity.branch, event: 'workflow_dispatch', run_attempt: 2, status: 'completed', conclusion: 'success'};
 const job = {name: 'verify / rust', run_id: 4, status: 'completed', conclusion: 'success'};
@@ -46,7 +47,9 @@ test('native assertions cannot disappear or skip in a green Mac run', () => {
 });
 test('actual trusted platform workflow inventory parses only jobs', async () => {
  const {readFileSync} = await import('node:fs');
- assert.equal(inventory(readFileSync('.github/workflows/verification-platform.yml','utf8'),'ubuntu-24.04').length,3);
+ const names=inventory(readFileSync('.github/workflows/verification-platform.yml','utf8'),'ubuntu-24.04');
+ assert.ok(names.includes('verify / rust (ubuntu-24.04)'));
+ assert.ok([3,5].includes(names.length));
 });
 test('reconciliation preserves docs exemption and discards moved candidates', async () => {
  const {reconcile} = await import('./reporter.ts');
@@ -66,25 +69,57 @@ test('reconciliation preserves docs exemption and discards moved candidates', as
 test('latest attempt, newer run, relevant base invalidation and docs base reuse', async () => {
  const {reconcile} = await import('./reporter.ts');
  const {readFileSync} = await import('node:fs');
- for (const mode of ['success','rerun','new-run','base-docs','base-code','failed','missing']) {
+ for (const mode of ['success','rerun','new-run','base-docs','base-code','failed','missing','policy-approved','policy-unreviewed','review-race']) {
   const pr = {number:1,state:'open',html_url:'https://github.com/tryapparent/apparent/pull/1',base:{ref:'main',sha:'b',repo:{full_name:repo}},head:{sha:'a',ref:'feature',repo:{full_name:repo}}};
-  const writes:any[]=[]; let runReads=0; let listReads=0;
+  const writes:any[]=[]; let runReads=0; let listReads=0; let reviewReads=0;
   const result = (id:number) => ({...run,id,head_sha:'a',head_branch:'feature',path: id===1?'.github/workflows/verification.yml':'.github/workflows/verification-mac.yml',conclusion:mode==='failed'?'failure':'success',run_attempt:mode==='rerun' && runReads>2?3:2});
   reconcile((path,body) => {
    if(body){writes.push(body);return {};}
    if(path.endsWith('/pulls/1')) return pr;
-   if(path.includes('/compare/')) return path.includes('/compare/old') ? {files:[{filename:mode==='base-code'?'Cargo.toml':'enablement/docs/test.md'}]} : {merge_base_commit:{sha:mode.startsWith('base-')?'old':'b'},files:[{filename:'capture/engine/main.rs'}]};
+   if(path.includes('/permission')) return {permission:'write'};
+   if(path.includes('/reviews?')) return ++reviewReads>1 && mode==='review-race' || mode==='policy-unreviewed' ? [] : [{id:1,state:'APPROVED',commit_id:'a',user:{login:'reviewer',type:'User'}}];
+   if(path.includes('/compare/')) return path.includes('/compare/old') ? {files:[{filename:mode==='base-code'?'Cargo.toml':'enablement/docs/test.md'}]} : {merge_base_commit:{sha:mode.startsWith('base-')?'old':'b'},files:[{filename:mode.startsWith('policy-') || mode==='review-race'?'.github/workflows/verification-platform.yml':'capture/engine/main.rs'}]};
    if(path.includes('/contents/')) {const filename=path.split('/contents/')[1].split('?')[0];return {content:Buffer.from(readFileSync(filename)).toString('base64')};}
    if(path.includes('/workflows/')) {listReads++;const id=path.includes('verification-mac')?2:1;return {total_count:mode==='missing'?0:1,workflow_runs:mode==='missing'?[]:[{id:mode==='new-run' && listReads>2?3:id}]};}
    const id=Number(path.match(/runs\/(\d+)/)?.[1]);
    if(path.includes('/jobs?')) {
     const runner=id===1?'ubuntu-24.04':'macos-15-intel';
-    const steps=['Execute the same changed-tree checks','Actual Electron to Rust Settings integration','Native Mac Storage','Native GPUI Copy','Native Electron selected-reference'].map(name=>({name,conclusion:'success'}));
-    return {total_count:3,jobs:['verify / select',`verify / desktop-ui (${runner})`,`verify / rust (${runner})`].map(name=>({...job,name,run_id:id,steps}))};
+    const admitted=policy(readFileSync('.github/workflows/verification-platform.yml','utf8'),runner);
+    const document=YAML.parse(readFileSync('.github/workflows/verification-platform.yml','utf8'));
+    return {total_count:admitted.names.length,jobs:admitted.names.map(name=>{
+     const key=name==='verify / select'?'select':name.split(' / ')[1].split(' ')[0];
+     return {...job,name,run_id:id,steps:document.jobs[key].steps.filter((s:any)=>s.run).map((s:any)=>({name:s.name || `Run ${s.run.split('\n')[0]}`,conclusion:id===1 && s.if?.includes("runner.os == 'macOS'") || id===2 && s.if?.includes("runner.os == 'Linux'")?'skipped':'success'}))};
+    })};
    }
    if(path.includes('/actions/runs/')) {runReads++;return result(id);}
    throw Error(path);
   },1);
-  assert.equal(writes[0].state,mode==='failed'?'failure':['success','base-docs'].includes(mode)?'success':'pending',mode);
+  assert.equal(writes[0].state,mode==='failed'?'failure':['success','base-docs','policy-approved'].includes(mode)?'success':'pending',mode);
+ }
+});
+test('policy maintenance admits additions without byte equality and requires real command anchors', async () => {
+ const {readFileSync}=await import('node:fs');
+ const source=readFileSync('.github/workflows/verification-platform.yml','utf8');
+ const changed=source.replace('name: Platform verification','name: Reviewed platform maintenance');
+ assert.deepEqual(policy(changed,'ubuntu-24.04'),policy(source,'ubuntu-24.04'));
+ for(const command of ['enablement/verification.py','_electron_rust_roundtrip']) assert.throws(()=>policy(source.replaceAll(command,'removed'),'ubuntu-24.04'));
+ for(const prefix of ['Native Mac Storage','Native GPUI Copy','Native Electron selected-reference']) assert.throws(()=>policy(source.replaceAll(prefix,'removed'),'macos-15-intel'));
+});
+test('required steps must succeed in owning job and candidate order', () => {
+ const name='verify / rust (ubuntu-24.04)';
+ const expected={[name]:['Actual Electron to Rust Settings integration','Execute the same changed-tree checks']};
+ const steps=['Actual Electron to Rust Settings integration','Execute the same changed-tree checks'].map(name=>({name,conclusion:'success'}));
+ const proof={...job,name,steps};
+ assert.equal(evaluate(run,[proof],identity,[name],expected),'success');
+ assert.equal(evaluate(run,[{...proof,steps:steps.toReversed()}],identity,[name],expected),'failure');
+ assert.equal(evaluate(run,[{...proof,steps:[]},{...job,name:'other',steps}],identity,[name],expected),'failure');
+ assert.equal(evaluate(run,[{...proof,steps:[steps[0],{...steps[1],conclusion:'skipped'}]}],identity,[name],expected),'failure');
+});
+test('policy admission requires independent exact-head maintainer approval', async () => {
+ const {reviewedPolicy}=await import('./reporter.ts');
+ const candidate={number:1,head:{sha:'a'},user:{login:'author'}};
+ for(const mode of ['approved','stale','author','read','changes','dismissed']) {
+  const fetch=(path:string)=>path.includes('/permission')?{permission:mode==='read'?'read':'write'}:[{id:1,commit_id:mode==='stale'?'old':'a',user:{login:mode==='author'?'author':'reviewer',type:'User'},state:mode==='changes'?'CHANGES_REQUESTED':mode==='dismissed'?'DISMISSED':'APPROVED'}];
+  if(mode==='approved') assert.ok(reviewedPolicy(fetch,candidate)); else assert.throws(()=>reviewedPolicy(fetch,candidate));
  }
 });
