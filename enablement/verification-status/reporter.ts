@@ -1,11 +1,10 @@
-import {execFileSync} from 'node:child_process';
 import {appendFileSync, readFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
 import {YAML} from 'bun';
+import {createAPI, ReporterHalt, type API} from './api.ts';
+export type {API} from './api.ts';
 export const repo = 'tryapparent/apparent';
 const prefix = `repos/${repo}`;
-export type API = (path: string, body?: unknown) => any;
-export const api: API = (path, body) => JSON.parse(execFileSync('gh', ['api', path, ...(body ? ['--method', 'POST', '--input', '-'] : [])], {input: body ? JSON.stringify(body) : undefined, encoding: 'utf8'}));
 export function pages(fetch: API, path: string, key?: string): any[] {
   const all: any[] = [];
   for (let page = 1; page <= 1000; page++) {
@@ -107,10 +106,10 @@ export function dispatchAuthority(fetch: API, run: any): string {
   if (!['admin', 'maintain', 'write'].includes(permission)) throw Error('Manual verification actor lacks repository write access');
   return JSON.stringify([login, permission]);
 }
-export function reconcile(fetch: API, number: number, listed?: any): void {
+export function reconcile(fetch: API, number: number, listed?: any, alreadyPending = false): void {
   // Invalidate known old green before any per-candidate evidence/API reads.
   const pending = (p: any) => fetch(`${prefix}/statuses/${p.head.sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking current verification evidence', target_url: p.html_url});
-  if (listed) pending(listed);
+  if (listed && !alreadyPending) pending(listed);
   const read = () => fetch(`${prefix}/pulls/${number}`);
   const candidate = read();
   if (candidate.state !== 'open' || candidate.base.ref !== 'main' || candidate.base.repo.full_name !== repo) return;
@@ -140,12 +139,12 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
     if (kind === 'public') {
       const path = '.github/workflows/stream-public.yml';
       const expected = publicPolicy(content(fetch, path, sha));
-      const runs = pages(fetch, `${prefix}/actions/workflows/stream-public.yml/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
+      const runs = pages(fetch, `${prefix}/actions/workflows/stream-public.yml/runs?event=workflow_dispatch&head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
       const latest = runs.sort((a, b) => b.id - a.id)[0];
       if (!latest) throw Error('Dispatch Public checks on exact head for Public-only proof');
       const run = fetch(`${prefix}/actions/runs/${latest.id}`);
       evidence.push({...run, authority: dispatchAuthority(fetch, run)});
-      const jobs = pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
+      const jobs = run.status === 'completed' ? pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs') : [];
       state = evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, ['verify'], expected);
     }
     if (kind === 'docs') state = 'success';
@@ -160,28 +159,34 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
         const trusted = policy(content(fetch, '.github/workflows/verification-platform.yml', baseSha), runner);
         admitted.names = [...new Set([...trusted.names, ...admitted.names])];
         if (admitted.names.some(name => !Object.hasOwn(admitted.steps, name))) throw Error('Candidate removed a required job');
-        const runs = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
+        const runs = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?event=workflow_dispatch&head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
         const latest = runs.sort((a, b) => b.id - a.id)[0];
         if (!latest) return 'pending';
         const run = fetch(`${prefix}/actions/runs/${latest.id}`);
-        const jobs = pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
+        const jobs = run.status === 'completed' ? pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs') : [];
         evidence.push({...run, authority: dispatchAuthority(fetch, run)});
         return evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, admitted.names, admitted.steps);
       });
       state = results.includes('failure') ? 'failure' : results.includes('pending') ? 'pending' : 'success';
     }
     description = state === 'success' ? 'Applicable verification complete; not release admission' : state === 'failure' ? 'Required verification failed or skipped' : description;
-  } catch (error) { description = String((error as Error).message).slice(0, 140); }
+  } catch (error) {
+    if (error instanceof ReporterHalt) throw error;
+    description = String((error as Error).message).slice(0, 140);
+  }
   // Serialized workflow writers re-read both candidate and evidence. Never publish
   // a terminal answer from an obsolete attempt or an obsolete PR candidate.
   if (fingerprint(read()) !== fingerprint(candidate)) return;
   for (const run of evidence) {
     const filename = run.path.split('/').at(-1);
-    const latest = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs').sort((a, b) => b.id - a.id)[0];
+    const latest = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?event=workflow_dispatch&head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs').sort((a, b) => b.id - a.id)[0];
     const fresh = fetch(`${prefix}/actions/runs/${run.id}`);
     try {
       if (dispatchAuthority(fetch, fresh) !== run.authority) {state = 'pending'; description = 'Manual verification authority changed';}
-    } catch {state = 'pending'; description = 'Manual verification authority no longer valid';}
+    } catch (error) {
+      if (error instanceof ReporterHalt) throw error;
+      state = 'pending'; description = 'Manual verification authority no longer valid';
+    }
     if (latest?.id !== run.id) {state = 'pending'; description = 'Newer verification requires reconciliation';}
     if (fresh.run_attempt !== run.run_attempt || fresh.status !== run.status || fresh.conclusion !== run.conclusion) {state = 'pending'; description = 'Verification changed during reconciliation';}
   }
@@ -195,26 +200,76 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
   }
   fetch(`${prefix}/statuses/${sha}`, {state, context: 'Verification complete', description, target_url: report});
 }
-export function reconcileAll(fetch: API, event: any = {}): void {
-  // A lifecycle event supplies a known target even if listing all PRs fails.
+export function eligibleEvent(event: any, name: string): boolean {
+  if (name !== 'workflow_run') return true;
+  const run = event.workflow_run;
+  return run?.event === 'workflow_dispatch' && run.head_repository?.full_name === repo &&
+    ['.github/workflows/verification.yml', '.github/workflows/verification-mac.yml', '.github/workflows/stream-public.yml'].includes(run.path) &&
+    (event.action !== 'in_progress' || run.run_attempt > 1);
+}
+export function reconcileAll(fetch: API, event: any = {}, eventName?: string): void {
+  const name = eventName ?? (event.pull_request ? 'pull_request_target' : event.workflow_run ? 'workflow_run' : 'workflow_dispatch');
+  if (!eligibleEvent(event, name)) return;
   const hint = event.pull_request;
   if (hint?.head?.sha && hint.base?.repo?.full_name === repo && hint.base.ref === 'main') {
-    fetch(`${prefix}/statuses/${hint.head.sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking current verification evidence', target_url: hint.html_url});
+    if (!Number.isInteger(hint.number) || hint.number < 1) throw Error('Invalid PR event');
+    reconcile(fetch, hint.number, hint);
+    return;
+  }
+  const requested = event.inputs?.pull_request;
+  if (name === 'workflow_dispatch' && requested) {
+    if (!/^[1-9][0-9]*$/.test(String(requested))) throw Error('Invalid targeted PR number');
+    reconcile(fetch, Number(requested));
+    return;
   }
   const manual = event.workflow_run;
-  if (manual?.head_repository?.full_name === repo && manual.pull_requests?.some((p: any) => p.head?.sha === manual.head_sha && p.base?.ref === 'main')) {
-    fetch(`${prefix}/statuses/${manual.head_sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking manual verification event', target_url: `https://github.com/${repo}/actions/runs/${manual.id}`});
+  const pendingHeads = new Set<string>();
+  const pending = (pr: any) => {
+    if (pendingHeads.has(pr.head.sha)) return;
+    fetch(`${prefix}/statuses/${pr.head.sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking current verification evidence', target_url: pr.html_url || `https://github.com/${repo}/actions/runs/${manual.id}`});
+    pendingHeads.add(pr.head.sha);
+  };
+  if (manual) {
+    // Preserve known-head invalidation even if PR lookup fails. A historical run
+    // cannot admit or invalidate another branch's current candidate.
+    for (const pr of manual.pull_requests ?? []) {
+      if (pr.head?.sha === manual.head_sha && pr.base?.ref === 'main') pending(pr);
+    }
   }
-  const prs = pages(fetch, `${prefix}/pulls?state=open&base=main`);
+  const query = manual ? `&head=tryapparent:${encodeURIComponent(manual.head_branch)}` : '';
+  const prs = pages(fetch, `${prefix}/pulls?state=open&base=main${query}`).filter(pr => !manual || (pr.head.sha === manual.head_sha && pr.head.ref === manual.head_branch && pr.head.repo?.full_name === repo));
+  // Invalidate the complete known global set before expensive evidence reads.
+  // This preserves pending on later per-PR/API failures and avoids duplicate writes.
+  for (const pr of prs) pending(pr);
+  if (manual && manual.status !== 'completed') return;
   let failed = false;
   for (const pr of prs) {
-    try { reconcile(fetch, pr.number, pr); }
-    catch { failed = true; console.error(`Verification reconciliation incomplete for PR #${pr.number}`); }
+    try { reconcile(fetch, pr.number, pr, true); }
+    catch (error) {
+      if (error instanceof ReporterHalt) throw error;
+      failed = true; console.error(`Verification reconciliation incomplete for PR #${pr.number}`);
+    }
   }
   if (failed) throw Error('One or more PR reconciliations failed; known heads remain pending');
 }
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   const event = JSON.parse(readFileSync(process.env.GITHUB_EVENT_PATH!, 'utf8'));
+  const name = process.env.GITHUB_EVENT_NAME!;
   if (process.env.GITHUB_REPOSITORY !== repo) throw Error('Unexpected repository');
-  reconcileAll(api, event);
+  if (eligibleEvent(event, name)) {
+    const global = name === 'push' || (name === 'workflow_dispatch' && !event.inputs?.pull_request);
+    const fetch = createAPI({maximum: global ? 200 : 60});
+    try {
+      const quota = fetch.preflight();
+      console.log(`Reporter API budget ${quota.maximum}; ${quota.remaining} remaining in the Actions credential.`);
+      reconcileAll(fetch, event, name);
+      console.log(`Reporter API requests: ${fetch.count()}.`);
+    } catch (error) {
+      // Stop, do not sleep/retry or continue scanning after quota exhaustion.
+      const message = (error as Error).message;
+      console.error(message);
+      if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `Verification reporter stopped: ${message}\n`);
+      process.exitCode = 1;
+    }
+  }
 }
