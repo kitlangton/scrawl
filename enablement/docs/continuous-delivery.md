@@ -308,6 +308,15 @@ step outcome, runs after failures, and missing diagnostics only warn. Diagnostic
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
 
+The disposable Mac Storage fixture waits for real Storage/Retention read receipts
+before its single Change click. Its TypeScript CI driver separates the owned
+Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
+operation. The initial picker and nested Go sheet are distinct readiness phases;
+no mutation, keyboard shortcut or preference write is retried. Existing exact
+PID/window/sheet/control checks, Choose/Cancel/Reset assertions, native consent,
+process cleanup and test deadlines remain required. This is test orchestration,
+not a change to installed Desktop routing or application persistence policy.
+
 ## PR verification evidence
 
 The automatic verification status reporter and its `Verification complete` commit
