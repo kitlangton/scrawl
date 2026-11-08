@@ -91,17 +91,14 @@ export function evaluate(run: any, jobs: any[], identity: any, required: string[
 function content(fetch: API, path: string, ref: string): string {
   return Buffer.from(fetch(`${prefix}/contents/${path}?ref=${encodeURIComponent(ref)}`).content, 'base64').toString();
 }
-export function reviewedPolicy(fetch: API, candidate: any): string {
-  const reviews = pages(fetch, `${prefix}/pulls/${candidate.number}/reviews`);
-  const latest = new Map<string, any>();
-  for (const review of reviews.sort((a, b) => a.id - b.id)) {
-    if (['APPROVED', 'CHANGES_REQUESTED', 'DISMISSED'].includes(review.state)) latest.set(review.user.login, review);
-  }
-  if ([...latest.values()].some(r => r.state === 'CHANGES_REQUESTED')) throw Error('Workflow policy has unresolved review');
-  const approved = [...latest.values()].filter(r => r.state === 'APPROVED' && r.commit_id === candidate.head.sha && r.user.login !== candidate.user?.login && r.user.type === 'User');
-  const trusted = approved.filter(r => ['admin', 'maintain', 'write'].includes(fetch(`${prefix}/collaborators/${encodeURIComponent(r.user.login)}/permission`).permission));
-  if (!trusted.length) throw Error('Changed workflow policy needs independent exact-head maintainer approval');
-  return JSON.stringify(trusted.map(r => [r.id, r.user.login, r.commit_id]));
+// GitHub only permits repository writers to dispatch these manual workflows.
+// Revalidate that authority; completion status does not replace source review.
+export function dispatchAuthority(fetch: API, run: any): string {
+  const login = run.triggering_actor?.login;
+  if (run.event !== 'workflow_dispatch' || typeof login !== 'string' || !login) throw Error('Missing manual verification actor');
+  const permission = fetch(`${prefix}/collaborators/${encodeURIComponent(login)}/permission`).permission;
+  if (!['admin', 'maintain', 'write'].includes(permission)) throw Error('Manual verification actor lacks repository write access');
+  return JSON.stringify([login, permission]);
 }
 export function reconcile(fetch: API, number: number): void {
   const read = () => fetch(`${prefix}/pulls/${number}`);
@@ -112,13 +109,11 @@ export function reconcile(fetch: API, number: number): void {
   let state = 'pending';
   let description = 'Manual exact-candidate verification required';
   const evidence: any[] = [];
-  let policyReview: string | undefined;
   try {
     if (candidate.head.repo?.full_name !== repo) throw Error('Fork requires trusted verification');
     const comparison = fetch(`${prefix}/compare/${candidate.base.sha}...${sha}`);
     if (comparison.files?.length >= 300 || !comparison.files?.length) throw Error('Incomplete or empty delta');
     const kind = scope(comparison.files.flatMap((f: any) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]));
-    if (comparison.files.some((f: any) => [f.filename, f.previous_filename].some(p => p?.startsWith('.github/workflows/')))) policyReview = reviewedPolicy(fetch, candidate);
     // New relevant base inputs invalidate proof; unrelated documentation does not.
     if (comparison.merge_base_commit.sha !== candidate.base.sha) {
       const baseDelta = fetch(`${prefix}/compare/${comparison.merge_base_commit.sha}...${candidate.base.sha}`);
@@ -132,7 +127,7 @@ export function reconcile(fetch: API, number: number): void {
       const latest = runs.sort((a, b) => b.id - a.id)[0];
       if (!latest) throw Error('Dispatch Public checks on exact head for Public-only proof');
       const run = fetch(`${prefix}/actions/runs/${latest.id}`);
-      evidence.push(run);
+      evidence.push({...run, authority: dispatchAuthority(fetch, run)});
       const jobs = pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
       state = evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, ['verify']);
     }
@@ -153,7 +148,7 @@ export function reconcile(fetch: API, number: number): void {
         if (!latest) return 'pending';
         const run = fetch(`${prefix}/actions/runs/${latest.id}`);
         const jobs = pages(fetch, `${prefix}/actions/runs/${run.id}/attempts/${run.run_attempt}/jobs`, 'jobs');
-        evidence.push(run);
+        evidence.push({...run, authority: dispatchAuthority(fetch, run)});
         return evaluate(run, jobs, {path, sha, branch: candidate.head.ref}, admitted.names, admitted.steps);
       });
       state = results.includes('failure') ? 'failure' : results.includes('pending') ? 'pending' : 'success';
@@ -163,14 +158,13 @@ export function reconcile(fetch: API, number: number): void {
   // Serialized workflow writers re-read both candidate and evidence. Never publish
   // a terminal answer from an obsolete attempt or an obsolete PR candidate.
   if (fingerprint(read()) !== fingerprint(candidate)) return;
-  if (policyReview !== undefined) {
-    try { if (reviewedPolicy(fetch, candidate) !== policyReview) {state = 'pending'; description = 'Policy approval changed during reconciliation';} }
-    catch {state = 'pending'; description = 'Policy approval no longer valid';}
-  }
   for (const run of evidence) {
     const filename = run.path.split('/').at(-1);
     const latest = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs').sort((a, b) => b.id - a.id)[0];
     const fresh = fetch(`${prefix}/actions/runs/${run.id}`);
+    try {
+      if (dispatchAuthority(fetch, fresh) !== run.authority) {state = 'pending'; description = 'Manual verification authority changed';}
+    } catch {state = 'pending'; description = 'Manual verification authority no longer valid';}
     if (latest?.id !== run.id) {state = 'pending'; description = 'Newer verification requires reconciliation';}
     if (fresh.run_attempt !== run.run_attempt || fresh.status !== run.status || fresh.conclusion !== run.conclusion) {state = 'pending'; description = 'Verification changed during reconciliation';}
   }

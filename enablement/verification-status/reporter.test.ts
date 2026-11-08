@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {YAML} from 'bun';
 import {evaluate, inventory, policy, pages, repo, scope} from './reporter.ts';
 const identity = {path: '.github/workflows/verification.yml', sha: 'a'.repeat(40), branch: 'feature'};
-const run = {id: 4, repository: {full_name: repo}, head_repository: {full_name: repo}, path: identity.path, head_sha: identity.sha, head_branch: identity.branch, event: 'workflow_dispatch', run_attempt: 2, status: 'completed', conclusion: 'success'};
+const run = {id: 4, repository: {full_name: repo}, head_repository: {full_name: repo}, path: identity.path, head_sha: identity.sha, head_branch: identity.branch, event: 'workflow_dispatch', triggering_actor: {login:'dispatcher'}, run_attempt: 2, status: 'completed', conclusion: 'success'};
 const job = {name: 'verify / rust', run_id: 4, status: 'completed', conclusion: 'success'};
 test('missing, skipped, failed and cancelled proof cannot pass', () => {
  assert.equal(evaluate(run, [], identity, [job.name]), 'failure');
@@ -69,15 +69,14 @@ test('reconciliation preserves docs exemption and discards moved candidates', as
 test('latest attempt, newer run, relevant base invalidation and docs base reuse', async () => {
  const {reconcile} = await import('./reporter.ts');
  const {readFileSync} = await import('node:fs');
- for (const mode of ['success','rerun','new-run','base-docs','base-code','failed','missing','policy-approved','policy-unreviewed','review-race']) {
+ for (const mode of ['success','rerun','new-run','base-docs','base-code','failed','missing','policy-approved']) {
   const pr = {number:1,state:'open',html_url:'https://github.com/tryapparent/apparent/pull/1',base:{ref:'main',sha:'b',repo:{full_name:repo}},head:{sha:'a',ref:'feature',repo:{full_name:repo}}};
-  const writes:any[]=[]; let runReads=0; let listReads=0; let reviewReads=0;
+  const writes:any[]=[]; let runReads=0; let listReads=0;
   const result = (id:number) => ({...run,id,head_sha:'a',head_branch:'feature',path: id===1?'.github/workflows/verification.yml':'.github/workflows/verification-mac.yml',conclusion:mode==='failed'?'failure':'success',run_attempt:mode==='rerun' && runReads>2?3:2});
   reconcile((path,body) => {
    if(body){writes.push(body);return {};}
    if(path.endsWith('/pulls/1')) return pr;
    if(path.includes('/permission')) return {permission:'write'};
-   if(path.includes('/reviews?')) return ++reviewReads>1 && mode==='review-race' || mode==='policy-unreviewed' ? [] : [{id:1,state:'APPROVED',commit_id:'a',user:{login:'reviewer',type:'User'}}];
    if(path.includes('/compare/')) return path.includes('/compare/old') ? {files:[{filename:mode==='base-code'?'Cargo.toml':'enablement/docs/test.md'}]} : {merge_base_commit:{sha:mode.startsWith('base-')?'old':'b'},files:[{filename:mode.startsWith('policy-') || mode==='review-race'?'.github/workflows/verification-platform.yml':'capture/engine/main.rs'}]};
    if(path.includes('/contents/')) {const filename=path.split('/contents/')[1].split('?')[0];return {content:Buffer.from(readFileSync(filename)).toString('base64')};}
    if(path.includes('/workflows/')) {listReads++;const id=path.includes('verification-mac')?2:1;return {total_count:mode==='missing'?0:1,workflow_runs:mode==='missing'?[]:[{id:mode==='new-run' && listReads>2?3:id}]};}
@@ -115,11 +114,10 @@ test('required steps must succeed in owning job and candidate order', () => {
  assert.equal(evaluate(run,[{...proof,steps:[]},{...job,name:'other',steps}],identity,[name],expected),'failure');
  assert.equal(evaluate(run,[{...proof,steps:[steps[0],{...steps[1],conclusion:'skipped'}]}],identity,[name],expected),'failure');
 });
-test('policy admission requires independent exact-head maintainer approval', async () => {
- const {reviewedPolicy}=await import('./reporter.ts');
- const candidate={number:1,head:{sha:'a'},user:{login:'author'}};
- for(const mode of ['approved','stale','author','read','changes','dismissed']) {
-  const fetch=(path:string)=>path.includes('/permission')?{permission:mode==='read'?'read':'write'}:[{id:1,commit_id:mode==='stale'?'old':'a',user:{login:mode==='author'?'author':'reviewer',type:'User'},state:mode==='changes'?'CHANGES_REQUESTED':mode==='dismissed'?'DISMISSED':'APPROVED'}];
-  if(mode==='approved') assert.ok(reviewedPolicy(fetch,candidate)); else assert.throws(()=>reviewedPolicy(fetch,candidate));
- }
+test('manual dispatch authority is authenticated without requiring an extra approver', async () => {
+ const {dispatchAuthority}=await import('./reporter.ts');
+ for(const permission of ['admin','maintain','write']) assert.ok(dispatchAuthority(()=>({permission}),run));
+ for(const permission of ['read','triage','none']) assert.throws(()=>dispatchAuthority(()=>({permission}),run));
+ assert.throws(()=>dispatchAuthority(()=>({permission:'write'}),{...run,triggering_actor:undefined}));
+ assert.throws(()=>dispatchAuthority(()=>({permission:'write'}),{...run,event:'pull_request'}));
 });

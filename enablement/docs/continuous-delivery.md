@@ -337,16 +337,13 @@ part of this mechanism.
 Policy-changing PRs are evaluated as data using Bun 1.3.10 YAML parsing.
 The supported current/parallel job union must be present; each required command
 step must succeed in its owning job and candidate order. Mac assertions are
-required only on Mac. Changed workflow files additionally require an independent
-exact-head APPROVED GitHub review from a live repository writer/maintainer/admin,
-with no unresolved changes-requested review. Approval and permissions are re-read
-before publication. Author approvals and dismissed/stale approvals do not admit
-policy. After approval or dismissal, manually dispatch Repository checks on main
-to reconcile; review events deliberately do not execute a privileged candidate
-workflow. Source approval authenticates policy maintenance, not successful test
-execution or release admission. This path needs an eligible independent reviewer;
-agent review prose alone is not a GitHub approval. Confirm that prerequisite before
-activating the required status. No privileged label or manual green override exists.
+required only on Mac. The manual run's triggering actor must retain repository
+write/maintain/admin access, checked again before status publication. Changed
+workflow policy is parsed as data and must preserve the trusted required job
+union and successful candidate command evidence. This completion status does
+not authenticate source-code correctness: independent source/security review
+remains part of delivery under the existing repository policy, without adding
+a second human GitHub approver requirement. It never authorizes publication.
 
 GitHub status writes have no compare-and-swap: final candidate/evidence re-reads
 and serialized writers reduce the race window; later lifecycle events reconcile
