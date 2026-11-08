@@ -1,5 +1,5 @@
 import {execFileSync} from 'node:child_process';
-import {readFileSync} from 'node:fs';
+import {appendFileSync, readFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
 import {YAML} from 'bun';
 export const repo = 'tryapparent/apparent';
@@ -179,13 +179,21 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
     if (fresh.run_attempt !== run.run_attempt || fresh.status !== run.status || fresh.conclusion !== run.conclusion) {state = 'pending'; description = 'Verification changed during reconciliation';}
   }
   if (fingerprint(read()) !== fingerprint(candidate)) return;
-  fetch(`${prefix}/statuses/${sha}`, {state, context: 'Verification complete', description, target_url: candidate.html_url});
+  const report = process.env.GITHUB_RUN_ID ? `https://github.com/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}` : candidate.html_url;
+  if (process.env.GITHUB_STEP_SUMMARY) {
+    appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### PR #${number}: ${state}\n\nCandidate: \`${sha}\`\n\n${evidence.map(run => `- [${run.path.includes('mac') ? 'Mac' : run.path.includes('public') ? 'Public' : 'Linux'} verification](https://github.com/${repo}/actions/runs/${run.id}) — ${run.status} / ${run.conclusion ?? 'pending'}`).join('\n')}\n\n`);
+  }
+  fetch(`${prefix}/statuses/${sha}`, {state, context: 'Verification complete', description, target_url: report});
 }
 export function reconcileAll(fetch: API, event: any = {}): void {
   // A lifecycle event supplies a known target even if listing all PRs fails.
   const hint = event.pull_request;
   if (hint?.head?.sha && hint.base?.repo?.full_name === repo && hint.base.ref === 'main') {
     fetch(`${prefix}/statuses/${hint.head.sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking current verification evidence', target_url: hint.html_url});
+  }
+  const manual = event.workflow_run;
+  if (manual?.head_repository?.full_name === repo && manual.pull_requests?.some((p: any) => p.head?.sha === manual.head_sha && p.base?.ref === 'main')) {
+    fetch(`${prefix}/statuses/${manual.head_sha}`, {state: 'pending', context: 'Verification complete', description: 'Rechecking manual verification event', target_url: `https://github.com/${repo}/actions/runs/${manual.id}`});
   }
   const prs = pages(fetch, `${prefix}/pulls?state=open&base=main`);
   let failed = false;
