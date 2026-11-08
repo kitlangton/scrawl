@@ -205,3 +205,22 @@ absence proof: cleanup repeats inode ownership checks and preserves unknown
 resources. It does not skip protected processes, grant host privilege or qualify
 an earlier failed/partial cold disk. An unavailable complete census remains a
 cold-retention method blocker under unprivileged access.
+
+On Clanker, `--retain-cold-state --host-fd-observation` explicitly opts one new
+job into a read-only sudo fallback for that access denial. It records the owned
+job opt-in for both normal and copied expiry reapers. No flag means the original
+unprivileged refusal. The fallback reuses the same bounded sequential UID/inode
+census as literal code passed to isolated system Python; root imports no
+user-writable module and receives no runtime path/code/UID override. Namespace,
+ptrace/DAC capabilities, owned directory/resources and before/after metadata are
+checked. It requires a <=5GiB/noSwap/one-CPU enclosing scope, uses noninteractive
+sudo; the opted-in independent expiry service explicitly sets MemoryMax=5G,
+MemorySwapMax=0 and CPUQuota=100% rather than inheriting the runner's scope. The
+default expiry service properties are unchanged. The fixed reader uses
+a 4s timeout plus 0.5s kill grace, and rejects denial, malformed output,
+timeouts or any unknown instead of skipping protected FDs. This adds no installed
+privilege grant, global setting, process stop or resource-content read. A match
+still prevents retention. A complete empty result is only a sequential metadata
+observation, not atomic/future exclusion, standalone equivalence or native proof.
+Existing owned-QEMU drain, retention verification and final identity checks
+remain required. Old failed resources are not retroactively qualified or reused.

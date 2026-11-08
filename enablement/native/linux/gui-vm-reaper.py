@@ -2,16 +2,20 @@
 """Expire a disposable GUI guest even if its runner was killed."""
 
 import fcntl
+import inspect
 import json
 import os
 from pathlib import Path
 import signal
 import stat
+import subprocess
+import socket
 import sys
 import time
 
 COLD_REQUEST = 'retain-cold-state.json'
 ARTIFACTS_RETAINED = 'remote exit observed; sha256 manifest verified\n'
+HOST_FD_REQUEST = 'host-fd-observation.json'
 
 
 def private_directory(directory):
@@ -135,6 +139,104 @@ def open_resource_owners(resources, proc=Path('/proc'), seconds=2):
     return sorted(owners)
 
 
+_OPEN_RESOURCE_OWNERS_SOURCE = inspect.getsource(open_resource_owners)
+
+
+def request_host_fd_observation(directory):
+    """Explicit task-local Clanker administration opt-in; never a host grant."""
+    if socket.gethostname() != 'clanker':
+        raise RuntimeError('host FD administration is Clanker-only')
+    directory, meta = private_directory(directory)
+    if not cold_retention_requested(directory):
+        raise RuntimeError('host FD observation requires cold retention')
+    exclusive_record(directory / HOST_FD_REQUEST, identity(meta) | {'version': 1})
+
+
+def host_fd_observation_requested(directory):
+    directory, meta = private_directory(directory)
+    if not os.path.lexists(directory / HOST_FD_REQUEST):
+        return False
+    value = json.loads(private_read(directory / HOST_FD_REQUEST))
+    # Directory timestamps/size change during normal job writes. Bind the
+    # stable owned directory authority; the actual read brackets full metadata.
+    if value.get('version') != 1 or any(value.get(k) != identity(meta)[k] for k in ('dev', 'ino', 'uid', 'mode')):
+        raise RuntimeError('host FD request does not bind owned job')
+    return True
+
+
+def host_fd_payload(directory, resources):
+    """Generate only the existing metadata census, with literal fixed inputs.
+
+    Root never imports user-writable modules or accepts arbitrary runtime args.
+    Same sequential/racy observation scope as open_resource_owners, not a lock.
+    """
+    if socket.gethostname() != 'clanker' or not host_fd_observation_requested(directory):
+        raise RuntimeError('host FD observation is not explicitly requested')
+    directory, meta = private_directory(directory)
+    if not set(resources).issubset({'disk.qcow2', 'OVMF_VARS.fd'}):
+        raise RuntimeError('unknown resource names')
+    for name, expected in resources.items():
+        if resource_metadata(directory / name) != expected:
+            raise RuntimeError('resource identity changed before host read')
+    scan = _OPEN_RESOURCE_OWNERS_SOURCE
+    if scan.count('os.getuid() not in process_uids') != 1:
+        raise RuntimeError('reviewed census UID selector changed')
+    scan = scan.replace('os.getuid() not in process_uids', 'INPUT["uid"] not in process_uids')
+    inputs = {'directory': str(directory), 'metadata': identity(meta), 'resources': resources,
+              'uid': os.getuid(), 'namespace': {k: os.readlink('/proc/self/ns/' + k) for k in ('pid', 'mnt', 'user')}}
+    return ('import os,sys,time,json,stat\nfrom pathlib import Path\nINPUT=' + repr(inputs) + '\n' +
+            inspect.getsource(identity) + '\n' + scan + '''
+try:
+    assert sys.argv == ['-c'] and os.geteuid() == 0
+    for k,v in INPUT['namespace'].items(): assert os.readlink('/proc/self/ns/'+k) == v
+    caps=int(next(x.split()[1] for x in Path('/proc/self/status').read_text().splitlines() if x.startswith('CapEff:')),16)
+    assert caps&(1<<19) and caps&((1<<1)|(1<<2))
+    group=Path('/proc/self/cgroup').read_text().strip().split(':')[-1]
+    assert group.startswith('/') and '..' not in group.split('/')
+    base=Path('/sys/fs/cgroup')/group.lstrip('/')
+    assert 0<int((base/'memory.max').read_text())<=5368709120 and (base/'memory.swap.max').read_text().strip()=='0'
+    quota,period=map(int,(base/'cpu.max').read_text().split()); assert 0<quota<=period
+    path=Path(INPUT['directory']); assert str(path.resolve())==str(path)
+    fd=os.open(path,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC)
+    try:
+        assert identity(os.fstat(fd))==INPUT['metadata'] and INPUT['metadata']['uid']==INPUT['uid'] and INPUT['metadata']['mode']&0o077==0
+        def check():
+            assert identity(os.fstat(fd))==INPUT['metadata'] and identity(path.lstat())==INPUT['metadata']
+            for name,expected in INPUT['resources'].items():
+                v=os.stat(name,dir_fd=fd,follow_symlinks=False)
+                assert stat.S_ISREG(v.st_mode) and v.st_uid==INPUT['uid'] and v.st_nlink==1 and v.st_mode&0o022==0
+                assert identity(v)==expected and identity((path/name).lstat())==expected
+        check(); owners=open_resource_owners(INPUT['resources']); check()
+        print(json.dumps({'status':'COMPLETE_BOUNDED_OBSERVATION','owners':owners}))
+    finally: os.close(fd)
+except Exception as error:
+    print(json.dumps({'status':'UNKNOWN','errorClass':type(error).__name__})); sys.exit(1)
+''')
+
+
+def observe_resource_owners(directory, resources):
+    """Keep unprivileged/default behavior; opted-in access denial uses fixed read."""
+    try:
+        return open_resource_owners(resources)
+    except RuntimeError as error:
+        if not str(error).startswith('cold resource ownership access is unknown ') or not host_fd_observation_requested(directory):
+            raise
+    payload = host_fd_payload(directory, resources)
+    argv = ['/usr/bin/sudo', '-n', '--', '/usr/bin/env', '-i', 'LC_ALL=C', 'PATH=/usr/bin:/bin',
+            '/usr/bin/timeout', '--signal=TERM', '--kill-after=0.5s', '4s', '/usr/bin/python3.12', '-IBS', '-c', payload]
+    try:
+        result = subprocess.run(argv, stdin=subprocess.DEVNULL, capture_output=True, timeout=5, check=False)
+        if result.returncode != 0 or len(result.stdout) > 16384 or result.stderr:
+            raise RuntimeError('host FD visibility unavailable or incomplete')
+        value = json.loads(result.stdout)
+        owners = value['owners']
+        if value != {'status': 'COMPLETE_BOUNDED_OBSERVATION', 'owners': owners} or not isinstance(owners, list) or len(owners) > 4096 or any(type(p) is not int or p <= 0 for p in owners) or owners != sorted(set(owners)):
+            raise RuntimeError('host FD result is unknown')
+        return owners
+    except (OSError, ValueError, KeyError, TypeError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError('host FD visibility unavailable or incomplete') from None
+
+
 def retain_cold_resources(directory, origin):
     """Observe owned cold files, not image equivalence or native acceptance."""
     if origin not in ('runner', 'expiry'):
@@ -146,7 +248,7 @@ def retain_cold_resources(directory, origin):
     if not any(os.path.lexists(path) for path in resources):
         return None
     before = {path.name: resource_metadata(path) for path in resources}
-    if list(qemu_users(resources[0])) or open_resource_owners(before):
+    if list(qemu_users(resources[0])) or observe_resource_owners(directory, before):
         raise RuntimeError('job disk or firmware still has an owner; cold state unqualified')
     verified = (directory / 'artifacts-retained').exists()
     if verified and private_read(directory / 'artifacts-retained').decode() != ARTIFACTS_RETAINED:
