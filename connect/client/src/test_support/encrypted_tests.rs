@@ -281,6 +281,12 @@ fn encrypted_settings_future_capture_restart_retry_and_disconnect() {
     no_media(&server);
 
     let future = f.bundle();
+    // The real Desktop starts the notes UI for every capture, even when no note
+    // is entered. Its stderr is local diagnostics, not part of the handoff.
+    let mut diagnostic = OpenOptions::new().write(true).create_new(true).mode(0o600)
+        .open(future.join("notes-ui.log")).unwrap();
+    diagnostic.write_all(b"synthetic Chromium diagnostic\n").unwrap();
+    drop(diagnostic);
     let id = f.client.enqueue(&future).unwrap();
     server.state.lock().unwrap().mode = "fail-file".into();
     f.client.process_once().unwrap();
@@ -298,6 +304,8 @@ fn encrypted_settings_future_capture_restart_retry_and_disconnect() {
     let out = f.root.join("retrieved.apparent");
     restarted.fetch(&id, &out, 0).unwrap();
     assert_bundle(&future, &out);
+    assert!(!out.join("notes-ui.log").exists());
+    assert!(future.join("notes-ui.log").is_file());
     assert_eq!(restarted.jobs().unwrap().len(), 1);
     assert!(history.is_dir());
 
@@ -414,6 +422,26 @@ fn encrypted_roundtrip_has_only_opaque_wire_assets_and_no_plaintext_metadata() {
         f.client.fetch(&id, &out, 0).is_err(),
         "fetch overwrote existing output"
     );
+}
+
+#[test]
+fn encrypted_snapshot_failures_preserve_actionable_asset_errors() {
+    for (asset, expected) in [("unexpected.svg", "unsupported_asset"), ("audio.wav", "file_too_large")] {
+        let f = Fixture::new();
+        let server = encryption_server("");
+        pair(&f, &server);
+        let bundle = f.bundle();
+        let file = File::create(bundle.join(asset)).unwrap();
+        if asset == "audio.wav" {
+            file.set_len(MAX_FILE_BYTES + 1).unwrap();
+        }
+        f.client.enqueue(&bundle).unwrap();
+        f.client.process_once().unwrap();
+        assert_eq!(job(&f).error.as_deref(), Some(expected));
+        no_media(&server);
+        assert!(!server.state.lock().unwrap().request_routes.iter()
+            .any(|route| route.starts_with("POST /v1/captures/")));
+    }
 }
 
 #[test]

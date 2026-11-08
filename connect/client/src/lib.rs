@@ -85,7 +85,11 @@ pub enum ConnectCommand {
     /// Disable automatic uploads and cancel pending jobs, retaining credentials.
     Disable,
     /// Retry failed queued captures. Does not discover or upload old captures.
-    Retry,
+    Retry {
+        /// Retry only this retained capture, without processing other queued work.
+        #[arg(long)]
+        id: Option<String>,
+    },
     /// Explicitly upload one historical capture (requires upload consent).
     Upload { bundle: PathBuf },
     /// List or revoke public-by-link access. IDs are management IDs, not capture IDs.
@@ -1622,10 +1626,31 @@ impl Client {
         Ok(())
     }
     pub fn retry(&self) -> Result<()> {
+        self.retry_selected(None)
+    }
+    /// Recover one retained capture under its existing identity and consent.
+    pub fn retry_capture(&self, id: &str) -> Result<()> {
+        ensure!(valid_id(id), "Capture ID must be 32 lowercase hexadecimal characters");
+        private_dir(&self.state)?;
+        // Serialize reset with worker result publication, before taking queue.lock.
+        // A busy worker must leave this request unchanged, not accept a retry
+        // which its older snapshot can immediately overwrite.
+        let _worker = Lock::acquire_until(
+            &self.state.join("worker.lock"), false,
+            Some(Instant::now() + Duration::from_secs(3)),
+        )?;
+        self.retry_selected(Some(id))?;
+        self.process_jobs(Some(id))
+    }
+    fn retry_selected(&self, id: Option<&str>) -> Result<()> {
         ensure!(self.enabled(), "Hosted uploads are disabled");
         private_dir(&self.state)?;
         let _lock = Lock::acquire(&self.state.join("queue.lock"), false)?;
+        let mut retried = false;
         for mut job in self.jobs()? {
+            if id.is_some_and(|id| job.id != id) {
+                continue;
+            }
             if self.active_locked(&job)
                 && matches!(job.status.as_str(), "pending" | "failed")
                 && now().saturating_sub(job.created) <= RETENTION
@@ -1635,8 +1660,10 @@ impl Client {
                 job.status = "pending".into();
                 job.error = None;
                 self.save_job(&job)?;
+                retried = true;
             }
         }
+        ensure!(id.is_none() || retried, "capture_not_retryable: choose a current pending or failed capture from apparent connect status; cancelled, expired and previous sign-in jobs cannot be revived");
         Ok(())
     }
     pub fn process_once(&self) -> Result<()> {
@@ -1645,7 +1672,13 @@ impl Client {
             Ok(lock) => lock,
             Err(_) => return Ok(()),
         };
+        self.process_jobs(None)
+    }
+    fn process_jobs(&self, id: Option<&str>) -> Result<()> {
         for mut job in self.jobs()? {
+            if id.is_some_and(|id| job.id != id) {
+                continue;
+            }
             if job.status != "pending" || job.next_attempt > now() || !self.active(&job) {
                 continue;
             }
@@ -1672,12 +1705,12 @@ impl Client {
                     job.error = None;
                 }
                 Err(error) => {
-                    let text = error.to_string();
+                    // Inspect causes for known codes, but persist only the allowlisted
+                    // classification below. Snapshot context is not a key failure.
+                    let text = format!("{error:#}");
                     job.error = Some(
                         if text.contains("encryption_pending_recipient") {
                             "encryption_pending_recipient"
-                        } else if text.contains("encryption_") || text.contains("encrypted_") {
-                            "encryption_action_required"
                         } else if text.contains("file_too_large") {
                             "file_too_large"
                         } else if text.contains("quota_exceeded") {
@@ -1689,6 +1722,8 @@ impl Client {
                             || text.contains("forbidden")
                         {
                             "auth_required"
+                        } else if text.contains("encryption_") || text.contains("encrypted_") {
+                            "encryption_action_required"
                         } else {
                             "upload_failed"
                         }
@@ -2031,17 +2066,17 @@ fn snapshot(bundle: &Path, stage: &Path) -> Result<Vec<Asset>> {
             .file_name()
             .into_string()
             .map_err(|_| anyhow::anyhow!("Invalid asset name"))?;
-        if name == ".publication.lock" {
-            // Engine keeps this empty coordination inode after publication. It
-            // is local machinery, never capture evidence or a remotely served asset.
+        if matches!(name.as_str(), ".publication.lock" | "notes-ui.log") {
+            // Engine's empty publication lock and Desktop's notes stderr are
+            // local machinery, never capture evidence or remotely served assets.
             let metadata = fs::symlink_metadata(entry.path())?;
             ensure!(
                 metadata.is_file()
                     && metadata.uid() == unsafe { libc::geteuid() }
                     && metadata.mode() & 0o022 == 0
                     && metadata.nlink() == 1
-                    && metadata.len() == 0,
-                "Unsafe bundle publication lock"
+                    && (name != ".publication.lock" || metadata.len() == 0),
+                "Unsafe bundle publication lock or notes diagnostic"
             );
             continue;
         }
