@@ -69,7 +69,7 @@ class AdmissionTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / '.github/workflows'
         workflow = (root / 'stream-public.yml').read_text()
         checks, deploy = workflow.split('\n  deploy:\n')
-        for event in ('pull_request', 'push', 'workflow_dispatch'):
+        for event in ('workflow_call', 'workflow_dispatch'):
             self.assertIn('\n  ' + event + ':', checks)
         self.assertIn('npm run verify', checks)
         self.assertNotIn('connect/', checks)
