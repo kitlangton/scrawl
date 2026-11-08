@@ -313,8 +313,8 @@ native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged
 The `verification-status` job in `checks.yml` is a credentialed, event-driven default-branch reporter.
 It publishes the commit status **Verification complete**, independent of the cheap
 Repository checks. It never dispatches native work. PR changes, main pushes and
-manual verification lifecycle events reconcile open main PRs under one serialized
-writer. Candidate code is read as data, never executed with the reporter token.
+manual verification lifecycle events reconcile affected open main PRs. Candidate
+events coalesce per branch; main pushes retain global reconciliation. Candidate code is read as data, never executed with the reporter token.
 
 Native changes require both manual exact-head workflows, their latest run and
 latest attempt, the complete current or parallel job union, and successful Mac
@@ -363,3 +363,48 @@ a global scan, cannot be made fail-closed by commit statuses alone. Reporter
 workflow failures remain operational errors; no green is proof of API freshness
 during such an outage. Public command steps, including verification and sealing,
 must succeed in the owning verify job; tolerated failures are rejected.
+
+
+## Reporter API budgets and recovery
+
+The trusted reporter uses the workflow's Actions credential throughout; another
+user token's quota does not establish recovery. PR lifecycle events reconcile
+only that PR. Manual verification lifecycle events look up matching open PRs by
+head branch and exact SHA; automatic Public runs and first-attempt in-progress
+notifications do no API work. Requested/rerun-start events authenticate the latest
+run and attempt before leaving pending without evaluating complete job evidence.
+Delayed start events reconcile current completed evidence instead of leaving a
+stale pending result. Completed events evaluate the current
+manual runs. Main pushes and blank manual dispatches retain a global scan, with
+all known heads invalidated before evidence reads. Global and candidate work use
+separate job-level coalescing domains, including a separate targeted-recovery
+domain. Reporter events have unique workflow-level keys: rejected events cannot
+evict eligible work before the job condition is evaluated. Non-main PR events
+are filtered both by the trigger and by the reporter.
+
+Every process preflights the same Actions credential. Targeted runs have a
+60-request hard budget and need at least 70 remaining requests; global runs have
+a 200-request budget and need at least 210. Content reads pinned to immutable
+commit SHAs are reused within the run; mutable refs, permissions, run listings
+and final evidence reads are refreshed. Status writes are spaced by one second.
+Quota exhaustion, the five-request reserve, or budget exhaustion halts the whole
+run immediately; no further PR, status or evidence requests are attempted.
+
+There is no polling, automatic retry, credential substitution or manual status
+publication. A rate-limit failure records the response's reset/Retry-After time
+and request ID without dumping response bodies, process environments or tokens.
+After that time, allow a natural relevant lifecycle event or perform one targeted
+recovery from trusted main:
+
+```sh
+gh workflow run checks.yml --ref main -f pull_request=1094
+```
+
+The recovery process must pass its own Actions-token quota preflight before any
+status writes. A successful application suite or user-token rate-limit request
+does not satisfy that condition. If quota is still insufficient, stop and retain
+the gate hold until the newly reported reset; do not rerun application/native
+verification to repair reporter delivery. Status-write/discovery outages retain
+the documented limitation above: the reporter cannot invalidate a previously
+published status when GitHub refuses the write. Reporter repair must be proven
+live before making `Verification complete` required.
