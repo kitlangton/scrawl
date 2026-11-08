@@ -1187,6 +1187,13 @@ pub(crate) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
     crate::capture::desktop::linux::media::run_sampler(sampler)
 }
 
+/// The verified Hyprland screen/area portal path includes composited live ink.
+/// Only a new successful video records this fact. Other backends and historical
+/// recordings stay unknown until their own native composition is verified.
+pub(crate) fn screen_video_ink() -> Option<crate::shared::model::VideoInk> {
+    linux::hyprland().then_some(crate::shared::model::VideoInk::Captured)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

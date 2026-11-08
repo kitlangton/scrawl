@@ -101,6 +101,7 @@ fn save_finish_trace(bundle_dir: &Path, trace: &FinishTrace) -> Result<()> {
 
 /// Pre-rendered keyframe visuals and encoded PNGs computed while transcription is running.
 pub struct PreparedVisuals {
+    pub video_ink: Option<model::VideoInk>,
     pub keyframes: Vec<model::Keyframe>,
     pub autocrop: Option<model::AutocropInfo>,
     pub contact_sheet_png: Vec<u8>,
@@ -120,6 +121,7 @@ pub fn prepare_visuals(
     marks: &[Mark],
     events: &[InteractionEvent],
     activity: &windows::ActivityLog,
+    video_ink: Option<model::VideoInk>,
 ) -> Option<PreparedVisuals> {
     if selected.is_empty() {
         return None;
@@ -135,6 +137,7 @@ pub fn prepare_visuals(
         events,
         &activity.windows,
         &activity.cursor,
+        video_ink,
     );
     let keyframes: Vec<model::Keyframe> =
         annotated_frames.iter().map(|(kf, _)| kf.clone()).collect();
@@ -188,6 +191,7 @@ pub fn prepare_visuals(
         _ => (None, None, Vec::new()),
     };
     Some(PreparedVisuals {
+        video_ink,
         keyframes,
         autocrop,
         contact_sheet_png,
@@ -202,6 +206,7 @@ pub fn prepare_visuals(
 pub struct SourceExtras {
     pub source: Option<String>,
     pub interaction_telemetry: Option<model::InteractionTelemetry>,
+    pub video_ink: Option<model::VideoInk>,
     pub device: Option<DeviceInfo>,
     /// What the recorded app said about itself: values at the start, their changes, and screens.
     pub context: std::collections::BTreeMap<String, String>,
@@ -333,6 +338,7 @@ pub fn finalize_capture_bundle(
             video: video_path,
             duration_ms,
             video_offset_ms,
+            video_ink,
         } = recording;
         if frames.is_empty() {
             // The MP4 stream can succeed even when every screenshot fails. Do not turn
@@ -369,6 +375,7 @@ pub fn finalize_capture_bundle(
                 strokes: strokes.clone(),
                 events: events.clone(),
                 interaction_telemetry,
+                video_ink,
                 note: note.clone(),
                 windows: activity.windows.clone(),
                 cursor: activity.cursor.clone(),
@@ -426,6 +433,7 @@ pub fn finalize_capture_bundle(
                                 &preview_marks,
                                 &events,
                                 &activity,
+                                video_ink,
                             )
                         })
                         .flatten();
@@ -452,6 +460,7 @@ pub fn finalize_capture_bundle(
             SourceExtras {
                 activity,
                 interaction_telemetry,
+                video_ink,
                 video_offset_ms,
                 autocrop: Some(crop_settings),
                 full_frames: video_path
@@ -542,6 +551,7 @@ pub fn rebuild_screen_bundle_with(
                 ..Default::default()
             },
             interaction_telemetry: old.interaction_telemetry,
+            video_ink: old.video_ink,
             full_frames,
             video_offset_ms: offset,
             autocrop,
@@ -633,7 +643,7 @@ pub fn build_bundle_from_parts(
         );
         let select_only_at = std::time::Instant::now();
         let matches_prepared = extras.prepared.as_ref().is_some_and(|prep| {
-            prep.keyframes.len() == selected.len()
+            prep.video_ink == extras.video_ink && prep.keyframes.len() == selected.len()
                 && prep.keyframes.iter().zip(&selected).all(|(a, (b, _))| {
                     a.index == b.index
                         && a.t == b.t
@@ -740,6 +750,7 @@ pub fn build_bundle_from_parts(
                     &events,
                     &extras.activity.windows,
                     &extras.activity.cursor,
+                    extras.video_ink,
                 );
                 let keyframes: Vec<model::Keyframe> =
                     annotated_frames.iter().map(|(kf, _)| kf.clone()).collect();
@@ -808,6 +819,7 @@ pub fn build_bundle_from_parts(
             marks,
             events,
             interaction_telemetry: extras.interaction_telemetry,
+            video_ink: extras.video_ink,
             keyframes,
             contact_sheet: "contact-sheet.png".into(),
             image_quality_warning: keyframe_warning,
@@ -988,6 +1000,7 @@ mod tests {
                 video: Some(movie.clone()),
                 duration_ms: 1_000,
                 video_offset_ms: 0,
+                video_ink: None,
             },
             Vec::new(),
             Vec::new(),

@@ -140,6 +140,8 @@ pub struct Unfinished {
     pub events: Vec<InteractionEvent>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction_telemetry: Option<crate::shared::model::InteractionTelemetry>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_ink: Option<crate::shared::model::VideoInk>,
     #[serde(default)]
     pub note: Option<String>,
     #[serde(default)]
@@ -291,6 +293,7 @@ pub fn orphan_recipe(
         strokes: Vec::new(),
         events: Vec::new(),
         interaction_telemetry: None,
+        video_ink: None,
         note: None,
         windows: Vec::new(),
         cursor: Vec::new(),
@@ -615,6 +618,26 @@ mod tests {
         frames: fake_frames,
         transcribe: fake_transcript,
     };
+
+    #[test]
+    fn recovery_preserves_video_ink_facts_without_guessing_old_sources() {
+        use crate::shared::model::VideoInk;
+        let captures = temp_dir("video-ink");
+        for (name, source) in [("old", None), ("captured", Some(VideoInk::Captured)), ("excluded", Some(VideoInk::Excluded))] {
+            let dir = orphan(&captures, &format!("{name}.apparent"));
+            let mut recipe = unfinished();
+            recipe.video_ink = source;
+            write(&dir, &recipe).unwrap();
+            assert_eq!(read(&dir).unwrap().video_ink, source);
+            rebuild(&dir, &FAKE).unwrap();
+            let rebuilt: crate::shared::model::ApparentBundle = serde_json::from_slice(
+                &std::fs::read(dir.join("apparent.json")).unwrap()
+            ).unwrap();
+            assert_eq!(rebuilt.video_ink, source);
+            assert_eq!(rebuilt.target, recipe.target);
+        }
+        std::fs::remove_dir_all(captures).unwrap();
+    }
 
     fn assert_rebuilt(dir: &Path) -> crate::shared::model::ApparentBundle {
         let bundle: crate::shared::model::ApparentBundle =

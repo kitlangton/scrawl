@@ -306,7 +306,8 @@ pub fn zoom(
             file: String::new(),
             event: String::new(),
             said: None,
-            // From the moment the mark starts, its whole ink stays drawn.
+            // Semantic replay shows the whole mark; composited sources retain
+            // the recorded progression and fade instead.
             mark_id: mark.filter(|e| t >= e.mark.t0).map(|e| e.mark.id.clone()),
             cursor: None,
         };
@@ -318,6 +319,7 @@ pub fn zoom(
             &view.strokes,
             &view.marks,
             &view.events,
+            crate::shared::model::VideoInk::replay(bundle.video_ink),
         );
         crate::capture::engine::render::draw_time_label(frame, &clock(t), label_scale);
         cells.push((i + 1, t));
