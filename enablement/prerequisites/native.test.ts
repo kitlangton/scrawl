@@ -5,6 +5,7 @@ import { tmpdir } from 'node:os';
 import { resolve, dirname } from 'node:path';
 import { checkNativeInputs } from './native.ts';
 import { spawnSync } from 'node:child_process';
+import '../native-build/build.test.ts';
 
 function fixture(t: any) {
   const root = mkdtempSync(resolve(tmpdir(), 'native-inputs-'));
