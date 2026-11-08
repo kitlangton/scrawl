@@ -1,0 +1,12 @@
+[package]
+name = "apparent-capture-engine"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+license = "MIT"
+description = "Staged shared capture admission and bundle lease mechanics"
+
+[dependencies]
+libc = "=0.2.189"
+serde = { version = "=1.0.229", features = ["derive"] }
+serde_json = "=1.0.151"

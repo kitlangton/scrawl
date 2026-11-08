@@ -68,7 +68,7 @@ fn disconnected(server: Option<&str>) -> Snapshot {
         server: server.map(str::to_owned),
         connected: false,
         uploads_enabled: false,
-        reauthorization_required: false, renewal_required: false, account_initial: None,
+        reauthorization_required: false,
     }
 }
 
@@ -77,31 +77,8 @@ fn connected() -> Snapshot {
         server: Some(DEFAULT_SERVER.into()),
         connected: true,
         uploads_enabled: true,
-        reauthorization_required: false, renewal_required: false, account_initial: None,
+        reauthorization_required: false,
     }
-}
-
-#[test]
-fn renewable_access_expiry_offers_check_without_another_login() {
-    let (mut controller, backend, events, logins, probes, _) = fixture();
-    let mut expired = connected();
-    expired.connected = false;
-    expired.uploads_enabled = false;
-    expired.renewal_required = true;
-    *backend.local.lock().unwrap() = Ok(expired);
-    controller.refresh();
-    let view = controller.view();
-    assert_eq!(view.presentation.headline, "Connection needs a refresh.");
-    assert!(!view.buttons.iter().any(|button| button.command == Command::Connect));
-    assert!(view.presentation.buttons.iter().any(|button| button.command == Command::Check));
-    assert!(!view.presentation.menu_actions.contains(&Command::Check));
-    assert!(logins.try_recv().is_err() && probes.try_recv().is_err());
-    controller.command(Command::Check);
-    *backend.local.lock().unwrap() = Ok(connected());
-    recv(&probes).send(Health::Online).unwrap();
-    controller.receive(recv(&events));
-    assert_eq!(controller.view().presentation.headline, "You’re connected.");
-    assert!(logins.try_recv().is_err());
 }
 
 fn fixture() -> (
@@ -236,13 +213,13 @@ fn login_requires_authoritative_enabled_state_not_transport_success() {
             server: Some(DEFAULT_SERVER.into()),
             connected: true,
             uploads_enabled: false,
-            reauthorization_required: false, renewal_required: false, account_initial: None,
+            reauthorization_required: false,
         }),
         Ok(Snapshot {
             server: Some("https://other.example".into()),
             connected: true,
             uploads_enabled: true,
-            reauthorization_required: false, renewal_required: false, account_initial: None,
+            reauthorization_required: false,
         }),
     ] {
         let (mut c, backend, events, logins, _, _) = fixture();
@@ -301,7 +278,7 @@ fn failed_disable_retains_retry_and_fresh_read_only_status_without_health_flood(
         server: Some(DEFAULT_SERVER.into()),
         connected: true,
         uploads_enabled: false,
-        reauthorization_required: false, renewal_required: false, account_initial: None,
+        reauthorization_required: false,
     });
     c.refresh();
     c.refresh();

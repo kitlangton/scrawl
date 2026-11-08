@@ -10,7 +10,6 @@ const { promisify } = require('node:util');
 const { _electron: electron, expect } = require('@playwright/test');
 const { captureReference } = require('../electron/runtime.cjs');
 const run = promisify(execFile);
-const { stopChild: stopOwned } = require('../../../../../enablement/native/owned-processes.ts');
 
 test('selected capture reference: real Rust selection and native clipboard', { timeout: 120000 }, async (t) => {
   const binary = process.env.APPARENT_REFERENCE_BINARY;
@@ -55,6 +54,14 @@ test('selected capture reference: real Rust selection and native clipboard', { t
   let application;
   let log;
   let seedOwner;
+  async function stopOwned(child) {
+    if (child && child.exitCode === null && child.signalCode === null) {
+      const ended = new Promise((resolve) => child.once('exit', resolve));
+      child.kill('SIGTERM');
+      const timer = setTimeout(() => { if (child.exitCode === null && child.signalCode === null) child.kill('SIGKILL'); }, 2500);
+      try { await ended; } finally { clearTimeout(timer); }
+    }
+  }
   async function stopRust() {
     await stopOwned(rust);
     await log?.close(); log = undefined;

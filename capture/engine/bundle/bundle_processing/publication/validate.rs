@@ -1,5 +1,7 @@
-use super::fs::{self, Directory};
-use crate::capture::engine::bundle::diagnostics::{Diagnose, Step};
+use super::{
+    fs::{self, Directory},
+    movie,
+};
 use crate::shared::model::ApparentBundle;
 use anyhow::{Context, Result, ensure};
 use std::{
@@ -126,49 +128,34 @@ impl Inventory {
             }
         }
         for image in &images {
-            self.file(image)
-                .and_then(validate_png)
-                .with_context(|| format!("invalid PNG artifact: {image}"))
-                .diagnostic(Step::PngValidate)?;
+            validate_png(self.file(image)?)
+                .with_context(|| format!("invalid PNG artifact: {image}"))?;
         }
         if let Some(audio) = &expected.audio {
-            self.file(audio)
-                .and_then(validate_wav)
-                .context("invalid WAV artifact")
-                .diagnostic(Step::WavValidate)?;
+            validate_wav(self.file(audio)?).context("invalid WAV artifact")?;
         }
         if let Some(video) = &expected.video {
-            self.file(video)
-                .and_then(apparent_capture_engine::publication::validate_movie)
-                .context("invalid movie artifact")
-                .diagnostic(Step::MovieValidate)?;
+            movie::validate(self.file(video)?).context("invalid movie artifact")?;
         }
         // Validate retained originals and auxiliary media too, not only the displayed subset.
         for (name, artifact) in &self.files {
             match Path::new(name).extension().and_then(|s| s.to_str()) {
                 Some("png") if !images.contains(name) => validate_png(&artifact.file)
-                    .with_context(|| format!("invalid retained PNG: {name}"))
-                    .diagnostic(Step::PngValidate)?,
+                    .with_context(|| format!("invalid retained PNG: {name}"))?,
                 Some("wav") if expected.audio.as_deref() != Some(name) => {
                     validate_wav(&artifact.file)
-                        .with_context(|| format!("invalid retained WAV: {name}"))
-                        .diagnostic(Step::WavValidate)?
+                        .with_context(|| format!("invalid retained WAV: {name}"))?
                 }
                 Some("mp4" | "mov") if expected.video.as_deref() != Some(name) => {
-                    apparent_capture_engine::publication::validate_movie(&artifact.file)
-                        .with_context(|| format!("invalid retained movie: {name}"))
-                        .diagnostic(Step::MovieValidate)?
+                    movie::validate(&artifact.file)
+                        .with_context(|| format!("invalid retained movie: {name}"))?
                 }
                 _ => (),
             }
         }
-        if let Some(journal) = self
-            .files
-            .get(crate::capture::engine::bundle::recover::UNFINISHED)
-        {
+        if let Some(journal) = self.files.get(crate::capture::engine::bundle::recover::UNFINISHED) {
             let bytes = fs::bytes(&journal.file, TEXT_CAP)?;
-            let _: crate::capture::engine::bundle::recover::Unfinished =
-                serde_json::from_slice(&bytes)?;
+            let _: crate::capture::engine::bundle::recover::Unfinished = serde_json::from_slice(&bytes)?;
             let old: serde_json::Value = serde_json::from_slice(&bytes)?;
             ensure!(
                 old["videoOffsetMs"].as_u64().unwrap_or(0) == expected.video_offset_ms,

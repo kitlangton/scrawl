@@ -1,10 +1,9 @@
 import { defineConfig, type Plugin } from "vite"
 import { fileURLToPath } from "node:url"
-import { publicAssetPlugin } from "./lib/public-assets.ts"
+import { publicAssetPlugin } from "./lib/public-assets.mjs"
 import react from "@vitejs/plugin-react"
 import { agentFiles, jsonLd } from "./scripts/site-build/agent-files.ts"
 import { MAP_DIR } from "./scripts/site-build/feature-audit.ts"
-import { browserAnalyticsDefinitions } from "../../shared/analytics/config.ts"
 
 const TYPES: Record<string, string> = { ".txt": "text/plain; charset=utf-8", ".md": "text/markdown; charset=utf-8" }
 
@@ -48,7 +47,6 @@ function featureMap(): Plugin {
 }
 
 export default defineConfig({
-  define: browserAnalyticsDefinitions(process.env),
   publicDir: false,
   // The public Apparent demo has no Kit release feed, agent instructions or feature map.
   plugins: [publicAssetPlugin(fileURLToPath(new URL("./public/assets/", import.meta.url))), react(), ...(process.env.APPARENT_PUBLIC_SITE === "1" ? [] : [forAgents(), featureMap()])],

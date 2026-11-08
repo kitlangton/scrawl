@@ -17,6 +17,7 @@ use super::pill_theme::{CARBON, PAPER};
 
 pub(in crate::capture::desktop) const PAPER_WIDTH: f32 = 1600.0;
 pub(in crate::capture::desktop) const PAPER_HEIGHT: f32 = 1100.0;
+pub(in crate::capture::desktop) const fn title() -> &'static str { "Apparent Whiteboard" }
 const TOOLBAR_HEIGHT: f32 = 64.0;
 const LILAC: u32 = 0xb7a5d8;
 
@@ -55,11 +56,14 @@ fn toolbar_button(id: &'static str, label: &'static str, close: bool) -> gpui::S
         )
 }
 
-#[derive(Default, Clone)]
+#[derive(Clone)]
 pub(in crate::capture::desktop) struct Board {
+    pub color: [u8;3],
     pub strokes: Vec<Vec<[f32; 2]>>,
     pub active: Option<Vec<[f32; 2]>>,
 }
+
+impl Default for Board {fn default()->Self{Self{color:[26,26,26],strokes:Vec::new(),active:None}}}
 
 impl Board {
     pub fn start(&mut self, point: [f32; 2]) {
@@ -97,6 +101,7 @@ impl Board {
 
 pub(in crate::capture::desktop) fn reset_for_capture(board: &Rc<RefCell<Board>>) {
     board.borrow_mut().clear();
+    board.borrow_mut().color=crate::shared::handoff::pen::rgb();
 }
 
 fn on_paper([x, y]: [f32; 2]) -> bool {
@@ -132,7 +137,7 @@ impl WhiteboardWindow {
     }
 }
 
-fn paint_stroke(window: &mut Window, points: &[[f32; 2]], origin: Point<Pixels>) {
+fn paint_stroke(window: &mut Window, points: &[[f32; 2]], origin: Point<Pixels>, color:[u8;3]) {
     if points.is_empty() {
         return;
     }
@@ -147,7 +152,8 @@ fn paint_stroke(window: &mut Window, points: &[[f32; 2]], origin: Point<Pixels>)
         }
     }
     if let Ok(path) = path.build() {
-        window.paint_path(path, gpui::hsla(0.0, 0.0, 0.10, 1.0));
+        let [r,g,b]=color;
+        window.paint_path(path, rgb((u32::from(r)<<16)|(u32::from(g)<<8)|u32::from(b)));
     }
 }
 
@@ -157,7 +163,6 @@ impl Render for WhiteboardWindow {
         div()
             .track_focus(&self.focus)
             .size_full()
-            .relative()
             .flex()
             .flex_col()
             .bg(rgb(PAPER))
@@ -203,13 +208,6 @@ impl Render for WhiteboardWindow {
                                     .text_size(px(16.0))
                                     .font_weight(FontWeight::MEDIUM)
                                     .child("Whiteboard"),
-                            )
-                            .child(
-                                div()
-                                    .text_size(px(10.0))
-                                    .font_family("monospace")
-                                    .text_color(rgb(PAPER))
-                                    .child(crate::capture::desktop::running_build_label()),
                             ),
                     )
                     .child(
@@ -274,10 +272,10 @@ impl Render for WhiteboardWindow {
                             |_, _, _| {},
                             move |bounds: Bounds<Pixels>, (), window: &mut Window, _: &mut App| {
                                 for stroke in &board.strokes {
-                                    paint_stroke(window, stroke, bounds.origin);
+                                    paint_stroke(window, stroke, bounds.origin, board.color);
                                 }
                                 if let Some(active) = &board.active {
-                                    paint_stroke(window, active, bounds.origin);
+                                    paint_stroke(window, active, bounds.origin, board.color);
                                 }
                             },
                         )
@@ -294,6 +292,7 @@ pub(in crate::capture::desktop) fn open(coord: &Entity<ApparentCoordinator>, cx:
     for handle in cx.windows() {
         if let Some(board) = handle.downcast::<WhiteboardWindow>() {
             let _ = board.update(cx, |_, window, _| window.activate_window());
+            coord.update(cx,|coord,_|{if let Some(session)=coord.onboarding.as_mut(){session.practice_whiteboard();}});
             return;
         }
     }
@@ -304,7 +303,7 @@ pub(in crate::capture::desktop) fn open(coord: &Entity<ApparentCoordinator>, cx:
         WindowOptions {
             window_bounds: Some(WindowBounds::Windowed(bounds)),
             titlebar: Some(gpui::TitlebarOptions {
-                title: Some("Apparent Whiteboard".into()),
+                title: Some(title().into()),
                 ..Default::default()
             }),
             app_id: Some("dev.kitlangton.apparent".into()),
@@ -335,6 +334,7 @@ pub(in crate::capture::desktop) fn open(coord: &Entity<ApparentCoordinator>, cx:
         },
     );
     if opened.is_ok() {
+        coord.update(cx,|coord,_|{if let Some(session)=coord.onboarding.as_mut(){session.practice_whiteboard();}});
         platform::float_whiteboard(cx);
         platform::take_keys(cx);
     }
@@ -348,6 +348,17 @@ pub(in crate::capture::desktop) fn finish_snapshot(
     let snapshot = board.borrow().clone();
     close();
     snapshot
+}
+
+pub(in crate::capture::desktop) fn frame(cx: &mut App) -> Option<[f32;4]> {
+    for handle in cx.windows() {
+        if handle.downcast::<WhiteboardWindow>().is_some() {
+            if let Ok(bounds) = handle.update(cx, |_, window, _| window.bounds()) {
+                return Some([bounds.origin.x.into(), bounds.origin.y.into(), bounds.size.width.into(), bounds.size.height.into()]);
+            }
+        }
+    }
+    None
 }
 
 pub(in crate::capture::desktop) fn close(cx: &mut App) {
@@ -425,7 +436,7 @@ fn append_to_bundle_with(
         mark_id: None,
         cursor: None,
     };
-    let paper = render_paper(&board.strokes, bundle.duration_ms);
+    let paper = render_paper(&board.strokes, bundle.duration_ms, board.color);
     // Contact sheets are rendered before the small number chip is stamped on the frame.
     // Existing PNGs already have their chips; reusing them does not hide any sketch content.
     frames.push((key.clone(), paper.clone()));
@@ -573,7 +584,7 @@ fn publish_artifacts(
     result
 }
 
-fn render_paper(strokes: &[Vec<[f32; 2]>], t_ms: u64) -> crate::shared::model::RgbaFrame {
+fn render_paper(strokes: &[Vec<[f32; 2]>], t_ms: u64, color:[u8;3]) -> crate::shared::model::RgbaFrame {
     use crate::shared::model::RgbaFrame;
 
     let (mut x0, mut y0, mut x1, mut y1) = (PAPER_WIDTH, PAPER_HEIGHT, 0.0f32, 0.0f32);
@@ -599,7 +610,7 @@ fn render_paper(strokes: &[Vec<[f32; 2]>], t_ms: u64) -> crate::shared::model::R
                 let (px, py) = (x + dx, y + dy);
                 if px >= 0 && py >= 0 && px < image.width as i32 && py < image.height as i32 {
                     let at = (py as usize * image.width as usize + px as usize) * 4;
-                    image.rgba[at..at + 3].fill(26);
+                    image.rgba[at..at + 3].copy_from_slice(&color);
                 }
             }
         }

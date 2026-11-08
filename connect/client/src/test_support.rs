@@ -7,8 +7,6 @@ mod encrypted_tests;
 mod renewal_tests;
 #[cfg(test)]
 mod settings_tests;
-#[cfg(test)]
-mod device_tests;
 use std::sync::OnceLock;
 
 pub type ConfigWriteHook = Box<dyn FnMut(&str, &Path)>;
@@ -673,7 +671,6 @@ impl Fixture {
                     grant_id: None,
                     auth_required: false,
                     encryption_identity: None,
-                    account_initial: None,
                 },
             )
             .unwrap();
@@ -705,7 +702,6 @@ struct State {
     // Optional synthetic registry: public keys and opaque storage, never crypto.
     encryption: Option<EncryptionState>,
     format: Option<String>,
-    delivery: Option<String>,
     request_routes: Vec<String>,
     list_routes: Vec<String>,
     progress: Vec<String>,
@@ -887,12 +883,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             .push((format!("{method} {route}"), body.to_vec()));
     }
     let mut status = 200;
-    let result: Vec<u8> = if method == "GET" && route.starts_with("/v1/captures/")
-        && (s.mode == "fetch-missing" || s.mode == "fetch-unauthorized"
-            || (route.split('/').count() == 4 && route.rsplit('/').next() != Some(s.capture_id.as_str()))) {
-        status = if s.mode == "fetch-unauthorized" { 401 } else { 404 };
-        json!({"error":{"code":if status == 401 {"unauthorized"} else {"not_found"}}}).to_string().into_bytes()
-    } else if route == "/v1/device/start" {
+    let result: Vec<u8> = if route == "/v1/device/start" {
         if let Some(encryption) = &mut s.encryption {
             let request: Value = serde_json::from_slice(body).unwrap();
             encryption.pending_key = request.get("encryptionKey").cloned();
@@ -1015,7 +1006,6 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             json!({"error":{"code":"expired"}}).to_string().into_bytes()
         } else if method == "POST" && parts.len() == 4 {
             let reservation: Value = serde_json::from_slice(body).unwrap();
-            s.delivery = reservation.get("delivery").and_then(Value::as_str).map(str::to_owned);
             s.format = reservation
                 .get("format")
                 .and_then(Value::as_str)
@@ -1031,7 +1021,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                 .iter()
                 .map(|v| serde_json::from_value(v.clone()).unwrap())
                 .collect();
-            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"format":s.format,"delivery":s.delivery,"evidenceReady":s.delivery.is_some() && s.files.iter().filter(|f| f.path.starts_with("evidence/")).all(|f| s.data.contains_key(&f.path))})
+            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"format":s.format})
                 .to_string()
                 .into_bytes()
         } else if parts.get(4) == Some(&"share") && parts.get(5) == Some(&"progress") {
@@ -1046,7 +1036,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
         } else if parts.get(4) == Some(&"files") {
             let path = parts[5..].join("/");
             if method == "PUT" {
-                if s.mode == "fail-file" || (s.mode == "fail-media" && path.starts_with("media/")) {
+                if s.mode == "fail-file" {
                     status = 503;
                     let _ = write!(
                         stream,
@@ -1054,7 +1044,7 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                     );
                     return;
                 }
-                if path == "audio.wav" || (s.encryption.is_some() && (path == "envelope.json" || path == "media/envelope.json")) {
+                if path == "audio.wav" || (s.encryption.is_some() && path == "envelope.json") {
                     if let Some(gate) = s.media_gate.clone() {
                         drop(s);
                         gate.started.store(true, Ordering::SeqCst);
@@ -1075,7 +1065,6 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
                     assert!(
                         path == "envelope.json"
                             || (path.starts_with("sealed/part-") && path.ends_with(".age"))
-                            || ["evidence/", "media/"].iter().any(|group| path.strip_prefix(group).is_some_and(|p| p == "envelope.json" || (p.starts_with("sealed/part-") && p.ends_with(".age"))))
                     );
                 }
                 s.data.insert(path, body.to_vec());
@@ -1092,13 +1081,13 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             }
         } else if parts.get(4) == Some(&"complete") {
             s.ready = true;
-            json!({"id":id,"status":"ready","format":s.format,"delivery":s.delivery,"evidenceReady":s.delivery.is_some() && s.files.iter().filter(|f| f.path.starts_with("evidence/")).all(|f| s.data.contains_key(&f.path))})
+            json!({"id":id,"status":"ready","format":s.format})
                 .to_string()
                 .into_bytes()
         } else {
             let mut files = s.files.clone();
             files.reverse();
-            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"files":files,"format":s.format,"delivery":s.delivery,"evidenceReady":s.delivery.is_some() && s.files.iter().filter(|f| f.path.starts_with("evidence/")).all(|f| s.data.contains_key(&f.path))})
+            json!({"id":id,"status":if s.ready {"ready"} else {"pending"},"files":files,"format":s.format})
                 .to_string()
                 .into_bytes()
         }
@@ -1152,8 +1141,6 @@ pub fn hosted_prepared_link_survives_upload_before_foreground_delivery() {
         "upload completion revoked a valid foreground link"
     );
     assert_eq!(link.text.matches("Anyone with this link").count(), 1);
-    assert!(link.text.contains("Carry out the instructions and changes I request in the transcript"));
-    assert!(link.text.contains("rather than stopping at a summary"));
     // A valid ready result must still lose authorization when consent is removed.
     f.client.disable(false).unwrap();
     assert!(!link.authorized());
@@ -1347,7 +1334,7 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
     assert_eq!(
         pointer,
         format!(
-            "apparent inspect {id}\n"
+            "apparent fetch {id} --out ./{id}.apparent --wait 120\napparent inspect ./{id}.apparent\n"
         )
     );
     assert!(!pointer.contains("login") && !pointer.contains("secret"));
@@ -1384,67 +1371,6 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
             .to_string()
             .contains("secret")
     );
-}
-#[cfg_attr(test, test)]
-pub fn hosted_fetch_before_reservation_waits_and_unavailable_is_actionable() {
-    for evidence in [false, true] {
-        let f = Fixture::new();
-        let fetch = |id: &str, out: &Path, wait| {
-            if evidence { f.client.fetch_evidence(id, out, wait) }
-            else { f.client.fetch(id, out, wait) }
-        };
-        let server = Server::new("");
-        f.authorize(&server.url);
-        let bundle = f.bundle();
-        let id = f.client.enqueue(&bundle).unwrap();
-        assert!(f.client.pointer(&bundle).is_some());
-        let out = f.root.join("delayed.apparent");
-        let error = fetch(&id, &out, 0).unwrap_err().to_string();
-        assert!(error.contains("Capture unavailable") && error.contains("API origin"));
-        assert!(!out.exists());
-        std::thread::scope(|scope| {
-            let worker = scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(150));
-                f.client.process_once().unwrap();
-            });
-            fetch(&id, &out, 5).unwrap();
-            worker.join().unwrap();
-        });
-        assert!(out.join("apparent.json").is_file());
-        server.state.lock().unwrap().ready = false;
-        let pending_out = f.root.join("pending.apparent");
-        std::thread::scope(|scope| {
-            scope.spawn(|| {
-                std::thread::sleep(Duration::from_millis(150));
-                server.state.lock().unwrap().ready = true;
-            });
-            fetch(&id, &pending_out, 5).unwrap();
-        });
-        for path in server.state.lock().unwrap().data.keys() {
-            assert_eq!(fs::read(bundle.join(path)).unwrap(), fs::read(pending_out.join(path)).unwrap());
-        }
-        for mode in ["fetch-missing", "fetch-unauthorized"] {
-            server.state.lock().unwrap().mode = mode.into();
-            let requests_before = server.state.lock().unwrap().requests;
-            let absent = f.root.join("absent.apparent");
-            let start = Instant::now();
-            let error = fetch(&id, &absent, 1).unwrap_err().to_string();
-            assert!(start.elapsed() < Duration::from_secs(3));
-            assert!(!absent.exists());
-            if mode == "fetch-missing" {
-                assert!(error.contains("Capture unavailable") && error.contains("fresh handoff"));
-            } else {
-                assert!(error.contains("authorization failed") && error.contains("apparent connect login"));
-                assert!(error.contains(&server.url) && !error.contains("--scope"));
-                // Authorization failures must not enter the pending/404 retry loop.
-                // Count requests directly: curl startup and CI scheduling can exceed
-                // one second even when the first response is returned without retry.
-                assert_eq!(server.state.lock().unwrap().requests - requests_before, 1);
-            }
-            assert!(!fs::read_dir(&f.root).unwrap().any(|entry|
-                entry.unwrap().file_name().to_string_lossy().starts_with(".apparent-fetch-")));
-        }
-    }
 }
 #[cfg_attr(test, test)]
 pub fn hosted_disable_logout_and_quota_preserve_local() {
@@ -1635,7 +1561,8 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
     let server = Server::new("slow");
     let stage = Scratch::new(&f.client.state).unwrap();
     let start = Instant::now();
-    let error = f.client
+    assert!(
+        f.client
             .raw_request(
                 &server.url,
                 Some("synthetic-secret"),
@@ -1647,10 +1574,8 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
                 Duration::from_millis(100),
                 &|| true
             )
-            .unwrap_err().to_string();
-    assert!(error.contains("account check") && error.contains("timeout"), "{error}");
-    assert!(error.contains("elapsed_ms=") && error.contains("request_timeout_ms=100"));
-    assert!(!error.contains("synthetic-secret") && !error.contains(&server.url));
+            .is_err()
+    );
     assert!(start.elapsed() < Duration::from_secs(1));
     assert!(
         f.client
@@ -1670,29 +1595,21 @@ pub fn hosted_transport_network_timeout_and_cancellation() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
     drop(listener);
-    let error = f.client
+    assert!(
+        f.client
             .request(
                 &url,
                 None,
-                "POST",
-                "/v1/device/start",
+                "GET",
+                "/v1/account",
                 None,
                 &stage.0.join("offline"),
                 100,
                 Duration::from_secs(1),
                 &|| true
             )
-            .unwrap_err().to_string();
-    assert!(error.contains("device authorization start") && error.contains("connection failed"), "{error}");
-    assert!(error.contains("curl_exit=7") && error.contains("http_status=0"));
-    assert!(!error.contains(&url));
-    let sized = Server::new("");
-    let error = f.client.raw_request(
-        &sized.url, Some("synthetic-read-secret"), "GET", "/v1/account", None,
-        &stage.0.join("oversized-response"), 1, Duration::from_secs(1), &|| true,
-    ).unwrap_err().to_string();
-    assert!(error.contains("response size limit exceeded") && error.contains("curl_exit=63"), "{error}");
-    assert!(error.contains("http_status=200"));
+            .is_err()
+    );
 }
 #[cfg_attr(test, test)]
 pub fn hosted_paths_symlinks_oversize_and_unknown_assets() {
@@ -1742,151 +1659,6 @@ pub fn hosted_paths_symlinks_oversize_and_unknown_assets() {
             .to_string()
             .contains("file_too_large")
     );
-}
-
-#[cfg_attr(test, test)]
-pub fn hosted_notes_assets_preserve_semantics_and_exclude_local_ui_log() {
-    let f = Fixture::new();
-    let bundle = f.bundle();
-    let notes = br#"{"version":1,"notes":[{"pin":1,"t":25,"x":0.5,"y":0.5,"text":"synthetic saved note"}]}"#;
-    let log = bundle.join("notes-ui.log");
-    OpenOptions::new().write(true).create_new(true).mode(0o600)
-        .open(&log).unwrap().write_all(b"synthetic local diagnostic; never share").unwrap();
-    let stage = Scratch::new(&f.client.state).unwrap();
-    let files = snapshot(&bundle, &stage.0).expect("normal capture must exclude the local UI diagnostic");
-    assert!(!files.iter().any(|file| file.path == "notes-ui.log"));
-    fs::write(bundle.join("notes.json"), notes).unwrap();
-    let stage = Scratch::new(&f.client.state).unwrap();
-    let files = snapshot(&bundle, &stage.0).expect("saved notes must transfer as semantic capture data");
-    assert!(files.iter().any(|file| file.path == "notes.json"));
-    assert_eq!(fs::read(stage.0.join("notes.json")).unwrap(), notes);
-    assert!(!files.iter().any(|file| file.path == "notes-ui.log"));
-    assert!(!stage.0.join("notes-ui.log").exists());
-    fs::remove_file(&log).unwrap();
-    let outside = f.root.join("private-log");
-    fs::write(&outside, b"private").unwrap();
-    std::os::unix::fs::symlink(&outside, &log).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::remove_file(&log).unwrap();
-    fs::hard_link(&outside, &log).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::remove_file(&log).unwrap();
-    OpenOptions::new().write(true).create_new(true).mode(0o600).open(&log).unwrap();
-    fs::set_permissions(&log, std::os::unix::fs::PermissionsExt::from_mode(0o644)).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::remove_file(&log).unwrap();
-    fs::create_dir(&log).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-}
-
-#[cfg_attr(test, test)]
-pub fn hosted_microphone_off_marker_is_local_and_strictly_validated() {
-    use std::os::unix::fs::{PermissionsExt, symlink};
-    let f = Fixture::new();
-    let bundle = f.bundle();
-    let marker = bundle.join("microphone-off");
-    fs::write(&marker, b"").unwrap();
-    fs::set_permissions(&marker, fs::Permissions::from_mode(0o644)).unwrap();
-    let stage = Scratch::new(&f.client.state).unwrap();
-    let files = snapshot(&bundle, &stage.0).expect("normal microphone-off capture must transfer");
-    assert!(!files.iter().any(|file| file.path == "microphone-off"));
-    assert!(!stage.0.join("microphone-off").exists());
-    assert_eq!(fs::read(stage.0.join("apparent.json")).unwrap(), fs::read(bundle.join("apparent.json")).unwrap());
-    fs::write(&marker, b"unexpected private bytes").unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::write(&marker, b"").unwrap();
-    fs::set_permissions(&marker, fs::Permissions::from_mode(0o666)).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::remove_file(&marker).unwrap();
-    let outside = f.root.join("outside-marker");
-    fs::write(&outside, b"").unwrap();
-    symlink(&outside, &marker).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::remove_file(&marker).unwrap();
-    fs::hard_link(&outside, &marker).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::remove_file(&marker).unwrap();
-    fs::create_dir(&marker).unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-    fs::remove_dir(&marker).unwrap();
-    fs::write(bundle.join("microphone-off.log"), b"unknown neighbour").unwrap();
-    assert!(snapshot(&bundle, &Scratch::new(&f.client.state).unwrap().0).is_err());
-}
-
-#[cfg_attr(test, test)]
-pub fn hosted_oversized_upload_retains_actionable_details_across_restart() {
-    for asset in ["recording.mov", "audio.wav"] {
-        let f = Fixture::new();
-        let server = Server::new("");
-        f.authorize(&server.url);
-        let bundle = f.bundle();
-        File::create(bundle.join(asset)).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
-        let id = f.client.enqueue(&bundle).unwrap();
-        f.client.process_once().unwrap();
-        let restarted = Client::new(provider(f.client.config.clone()));
-        restarted.process_once().unwrap();
-        let status = restarted.status(false).unwrap();
-        let job = &status["queue"][0];
-        assert_eq!(job["id"], id);
-        assert_eq!(job["status"], "failed");
-        assert_eq!(job["error"], "file_too_large");
-        assert_eq!(job["attempts"], 1, "permanent size failure must not retry automatically");
-        assert_eq!(job["sizeFailure"], json!({"path":asset,"size":MAX_FILE_BYTES+1,"limit":MAX_FILE_BYTES}));
-        assert_eq!(server.state.lock().unwrap().requests, 0, "reject before reservation or upload");
-        assert_eq!(fs::metadata(bundle.join(asset)).unwrap().len(), MAX_FILE_BYTES + 1);
-        assert!(!status.to_string().contains("synthetic-upload-secret"));
-
-        // An older durable job has no structured details; retain its stable code.
-        let path = restarted.state.join(format!("{id}.job"));
-        let current: Value = serde_json::from_slice(&read_private(&path, JSON_LIMIT).unwrap()).unwrap();
-        let mut legacy = current.clone();
-        legacy.as_object_mut().unwrap().remove("sizeFailure");
-        atomic_json(&path, &legacy).unwrap();
-        assert_eq!(restarted.status(false).unwrap()["queue"][0]["error"], "file_too_large");
-        assert!(restarted.status(false).unwrap()["queue"][0]["sizeFailure"].is_null());
-
-        // Explicit recovery clears stale details before attempting changed bytes.
-        atomic_json(&path, &current).unwrap();
-        fs::write(bundle.join(asset), b"small replacement").unwrap();
-        restarted.retry().unwrap();
-        assert!(restarted.status(false).unwrap()["queue"][0]["sizeFailure"].is_null());
-        restarted.process_once().unwrap();
-        let recovered = restarted.status(false).unwrap();
-        assert_eq!(recovered["queue"][0]["status"], "ready");
-        assert!(recovered["queue"][0]["sizeFailure"].is_null());
-    }
-}
-
-#[cfg_attr(test, test)]
-pub fn hosted_size_failure_projection_separates_queue_intents() {
-    let f = Fixture::new();
-    let server = Server::new("");
-    f.authorize(&server.url);
-    let bundle = f.bundle();
-    File::create(bundle.join("recording.mov")).unwrap().set_len(MAX_FILE_BYTES + 1).unwrap();
-    f.client.enqueue(&bundle).unwrap();
-    f.client.process_once().unwrap();
-    let private = f.client.upload_size_failure(&bundle, UploadQueueKind::Private).unwrap();
-    assert_eq!(private, UploadSizeFailure { kind: UploadQueueKind::Private, size: MAX_FILE_BYTES+1, limit: MAX_FILE_BYTES });
-    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).is_none());
-    assert!(f.client.upload_size_failure(&f.root.join("absent.apparent"), UploadQueueKind::Private).is_none());
-    let mut job = f.client.jobs().unwrap().pop().unwrap();
-    job.encrypted = true;
-    f.client.save_job(&job).unwrap();
-    assert_eq!(f.client.upload_size_failure(&bundle, UploadQueueKind::Private), Some(private.clone()));
-    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).is_none());
-    let mut public = job.clone();
-    public.id = fixture_id(); public.public_copy = true; public.shared = true; public.encrypted = false;
-    public.created += 1;
-    public.size_failure.as_mut().unwrap().size += 7;
-    f.client.save_job(&public).unwrap();
-    assert_eq!(f.client.upload_size_failure(&bundle, UploadQueueKind::Private), Some(private));
-    assert_eq!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).unwrap().size, MAX_FILE_BYTES+8);
-    public.status = "ready".into(); f.client.save_job(&public).unwrap();
-    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::PublicCopy).is_none());
-    job.status = "pending".into(); f.client.save_job(&job).unwrap();
-    assert!(f.client.upload_size_failure(&bundle, UploadQueueKind::Private).is_none());
-    assert_eq!(server.state.lock().unwrap().requests, 0);
 }
 
 #[cfg_attr(test, test)]
@@ -2488,20 +2260,4 @@ pub fn hosted_provider_write_failure_never_reports_disabled_or_login_success() {
     assert_eq!(client.jobs().unwrap()[0].status, "cancelled");
     assert!(server.state.lock().unwrap().data.is_empty());
     assert_eq!(fs::read(bundle.join("audio.wav")).unwrap(), b"audio");
-}
-
-#[cfg_attr(test, test)]
-pub fn hosted_upload_diagnostic_preserves_stage_without_private_error_text() {
-    let sensitive = "synthetic-private-key-path-and-token-never-export";
-    let error = anyhow::anyhow!(sensitive).context("encryption_snapshot_failed");
-    assert!(error.chain().any(|cause| cause.to_string().contains(sensitive)));
-    assert_eq!(upload_failure_diagnostic(&error), ("snapshot", "unclassified"));
-    let rejected = anyhow::anyhow!("unsupported_asset: bundle contains an unknown asset; no files were omitted")
-        .context("encryption_snapshot_failed");
-    assert_eq!(upload_failure_diagnostic(&rejected), ("snapshot", "unknown_asset"));
-    let io = anyhow::Error::from(std::io::Error::new(std::io::ErrorKind::PermissionDenied, sensitive))
-        .context("encryption_pack_failed");
-    assert_eq!(upload_failure_diagnostic(&io), ("encrypt", "io_permission"));
-    let arbitrary = anyhow::anyhow!("encryption_snapshot_failed with a synthetic secret");
-    assert_eq!(upload_failure_diagnostic(&arbitrary), ("upload", "unclassified"));
 }

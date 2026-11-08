@@ -12,16 +12,16 @@
     <canvas id="c" width="1200" height="630"></canvas>
     <div id="hud"></div>
     <script src="/node_modules/matter-js/build/matter.min.js"></script>
-    <script src="common.ts"></script>
+    <script src="common.js"></script>
     <script>
       ;(() => {
         const params = new URLSearchParams(location.search)
         const name = params.get("c")
         // Query input selects a known concept, never any part of a script URL.
         const source = new Map([
-          ["apparent-fix", "./apparent-fix.ts"],
-          ["apparent-lasso", "./apparent-lasso.ts"],
-          ["apparent-pile", "./apparent-pile.ts"],
+          ["apparent-fix", "./apparent-fix.js"],
+          ["apparent-lasso", "./apparent-lasso.js"],
+          ["apparent-pile", "./apparent-pile.js"],
         ]).get(name)
         if (!source) {
           document.getElementById("hud").textContent = "Unknown video concept"

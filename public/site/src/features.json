@@ -22,60 +22,11 @@
   ],
   "features": [
     {
-      "id": "public-demo-viewing",
-      "added": "2026-11-06",
-      "group": "agent",
-      "name": "Public recording demo views",
-      "says": "The public homepage has a segmented keyboard-seekable timeline and named chapters. On phones, an enlarged viewport smoothly follows the approved recording’s observed cursor track with captions outside the moving crop. Desktop, reduced-motion and fullscreen playback retain the complete frame. The QR splash wash is 90% opaque while the QR image stays opaque.",
-      "status": "main",
-      "platforms": [
-        "mac",
-        "linux"
-      ],
-      "note": "Public browser presentation only; no desktop capture or platform support change. Local review candidate; not deployment evidence.",
-      "docs": [
-        "public/site/docs/feature-grid.md"
-      ]
-    },
-    {
-      "id": "hermes-recording-tools",
-      "added": "2026-11-06",
-      "group": "cli",
-      "name": "Hermes recording inspection plugin candidate",
-      "says": "Native Hermes tools read Apparent transcripts with contact-sheet and keyframe images and zoom into moments or marks through an installed full Apparent CLI. A bundled setup skill guides installation and existing onboarding; read-only status checks identify the next unfinished checkpoint.",
-      "status": "main",
-      "platforms": ["mac", "linux"],
-      "note": "Unreleased candidate. Linux installed-CLI synthetic-file inspection and zoom are checked; guided native recorder/CLI installation and onboarding on both platforms, native Hermes Desktop/model vision and Connect retrieval remain acceptance gates. Setup does not run automatically on plugin installation. No automatic send or conversation picker.",
-      "docs": ["hermes/README.md"]
-    },
-    {
-      "id": "connect-aggregate-daily-activity",
-      "added": "2026-11-04",
-      "group": "settings",
-      "name": "Aggregate-only daily service activity",
-      "says": "Successful upload/share actions deduplicate per account and original UTC day inside Cloudflare. Only daily observed totals and coverage metadata are selected for sync to the existing warehouse connector. Individual PostHog events remain opt-in. Prior refusals, request privacy signals and fixture exclusions are respected; account/day attribution expires at UTC day end plus one hour. Missing days are unknown, not verified zeroes.",
-      "status": "main",
-      "platforms": ["mac", "linux"],
-      "note": "Server-side daily totals for this small friends project; prospective notice precedes counting. This is a fail-open observed lower bound, not an exact census or anonymity guarantee. An empty current day exposes typed NULL/unknown status metadata for warehouse bootstrap, never invented activity or zero. Existing D1 Read access is account-scoped; only sync selection is restricted to reviewed views. No new browser SDK, replay, identity or export service.",
-      "docs": ["connect/docs/aggregate-dau.md"]
-    },
-    {
-      "id": "connect-product-analytics",
-      "added": "2026-11-03",
-      "group": "settings",
-      "name": "Default-enabled analytics with separate website/account choices",
-      "says": "Website visits/download clicks and signed-in account activity have separate affirmative analytics choices and disclosure. Daily active Connect accounts counts consented accounts with a verified upload completion or durable share creation per UTC day; local-only recordings, login, device connection and background snapshots do not qualify. The account control uses CSRF-protected writes and revision readback; website analytics respects GPC/DNT. Withdrawal blocks new sends/admissions; stale opt-ins and late identity responses cannot restore a withdrawn choice. Login or upload permission alone grants no analytics consent.",
-      "status": "main",
-      "platforms": ["mac", "linux"],
-      "note": "Server and configured browser capability default enabled with EU ingestion and production labeling; migration0007 enables database availability without rewriting0006. Missing/invalid keys fail closed. No account/browser is silently enrolled; browser choices expire after180days and account choices persist until withdrawal/deletion. Only allowlisted metadata is exported: no recordings, filenames, emails, keys, URL queries/fragments or capability links. Browser device-approval and shared-link-management routes, and recording recipients, are not instrumented. Already-authorized server sends may finish after withdrawal. Controller/privacy contact are disclosed; independent actual-deployment acceptance remains required, not inferred from source landing.",
-      "docs": ["connect/docs/product-analytics.md"]
-    },
-    {
       "id": "shared-system-appearance",
       "added": "2026-11-02",
       "group": "platforms",
       "name": "System light and dark appearance",
-      "says": "Frontend surfaces share one semantic theme and follow system light/dark appearance while open: Electron frontend, Connect account and recording recipient pages, and public pages. Public uses Paper/Carbon with Stock grouped fields in light mode, and Carbon/Paper with muted Lilac/Carbon grouped fields in dark mode. Feature illustration chrome shares those semantic roles; original media keeps its pixels. Native legacy surfaces and captured media keep their existing rendering. Browser checks cover Chromium and Firefox; native platform acceptance remains separate.",
+      "says": "Frontend surfaces share one semantic theme and follow system light/dark appearance while open: Electron frontend, Connect account and recording recipient pages, and public pages. Native legacy surfaces and captured media keep their existing rendering. Browser checks cover Chromium and Firefox; native platform acceptance remains separate.",
       "status": "main",
       "platforms": [
         "mac",
@@ -90,7 +41,7 @@
       "added": "2026-11-02",
       "group": "platforms",
       "name": "Adaptive Mac menu bar icon",
-      "says": "The Mac menu bar keeps the Apparent a in purple: Lilac on Carbon in system Dark mode, darker purple on Paper in system Light mode. It follows live system appearance changes without restarting, including in full-screen apps. The app icon and Linux tray are unchanged.",
+      "says": "The Mac menu bar keeps the Apparent a in purple: Lilac on Carbon in dark appearance, darker purple on Paper in light appearance. It follows live menu bar appearance changes without restarting. The app icon and Linux tray are unchanged.",
       "status": "main",
       "platforms": ["mac"],
       "docs": ["capture/desktop/docs/onboarding-and-settings.md#mac-menu-bar-icon"]
@@ -99,7 +50,7 @@
       "id": "typed-capture-notes",
       "group": "record",
       "name": "Shift-click typed notes",
-      "says": "Shift-click opens a compact Electron note field. Enter or Attach saves text; empty Enter keeps the pin. Escape retains an in-capture draft; Shift-move outside the editor resumes drawing. The Electron recording pill shows a note icon and saved count in a flush lilac extension, hidden at zero without moving recording controls. It opens the existing notes list; native fallback retains its compact Notes control. Typed notes retain click-time anchors and appear alongside speech in the handoff timeline.",
+      "says": "Shift-click opens a compact Electron note field. Enter or Attach saves text; empty Enter keeps the pin. Escape retains an in-capture draft. A saved-note counter offers editing and deletion. Typed notes retain click-time anchors in the bundle and handoff.",
       "status": "main",
       "added": "2026-11-02",
       "platforms": [
@@ -127,7 +78,7 @@
           "does": "Set false for intentional silent captures; applies to the next screen capture without changing the selected microphone device"
         }
       ],
-      "note": "Enabled by default. Linux native and Electron Settings can be Shift-clicked during capture for self-feedback; macOS still excludes its own Settings windows. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",
+      "note": "Enabled by default. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",
       "docs": [
         "capture/engine/docs/keyframes-and-text.md",
         "capture/desktop/ui/frontend/README.md"
@@ -137,7 +88,7 @@
       "id": "desktop-error-reporting",
       "group": "settings",
       "name": "Technical error reports",
-      "says": "A small General setting controls default-on, content-free desktop failure reports. Includes Rust panics and Electron unhandled exceptions/rejections. Requires a packaged EU PostHog project token. Reports include failure steps and source lines, OS error codes, JSON error category and position, app build, OS/architecture and capture setup/counts for reproduction, without recordings, logs or raw error text. No session replay or persistent user identity.",
+      "says": "A small General setting controls default-on, content-free desktop failure reports. Requires a packaged EU PostHog project token. Reports contain a static failure category, app build, OS/architecture and source call site, not recordings, logs or raw error text. No session replay or persistent user identity.",
       "status": "main",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],
@@ -151,7 +102,7 @@
       "id": "site-feature-grid",
       "group": "install",
       "name": "Animated homepage feature explanations",
-      "says": "Four illustrative explanations after the product video cover whiteboard feedback, the multimedia timeline, clipboard handoff, and an agent showing its changes in a captioned walkthrough. Desktop animations have a visible pause control, pause offscreen and respect reduced motion. Phones use static semantic examples with readable labels instead of scaled desktop canvases.",
+      "says": "Four illustrative animations after the product video explain whiteboard feedback, the multimedia timeline, clipboard handoff, and an agent showing its changes in a captioned walkthrough. Animations pause offscreen and respect reduced motion.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": [
@@ -177,41 +128,39 @@
       "id": "hosted-sync",
       "group": "delivery",
       "name": "Connect complete-bundle handoff",
-      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text starts with a single apparent inspect <id> command that fetches to ./<id>.apparent, waits up to 120 seconds, and prints the summary plus a one-line CLI installation fallback, with timestamped words and marks last. Hosted prompts omit local paths and repeated login instructions; unavailable hosted admission keeps local inspection instructions. A separate read login retrieves and validates the complete bundle; failures preserve the local original. Fetch waits through pre-reservation not_found within --wait and gives private, actionable unavailable/read-authorization guidance without exposing capture existence.",
-      "status": "main",
+      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text starts with fetch and inspect commands plus a one-line CLI installation fallback, with timestamped words and marks last. Hosted prompts omit local paths and repeated login instructions; unavailable hosted admission keeps local inspection instructions. A separate read login retrieves and validates the complete bundle; failures preserve the local original.",
+      "status": "experiment:hostedSync",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
-      "note": "Recipient CLI login defaults to read scope and the configured or official API, prints approval without opening a browser, and enrolls its read decryption key. Latest verified Linux CLI installation selects the newest published Linux preview. New private encrypted captures transfer summary/images before media under the same capture ID. Inspect downloads an explicitly marked immutable evidence snapshot; fetch --media retrieves a separate complete recording. Compatible service publication is required; existing single-stream captures remain readable. Private Connect is available by default; experiments.hostedSync=false opts out of automatic private handoff. Uploads-enabled and upload-consent preferences remain separate explicit choices, false without a saved choice; CLI sign-in or General Settings through the default-on connectSettings controls. Update Apparent for apparent connect; older apps use apparent cloud, retained as a compatibility alias. Connect browser routes at app.tryapparent.com/connect and /connect/device retain /hosted aliases; API, Google callback, host-only sessions and device credentials stay at hosted.tryapparent.com. The V4 web UI provides account sign-in, independent scope review and verified device approval; website approval does not prove local upload settings or CLI credentials. Shared behavior and affected native seams follow the Desktop verification policy; Settings connection and recovery controls are available by default, with explicit upload consent still required. Source availability does not prove an affected OS effect or account approval. V1 rejects files above 90,000,000 bytes rather than omitting media. Local queue status retains the rejected asset name, exact size and limit across restart; no automatic retry can fix an unchanged oversized file. No automatic historical uploads. Explicit apparent connect upload creates a fresh ID; apparent connect retry keeps existing IDs. Better Auth migration candidate renews device credentials while renewal remains valid, preserving queued IDs and consent; revoked or expired renewal needs approval again. Existing credentials require one new login after updating. Browser sign-in alone does not enroll endpoint keys; CLI read approval enrolls the receiving key. Schema changes remain separately authorized; applicable shared/native acceptance and exact-main publication gates still apply.",
+      "note": "Default off; CLI sign-in or General Settings through the default-on connectSettings controls. Update Apparent for apparent connect; older apps use apparent cloud, retained as a compatibility alias. Connect browser routes at app.tryapparent.com/connect and /connect/device retain /hosted aliases; API, Google callback, host-only sessions and device credentials stay at hosted.tryapparent.com. The V4 web UI provides account sign-in, independent scope review and verified device approval; website approval does not prove local upload settings or CLI credentials. Native capsule proof remains deferred; Settings connection and recovery controls are available by default, with explicit upload consent still required. Candidate requires native capture/paste proof on each OS and deployed account approval. V1 rejects files above 90,000,000 bytes rather than omitting media. No automatic historical uploads. Explicit apparent connect upload creates a fresh ID; apparent connect retry keeps existing IDs. Better Auth migration candidate renews device credentials while renewal remains valid, preserving queued IDs and consent; revoked or expired renewal needs approval again. Existing credentials require one new login after updating. Service login does not establish encryption trust. Migration, live OAuth and both native platform gates remain required before release.",
       "config": [
-        { "key": "experiments.hostedSync", "value": "boolean; true by default", "does": "Make automatic private handoff available; false opts out without granting consent" },
-        { "key": "cloud.enabled", "value": "boolean; false by default", "does": "Enable the automatic upload queue only with feature availability and explicit consent" },
+        { "key": "cloud.enabled", "value": "boolean; false by default", "does": "Enable the automatic upload queue only with experiment and consent" },
         { "key": "cloud.uploadConsent", "value": "boolean; false by default", "does": "Record explicit permission to share capture contents" },
         { "key": "cloud.server", "value": "HTTPS API origin; loopback HTTP for development", "does": "Select the Connect account API, not a token or preference store" }
       ],
-      "docs": ["connect/docs/hosted-client.md", "connect/docs/hosted-api.md", "connect/web/docs/design.md"]
+      "docs": ["connect/docs/hosted-client.md", "connect/docs/hosted-api.md", "public/site/docs/hosted-design.md"]
 
     },
     {
       "id": "hosted-encryption",
       "group": "delivery",
       "name": "Endpoint-encrypted Connect handoff",
-      "says": "Endpoint encryption preserves click-link, sign-in and approval from any browser or device. Local bundles remain ordinary; approved agent clients decrypt authenticated ciphertext locally.",
-      "status": "main",
+      "says": "Candidate endpoint encryption preserves click-link, sign-in and approval from any browser or device. Local bundles remain ordinary; approved agent clients decrypt authenticated ciphertext locally.",
+      "status": "experiment:hostedEncryption",
       "added": "2026-11-01",
       "platforms": ["mac", "linux"],
-      "note": "Desktop sender encryption is available by default; experiments.hostedEncryption=false explicitly opts out without changing upload consent. CLI read approval enrolls its receiving key without changing the Desktop experiment. Connect account authorization is trusted to authorize recipients: a compromised authorization service can add or substitute an attacker key. No independent pairing, plaintext fallback, server content keys or public rendering of encrypted captures. Missing recipient leaves the local recording pending. V1 covers future freshly staged captures only, with no historical regrant or key-recovery UI; existing plaintext remains untouched without data migration. Independent security review, adverse integration and affected native-seam proof remain required; no deployment or permission change is implied.",
-      "config": [{ "key": "experiments.hostedEncryption", "value": "boolean; true by default", "does": "Select sender encryption; reader keys remain separately approved" }],
+      "note": "Off by default and unshipped. Connect account authorization is trusted to authorize recipients: a compromised authorization service can add or substitute an attacker key. No independent pairing, plaintext fallback, server content keys or public rendering of encrypted captures. Missing recipient leaves the local recording pending. V1 covers future freshly staged captures only, with no historical regrant or key-recovery UI; existing plaintext remains untouched without data migration. Independent security review, adverse integration and exact native platform proof remain required; no deployment or permission change is implied.",
       "docs": ["connect/docs/hosted-encryption.md", "connect/docs/hosted-client.md", "connect/docs/hosted-api.md"]
     },
     {
       "id": "connect-settings",
       "group": "delivery",
       "name": "Connect account controls in General Settings",
-      "says": "General Settings uses a benefit-led Connect card above Launch at login, with explicit upload consent, browser approval and verified local activation. Expired access with a valid refresh grant offers Check connection instead of another sign-in. The account control shows the verified email initial when available, with a neutral person icon otherwise. Account controls include upload disable/re-enable, connection checks and confirmed disconnect; functional colors distinguish success, progress, caution and failure. Cancel, disable uploads and disconnect preserve local capture; account connection does not create public links.",
+      "says": "General Settings uses a benefit-led Connect card above Launch at login, with explicit upload consent, browser approval and verified local activation. Account controls include upload disable/re-enable, connection checks and confirmed disconnect; functional colors distinguish success, progress, caution and failure. Cancel, disable uploads and disconnect preserve local capture; account connection does not create public links.",
       "status": "experiment:connectSettings",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],
-      "note": "Default on; experiments.connectSettings=false hides these controls. Visibility does not sign in or enable uploads. Independent of hostedSharing; no onboarding step. Native Settings reads the experiment on open. Reopen the Electron window to show a newly enabled card; an open Electron stream observes disabling at its next request or client predicate, or within 500 ms while idle, and cancels pending sign-in. Installed General connection actions open the shared Electron Connect view when packaged assets are available, using a Connect-only preload and the existing Rust controller socket. Reload/close cancels pending sign-in and never replays the opening action. Navigation returns to the existing Settings pages; missing assets or a failed Electron window retain the native fallback. General/Connect opening no longer measures capture history; native fallback size measurement follows an explicit Storage visit. macOS and isolated Linux acceptance of this routing remains required before release. Uses the configured API or hosted.tryapparent.com, not a CLI setup prerequisite. Website approval alone is not local activation. Electron transport checks, actual-Rust integration, native platform proof and live account approval are distinct gates; this entry is not proof of them.",
+      "note": "Default on; experiments.connectSettings=false hides these controls. Visibility does not sign in or enable uploads. Independent of hostedSharing; no onboarding step. Native Settings reads the experiment on open. Reopen the Electron window to show a newly enabled card; an open Electron stream observes disabling at its next request or client predicate, or within 500 ms while idle, and cancels pending sign-in. The opt-in Electron General card reuses the Rust controller/client over a window-owned socket; reload/close also cancels pending sign-in. Installed native Settings remain the rollback; routing is unchanged. Uses the configured API or hosted.tryapparent.com, not a CLI setup prerequisite. Website approval alone is not local activation. Electron transport checks, actual-Rust integration, native platform proof and live account approval are distinct gates; this entry is not proof of them.",
       "docs": ["capture/desktop/docs/onboarding-and-settings.md", "connect/docs/hosted-client.md"]
     },
     {
@@ -232,12 +181,11 @@
       "id": "hosted-sharing",
       "group": "delivery",
       "name": "Share one recording by link",
-      "says": "Copy link beside Paste reserves public-by-link access for the selected capture before its media finishes uploading. Settings exposes hosted account consent and shared-link management. CLI listing follows every page and revocation preserves the private recording. The React recipient viewer pairs native video with a timestamped transcript and Copy for agent; original image evidence remains available without a gallery, with capture timestamps on frame links when valid keyframe metadata is available. Copied prompts ask the agent to carry out the sender's instructions and changes in the transcript rather than stopping at a summary.",
-      "status": "main",
+      "says": "Copy link beside Paste reserves public-by-link access for the selected capture before its media finishes uploading. Settings exposes hosted account consent and shared-link management. CLI listing follows every page and revocation preserves the private recording. The React recipient viewer pairs native video with a timestamped transcript and Copy for agent; original image evidence remains available without a gallery.",
+      "status": "experiment:hostedSharing",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],
-      "config": [{ "key": "experiments.hostedSharing", "value": "boolean; true by default", "does": "An explicit false hides public sharing controls; consent remains separate" }],
-      "note": "Available by default; experiments.hostedSharing=false explicitly hides sharing controls. Availability grants neither upload consent nor public access. Linux synthetic sender acceptance is retained; affected macOS native acceptance remains pending. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied. Completed Copy link opens a capture-bound Electron confirmation using the shared installed runtime. Explicit non-E2E public-copy consent precedes Rust background preparation and foreground clipboard delivery; private encrypted transfers and local Paste remain separate. Server activation is separately verified; default availability is not a deployment receipt. Affected native boundaries remain subject to the Desktop verification policy.",
+      "note": "Default off. Native candidate only: Linux GUI, macOS native pill/Swift Settings, onboarding cancellation, foreground clipboard gating and end-to-end real-feature walkthrough still require platform proof. A configured hosted API and explicit upload consent are required. Deployment also needs SHARING_ENABLED=true; it defaults off. No production deployment is implied. The Electron selected-capture candidate adds explicit non-E2E public-copy confirmation with Rust-owned background preparation and foreground clipboard delivery; installed capsule routing and native acceptance remain unchanged.",
       "docs": ["capture/engine/docs/keyframes-and-text.md", "connect/docs/hosted-client.md", "connect/docs/hosted-api.md"]
     },
     {
@@ -253,45 +201,31 @@
       "docs": ["capture/desktop/docs/native-launch.md"]
     },
     {
-      "id": "site-homepage-photos",
+      "id": "site-team",
       "group": "install",
-      "name": "Homepage photos",
-      "says": "The public homepage shows Simon dancing and Olivia cuddling a dog, with handwritten activity annotations.",
-      "status": "main",
-      "added": "2026-11-03",
+      "name": "Homepage team",
+      "says": "The public homepage shows Olivia and Simon with uncropped portraits and links each affiliation logo to its organization.",
+      "status": "review:#138",
+      "added": "2026-10-30",
       "platforms": ["mac", "linux"],
-      "docs": ["public/site/docs/feature-grid.md"]
-    },
-    {
-      "id": "site-frog-water-qr",
-      "group": "install",
-      "name": "Homepage frog water QR Easter egg",
-      "says": "Two quick clicks, taps or keyboard activations on the greeting frog trigger a backflip, belly-flop and water ripple QR reveal for app.tryapparent.com. A single click still waves. Escape and Back to the pond restore focus and scrolling. Reduced motion reveals the QR immediately.",
-      "status": "main",
-      "added": "2026-11-06",
-      "platforms": [
-        "mac",
-        "linux"
-      ],
-      "docs": [
-        "public/site/docs/feature-grid.md"
-      ]
+      "pr": 138,
+      "docs": ["public/site/docs/clanker-deploy.md"]
     },
     {
       "id": "site-frog-footer",
       "group": "install",
-      "name": "Homepage feedback footer",
-      "says": "A playful Try apparent invitation beneath the photos first requests apparent://open, then offers an explicit second-click download using the hero platform/CPU selection. The LinkedIn chooser links directly to both profiles. There is no installation detection, automatic download, capture or feedback submission. Actions use square brand frames.",
+      "name": "Frog theatre feedback footer",
+      "says": "Paper fades into the frog theatre behind a feedback invitation. Try first attempts apparent://open, then the same button offers an explicit second-click platform download; no installation detection or automatic download. Hero and footer share a rounded button style. The compact Berlin credit respects reduced motion; the LinkedIn chooser does not record or send feedback.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
       "docs": ["public/site/docs/footer-release.md"]
     },
     {
-      "id": "site-belief-statement",
+      "id": "site-belief-pond",
       "group": "install",
-      "name": "Homepage belief statement",
-      "says": "The belief statement above the photos keeps the original wording, hand-drawn work circle and enjoyable highlight at desktop and mobile sizes.",
+      "name": "Interactive homepage belief",
+      "says": "Scroll directly draws and reverses the work circle and enjoyable highlight. Me too sends one frog into a group hug; reduced motion skips travel. Mobile keeps text and controls inset with a compact text-to-frog gap.",
       "status": "main",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
@@ -377,17 +311,6 @@
       "docs": ["capture/desktop/docs/linux/linux.md", "capture/engine/docs/capture.md"]
     },
     {
-      "id": "engine-hyprland-capture2",
-      "group": "start",
-      "name": "Independent one-monitor Hyprland capture",
-      "says": "The independent Engine capture/2 provider can record one Hyprland monitor through the native sharing portal and produce authenticated retained materials.",
-      "status": "main",
-      "added": "2026-11-07",
-      "platforms": ["linux"],
-      "note": "Source-bound package and SDK 0.4.5 proof passed in a disposable Omarchy guest at 1280×800 scale 1: native monitor consent, first-frame readiness, Stop, sealed H.264 readback and cold materials inspection. XWayland is required for source discovery. Other Wayland backends, multiple monitors, regions/windows, audio and fact collectors are unsupported. Exact-main archive admission and desktop Saved/Copy integration remain separate; installed routing is unchanged. No control-surface exclusion or clean initial frames is claimed.",
-      "docs": ["engine/delivery/capture/README.md"]
-    },
-    {
       "id": "recent-area",
       "group": "start",
       "name": "What to record and Recent Area",
@@ -420,7 +343,7 @@
       "says": "Hold ⇧ and move to draw red ink over any app; it fades after release and is redrawn on the keyframes.",
       "status": "stable@0.3.4",
       "platforms": ["mac", "linux"],
-      "note": "Desktop ink can cross displays without expanding the recording source; bundle marks are clipped to the selected recording. Linux uses a spanning overlay and macOS uses per-display panels. The Electron development window offers live drawing status and Undo last mark through the Rust controller; native input and overlays remain authoritative. Installed routing is unchanged. Native cross-display acceptance remains pending in issue #355. On Wayland the Linux preview needs the input group for ink outside its own windows.",
+      "note": "On Wayland the Linux preview needs the input group for ink outside its own windows.",
       "shortcuts": [{ "keys": "⇧ + move", "does": "Draw" }],
       "docs": ["README.md#capture-controls"]
     },
@@ -487,17 +410,17 @@
       "status": "branch:t3/explore-agent-video-workflows",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],
-      "note": "Existing state/stop/cancel had Linux disposable-VM proof. New owned start/wait receipts have shared Rust contract tests; exact-candidate Linux GUI and Mac runtime proof are required before release. No media change or new experiment gate. The independently packaged apparent-capture executable exposes state/start/inspect/stop/cancel using the same adopted Rust client; standalone installed-provider save/cancel proof passed on Linux and macOS; Mac also exercised same-ID retry and provider-restart recovery.",
-      "docs": ["capture/engine/docs/capture.md", "capture/desktop/docs/linux/linux.md", "capture/agent/docs/agent-video-workflow.md", "capture/agent/control-client/README.md"]
+      "note": "Existing state/stop/cancel had Linux disposable-VM proof. New owned start/wait receipts have shared Rust contract tests; exact-candidate Linux GUI and Mac runtime proof are required before release. No media change or new experiment gate.",
+      "docs": ["capture/engine/docs/capture.md", "capture/desktop/docs/linux/linux.md", "capture/agent/docs/agent-video-workflow.md"]
     },
     {
       "id": "capsule",
       "group": "record",
       "name": "Capsule",
-      "says": "The capsule shows the time with Finish and Cancel on the display in use.",
+      "says": "The capsule shows the time with Finish and Cancel on the display in use; on a Mac it's a native Metal panel, black or glass.",
       "status": "stable@0.3.4",
       "platforms": ["mac", "linux"],
-      "note": "The Electron pill uses shared React/shadcn controls, Lucide icons, visible action labels and a rightmost cancel/dismiss icon. Status and warning controls keep full 44px targets with space before the clock; warning and pill outlines share the theme border token. Capture state remains Rust-owned. Its notification pocket candidate expands vertically at the same width with shared Collapsible/Alert controls; capture-bound upload-size errors offer explicit local Paste while preserving the original; native geometry and handoff proof remain required. Installed routing, native window behavior and capture-output parity require Mac and isolated Linux acceptance before release. The retained native fallback uses GPUI on Linux and Metal on Mac; glass needs macOS 26. Existing Hyprland workspace behavior remains an acceptance requirement.",
+      "note": "Linux draws the GPUI capsule; glass needs macOS 26. On main, the Hyprland capsule stays pinned across workspaces without pinning other app windows.",
       "config": [
         { "key": "nativePill", "value": "false", "does": "Draw the GPUI capsule instead of the Metal one (Mac)" },
         { "key": "pillStyle", "value": "\"black\" | \"glass\"", "does": "The Metal capsule's look" }
@@ -1010,7 +933,7 @@
       "says": "Pick iPhone with a phone plugged in: a mirror opens, the phone's own video records with your narration, and ink works over the mirror.",
       "status": "stable@0.3.4",
       "platforms": ["mac"],
-      "note": "Deferred; no current maintenance or rebuild-adoption commitment. The version records historical availability. Legacy implementation needs AVFoundation's screen capture devices.",
+      "note": "Needs AVFoundation's screen capture devices.",
       "shortcuts": [{ "keys": "M", "does": "Flag a moment (iPhone mirror focused)" }],
       "docs": ["README.md#iphone", "capture/engine/docs/iphone-and-routing.md"]
     },
@@ -1035,23 +958,10 @@
       "docs": ["README.md#settings", "capture/desktop/docs/onboarding-and-settings.md"]
     },
     {
-      "id": "owner-settings-storage",
-      "added": "2026-11-05",
-      "group": "settings",
-      "name": "Owner-scoped settings storage foundation",
-      "says": "A development helper updates one stream's stored state atomically while preserving other preferences and secrets. Installed Settings and onboarding keep their existing storage until their replacement is adopted.",
-      "status": "main",
-      "platforms": ["mac", "linux"],
-      "config": [{ "key": "streamState", "value": "{owner: {revision, value}}", "does": "Versioned state used only by explicitly composed new-shell consumers" }],
-      "note": "No installed route or new Settings control is enabled. Owner schemas remain separate. Native artifacts require successful verification for their own platform before admission; packaged-app adoption requires its affected native checks.",
-      "docs": ["shared/config-native/README.md", "composition/config/README.md"]
-    },
-    {
       "id": "about-build-identity",
       "group": "settings",
       "name": "Running build identity",
-      "says": "Apparent control windows show the running backend’s compiled commit in a small corner label. The recording pill and transparent ink/laser canvases are exempt. Settings › About also shows its package version. Tracked local edits show +modified; unavailable identity says build unknown.",
-      "note": "Decommissioned iPhone/mirror surfaces are outside the supported window inventory.",
+      "says": "Settings › About shows the package version and compiled commit, with +modified for tracked local edits and build unknown when revision metadata is unavailable.",
       "status": "main",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],
@@ -1136,7 +1046,7 @@
       "says": "A minute after a cabled capture, its video is re-encoded to HEVC at 1600 px (750 MB to 72 MB in one test).",
       "status": "stable@0.3.4",
       "platforms": ["mac"],
-      "note": "iPhone support, including phone-specific shrinking, is deferred and need not be maintained or adopted in the current rebuild. The version records historical availability; the legacy path is Mac only.",
+      "note": "The iPhone path is Mac only.",
       "docs": ["README.md#keeping-captures-small"]
     },
     {
@@ -1192,14 +1102,14 @@
       "id": "cli-issue-reporting",
       "group": "cli",
       "name": "Agent GitHub issue reporting",
-      "says": "apparent issue and apparent-agent issue preview exact text as JSON; explicit --submit publishes to tryapparent/apparent using the caller's GitHub CLI login and verifies the issue before returning its URL. No automatic capture or log attachments.",
+      "says": "apparent issue previews exact text as JSON; explicit --submit publishes to tryapparent/apparent using the caller's GitHub CLI login and verifies the issue before returning its URL. No automatic capture or log attachments.",
       "status": "main",
       "added": "2026-11-01",
       "platforms": [
         "mac",
         "linux"
       ],
-      "note": "Available by default in the legacy apparent CLI and the standalone apparent-agent package; preview stays offline unless --submit is supplied. Agents must search for duplicates and get approval of the exact repository and text before submitting. No automatic attachments, implementation or merge.",
+      "note": "Available by default; preview stays offline unless --submit is supplied. Agents must get approval of the exact repository and text before submitting. No automatic implementation or merge.",
       "docs": [
         "capture/desktop/docs/issue-reporting.md"
       ]
@@ -1238,55 +1148,11 @@
       "id": "cli-zoom",
       "group": "cli",
       "name": "apparent zoom",
-      "says": "apparent-agent zoom builds a visual PNG sheet around a time, spoken phrase or numbered mark, with semantic timing in companion JSON.",
+      "says": "A dense sheet of frames around a time, a phrase that was said, or a numbered mark.",
       "status": "main",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],
       "docs": ["capture/agent/skills/apparent/SKILL.md"]
-    },
-    {
-      "id": "agent-local-demo-cli",
-      "group": "cli",
-      "name": "apparent-agent demo",
-      "says": "Creates a private local synthetic .apparent example with annotated PNG keyframes, semantic marks, interactions and timed illustrative transcript. It is not a recording or native artifact.",
-      "status": "main",
-      "added": "2026-11-05",
-      "platforms": ["mac", "linux"],
-      "note": "No screen, window, session, microphone, provider, UI, Engine or network is read or launched. Default output follows configured capture storage; --out requires a fresh absolute .apparent directory. PNG and semantic files are private, the manifest is published last, and synthetic provenance is explicit. --clipboard requires a compatible already-running GUI before generation, copies only Record-formatted semantic text, and never launches the GUI or copies images. Refusal or unknown retains the valid bundle and reports its path; unknown exits 3 without retry. Native effect, GUI archive and installed activation remain separate platform gates.",
-      "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
-    },
-    {
-      "id": "agent-local-inspection-cli",
-      "group": "cli",
-      "name": "Local TypeScript bundle inspection CLI",
-      "says": "The independently installable apparent-agent command inspects local .apparent manifests, explicitly orchestrates Engine capture contracts v1 and capture/2, and recovers Record-owned jobs with persisted processing selection. Fresh explicit capture/2 may continue through Record standard visual processing after terminal capture close; Saved is reported only with exact facts, handoff and lifecycle clearance. Inspection has no Desktop, Cargo, network, or Connect dependency.",
-      "status": "main",
-      "added": "2026-11-05",
-      "platforms": ["mac", "linux"],
-      "note": "Optional Record cold metadata preserves transcript collection state, initial unobserved audio gaps and a hash-checked original accepted-stroke companion; legacy absence remains unknown and local checks do not authenticate native Saved or final canvas. `apparent-agent recover` reconciles only persisted Record-owned capture/2 plans and publication tuples; fresh capture, new selection and new trusted-root admission are refused. Unselected materials and legacy reservations remain unavailable. Pending, unknown, issue, unresolved ownership, or unconfirmed peer input closure returns status 3; after Record confirms local drain and disposal, recovery connections release even when runtime clearance remains unresolved; released input closure is reported separately and status remains 3. The packed idle-empty Linux run covers peer release and process exit only; no retained-job, capture, processing, publication or route-activation proof is claimed. Local copy uses the published Host text-only clipboard port and Record semantic policy, requires a compatible running GUI and Node 22.18+, never launches the GUI, and returns success only for an exact Applied digest/UTF8 length. Unknown writes return exit 3 without retry; no image, paste, session-forwarding or Saved claim. The compatible GUI supplies the native effect; GUI artifact admission and installed routing remain separate. latest honors APPARENT_CAPTURES_DIR and read-only capturesDir config, with bounded validated manifest reads. Default inspect text is regenerated from manifest semantics when summary.md is missing or stale; --stored-summary selects producer text, --experiment agentContext enriches the local timeline, and --json preserves raw manifest bytes. Image mode lists safe references without inspecting pixels. Both Agent record routes default omitted --duration to 5 seconds; an explicit value remains bounded to greater than 0 and at most 3600 seconds, and timing begins after native recording readiness. The existing record syntax retains explicit Engine V1 readiness. `record --protocol capture2` separately requires APPARENT_ENGINE_CAPTURE_EXECUTABLE and current exact source discovery; omitted --out uses Record absent-destination allocation in configured capture storage, while explicit --out remains supported; it sends silent local-only options and does not fall back to V1. `capture --protocol capture2 sources [--json]` performs read-only public SDK discovery with exact IDs, kind, geometry, validated descriptors, truthful availability and confirmed bounded close; it creates no Record authority, output directory or capture. `capture --protocol capture2 inspect|stop|cancel <request-id>` is the explicit recovery route in the existing capture command family; default recovery remains V1. Cold inspect reports Saved only when persisted Record facts and handoff resolution match the retained Agent request, artifact and canonical destination with confirmed transport close; otherwise it omits the bundle path. It does not dispatch processing or publication. Record owns request mappings, destination reservation/replay and publication. Agent owns CLI timing, signals, public request identity and transport cleanup. The separately admitted Linux x64 X11 capture/2 provider qualifies explicit display capture and cold controls with silent local-only options; it is not installed or activated by default. Wayland and macOS capture/2 remain unavailable. Fresh standard capture/2 can reach Saved through Record after terminal capture close; Saved still requires exact facts, handoff, and lifecycle confirmation. Frames and zoom use the media SDK when a decoder is explicitly configured; without that capability they may select retained PNG keyframes, clearly labeled with bundle-manifest source and original timestamps. Zoom uses bounded bundled PNG decoding for image composition and writes a fresh private PNG sheet with semantic timing/mark context; decoded-frame ink, pins and laser trails honor exact optional sRGB stroke RGB byte triplets, with malformed values rejected before decode. Saved keyframes remain baked and unchanged; PNG composition is not native video decoding. Standalone Agent requires Node 22.18+ and bundles the authenticated compiled headless Record backend without React or Electron; the tarball contains no source prepare step. An explicit offline installer accepts local Agent and complete Linux x64 media artifacts with externally trusted digests, verifies the full native inventory, and requires a native media/1 handshake and confirmed close. An optional separately authenticated Capture/2 closure is installed alongside media; its public native handshake and confirmed close gate the receipt without starting capture, and readiness remains explicit. Capture/2 and media/2 use a shared private runtime through explicit wrapper paths; default protocol selection and routing remain unchanged. It accepts stable SDK 0.2.x and 0.3.x media exports, including compatible patch releases, plus the separately qualified stable 0.4.x media/1 line; other new minor lines and prereleases are refused. Its receipt does not claim codec proof, current-main admission, or global routing; ordinary current-tree admission remains required. Completed-bundle media/1 frames and zoom are qualified on macOS 26.6.2 Apple Silicon/Rosetta with the explicitly configured admitted macos-x64 worker; the producer separately passed native Intel macOS 26.6.1. No ARM-native artifact, macOS 15 runtime, capture, raw-material media2, or Saved claim. The offline native installer remains Linux x64 only. No network, source build, FFmpeg fallback, Connect, authentication, or standalone Engine runtime archive is included. Existing apparent routing is unchanged.",
-      "docs": ["agent/README.md", "agent/docs/cli-parity.md"]
-    },
-    {
-      "id": "agent-frames-media-cli",
-      "group": "cli",
-      "name": "Agent local frame range selection",
-      "says": "apparent-agent frames requests local decoding through the Engine media SDK, or selects matching saved keyframes without a provider.",
-      "status": "main",
-      "added": "2026-11-05",
-      "platforms": ["mac", "linux"],
-      "note": "With a configured provider, consumer orchestration requests decoded frames and preserves provider errors. Without provider paths, or for point ranges, it can select existing PNG-signature manifest keyframes under frames/ using an inclusive range and half-frame margin. JSON distinguishes saved-keyframe mode from decoded frames; timestamps remain the manifest timestamps. If the provider is unavailable and no saved image matches, it reports video extraction unavailable. This read-only fallback makes no pixel-decoding or native-proof claim. No ffmpeg, PATH fallback, bundle mutation, image opening, or network behavior.",
-      "docs": ["agent/README.md", "agent/docs/cli-parity.md", "capture/agent/skills/apparent/SKILL.md", "engine/sdk/README-media.md"]
-    },
-    {
-      "id": "agent-standalone-skill",
-      "group": "cli",
-      "name": "Standalone apparent-agent skill guide",
-      "says": "apparent-agent skill prints the package's bundled capture-reading guide to stdout for agents using the standalone local inspection CLI.",
-      "status": "main",
-      "added": "2026-11-05",
-      "platforms": ["mac", "linux"],
-      "note": "The command reads only package-relative guide text, takes no operands, and does not start Engine, read settings, access bundles, or use the network. It documents local inspection only and makes no recording, media, or Connect capability claim. Legacy apparent skill and routing remain unchanged.",
-      "docs": ["agent/skills/apparent/SKILL.md", "agent/docs/cli-parity.md"]
     },
     {
       "id": "cli-read",
@@ -1301,11 +1167,11 @@
       "id": "cli-copy",
       "group": "cli",
       "name": "copy",
-      "says": "Copy a saved capture to the clipboard without contacting an agent session, or use apparent-agent copy --preview to print the same local handoff text without GUI or clipboard access. Preview clearly labels local evidence-only bundles whose video/audio was not downloaded; the handoff remains text-only and does not authenticate native Saved publication or deliver a link.",
+      "says": "Copy a saved capture to the clipboard without contacting an agent session. The confirmation explains that copy is text-only by default and points to the contact sheet; the user checks the unsent draft for an image.",
       "status": "main",
       "added": "2026-10-28",
       "platforms": ["mac", "linux"],
-      "docs": ["agent/README.md", "agent/skills/apparent/SKILL.md", "agent/docs/cli-parity.md", "capture/agent/skills/apparent/SKILL.md", "README.md#usage"]
+      "docs": ["capture/agent/skills/apparent/SKILL.md", "README.md#usage"]
     },
     {
       "id": "cli-reprocess",
@@ -1430,7 +1296,6 @@
       "id": "linux-appimage-updates",
       "group": "install",
       "name": "Linux AppImage update channels",
-      "note": "Signing-history migration uses a permanent legacy bridge release and a separate v2 Main feed. Old ancestry stays outside Main. Publication and packaged old-to-bridge-to-v2 acceptance remain required before claiming recovery is live.",
       "says": "Installed AppImages check at launch and hourly, and stage verified updates for the next launch. Main publishes checked builds after pushes/merges without version bumps; failed builds preserve the last good release. Settings and CLI offer Stable or Main, manual check results and live version status. Update now waits until capture is idle.",
       "status": "main",
       "added": "2026-10-28",
@@ -1465,18 +1330,19 @@
       "id": "onboarding",
       "group": "install",
       "name": "Welcome tour",
-      "says": "A welcome, an 11 s demo, one permissions checklist, an optional inline Record shortcut editor, and a first capture; it resumes where any quit left it.",
+      "says": "Branded setup with a pen choice, permissions checklist, Record shortcut editor and guided first capture; setup resumes after a quit.",
       "status": "main",
       "added": "2026-10-29",
       "platforms": ["mac", "linux"],
-      "config": [{ "key": "onboarding", "value": "{…}", "does": "Tour progress; delete it to replay the tour" }],
+      "note": "Release-baseline candidate; installed Mac audio, focus, packaging and workflow acceptance remain required. Pen color persists and is carried into saved ink and export.",
+      "config": [{ "key": "penColor", "value": "coral|purple|blue|green", "does": "Saved drawing pigment; read at app startup or changed immediately by onboarding" }, { "key": "onboarding", "value": "{…}", "does": "Tour progress; delete it to replay the tour" }],
       "docs": ["README.md#welcome-and-permissions", "capture/desktop/docs/onboarding-and-settings.md"]
     },
     {
       "id": "onboarding-first-capture",
       "group": "install",
       "name": "Choose and try your Record shortcut",
-      "says": "Onboarding requires an explicit shortcut choice and a successful shortcut-started recording before it can finish. Closing leaves setup unfinished for the next launch.",
+      "says": "Onboarding coaches a shortcut-started recording, whiteboard and screen drawing, manual paste confirmation and locating the practice capture. Closing leaves setup unfinished for the next launch.",
       "status": "main",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],

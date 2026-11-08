@@ -1,7 +1,5 @@
 use super::*;
-use crate::{MAX_FILE_BYTES, SizeFailure};
 use std::os::unix::fs::{MetadataExt, PermissionsExt, symlink};
-use std::process::Command;
 
 struct Fixture {
     root: PathBuf,
@@ -61,7 +59,6 @@ impl Fixture {
                 account_id: "account-a".into(),
                 capture_id: "0123456789abcdef0123456789abcdef".into(),
                 sender_grant_id: "sender-grant".into(),
-                group: None,
             },
         }
     }
@@ -165,119 +162,6 @@ impl Fixture {
         out
     }
 }
-
-#[test]
-fn context_group_is_optional_on_wire_and_bound_to_transfer() {
-    let f = Fixture::new();
-    let wire = serde_json::to_value(&f.context).unwrap();
-    assert!(wire.get("group").is_none());
-    assert_eq!(
-        serde_json::to_string(&f.context).unwrap(),
-        r#"{"origin":"https://api.example.com","accountId":"account-a","captureId":"0123456789abcdef0123456789abcdef","senderGrantId":"sender-grant"}"#
-    );
-    let mut grouped = f.context.clone();
-    grouped.group = Some("evidence".into());
-    assert_ne!(
-        serde_json::to_vec(&grouped).unwrap(),
-        serde_json::to_vec(&f.context).unwrap()
-    );
-    assert!(f.pack().len() >= 2);
-    assert!(unpack(&f.spool, &f.output, &grouped, &f.reader, &f.sender_peer()).is_err());
-}
-
-#[test]
-fn media_group_can_be_empty_but_rejects_non_media_assets() {
-    let f = Fixture::new();
-    let mut context = f.context.clone();
-    context.group = Some("media".into());
-    let spool = f.root.join("media-spool");
-    private_dir(&spool).unwrap();
-    let transport = pack(&f.stage, &spool, &context, &f.sender, &f.recipients()).unwrap();
-    assert!(transport.len() >= 2);
-    let mut invalid = context.clone();
-    invalid.group = Some("other".into());
-    let bad_spool = f.root.join("bad-spool");
-    private_dir(&bad_spool).unwrap();
-    assert!(pack(&f.stage, &bad_spool, &invalid, &f.sender, &f.recipients()).is_err());
-}
-
-#[test]
-fn evidence_preserves_full_frame_directory_guard() {
-    let f = Fixture::new();
-    for alias in ["fullFrames", "full_frames"] {
-        for path in ["../private", "/tmp/private", "frames-full"] {
-            let metadata = serde_json::json!({"autocrop":{alias:path}});
-            fs::write(f.stage.join("apparent.json"), serde_json::to_vec(&metadata).unwrap()).unwrap();
-            let files = stage_assets(&f.stage).unwrap();
-            assert_eq!(validate_group_references(&f.stage, &files, Some("evidence")).is_ok(),
-                path == "frames-full", "{alias}: {path}");
-        }
-    }
-}
-
-#[test]
-fn evidence_group_rejects_missing_real_frame_and_media_group_rejects_evidence() {
-    let f = Fixture::new();
-    let metadata = serde_json::json!({"contactSheet":"contact-sheet.png", "keyframes":[{"file":"frames/missing.png"}]});
-    fs::write(
-        f.stage.join("apparent.json"),
-        serde_json::to_vec(&metadata).unwrap(),
-    )
-    .unwrap();
-    let files = stage_assets(&f.stage).unwrap();
-    validate_group_manifest(&files, Some("evidence")).unwrap();
-    assert!(validate_group_references(&f.stage, &files, Some("evidence")).is_err());
-    assert!(validate_group_manifest(&files, Some("media")).is_err());
-}
-
-#[test]
-fn grouped_manifests_reject_duplicate_bad_hash_and_oversized_media() {
-    let f = Fixture::new();
-    let mut files = stage_assets(&f.stage).unwrap();
-    let mut duplicate = files[0].clone();
-    duplicate.path = files[1].path.clone();
-    files.push(duplicate);
-    assert!(validate_group_manifest(&files, Some("media")).is_err());
-
-    files.pop();
-    files[0].sha256 = "not-a-digest".into();
-    assert!(validate_group_manifest(&files, Some("media")).is_err());
-
-    let media = Asset {
-        path: "recording.mp4".into(),
-        size: MAX_FILE_BYTES + 1,
-        sha256: "0".repeat(64),
-    };
-    assert!(validate_group_manifest(&[media], Some("media")).is_err());
-}
-
-#[test]
-fn deferred_media_cannot_satisfy_evidence_frame_reference() {
-    let f = Fixture::new();
-    let metadata = serde_json::json!({"contactSheet":"contact-sheet.png", "audio":"audio.wav", "keyframes":[{"file":"audio.wav"}]});
-    fs::write(
-        f.stage.join("apparent.json"),
-        serde_json::to_vec(&metadata).unwrap(),
-    )
-    .unwrap();
-    let files = stage_assets(&f.stage).unwrap();
-    validate_group_manifest(&files, Some("evidence")).unwrap();
-    assert!(validate_group_references(&f.stage, &files, Some("evidence")).is_err());
-}
-
-#[test]
-fn deferred_media_cannot_satisfy_autocrop_evidence_reference() {
-    let f = Fixture::new();
-    let metadata = serde_json::json!({"contactSheet":"contact-sheet.png", "video":"recording.mp4", "autocrop":{"fullContactSheet":"recording.mp4"}});
-    fs::write(
-        f.stage.join("apparent.json"),
-        serde_json::to_vec(&metadata).unwrap(),
-    )
-    .unwrap();
-    let files = stage_assets(&f.stage).unwrap();
-    validate_group_manifest(&files, Some("evidence")).unwrap();
-    assert!(validate_group_references(&f.stage, &files, Some("evidence")).is_err());
-}
 impl Drop for Fixture {
     fn drop(&mut self) {
         let _ = fs::remove_dir_all(&self.root);
@@ -330,153 +214,6 @@ fn roundtrip_multiple_recipients_preserves_exact_private_assets() {
         }
     }
 }
-
-#[test]
-#[ignore = "requires the production TypeScript crypto interop script and Node 22"]
-fn production_typescript_crypto_interop() {
-    production_typescript_crypto_interop_for("https://api.example.com");
-}
-
-#[test]
-#[ignore = "requires the production TypeScript crypto interop script and Node 22"]
-fn production_typescript_crypto_interop_mounted() {
-    production_typescript_crypto_interop_for("https://app.tryapparent.com/connect");
-}
-
-fn production_typescript_crypto_interop_for(origin: &str) {
-    let node = std::env::var_os("APPARENT_CONNECT_INTEROP_NODE")
-        .expect("set APPARENT_CONNECT_INTEROP_NODE to the absolute Node 22 executable");
-    let script = PathBuf::from(
-        std::env::var_os("APPARENT_CONNECT_INTEROP_SCRIPT")
-            .expect("set APPARENT_CONNECT_INTEROP_SCRIPT to the absolute interop script path"),
-    );
-    assert!(
-        Path::new(&node).is_absolute(),
-        "Node executable must be absolute"
-    );
-    assert!(script.is_absolute(), "interop script path must be absolute");
-
-    let mut f = Fixture::new();
-    f.context.origin = origin.into();
-    // Force the TypeScript side to exercise multiple bounded transport parts.
-    let summary: Vec<u8> = (0..33 * 1024 * 1024).map(|i| (i % 251) as u8).collect();
-    fs::write(f.stage.join("summary.md"), &summary).unwrap();
-    let transport = f.pack();
-    validate_transport(&transport).unwrap();
-    let envelope = read_envelope(&f.spool).unwrap();
-    let signed_bytes = signature_bytes(&envelope.signed).unwrap();
-    let mut weak_key = [0u8; 32];
-    weak_key[0] = 1; // Identity point.
-    let mut weak_signature = [0u8; 64];
-    weak_signature[0] = 1;
-    let mut noncanonical_scalar = unhex::<64>(&envelope.signature).unwrap();
-    noncanonical_scalar[32..].fill(0xff);
-    let strict_cases = [
-        (weak_key, weak_signature),
-        (f.sender.signing.verifying_key().to_bytes(), weak_signature),
-        (f.sender.signing.verifying_key().to_bytes(), noncanonical_scalar),
-        ([0xff; 32], unhex::<64>(&envelope.signature).unwrap()),
-    ].into_iter().map(|(key, signature)| {
-        let accepted = VerifyingKey::from_bytes(&key)
-            .is_ok_and(|key| key.verify_strict(&signed_bytes, &Signature::from_bytes(&signature)).is_ok());
-        assert!(!accepted, "strict Ed25519 negative vector was accepted");
-        serde_json::json!({"publicKey": hex(&key), "signature": hex(&signature), "accepted": accepted})
-    }).collect::<Vec<_>>();
-    let expected = stage_assets(&f.stage)
-        .unwrap()
-        .into_iter()
-        .map(|asset| {
-            let bytes = fs::read(f.stage.join(&asset.path)).unwrap();
-            serde_json::json!({"path": asset.path, "hex": hex(&bytes)})
-        })
-        .collect::<Vec<_>>();
-    let manifest = serde_json::json!({
-        "context": f.context,
-        "senderKey": f.sender.public_key(),
-        "readerKey": f.reader.public_key(),
-        "signedBytesHex": hex(&signature_bytes(&envelope.signed).unwrap()),
-        "strictCases": strict_cases,
-        "expected": expected,
-    });
-    fs::write(
-        f.root.join("interop.json"),
-        serde_json::to_vec(&manifest).unwrap(),
-    )
-    .unwrap();
-
-    let status = Command::new(node)
-        .arg(script)
-        .arg(&f.root)
-        .status()
-        .expect("launch production TypeScript crypto interop script");
-    assert!(
-        status.success(),
-        "TypeScript crypto interop script failed: {status}"
-    );
-
-    let assets = f
-        .unpack()
-        .expect("Rust must unpack TypeScript production output");
-    for asset in assets {
-        assert_eq!(
-            fs::read(f.stage.join(&asset.path)).unwrap(),
-            fs::read(f.output.join(&asset.path)).unwrap(),
-            "TypeScript roundtrip changed {}",
-            asset.path
-        );
-    }
-
-    // Exercise Rust's rejection paths against the TypeScript-produced archive.
-    let tampered_spool = f.root.join("tampered-spool");
-    private_dir(&tampered_spool).unwrap();
-    for entry in fs::read_dir(&f.spool).unwrap() {
-        let entry = entry.unwrap();
-        let destination = tampered_spool.join(entry.file_name());
-        if entry.file_type().unwrap().is_dir() {
-            private_dir(&destination).unwrap();
-            for child in fs::read_dir(entry.path()).unwrap() {
-                let child = child.unwrap();
-                fs::copy(child.path(), destination.join(child.file_name())).unwrap();
-            }
-        } else {
-            fs::copy(entry.path(), destination).unwrap();
-        }
-    }
-    let part = tampered_spool.join(part_path(0));
-    let mut bytes = fs::read(&part).unwrap();
-    let last = bytes.len() - 1;
-    bytes[last] ^= 1;
-    fs::write(part, bytes).unwrap();
-    let tampered_output = f.root.join("tampered-output");
-    private_dir(&tampered_output).unwrap();
-    assert!(
-        unpack(
-            &tampered_spool,
-            &tampered_output,
-            &f.context,
-            &f.reader,
-            &f.sender_peer()
-        )
-        .is_err()
-    );
-    assert!(fs::read_dir(tampered_output).unwrap().next().is_none());
-
-    let outsider = load_or_create_identity(&f.root.join("outsider.identity")).unwrap();
-    let wrong_output = f.root.join("wrong-recipient-output");
-    private_dir(&wrong_output).unwrap();
-    assert!(
-        unpack(
-            &f.spool,
-            &wrong_output,
-            &f.context,
-            &outsider,
-            &f.sender_peer()
-        )
-        .is_err()
-    );
-    assert!(fs::read_dir(wrong_output).unwrap().next().is_none());
-}
-
 #[test]
 fn fresh_pack_randomizes_ciphertext_without_changing_source() {
     let f = Fixture::new();
@@ -730,15 +467,7 @@ fn source_allowlist_limits_and_nonempty_scratch_are_preserved() {
         .unwrap()
         .set_len(90_000_001)
         .unwrap();
-    let error = pack(&f.stage, &f.spool, &f.context, &f.sender, &f.recipients())
-        .context("encryption_pack_failed")
-        .unwrap_err();
-    let size = error
-        .downcast_ref::<SizeFailure>()
-        .expect("preserve typed size reason through encryption context");
-    assert_eq!(size.path, "recording.mp4");
-    assert_eq!(size.size, MAX_FILE_BYTES + 1);
-    assert_eq!(size.limit, MAX_FILE_BYTES);
+    assert!(pack(&f.stage, &f.spool, &f.context, &f.sender, &f.recipients()).is_err());
     fs::remove_file(oversized).unwrap();
     let sentinel = f.spool.join("caller-owned");
     new_private_file(&sentinel)

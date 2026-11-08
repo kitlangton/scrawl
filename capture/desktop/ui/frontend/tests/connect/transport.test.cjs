@@ -4,12 +4,9 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { LegacySettings: ConnectSettings, browserUri } = require('../../electron/connect.cjs');
+const { ConnectSettings, browserUri } = require('../../electron/connect.cjs');
 const view = { title: 'Apparent Connect', status: 'Not connected', detail: 'Local only', note: 'No public links',
   server: null, verificationUri: null, userCode: null, buttons: [{ command: 'connect', title: 'Sign in', enabled: true }] };
-const semantic = { snapshot:{connected:false,uploadsEnabled:false,renewalRequired:false,reauthorizationRequired:false,accountInitial:null},
-  health:null,error:null,localError:null,consent:false,approval:false,operation:null,logout:false,
-  retryDisable:null,confirmation:null,closed:false,sharedLinksUrl:null };
 async function fixture(t, respond = () => ({ connect: view })) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'co-'));
   const directory = path.join(home, '.config/apparent/agent-control');
@@ -36,7 +33,7 @@ async function fixture(t, respond = () => ({ connect: view })) {
   const address = path.join(directory, 'capture.sock');
   await new Promise(resolve => server.listen(address, resolve));
   await fs.chmod(address, 0o600);
-  const client = new ConnectSettings(home);
+  const client = new ConnectSettings(home, 150);
   t.after(async () => {
     client.close();
     for (const socket of clients) socket.destroy();
@@ -44,28 +41,6 @@ async function fixture(t, respond = () => ({ connect: view })) {
     await fs.rm(home, { recursive: true, force: true });
   });
   return { client, home, address, directory, requests, clients, closed: () => closed };
-}
-test('semantic facts strip unknown secrets and cannot authorize unrelated browser actions', async t => {
-  const f = await fixture(t, () => ({connect:{...view,presentationState:{...semantic,token:'secret',
-    snapshot:{...semantic.snapshot,token:'nested-secret'}}}}));
-  assert.deepEqual((await f.client.request()).view.presentationState, semantic);
-});
-test('an explicit semantic shared-link denial cannot fall back to the legacy URL', async t => {
-  const url = 'https://connect.test/connect/shares';
-  const presentation = {tone:'neutral',headline:'Connect',detail:'Local',note:'',artwork:false,compact:false,accountMenu:true,
-    buttons:[{command:'open-shared-links',title:'Manage',enabled:true}],menuActions:['open-shared-links'],sharedLinksUrl:url};
-  const f = await fixture(t, request => ({connect:{...view,presentation,presentationState:semantic},
-    ...(request.command === 'open-shared-links' ? {openUri:url} : {})}));
-  assert.equal((await f.client.request()).status, 'connected');
-  assert.deepEqual(await f.client.request('open-shared-links'), {status:'error'});
-});
-for (const patch of [{operation:'upload'}, {error:'secret diagnostic'}, {snapshot:{...semantic.snapshot,accountInitial:'private@example.com'}},
-  {confirmation:'yes'}, {sharedLinksUrl:'https://connect.test/other'}]) {
-  test('malformed semantic facts close without falling back to old presentation '+JSON.stringify(patch), async t => {
-    const f = await fixture(t, () => ({connect:{...view,presentationState:{...semantic,...patch}}}));
-    assert.deepEqual(await f.client.request(), {status:'error'});
-    assert.equal(f.client.socket, undefined);
-  });
 }
 test('Connect stream opens locally, reuses one controller, strips unknown fields and never supplies server/URI', async t => {
   const f = await fixture(t, () => ({ connect: { ...view, token: 'synthetic-secret' }, config: 'synthetic-secret' }));
@@ -108,28 +83,14 @@ test('Connect close invalidates in-flight receipt, closes controller and reopen 
   assert.deepEqual(await f.client.request(), { status: 'connected', view });
   assert.equal(f.requests.at(-1).connect, 'settings');
 });
-test('Connect timeout closes ambiguous controller without retrying a command', { timeout: 2000 }, async t => {
-  let received;
-  const admitted = new Promise(resolve => { received = resolve; });
-  const f = await fixture(t, request => {
-    if (request.command) { received(); return; }
-    return { connect: view };
-  });
-  assert.deepEqual(await f.client.request(), { status: 'connected', view });
-  f.client.timeout = 150;
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  let settled = false;
-  const pending = f.client.request('allow').then(result => { settled = true; return result; });
-  await admitted;
-  t.mock.timers.tick(149);
-  await new Promise(setImmediate);
-  assert.equal(settled, false);
-  t.mock.timers.tick(1);
-  assert.deepEqual(await pending, { status: 'cancelled' });
-  assert.equal(f.client.socket, undefined);
+test('Connect timeout closes ambiguous controller without retrying a command', async t => {
+  const f = await fixture(t, request => request.command ? undefined : { connect: view });
+  await f.client.request();
+  const before = performance.now();
+  assert.deepEqual(await f.client.request('allow'), { status: 'cancelled' });
+  assert.ok(performance.now() - before < 1000);
   assert.equal(f.requests.filter(r => r.command === 'allow').length, 1);
 });
-
 for (const response of [{ error: 'feature_disabled' }, { error: 'synthetic-secret' },
   { connect: { ...view, userCode: 'secret with spaces' } },
   { connect: view, openUri: 'https://example.com/' }]) {
@@ -158,14 +119,14 @@ test('Connect oversized/compound frame closes before exposing a response', async
 
 test('typed presentation is bounded, strips unknown data and admits only the explicit shared-links URI action', async t => {
   const presentation = { tone:'success', headline:'Connected', detail:'Private uploads', note:'', artwork:true,
-    compact:true, accountMenu:true, accountInitial:'M', buttons:[{command:'open-shared-links',title:'Manage shared links',enabled:true}],
+    compact:true, accountMenu:true, buttons:[{command:'open-shared-links',title:'Manage shared links',enabled:true}],
     menuActions:['open-shared-links'], sharedLinksUrl:'https://example.com/hosted/shares' };
   const f = await fixture(t, request => ({ connect:{...view,presentation:{...presentation,secret:'hidden'}},
     ...(request.command === 'open-shared-links' ? { openUri:presentation.sharedLinksUrl } : {}) }));
   assert.deepEqual((await f.client.request()).view.presentation, presentation);
   assert.equal((await f.client.request('open-shared-links')).openUri, presentation.sharedLinksUrl);
 });
-for (const invalid of [{tone:'purple'}, {menuActions:['disconnect']}, {sharedLinksUrl:'https://example.com/unrelated'}, {accountInitial:'m@example.com'}, {accountInitial:'\u202eM'}, {accountInitial:'ABCD'}]) {
+for (const invalid of [{tone:'purple'}, {menuActions:['disconnect']}, {sharedLinksUrl:'https://example.com/unrelated'}]) {
   test('rejects malformed semantic presentation '+JSON.stringify(invalid), async t => {
     const presentation = {tone:'neutral',headline:'Connect',detail:'Local',note:'',artwork:false,compact:false,accountMenu:false,
       buttons:[],menuActions:[],sharedLinksUrl:null,...invalid};

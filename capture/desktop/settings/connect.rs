@@ -75,8 +75,6 @@ pub struct Snapshot {
     pub connected: bool,
     pub uploads_enabled: bool,
     pub reauthorization_required: bool,
-    pub renewal_required: bool,
-    pub account_initial: Option<String>,
 }
 
 /// Only public device-flow presentation data. The adapter must use the client's
@@ -473,9 +471,6 @@ impl Controller {
             if snapshot.reauthorization_required {
                 view.status = "Sign-in required".into();
                 view.detail = "This computer's authorization has expired or been revoked. Sign in again to reconnect; local captures still work.".into();
-            } else if snapshot.renewal_required {
-                view.status = "Connection needs a refresh".into();
-                view.detail = "You're still signed in. Check connection to renew this computer's access; local captures still work.".into();
             } else if snapshot.uploads_enabled {
                 view.status = "Uploads on".into();
                 view.detail = "New captures can upload privately to your Connect account.".into();
@@ -572,13 +567,12 @@ impl Controller {
         } else {
             let uploads = self.snapshot.as_ref().is_some_and(|s| s.uploads_enabled);
             let connected = self.snapshot.as_ref().is_some_and(|s| s.connected);
-            let renewal = self.snapshot.as_ref().is_some_and(|s| s.renewal_required);
             let reauthorize = self
                 .snapshot
                 .as_ref()
                 .is_some_and(|s| s.reauthorization_required)
                 || self.health == Some(Health::AuthRequired);
-            if (!uploads && !renewal) || reauthorize {
+            if !uploads || reauthorize {
                 view.buttons.push(button(
                     Command::Connect,
                     if reauthorize {
@@ -591,14 +585,14 @@ impl Controller {
                     self.snapshot.is_some() && self.retry_disable.is_none(),
                 ));
             }
-            if connected || renewal || reauthorize || self.error.is_some() || self.local_error.is_some() {
+            if connected || reauthorize || self.error.is_some() || self.local_error.is_some() {
                 view.buttons.push(button(
                     Command::Check,
                     "Check connection",
                     self.snapshot.is_some(),
                 ));
             }
-            if uploads || renewal || self.retry_disable == Some(false) || self.local_error.is_some() {
+            if uploads || self.retry_disable == Some(false) || self.local_error.is_some() {
                 view.buttons.push(button(
                     Command::Disable,
                     if self.retry_disable == Some(false) {
@@ -610,7 +604,6 @@ impl Controller {
                 ));
             }
             if connected
-                || renewal
                 || reauthorize
                 || self.retry_disable == Some(true)
                 || self.local_error.is_some()
@@ -636,68 +629,6 @@ impl Controller {
             }
         }
         view
-    }
-
-    /// Electron's Connect surface is presented by the TypeScript client. Keep the
-    /// native `View` intact for existing native renderers, and expose only the
-    /// controller state needed to reproduce that presentation.
-    pub fn electron_view(&self) -> serde_json::Value {
-        let mut value = serde_json::to_value(self.view())
-            .expect("Connect settings View is serializable");
-        if let Some(object) = value.as_object_mut() {
-            // Retain the legacy projection for an already installed older
-            // Electron consumer. New consumers select presentationState only.
-            let snapshot = self.snapshot.as_ref().map(|snapshot| serde_json::json!({
-                "connected": snapshot.connected,
-                "uploadsEnabled": snapshot.uploads_enabled,
-                "renewalRequired": snapshot.renewal_required,
-                "reauthorizationRequired": snapshot.reauthorization_required,
-                "accountInitial": snapshot.account_initial,
-            }));
-            let (operation, logout) = match self.request.as_ref().map(|r| r.operation) {
-                Some(Operation::Login) => (Some("login"), false),
-                Some(Operation::Probe) => (Some("probe"), false),
-                Some(Operation::Disable { logout }) => (Some("disable"), logout),
-                None => (None, false),
-            };
-            object.insert("presentationState".into(), serde_json::json!({
-                "snapshot": snapshot,
-                "health": self.health.map(health_name),
-                "error": self.error.map(error_name),
-                "localError": self.local_error.map(error_name),
-                "consent": self.consent,
-                "approval": self.approval.is_some(),
-                "operation": operation,
-                "logout": logout,
-                "retryDisable": self.retry_disable,
-                "confirmation": self.confirmation,
-                "closed": self.closed,
-                "sharedLinksUrl": self.backend.shared_links_url(),
-            }));
-        }
-        value
-    }
-}
-
-fn health_name(health: Health) -> &'static str {
-    match health {
-        Health::Online => "online",
-        Health::Offline => "offline",
-        Health::AuthRequired => "auth-required",
-    }
-}
-
-fn error_name(error: SafeError) -> &'static str {
-    match error {
-        SafeError::Cancelled => "cancelled",
-        SafeError::Offline => "offline",
-        SafeError::AuthRequired => "auth-required",
-        SafeError::Rejected => "rejected",
-        SafeError::Expired => "expired",
-        SafeError::LocalState => "local-state",
-        SafeError::InvalidServer => "invalid-server",
-        SafeError::UnverifiedCommit => "unverified-commit",
-        SafeError::Unavailable => "unavailable",
     }
 }
 

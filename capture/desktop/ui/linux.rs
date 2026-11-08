@@ -325,34 +325,6 @@ struct PillDrag {
     panel: [f64; 4],
     pointer_down: [f64; 2],
     display: crate::capture::engine::runtime::screens::Screen,
-    owner: PillDragOwner,
-}
-
-enum PillDragOwner {
-    Native,
-    Electron { pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>, position: Arc<Mutex<Option<[f64; 4]>>> },
-}
-
-impl PillDragOwner {
-    fn current(&self, id: u32) -> bool {
-        match self {
-            Self::Native => own_window(&PILL_WINDOW) == Some(id),
-            Self::Electron { pid, alive, .. } => alive.load(Ordering::Acquire)
-                && crate::capture::ui_process::owns(*pid as i32)
-                && x11::window_info(id as isize).is_some_and(|window| window.pid == *pid),
-        }
-    }
-    fn needs_pin(&self) {
-        match self {
-            Self::Native => PILL_NEEDS_PIN.store(true, Ordering::Release),
-            Self::Electron { pin, .. } => pin.store(true, Ordering::Release),
-        }
-    }
-    fn moved(&self, rect: [f64; 4]) {
-        if let Self::Electron { position, .. } = self {
-            *position.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(rect);
-        }
-    }
 }
 
 static PILL_DRAG: std::sync::Mutex<Option<PillDrag>> = std::sync::Mutex::new(None);
@@ -360,47 +332,13 @@ static PILL_DRAG: std::sync::Mutex<Option<PillDrag>> = std::sync::Mutex::new(Non
 // after the mouse button is released. The ink overlay may still follow the pointer.
 static PILL_USER_MOVED: AtomicBool = AtomicBool::new(false);
 
-fn drag_left_down(x11_left: bool, kernel: Option<&linux::input::Held>) -> bool {
-    // An XWayland unmap cancels its implicit grab and clears its button mask.
-    // The existing input reader retains the actual held/released device state.
-    kernel.map_or(x11_left, |held| held.left())
-}
-
-#[test]
-fn pill_drag_uses_kernel_button_across_xwayland_remaps() {
-    let mut held = linux::input::Held::default();
-    held.keys.insert(linux::input::code::BTN_LEFT);
-    assert!(drag_left_down(false, Some(&held)), "A remap is not a physical release");
-    held.keys.clear();
-    assert!(!drag_left_down(true, Some(&held)), "A stale X11 press must not prolong dragging");
-    assert!(drag_left_down(true, None));
-    assert!(!drag_left_down(false, None));
-}
-
 /// Only the recording status/clock starts a drag, not the actionable chips.
 pub(in crate::capture::desktop) fn begin_pill_drag() {
+    if !crate::shared::handoff::experiment("movableRecordingControls") { return; }
     let Some(id) = own_window(&PILL_WINDOW) else { return };
-    begin_owned_pill_drag(id, PillDragOwner::Native, None);
-}
-
-pub(in crate::capture::desktop) fn begin_electron_pill_drag(
-    id: u32, pid: u32, alive: Arc<AtomicBool>, pin: Arc<AtomicBool>,
-    position: Arc<Mutex<Option<[f64; 4]>>>, point: [f64; 2],
-) {
-    begin_owned_pill_drag(id, PillDragOwner::Electron { pid, alive, pin, position }, Some(point));
-}
-
-fn begin_owned_pill_drag(id: u32, owner: PillDragOwner, point: Option<[f64; 2]>) {
-    if !crate::shared::handoff::experiment("movableRecordingControls") || !owner.current(id) { return; }
-    let Some(pointer) = x11::pointer_state() else { return };
-    if !drag_left_down(pointer.left, linux::input::held().as_ref()) { return; }
-    let [x, y] = point.unwrap_or_else(|| {
-        let (x, y) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
-        [x, y]
-    });
+    let Some(pointer) = x11::pointer_state().filter(|p| p.left) else { return };
+    let (x, y) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
     let Some(panel) = x11::geometry(id) else { return };
-    if ![x, y].iter().all(|v| v.is_finite()) || x < panel[0] || y < panel[1]
-        || x >= panel[0] + panel[2] || y >= panel[1] + panel[3] { return; }
     let screens = crate::capture::engine::runtime::screens::displays();
     let centre = [panel[0] + panel[2] / 2.0, panel[1] + panel[3] / 2.0];
     let Some(display) = crate::capture::engine::runtime::screens::index_at(&screens, centre).map(|i| screens[i].clone()) else {
@@ -411,7 +349,6 @@ fn begin_owned_pill_drag(id: u32, owner: PillDragOwner, point: Option<[f64; 2]>)
         panel,
         pointer_down: [x, y],
         display,
-        owner,
     });
 }
 
@@ -419,36 +356,23 @@ pub(in crate::capture::desktop) fn tick_pill_drag() {
     let mut slot = PILL_DRAG.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
     let Some(drag) = slot.as_ref() else { return };
     let Some(pointer) = x11::pointer_state() else { return };
-    if !drag_left_down(pointer.left, linux::input::held().as_ref()) || !drag.owner.current(drag.id) {
+    if !pointer.left || own_window(&PILL_WINDOW) != Some(drag.id) {
         *slot = None;
         return;
     }
     // XWayland's root pointer freezes above native Wayland windows. Ask the
-    // compositor first; the existing kernel reader keeps the button state over remaps.
+    // compositor first; the button state still comes from the X11 press.
     let (px, py) = linux::cursor_position().unwrap_or((pointer.x, pointer.y));
-    let Some(live) = x11::geometry(drag.id) else { *slot = None; return; };
-    // Electron owns content size. Keep the original grab offset while clamping
-    // against its live dimensions, without restoring a stale warning/reveal size.
-    let panel = [drag.panel[0], drag.panel[1], live[2], live[3]];
     let [x, y] = crate::capture::engine::runtime::screens::drag_pill_origin(
         &drag.display,
-        panel,
+        drag.panel,
         drag.pointer_down,
         [px, py],
     );
     if (x - drag.panel[0]).abs() >= 1.0 || (y - drag.panel[1]).abs() >= 1.0 {
-        // The compositor pointer query may have waited while the child retired
-        // or the user released the button. Refuse a stale move after that wait.
-        if !drag.owner.current(drag.id) || !x11::pointer_state()
-            .is_some_and(|p| drag_left_down(p.left, linux::input::held().as_ref())) {
-            *slot = None;
-            return;
-        }
         PILL_USER_MOVED.store(true, Ordering::Release);
-        let rect = [x, y, live[2], live[3]];
-        x11::move_origin(drag.id, [x, y]);
-        drag.owner.moved(rect);
-        drag.owner.needs_pin();
+        x11::place(drag.id, [x, y, drag.panel[2], drag.panel[3]]);
+        PILL_NEEDS_PIN.store(true, Ordering::Release);
     }
 }
 
@@ -978,41 +902,18 @@ pub(in crate::capture::desktop) fn restore_note_focus(token: u64, owner: u32) {
 }
 
 /// The Electron counter follows the same native recording panel, including user drags.
-pub(in crate::capture::desktop) fn note_badge_anchor(width: f32, y: f32, height: f32) -> Option<[f64; 4]> {
+pub(in crate::capture::desktop) fn note_badge_anchor(width: f32, y: f32) -> Option<[f64; 4]> {
     let rect = x11::geometry(own_window(&PILL_WINDOW)?)?;
-    Some(note_badge_rect(rect, width, y, height))
-}
-
-fn note_badge_rect(window: [f64; 4], width: f32, y: f32, height: f32) -> [f64; 4] {
-    // GPUI dimensions are DIPs; the X11 root geometry is physical pixels.
-    let scale = window[2] / f64::from(PILL_WINDOW_W);
-    [window[0] + (window[2] - f64::from(width) * scale) / 2.0,
-        window[1] + f64::from(y) * scale, f64::from(width) * scale, f64::from(height) * scale]
-}
-
-#[cfg(test)]
-mod note_anchor_tests {
-    use super::note_badge_rect;
-    #[test]
-    fn counter_anchor_uses_the_capsule_physical_rect_at_fractional_scale() {
-        assert_eq!(note_badge_rect([100.0, 30.0, 800.0, 105.0], 400.0, 22.0, 40.0),
-            [250.0, 57.5, 500.0, 50.0]);
-        assert_eq!(note_badge_rect([-1280.0, 0.0, 640.0, 84.0], 400.0, 22.0, 40.0),
-            [-1160.0, 22.0, 400.0, 40.0]);
-    }
+    Some([rect[0] + rect[2] / 2.0 - f64::from(width) / 2.0,
+        rect[1] + f64::from(y), f64::from(width), f64::from(super::super::ISLAND_H)])
 }
 
 #[derive(Clone, Copy, Default)]
-struct NoteSurface { id: u32, generation: u64, worker: bool, rect: [i32; 4], focus: bool, flying: bool }
+struct NoteSurface { id: u32, generation: u64, worker: bool, rect: [i32; 4], focus: bool }
 #[derive(Clone, Copy, Default)]
 struct NoteSurfaces { pid: u32, slots: [NoteSurface; 2] }
-impl NoteSurfaces {
-    fn current(&self, pid: u32, id: u32, index: usize, generation: u64) -> bool {
-        self.pid == pid && self.slots[index].id == id && self.slots[index].generation == generation
-    }
-}
 static NOTE_SURFACES: std::sync::Mutex<NoteSurfaces> = std::sync::Mutex::new(NoteSurfaces {
-    pid: 0, slots: [NoteSurface { id: 0, generation: 0, worker: false, rect: [0; 4], focus: false, flying: false }; 2],
+    pid: 0, slots: [NoteSurface { id: 0, generation: 0, worker: false, rect: [0; 4], focus: false }; 2],
 });
 
 pub(in crate::capture::desktop) fn register_note_surfaces(pid: u32) {
@@ -1024,39 +925,15 @@ pub(in crate::capture::desktop) fn clear_note_surfaces(pid: u32) {
 }
 fn raise_note_surfaces() {
     let state = *NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-    let mut ids: Vec<_> = state.slots.iter().filter(|surface| surface.id != 0 &&
+    let ids: Vec<_> = state.slots.iter().filter(|surface| surface.id != 0 &&
         x11::window_info(surface.id as isize).is_some_and(|w| w.pid == state.pid && w.on_screen()))
         .map(|surface| surface.id).collect();
-    if state.slots[1].flying && ids.contains(&state.slots[1].id) {
-        // XWayland compositors can route clicks to the focused app through a
-        // transparent window even with an empty input shape. Keep controls above
-        // the visual flight, with the Notes counter above the pill's native rect.
-        let popup = state.slots[1].id;
-        ids.retain(|id| *id != popup);
-        if let Some(pill) = own_window(&PILL_WINDOW) { ids.insert(0, pill); }
-        ids.insert(0, popup);
-    }
     x11::raise_group(&ids);
 }
 
 pub(in crate::capture::desktop) fn maintain_note_surfaces(pid: u32) {
     let owned = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner).pid == pid;
     if owned { raise_note_surfaces(); }
-}
-
-/// Hyprland can leave X11 keyboard focus at None while still reporting the
-/// popup as its active client. Reconcile X11 after the compositor's placement,
-/// and only while the same visible surface request still owns that focus.
-pub(in crate::capture::desktop) fn place_note_with_keyboard_focus(
-    place: impl FnOnce() -> anyhow::Result<()>,
-    wants_focus: bool,
-    still_current: impl Fn() -> bool,
-    focus: impl FnOnce(),
-) -> anyhow::Result<()> {
-    if !still_current() { return Ok(()); }
-    place()?;
-    if wants_focus && still_current() { focus(); }
-    Ok(())
 }
 
 fn pin_note_surface(id: u32, pid: u32, index: usize) {
@@ -1069,30 +946,7 @@ fn pin_note_surface(id: u32, pid: u32, index: usize) {
             (slot.generation, slot.rect, slot.focus)
         };
         let visible = x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen());
-        let result = if visible {
-            place_note_with_keyboard_focus(
-                || linux::hyprland::place_note(id, pid, rect, focus, || {
-                    let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    state.current(pid, id, index, generation)
-                        && x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen())
-                }),
-                focus,
-                || {
-                    let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    state.current(pid, id, index, generation)
-                        && x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen())
-                },
-                || {
-                    // An intervening app switch must win over delayed placement.
-                    if !linux::hyprland::note_is_active(id, pid) { return; }
-                    let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
-                    if state.current(pid, id, index, generation)
-                        && x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen()) {
-                        x11::focus(id);
-                    }
-                },
-            )
-        } else { Ok(()) };
+        let result = if visible { linux::hyprland::place_note(id, pid, rect, focus) } else { Ok(()) };
         if visible && result.is_ok() { raise_note_surfaces(); } else { failures += 1; }
         let retry = {
             let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1120,7 +974,7 @@ pub(in crate::capture::desktop) fn prepare_note_surface(id: u32, pid: u32) -> bo
     x11::prepare_floating(id)
 }
 
-pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [i32; 4], focus: bool, popup: bool, flying: bool) {
+pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [i32; 4], focus: bool, popup: bool) {
     let index = usize::from(popup);
     {
         let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -1134,7 +988,7 @@ pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [
         let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         if state.pid != pid { return; }
         let slot = &mut state.slots[index];
-        slot.id = id; slot.rect = rect; slot.focus = focus; slot.flying = flying; slot.generation = slot.generation.wrapping_add(1);
+        slot.id = id; slot.rect = rect; slot.focus = focus; slot.generation = slot.generation.wrapping_add(1);
         let start = !slot.worker && linux::hyprland::running();
         slot.worker |= start;
         start
@@ -1142,41 +996,4 @@ pub(in crate::capture::desktop) fn place_note_surface(id: u32, pid: u32, rect: [
     raise_note_surfaces();
     if focus { x11::focus(id); }
     if start_worker { std::thread::spawn(move || pin_note_surface(id, pid, index)); }
-}
-
-/// Current compositor/window owner, including owned Electron children.
-pub(in crate::capture::desktop) fn share_foreground_pid() -> u32 { note_focus().1 }
-
-#[cfg(test)]
-mod note_focus_tests {
-    use super::*;
-
-    #[test]
-    fn note_focus_requires_current_process_surface_and_placement() {
-        let mut state = NoteSurfaces { pid: 10, ..Default::default() };
-        state.slots[1] = NoteSurface { id: 20, generation: 3, ..Default::default() };
-        assert!(state.current(10, 20, 1, 3));
-        assert!(!state.current(11, 20, 1, 3));
-        assert!(!state.current(10, 21, 1, 3));
-        assert!(!state.current(10, 20, 1, 2));
-        assert!(!state.current(10, 20, 0, 3));
-        state.slots[1].generation += 1;
-        assert!(!state.current(10, 20, 1, 3));
-    }
-
-    #[test]
-    fn unavailable_failed_and_nonfocus_placements_never_take_focus() {
-        place_note_with_keyboard_focus(
-            || panic!("stale request placed a window"), true, || false,
-            || panic!("stale request took focus"),
-        ).unwrap();
-        assert!(place_note_with_keyboard_focus(
-            || anyhow::bail!("placement failed"), true, || true,
-            || panic!("failed placement took focus"),
-        ).is_err());
-        place_note_with_keyboard_focus(
-            || Ok(()), false, || true,
-            || panic!("badge or decorative flight took focus"),
-        ).unwrap();
-    }
 }

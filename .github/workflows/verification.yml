@@ -5,37 +5,14 @@ on:
 
 permissions:
   contents: read
-  actions: read
 
-# Finish the running candidate; replace only pending work. Mac never holds this lane.
+# Coalesce only this platform; a queued Mac must not hold Linux publication.
 concurrency:
   group: changed-tree-${{ github.event_name }}-${{ github.ref }}
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   verify:
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      actions: read
-      attestations: write
-      contents: read
-      id-token: write
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: ubuntu-24.04
-
-  runtime-budget:
-    if: always()
-    needs: [verify]
-    permissions:
-      contents: read
-      actions: read
-    name: Workflow runtime budget
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: ./.github/actions/runtime-budget

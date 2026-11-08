@@ -3,7 +3,9 @@ use std::collections::BTreeMap;
 use serde::{Deserialize, Serialize};
 
 pub use crate::shared::windows::{CursorSample, WindowSnapshot};
-pub use apparent_capture_engine::ink::{SCALE, Stroke};
+
+/// Coordinates in `Stroke::pts` are scaled to `0..=10_000` (1/10000 of target width/height).
+pub const SCALE: i32 = 10_000;
 
 /// Pause longer than this (ms) between strokes starts a new `Mark`.
 pub const MARK_GAP_MS: u64 = 1_200;
@@ -373,6 +375,74 @@ pub struct WordTiming {
     pub text: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct Stroke {
+    #[serde(default,skip_serializing_if="Option::is_none")]
+    pub color: Option<[u8;3]>,
+    pub t0: u64,
+    pub t1: u64,
+    pub fw: u32,
+    pub fh: u32,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub on: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pin: Option<u32>,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub laser: bool,
+    /// Flat triples `[x, y, dt_ms, ...]` where `x, y` are in `0..=SCALE` and `dt_ms` is ms since `t0`.
+    pub pts: Vec<i32>,
+}
+
+impl Stroke {
+    pub fn rgba(&self)->[u8;4] {let [r,g,b]=self.color.unwrap_or([255,59,48]);[r,g,b,255]}
+    /// Moves the stroke `ms` earlier onto a clock that started at `ms`, shifting point `dt_ms`
+    /// by any clipped prefix and dropping points before `ms`. Returns `false` if the stroke
+    /// ended before `ms` or has no remaining points.
+    pub fn rebase(&mut self, ms: u64) -> bool {
+        if self.t1 < ms {
+            self.pts.clear();
+            return false;
+        }
+        let lost = ms.saturating_sub(self.t0) as i64;
+        self.t0 = self.t0.saturating_sub(ms);
+        self.t1 = self.t1.saturating_sub(ms);
+        if lost > 0 {
+            let mut kept = Vec::with_capacity(self.pts.len());
+            for chunk in self.pts.chunks_exact(3) {
+                let dt = i64::from(chunk[2]) - lost;
+                if dt >= 0 {
+                    kept.extend_from_slice(&[chunk[0], chunk[1], dt as i32]);
+                }
+            }
+            self.pts = kept;
+        }
+        !self.pts.is_empty()
+    }
+
+    /// Returns normalized `(x, y)` points in `0.0..=1.0`.
+    pub fn normalized_points(&self) -> Vec<[f32; 2]> {
+        self.pts
+            .chunks_exact(3)
+            .map(|c| [c[0] as f32 / SCALE as f32, c[1] as f32 / SCALE as f32])
+            .collect()
+    }
+
+    /// Returns `(x, y, absolute_t_ms)` points.
+    pub fn timed_points(&self) -> Vec<(f32, f32, u64)> {
+        self.pts
+            .chunks_exact(3)
+            .map(|c| {
+                (
+                    c[0] as f32 / SCALE as f32,
+                    c[1] as f32 / SCALE as f32,
+                    self.t0.saturating_add(c[2].max(0) as u64),
+                )
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Shape {
@@ -571,6 +641,17 @@ impl RgbaFrame {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn stroke_colours_round_trip_without_changing_legacy_captures() {
+        let legacy=serde_json::json!({"t0":0,"t1":10,"fw":100,"fh":100,"pts":[10,20,0,30,40,10]});
+        let stroke:super::Stroke=serde_json::from_value(legacy.clone()).unwrap();
+        assert_eq!(stroke.rgba(),[255,59,48,255]);
+        assert_eq!(serde_json::to_value(&stroke).unwrap(),legacy);
+        let mut coloured=stroke;coloured.color=Some([59,121,189]);
+        let decoded:super::Stroke=serde_json::from_value(serde_json::to_value(&coloured).unwrap()).unwrap();
+        assert_eq!(decoded.rgba(),[59,121,189,255]);
+    }
+
     use super::*;
 
     fn span(t0: u64, t1: u64, name: &str) -> ScreenSpan {
@@ -644,6 +725,7 @@ mod tests {
     #[test]
     fn stroke_and_event_rebase_shift_dt_and_drop_pre_offset_items() {
         let mut before = Stroke {
+            color: None,
             t0: 100,
             t1: 400,
             fw: 100,
@@ -651,12 +733,12 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
-            rgb: None,
             pts: vec![10, 20, 0, 30, 40, 300],
         };
         assert!(!before.rebase(500));
 
         let mut spanning = Stroke {
+            color: None,
             t0: 300,
             t1: 700,
             fw: 100,
@@ -664,7 +746,6 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
-            rgb: None,
             pts: vec![10, 20, 0, 20, 30, 150, 30, 40, 200, 50, 60, 400],
         };
         assert!(spanning.rebase(500));
@@ -673,6 +754,7 @@ mod tests {
         assert_eq!(spanning.pts, vec![30, 40, 0, 50, 60, 200]);
 
         let mut after = Stroke {
+            color: None,
             t0: 800,
             t1: 1_000,
             fw: 100,
@@ -680,7 +762,6 @@ mod tests {
             on: None,
             pin: None,
             laser: false,
-            rgb: None,
             pts: vec![10, 20, 0, 50, 60, 200],
         };
         assert!(after.rebase(500));

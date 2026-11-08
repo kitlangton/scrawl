@@ -26,10 +26,9 @@ impl ApparentCoordinator {
     ) {
         // The worker still owns its exact ID's receipt after dismissal. Only its
         // UI/clipboard/onboarding effects lose ownership when a new capture starts.
-        if let Err(error) = &finalized {
-            crate::capture::desktop::workflow::error_reporting::report_error(
+        if finalized.is_err() {
+            crate::capture::desktop::workflow::error_reporting::report(
                 crate::capture::desktop::workflow::error_reporting::Failure::FinalizeCapture,
-                error,
             );
         }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
@@ -144,7 +143,9 @@ impl ApparentCoordinator {
                 crate::capture::desktop::linux::auto_paste::completion_note(clipboard_ready).into(),
             );
         }
+        if let Some(session)=self.onboarding.as_mut(){session.practice_saved_bundle(&dir);}
         self.set_review_bundle((dir, bundle), self.completed_note.clone());
+        if let Some(session)=self.onboarding.as_mut(){session.observe_practice(false,0,true,Some(clipboard_ready));}
         self.set_island_phase(IslandPhase::Completed {
             finished_at: Instant::now(),
             frame_count,

@@ -35,9 +35,7 @@ SOURCES = {
     ),
     "capture/desktop/scripts/release/setup-sparkle.sh": ("Cargo.toml",),
     "capture/desktop/scripts/linux/appimage/appimage.sh": (
-        "Cargo.toml",
-        "main.rs",
-        "capture/desktop/linux/interaction/clipboard.rs",
+        "capture/desktop/scripts/support/apparent-restore-clipboard.py",
         "capture/desktop/packaging/linux/dev.kitlangton.apparent.desktop",
         "capture/desktop/scripts/linux/appimage/check-appimage-encoder.sh",
     ),

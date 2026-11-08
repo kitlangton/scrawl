@@ -1,8 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react"
+import { useEffect, useRef, useState } from "react"
 import { LatestDownload } from "../download/LatestDownload"
-
-import { FrogSplash } from "./frog-splash/frog-splash"
-import "./frog-splash/frog-splash.css"
 
 const ART = "/pond"
 // A prior 404 for this path is cached at the Cloudflare edge.
@@ -11,10 +8,6 @@ const LILY = `${ART}/lily-clean.png?v=1`
 type Position = { x: number; y: number }
 
 export function FrogPond() {
-  const lounge = useRef<HTMLButtonElement>(null)
-  const previousTap = useRef(-Infinity)
-  const [splash, setSplash] = useState(false)
-  const dismissSplash = useCallback(() => { previousTap.current = -Infinity; setSplash(false) }, [])
   const hero = useRef<HTMLElement>(null)
   const frog = useRef<HTMLButtonElement>(null)
   const landing = useRef<HTMLImageElement>(null)
@@ -122,24 +115,16 @@ export function FrogPond() {
     }
   }, [])
 
-  return <><section className="pond-hero" ref={hero} id="top">
+  return <section className="pond-hero" ref={hero} id="top">
     <div className="pond-copy">
-      <h1><span className="hero-agent-line">Tell your coding agent what to change</span><span className="hero-feedback-line">by pointing, talking, and drawing.</span><span className="pond-word"><img className="pond-cover-pad" src={LILY} alt="" /><button ref={frog} className="pond-cover-frog" type="button" onClick={jump} aria-label="Jump to the other lily" data-at-end={atEnd.current} data-landings={landings}><img src={`${ART}/frog-rest-cohesive.png`} alt="" className={airborne ? "pond-hidden" : ""} /><img src={`${ART}/frog-air-cohesive.png`} alt="" className={airborne ? "" : "pond-hidden"} /></button></span></h1>
-      <p><img className="pond-wordmark" src="/apparent-wordmark.svg" alt="apparent" /> creates the instructions.<br className="hero-sentence-break" />Your agent makes the changes and uses<br className="hero-return-break" /> apparent to send back a video walkthrough.</p>
+      <h1>Visual feedback gets lost<br />in <span className="pond-word"><span className="pond-word-text">text.</span><img className="pond-cover-pad" src={LILY} alt="" /><button ref={frog} className="pond-cover-frog" type="button" onClick={jump} aria-label="Jump to the other lily" data-at-end={atEnd.current} data-landings={landings}><img src={`${ART}/frog-rest-cohesive.png`} alt="" className={airborne ? "pond-hidden" : ""} /><img src={`${ART}/frog-air-cohesive.png`} alt="" className={airborne ? "" : "pond-hidden"} /></button></span></h1>
+      <p><img className="pond-wordmark" src="/apparent-wordmark.svg" alt="Apparent" /> lets you show an agent what to change and see what it made.</p>
       <div className="pond-download"><LatestDownload /></div>
     </div>
     <div className="pond-scene">
       <img className="pond-pad pond-left-pad" src={LILY} alt="" />
-      <button ref={lounge} onClickCapture={event => {
-        const now = performance.now()
-        if (now - previousTap.current < 420) {
-          event.preventDefault()
-          event.stopPropagation()
-          previousTap.current = -Infinity
-          setSplash(true)
-        } else previousTap.current = now
-      }} type="button" className="pond-lounging-frog" onClick={greet} aria-label="Wave to the lounging frog" data-waves={waves}><img src={`${ART}/frog-lounge-cohesive.png`} alt="" className={wavePose ? "pond-hidden" : ""} /><img src={`${ART}/frog-wave-cohesive.png`} alt="" className={wavePose ? "" : "pond-hidden"} /><span className="pond-hello" aria-hidden="true" data-visible={greeting}>hi!</span></button>
+      <button type="button" className="pond-lounging-frog" onClick={greet} aria-label="Wave to the lounging frog" data-waves={waves}><img src={`${ART}/frog-lounge-cohesive.png`} alt="" className={wavePose ? "pond-hidden" : ""} /><img src={`${ART}/frog-wave-cohesive.png`} alt="" className={wavePose ? "" : "pond-hidden"} /><span className="pond-hello" aria-hidden="true" data-visible={greeting}>hi!</span></button>
       <img ref={landing} className="pond-pad pond-right-pad" src={LILY} alt="" />
     </div>
-  </section>{splash && lounge.current && <FrogSplash original={lounge.current} onDismiss={dismissSplash} />}</>
+  </section>
 }

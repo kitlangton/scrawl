@@ -1,12 +1,12 @@
-.feature-grid-section { max-width: 1120px; margin: 0 auto; padding: 42px 24px 48px; color: var(--color-foreground); }
+.feature-grid-section { max-width: 1200px; margin: 0 auto; padding: 42px 32px 68px; color: var(--color-foreground); }
 .feature-grid-heading { position: relative; margin-bottom: 28px; }
-.feature-grid-heading h2 { margin: 0; font:700 clamp(30px, 3.6vw, 46px)/1.12 "Host Grotesk", sans-serif; letter-spacing: -.04em; text-wrap: balance; }
-.feature-grid-heading h2 img { display: inline-block; width: 200px; height: auto; vertical-align: middle; }
+.feature-grid-heading h2 { margin: 0; font: 600 clamp(30px, 4.5vw, 58px)/1.1 "Host Grotesk", Arial, sans-serif; letter-spacing: -1.6px; }
+.feature-grid-heading h2 img { display: inline-block; width: 250px; height: auto; vertical-align: middle; }
 .feature-grid-toggle { display: block; margin: 14px 0 0 auto; padding: 4px 0; min-height: 32px; border: 0; background: transparent; color: var(--color-muted-foreground); font: inherit; font-size: 12px; cursor: pointer; }
 .feature-grid-toggle:hover { color: var(--color-foreground); }
 .feature-grid-toggle:focus-visible { outline: 2px solid var(--color-ring); outline-offset: 4px; }
 .feature-grid-cards { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 30px 20px; }
-.feature-grid-viewport { position: relative; overflow: hidden; aspect-ratio: 800 / 540; background: var(--color-muted); border: 1px solid #02010225; border-radius: 0; }
+.feature-grid-viewport { position: relative; overflow: hidden; aspect-ratio: 800 / 540; background: var(--color-muted); border: 1px solid #02010225; border-radius: 16px; }
 .feature-grid-viewport iframe { display: block; width: 800px; height: 540px; border: 0; transform-origin: top left; }
 .feature-grid-card h3 { margin: 0; padding: 15px 2px 0; color: var(--color-foreground); font: 700 18px/1.25 "Host Grotesk", Arial, sans-serif; letter-spacing: -.35px; }
 .feature-grid-description { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }

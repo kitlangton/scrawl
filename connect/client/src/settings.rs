@@ -9,8 +9,6 @@ pub struct Snapshot {
     pub connected: bool,
     pub uploads_enabled: bool,
     pub reauthorization_required: bool,
-    pub renewal_required: bool,
-    pub account_initial: Option<String>,
 }
 #[derive(Clone)]
 pub struct Approval {
@@ -36,7 +34,7 @@ pub enum SafeError {
 }
 
 // Inspect only known internal diagnostics, never copy remote text, paths or secrets.
-pub fn safe_error(error: &anyhow::Error, allowed: &dyn Fn() -> bool) -> SafeError {
+fn safe_error(error: &anyhow::Error, allowed: &dyn Fn() -> bool) -> SafeError {
     if !allowed() {
         return SafeError::Cancelled;
     }
@@ -134,28 +132,6 @@ impl Client {
             .map_err(|_| SafeError::LocalState)?;
         Ok((credential.server == server).then_some(credential))
     }
-    /// Private main-process facts for the adopted TypeScript account-state policy.
-    /// Private record validation and filesystem safety remain native mechanics;
-    /// tokens, refresh tokens, paths and generations never cross this boundary.
-    pub fn settings_facts(&self) -> std::result::Result<Value, SafeError> {
-        let config = self.settings_local_config()?;
-        let pending = self.revocation_pending();
-        let grant = |scope: &str| -> std::result::Result<Value, SafeError> {
-            if pending { return Ok(Value::Null); }
-            match fs::symlink_metadata(self.state.join(format!("{scope}.credential"))) {
-                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Value::Null),
-                Err(_) => return Err(SafeError::LocalState),
-                Ok(_) => (),
-            }
-            let c = self.stored_credential(scope).map_err(|_| SafeError::LocalState)?;
-            Ok(json!({"server":c.server,"scope":c.scope,"authRequired":c.auth_required,
-                "hasRefresh":c.refresh_token.is_some(),"expiresAt":c.expires_at,
-                "refreshExpiresAt":c.refresh_expires_at,"accountInitial":c.account_initial}))
-        };
-        Ok(json!({"cloud":{"server":config.server,"enabled":config.enabled,"uploadConsent":config.upload_consent},
-            "hostedSync":self.provider.experiment(HOSTED_SYNC),"revocationPending":pending,
-            "upload":grant("upload")?,"read":grant("read")?}))
-    }
     /// Fresh disk-only state; never renews credentials or probes the server.
     pub fn settings_snapshot(&self) -> std::result::Result<Snapshot, SafeError> {
         if self.revocation_pending() {
@@ -172,9 +148,6 @@ impl Client {
         let read = self.settings_grant("read", origin)?;
         let connected = upload.as_ref().is_some_and(Self::settings_usable)
             || read.as_ref().is_some_and(Self::settings_usable);
-        let account_initial = upload.as_ref().or(read.as_ref()).filter(|grant| grant.usable())
-            .and_then(|grant| grant.account_initial.as_deref())
-            .filter(|value| renewal::valid_account_initial(value)).map(str::to_owned);
         Ok(Snapshot {
             uploads_enabled: server.is_some()
                 && !self.revocation_pending()
@@ -185,14 +158,9 @@ impl Client {
             reauthorization_required: upload
                 .as_ref()
                 .or(read.as_ref())
-                .is_some_and(|grant| !grant.usable()),
-            renewal_required: upload
-                .as_ref()
-                .or(read.as_ref())
-                .is_some_and(|grant| grant.usable() && !Self::settings_usable(grant)),
+                .is_some_and(|grant| !Self::settings_usable(grant)),
             server,
             connected,
-            account_initial,
         })
     }
     /// The sole device-login protocol, with no stdout or automatic browser opening.

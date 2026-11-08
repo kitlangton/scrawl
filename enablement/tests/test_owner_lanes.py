@@ -1,7 +1,6 @@
 """Advisory selection cannot become execution or omit structural changes."""
 import os
 import json
-import hashlib
 import shutil
 from pathlib import Path
 import subprocess
@@ -9,7 +8,6 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
-from types import SimpleNamespace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import owner_lanes as lanes
@@ -25,8 +23,6 @@ class OwnerTests(unittest.TestCase):
             'capture/desktop/ui/frontend/src/App.tsx': {'desktop-ui', 'capture'},
             'capture/desktop/settings.rs': {'capture', 'engine-staged', 'desktop-ui'},
             'capture/engine/bundle/mod.rs': {'capture', 'engine-staged'},
-            'engine/core/src/secure.rs': {'capture', 'engine-staged'},
-            'engine/src/capture.rs': {'capture', 'engine-staged'},
             'shared/ui/src/index.ts': {'desktop-ui', 'connect-service', 'capture'},
         }
         for path, expected in cases.items():
@@ -77,179 +73,30 @@ class OwnerTests(unittest.TestCase):
             self.assertEqual([call.args[0][1] for call in run.call_args_list], ['build', 'test'])
             self.assertTrue(all('connect/client/Cargo.toml' in call.args[0] for call in run.call_args_list))
 
-    def test_linux_integration_commands_and_environment(self):
-        for online in (False, True):
-            with self.subTest(online=online), patch.object(lanes.sys, 'platform', 'linux'), \
-                    patch.object(lanes.legacy, 'check_temp_environment') as preflight, \
-                    patch.object(lanes.os, 'access', return_value=True), \
-                    patch.dict(os.environ, {'T3_BUILD_JOBS': '2', 'ELECTRON_OVERRIDE_DIST_PATH': '/fixture'}), \
-                    patch.object(lanes.subprocess, 'run') as run:
-                run.side_effect = lambda args, **kwargs: SimpleNamespace(stdout=(
-                    'test fixture::connect_settings_electron_rust_roundtrip ... ok\n'
-                    'test fixture::storage_electron_rust_roundtrip ... ok\n'
-                    if args[0] == 'cargo' else '/fixture/electron\n'))
-                lanes.run_lane('desktop-ui-integration', online)
-                preflight.assert_called_once_with()
-                commands = [call.args[0] for call in run.call_args_list]
-                self.assertEqual(commands[:3], [
-                    ['npm', 'ci', '--no-audit', '--no-fund'] + ([] if online else ['--offline']),
-                    ['npm', 'test'], ['xvfb-run', '-a', 'npm', 'run', 'test:electron']])
-                self.assertEqual(commands[3], ['node', '-p', "require('electron')"])
-                self.assertEqual(commands[4], ['cargo', 'test', '-j', '2',
-                    '--locked' if online else '--offline', '_electron_rust_roundtrip',
-                    '--', '--ignored', '--test-threads=1'])
-                for call in run.call_args_list[:4]:
-                    self.assertEqual(call.kwargs['cwd'], lanes.ROOT / 'capture/desktop/ui/frontend')
-                rust = run.call_args_list[4].kwargs
-                self.assertEqual(rust['cwd'], lanes.ROOT)
-                for key in ('APPARENT_STORAGE_TEST_ELECTRON', 'APPARENT_CONNECT_TEST_ELECTRON'):
-                    self.assertEqual(rust['env'][key], '/fixture/electron')
-                self.assertTrue(all(call.kwargs['check'] for call in run.call_args_list))
-        self.assertNotIn('desktop-ui-integration', lanes.LANES)
-
-    def test_integration_rejects_zero_rust_tests(self):
-        with patch.object(lanes.sys, 'platform', 'linux'), \
-                patch.object(lanes.legacy, 'check_temp_environment'), \
-                patch.object(lanes.os, 'access', return_value=True), \
-                patch.object(lanes.subprocess, 'run') as run:
-            run.side_effect = lambda args, **kwargs: SimpleNamespace(stdout=(
-                'test result: ok. 0 passed\n' if args[0] == 'cargo' else '/fixture/electron\n'))
-            with self.assertRaisesRegex(RuntimeError, 'Required Rust bridge test'):
-                lanes.run_lane('desktop-ui-integration', online=True)
-
-    def test_offline_requires_external_electron_before_install(self):
-        for dist in ('', 'relative', str(lanes.ROOT / 'capture/desktop/ui/frontend/node_modules/electron/dist')):
-            with self.subTest(dist=dist), patch.object(lanes.sys, 'platform', 'linux'), \
-                    patch.object(lanes.legacy, 'check_temp_environment'), \
-                    patch.dict(os.environ, {'ELECTRON_OVERRIDE_DIST_PATH': dist}), \
-                    patch.object(lanes.os, 'access', return_value=True), \
-                    patch.object(lanes.subprocess, 'run') as run:
-                with self.assertRaisesRegex(ValueError, 'external Linux Electron dist'):
-                    lanes.run_lane('desktop-ui-integration')
-                run.assert_not_called()
-
-    def test_desktop_ui_stays_frontend_only(self):
-        with patch.object(lanes.sys, 'platform', 'linux'), patch.object(lanes.subprocess, 'run') as run:
-            lanes.run_lane('desktop-ui')
-            self.assertEqual([call.args[0] for call in run.call_args_list], [
-                ['npm', 'ci', '--no-audit', '--no-fund'], ['npm', 'test'],
-                ['xvfb-run', '-a', 'npm', 'run', 'test:electron']])
-
-    def test_integration_fails_closed(self):
-        with patch.object(lanes.sys, 'platform', 'darwin'), patch.object(lanes.subprocess, 'run') as run:
-            with self.assertRaises(ValueError):
-                lanes.run_lane('desktop-ui-integration')
-            run.assert_not_called()
-        with patch.object(lanes.sys, 'platform', 'linux'), \
-                patch.object(lanes.legacy, 'check_temp_environment'), \
-                patch.object(lanes.subprocess, 'run') as run:
-            run.side_effect = subprocess.CalledProcessError(7, 'npm')
-            with self.assertRaises(subprocess.CalledProcessError):
-                lanes.run_lane('desktop-ui-integration', online=True)
-            self.assertEqual(run.call_count, 1)
-            run.side_effect = None
-            run.reset_mock()
-            run.return_value.stdout = 'relative/electron\n'
-            with self.assertRaises(ValueError):
-                lanes.run_lane('desktop-ui-integration', online=True)
-            self.assertEqual(run.call_count, 4)
-
     @unittest.skipUnless(shutil.which('node'), 'Public entrypoint requires Node')
     def test_public_entrypoint_environment_and_failure_propagation(self):
         node = shutil.which('node')
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             log = root / 'calls'
-            # Run unchanged entrypoint/preparation sources in an owned miniature tree.
-            # Only subprocesses and frozen media identity are fixture boundaries.
-            sources = (
-                'public/site/scripts/site-build/verify.ts',
-                'public/site/scripts/pages/prepare-pages-video.ts',
-                'public/site/scripts/browser-setup/install.ts',
-                'composition/delivery/runtime/ubuntu-dependencies.ts',
-            )
-            for source in sources:
-                target = root / source
-                target.parent.mkdir(parents=True, exist_ok=True)
-                shutil.copyfile(lanes.ROOT / source, target)
-            site = root / 'public/site'
-            artifact = site / 'dist-apparent'
-            artifact.mkdir()
-            media = b'abcdefgh'
-            (artifact / 'fixture.mp4').write_bytes(media)
-            chunks = [media[:4], media[4:]]
-            identity = dict(path='/fixture.mp4', size=len(media),
-                            sha256=hashlib.sha256(media).hexdigest(), chunkSize=4,
-                            chunks=[dict(size=len(chunk), sha256=hashlib.sha256(chunk).hexdigest())
-                                    for chunk in chunks])
-            metadata = site / 'lib/pages-video-metadata.ts'
-            metadata.parent.mkdir()
-            metadata.write_text('export const movie = ' + json.dumps(identity) +
-                                ';\nexport const chunkPath = chunk => `/assets/${chunk.sha256}.bin`;\n')
-            stub = """#!/usr/bin/python3
-import os,sys,json
-from pathlib import Path
-prepared = os.environ.get('SITE_ARTIFACT')
-if prepared:
-    output = Path(prepared)
-    assert (output / '_routes.json').is_file()
-    assert not (output / 'fixture.mp4').exists()
-    assert len(list((output / 'assets').glob('*.bin'))) == 2
-    assert (Path.cwd() / 'dist-apparent/fixture.mp4').read_bytes() == b'abcdefgh'
-with open(os.environ['CALL_LOG'],'a') as f:
-    f.write(json.dumps([Path(sys.argv[0]).name, sys.argv[1:],
-        os.environ.get('APPARENT_PUBLIC_SITE'), os.environ.get('VITE_HOSTED_API_ORIGIN'),
-        os.getcwd(), prepared, os.environ.get('PAGES_WORKER'),
-        os.environ.get('PUBLIC_THEME_ARTIFACT'), os.environ.get('THEME_SURFACES')]) + '\\n')
-sys.exit(7 if Path(sys.argv[0]).name == os.environ.get('FAIL_COMMAND') or
-         (prepared and os.environ.get('FAIL_PREPARED')) else 0)
-"""
+            # Inert subprocess boundary: execute the actual owner entrypoint,
+            # retaining its environment, order and fail-fast behavior.
+            stub = "#!/usr/bin/python3\nimport os,sys,json\nwith open(os.environ['CALL_LOG'],'a') as f: f.write(json.dumps([sys.argv[0],sys.argv[1:],os.environ.get('APPARENT_PUBLIC_SITE'),os.environ.get('VITE_HOSTED_API_ORIGIN')])+ '\\n')\nsys.exit(7 if os.path.basename(sys.argv[0]) == os.environ.get('FAIL_COMMAND') else 0)\n"
             for command in ('bun', 'npm', 'node', 'python3'):
                 path = root / command
                 path.write_text(stub); path.chmod(0o755)
-            env = dict(os.environ, PATH=str(root), CALL_LOG=str(log), TMPDIR=str(root))
-            for key in ('VITE_HOSTED_API_ORIGIN', 'SITE_ARTIFACT', 'PAGES_WORKER',
-                        'CHROME_PATH', 'FAIL_COMMAND', 'FAIL_PREPARED'):
-                env.pop(key, None)
-            script = site / 'scripts/site-build/verify.ts'
+            env = dict(os.environ, PATH=str(root), CALL_LOG=str(log))
+            script = lanes.ROOT / 'public/site/scripts/site-build/verify.mjs'
             result = subprocess.run([node, str(script)], env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual(len(calls), 10)
-            self.assertTrue(all(call[2:5] == ['1', None, str(site)] for call in calls))
-            self.assertEqual([call[0] for call in calls],
-                             ['bun', 'npm', 'node', 'node', 'npm', 'node',
-                              'node', 'node', 'node', 'node'])
-            self.assertEqual(calls[0][1], ['install', '--frozen-lockfile'])
-            self.assertEqual(calls[1][1], ['run', 'build'])
-            self.assertEqual(calls[2][1], ['scripts/site-build/package-apparent.ts'])
-            self.assertEqual(calls[3][1], ['../../shared/ui/test/appearance.mjs'])
-            self.assertEqual(calls[3][7:], ['public/site/dist-apparent', 'public'])
-            self.assertEqual(calls[4][1], ['run', 'build:pages-worker'])
-            self.assertEqual(calls[5][1], ['--test', 'scripts/pages/test-pages-video-runtime.ts'])
-            self.assertEqual(calls[5][6], 'dist-apparent/_worker.js')
-            self.assertIn('scripts/pages/test-public-homepage.ts', calls[6][1])
-            self.assertEqual(calls[7][1], ['--test', 'scripts/pages/test-public-homepage.ts'])
-            self.assertIn('scripts/cd/publish-pages.test.ts', calls[8][1])
-            self.assertEqual(calls[9][1], ['--experimental-strip-types', 'scripts/cd/analytics-smoke.ts'])
-            self.assertTrue(all(call[6] is None for i, call in enumerate(calls) if i != 5))
-            prepared = Path(calls[7][5])
-            self.assertEqual(prepared.parent, root)
-            self.assertFalse(prepared.exists(), 'prepared copy must be cleaned after success')
-            self.assertTrue(all(call[5] is None for i, call in enumerate(calls) if i != 7))
-            self.assertEqual((artifact / 'fixture.mp4').read_bytes(), media)
+            self.assertEqual(len(calls), 5)
+            self.assertTrue(all(call[2:] == ['1', 'https://hosted.tryapparent.com'] for call in calls))
+            self.assertIn('scripts/site-build/package-apparent.mjs', calls[2][1])
             log.unlink()
             result = subprocess.run([node, str(script)], env=dict(env, FAIL_COMMAND='npm'), capture_output=True)
             self.assertEqual(result.returncode, 7)
             self.assertEqual(len(log.read_text().splitlines()), 2)
-            log.unlink()
-            result = subprocess.run([node, str(script)], env=dict(env, FAIL_PREPARED='1'), capture_output=True)
-            self.assertNotEqual(result.returncode, 0)
-            self.assertIn(b'Prepared Public browser verification failed (7)', result.stderr)
-            failed_calls = [json.loads(line) for line in log.read_text().splitlines()]
-            self.assertEqual(len(failed_calls), 8, 'prepared failure must stop later suites')
-            self.assertFalse(Path(failed_calls[-1][5]).exists(), 'prepared copy must be cleaned after failure')
-            self.assertEqual((artifact / 'fixture.mp4').read_bytes(), media)
 
     def test_workflow_keeps_full_verification_and_separate_advisory(self):
         workflow = (lanes.ROOT / '.github/workflows/verification-platform.yml').read_text()

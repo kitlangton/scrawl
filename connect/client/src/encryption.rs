@@ -35,8 +35,6 @@ pub(super) struct Context {
     pub account_id: String,
     pub capture_id: String,
     pub sender_grant_id: String,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub group: Option<String>,
 }
 #[derive(Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -225,118 +223,6 @@ fn context_valid(context: &Context) -> Result<()> {
                 .all(|s| !s.is_empty() && s.len() <= 256 && !s.chars().any(char::is_control)),
         "invalid_encryption_context"
     );
-    ensure!(
-        matches!(
-            context.group.as_deref(),
-            None | Some("evidence") | Some("media")
-        ),
-        "invalid_encryption_context"
-    );
-    Ok(())
-}
-
-pub(super) fn is_media_path(path: &str) -> bool {
-    matches!(path, "audio.wav" | "recording.mp4" | "recording.mov")
-}
-
-fn validate_group_manifest(files: &[Asset], group: Option<&str>) -> Result<()> {
-    ensure!(files.len() <= MAX_FILES, "invalid_manifest: file count");
-    let mut names = BTreeSet::new();
-    let mut total = 0u64;
-    for file in files {
-        ensure!(
-            super::asset_path(&file.path)
-                && super::hex_digest(&file.sha256)
-                && names.insert(file.path.as_str()),
-            "invalid_manifest: unsafe or duplicate file"
-        );
-        super::check_file_size(&file.path, file.size)?;
-        total = total.checked_add(file.size).context("quota_exceeded")?;
-        ensure!(total <= MAX_BYTES, "quota_exceeded");
-    }
-    match group {
-        None => validate_assets(files)?,
-        Some("evidence") => {
-            ensure!(
-                files.iter().all(|f| !is_media_path(&f.path)),
-                "invalid_encryption_group"
-            );
-            validate_assets(files)?;
-        }
-        Some("media") => {
-            ensure!(
-                files.iter().all(|f| is_media_path(&f.path)),
-                "invalid_encryption_group"
-            );
-        }
-        _ => anyhow::bail!("invalid_encryption_group"),
-    }
-    Ok(())
-}
-fn validate_group_references(stage: &Path, files: &[Asset], group: Option<&str>) -> Result<()> {
-    let names: BTreeSet<_> = files.iter().map(|f| f.path.as_str()).collect();
-    match group {
-        None => validate_bundle_references(stage, files)?,
-        Some("evidence") => {
-            let metadata: Value = serde_json::from_slice(&fs::read(stage.join("apparent.json"))?)?;
-            let mut refs = files.to_vec();
-            for (field, allowed) in [
-                ("audio", vec!["audio.wav"]),
-                ("video", vec!["recording.mp4", "recording.mov"]),
-            ] {
-                if let Some(value) = metadata.get(field) {
-                    if value.is_null() {
-                        continue;
-                    }
-                    let path = value.as_str().context("Invalid asset reference")?;
-                    ensure!(
-                        allowed.contains(&path),
-                        "Unsafe or missing bundle asset reference"
-                    );
-                    if !names.contains(path) {
-                        refs.push(Asset {
-                            path: path.into(),
-                            size: 0,
-                            sha256: "0".repeat(64),
-                        });
-                    }
-                }
-            }
-            for field in ["contactSheet", "contact_sheet"] {
-                if let Some(value) = metadata.get(field).filter(|v| !v.is_null()) {
-                    ensure!(
-                        value.as_str().is_some_and(|p| names.contains(p)),
-                        "Unsafe or missing bundle asset reference"
-                    );
-                }
-            }
-            if let Some(frames) = metadata.get("keyframes").and_then(Value::as_array) {
-                for frame in frames {
-                    let path = frame
-                        .get("file")
-                        .and_then(Value::as_str)
-                        .context("Missing frame asset")?;
-                    ensure!(
-                        names.contains(path),
-                        "Unsafe or missing bundle asset reference"
-                    );
-                }
-            }
-            if let Some(crop) = metadata.get("autocrop").filter(|v| !v.is_null()) {
-                for field in ["fullContactSheet", "full_contact_sheet"] {
-                    if let Some(value) = crop.get(field).filter(|v| !v.is_null()) {
-                        ensure!(
-                            value.as_str().is_some_and(|p| names.contains(p)),
-                            "Unsafe or missing bundle asset reference"
-                        );
-                    }
-                }
-            }
-            validate_bundle_references(stage, &refs)?;
-        }
-        Some("media") => (),
-        _ => anyhow::bail!("invalid_encryption_group"),
-    }
     Ok(())
 }
 fn signature_bytes(signed: &Signed) -> Result<Vec<u8>> {
@@ -474,7 +360,7 @@ fn stage_assets(stage: &Path) -> Result<Vec<Asset>> {
             .custom_flags(libc::O_NOFOLLOW)
             .open(stage.join(&path))?;
         let size = file.metadata()?.len();
-        super::check_file_size(&path, size)?;
+        ensure!(size <= super::MAX_FILE_BYTES, "file_too_large");
         total = total.checked_add(size).context("quota_exceeded")?;
         ensure!(total <= MAX_BYTES, "quota_exceeded");
         files.push(Asset {
@@ -483,6 +369,8 @@ fn stage_assets(stage: &Path) -> Result<Vec<Asset>> {
             size,
         });
     }
+    validate_assets(&files)?;
+    validate_bundle_references(stage, &files)?;
     Ok(files)
 }
 
@@ -558,21 +446,7 @@ pub(super) fn pack(
             parsed.push(recipient);
         }
     }
-    let all_files = stage_assets(stage)?;
-    let files: Vec<_> = match context.group.as_deref() {
-        None => all_files,
-        Some("evidence") => all_files
-            .into_iter()
-            .filter(|f| !is_media_path(&f.path))
-            .collect(),
-        Some("media") => all_files
-            .into_iter()
-            .filter(|f| is_media_path(&f.path))
-            .collect(),
-        _ => anyhow::bail!("invalid_encryption_group"),
-    };
-    validate_group_manifest(&files, context.group.as_deref())?;
-    validate_group_references(stage, &files, context.group.as_deref())?;
+    let files = stage_assets(stage)?;
     let inner = Inner {
         version: 1,
         context: context.clone(),
@@ -822,7 +696,7 @@ pub(super) fn unpack(
         inner.version == 1 && &inner.context == context,
         "encryption_context_mismatch"
     );
-    validate_group_manifest(&inner.files, context.group.as_deref())?;
+    validate_assets(&inner.files)?;
     empty_private(output)?;
     for asset in &inner.files {
         let path = output.join(&asset.path);
@@ -845,7 +719,7 @@ pub(super) fn unpack(
         plaintext.read(&mut tail)? == 0,
         "encryption_archive_trailing_data"
     );
-    validate_group_references(output, &inner.files, context.group.as_deref())?;
+    validate_bundle_references(output, &inner.files)?;
     File::open(output)?.sync_all()?;
     Ok(inner.files)
 }

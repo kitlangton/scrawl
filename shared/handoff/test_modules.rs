@@ -1,14 +1,5 @@
 use super::*;
 
-#[cfg(target_os = "macos")]
-#[test]
-fn pasteboard_write_requires_advance_and_exact_string_type_readback() {
-    assert!(pasteboard_write_confirmed(11, 12, 12, true));
-    assert!(!pasteboard_write_confirmed(11, 12, 13, true));
-    assert!(!pasteboard_write_confirmed(11, 11, 11, true));
-    assert!(!pasteboard_write_confirmed(11, 12, 12, false));
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -751,35 +742,17 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         let config = load_config_from(&path);
-        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture", "hostedSync", "hostedEncryption", "hostedSharing"] {
+        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture"] {
             assert!(experiment_enabled_in(&config, name), "{name}");
             set_experiment_in(&path, name, false).unwrap();
             assert!(!experiment_enabled_in(&load_config_from(&path), name), "{name}");
             set_experiment_in(&path, name, true).unwrap();
             assert!(experiment_enabled_in(&load_config_from(&path), name), "{name}");
         }
-        for name in ["clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
+        for name in ["hostedSync", "hostedSharing", "hostedEncryption", "clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
             assert!(!experiment_enabled_in(&config, name), "{name}");
         }
         assert!(config.cloud.is_none());
-    }
-
-    #[test]
-    fn connect_defaults_do_not_grant_consent_or_change_unknown_config() {
-        let fixture = Fixture::new();
-        let path = fixture.0.join("config.json");
-        fs::write(&path, r#"{"secret":"synthetic","unknown":{"kept":true},"cloud":{"enabled":false,"uploadConsent":false,"server":"https://api.example.invalid"}}"#).unwrap();
-        for name in ["hostedSync", "hostedEncryption", "hostedSharing"] {
-            assert!(experiment_enabled_in(&load_config_from(&path), name));
-            set_experiment_in(&path, name, false).unwrap();
-            assert!(!experiment_enabled_in(&load_config_from(&path), name));
-        }
-        let raw: serde_json::Value = serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
-        assert_eq!(raw["secret"], "synthetic");
-        assert_eq!(raw["unknown"]["kept"], true);
-        assert_eq!(raw["cloud"]["enabled"], false);
-        assert_eq!(raw["cloud"]["uploadConsent"], false);
-        assert!(!experiment_enabled_in(&load_config_from(&path), "hostedSharing"));
     }
 
     #[test]
@@ -910,9 +883,8 @@ mod tests {
         let path = fixture.0.join("config.json");
         let missing = load_config_from(&path);
         assert!(experiment_enabled_in(&missing, "connectSettings"));
-        assert!(experiment_enabled_in(&missing, "hostedSync"));
-        assert!(experiment_enabled_in(&missing, "hostedEncryption"));
-        assert!(experiment_enabled_in(&missing, "hostedSharing"));
+        assert!(!experiment_enabled_in(&missing, "hostedSync"));
+        assert!(!experiment_enabled_in(&missing, "hostedSharing"));
         assert!(missing.cloud.is_none());
         fs::write(&path, r#"{"autoSend":false,"experiments":{"other":true}}"#).unwrap();
         assert!(experiment_enabled_in(&load_config_from(&path), "connectSettings"));
@@ -1351,35 +1323,4 @@ mod session_lookup {
         });
         assert_eq!(result.0, "ses_00000");
     }
-}
-
-/// Run only on an owned disposable Mac: all pasteboard bytes are synthetic.
-#[cfg(target_os = "macos")]
-#[test]
-fn pasteboard_competing_process_during_readback_stays_unknown_without_retry() {
-    use objc2_app_kit::{NSPasteboard, NSPasteboardTypeString};
-    use std::io::Write as _;
-    use std::process::{Command, Stdio};
-    use std::rc::Rc;
-    use std::cell::Cell;
-    let calls = Rc::new(Cell::new(0));
-    let competitor_count = Rc::new(Cell::new(0_isize));
-    let observed_calls = calls.clone();
-    let observed_count = competitor_count.clone();
-    CLIPBOARD_BEFORE_READBACK.with(|slot| {
-        *slot.borrow_mut() = Some(Box::new(move || {
-            observed_calls.set(observed_calls.get() + 1);
-            let mut child = Command::new("/usr/bin/pbcopy").stdin(Stdio::piped()).spawn().expect("synthetic competing pasteboard process");
-            child.stdin.take().unwrap().write_all(b"synthetic-competing-owner").unwrap();
-            assert!(child.wait().unwrap().success());
-            observed_count.set(NSPasteboard::generalPasteboard().changeCount() as isize);
-        }));
-    });
-    let result = copy_string_to_clipboard_verified_local("synthetic-candidate-write");
-    assert_eq!(result, VerifiedClipboardTextWrite::OutcomeUnknown);
-    assert_eq!(calls.get(), 1);
-    let pasteboard = NSPasteboard::generalPasteboard();
-    assert_eq!(pasteboard.changeCount() as isize, competitor_count.get(), "no retry or restoration may overwrite the competitor");
-    let actual = unsafe { pasteboard.stringForType(NSPasteboardTypeString) }.unwrap();
-    assert!(actual.to_string() == "synthetic-competing-owner", "competing synthetic text must remain");
 }

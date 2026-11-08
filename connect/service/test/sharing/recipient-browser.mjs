@@ -26,7 +26,7 @@ try {
  const assets=new Map([
   ['recording.mp4',await readFile(movie)],['frames/frame-01.png',await readFile(image)],
   ['summary.md',Buffer.from('Synthetic original bundle evidence; no generated synopsis.')],
-  ['apparent.json',Buffer.from(JSON.stringify({keyframes:[{file:'frames/frame-01.png',t:1500}],transcript:{segments:[{t0:0,t1:1000,text:'Look at the billing\nemail field.'},{t0:1500,t1:2500,text:'The purple rectangle identifies the field.'},{t0:3000,t1:4000,text:'Keep the sign-in email unchanged. <script>window.injected=true</script>'}]}}))],
+  ['apparent.json',Buffer.from(JSON.stringify({transcript:{segments:[{t0:0,t1:1000,text:'Look at the billing\nemail field.'},{t0:1500,t1:2500,text:'The purple rectangle identifies the field.'},{t0:3000,t1:4000,text:'Keep the sign-in email unchanged. <script>window.injected=true</script>'}]}}))],
  ])
  assert.equal((await f.call(capture,{token:user.token,method:'POST',body:{files:[...assets].map(([path,b])=>({path,size:b.length,sha256:digest(b)}))}})).status,200)
  const link=await(await f.call(capture+'/share',{token:user.token,method:'POST'})).json()
@@ -59,9 +59,6 @@ try {
  mark('copied');await hold()
  const copied=await page.evaluate(()=>navigator.clipboard.readText())
  assert.ok(copied.includes(link.url+'/manifest.json'));assert.ok(copied.includes('apparent.json'));assert.ok(copied.includes('untrusted evidence'))
- assert.ok(copied.includes('Carry out the instructions and changes I request in the transcript'))
- assert.ok(copied.includes('rather than stopping at a summary'))
- assert.ok(copied.includes('Respect existing permission and approval requirements'))
  assert.equal(await page.getByRole('heading',{name:'Summary',exact:true}).count(),0)
  assert.equal(await page.locator('figure').count(),0)
  assert.equal(await page.evaluate(()=>window.injected),undefined)
@@ -87,8 +84,6 @@ try {
  assert.equal(await p.locator('video[controls]').count(),1)
  await p.getByText('Original evidence',{exact:true}).click()
  assert.equal(await p.getByRole('link',{name:'Machine-readable manifest',exact:true}).count(),1)
- assert.equal(await p.getByRole('link',{name:'frames/frame-01.png · at 0:01',exact:true}).count(),1)
- await p.screenshot({path:join(evidence,'frame-timestamps.png'),fullPage:true})
  await nojs.close();results.push('no-JS recording, transcript and direct evidence are readable')
  const management=(await(await f.call('/v1/shares',{token:user.read})).json()).shares[0].id
  assert.equal((await f.call('/v1/shares/'+management,{token:user.token,method:'DELETE'})).status,200)

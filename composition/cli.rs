@@ -206,9 +206,6 @@ enum Command {
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Fetch {
         id: String,
-        /// Explicitly retrieve the complete recording (also the default for fetch).
-        #[arg(long)]
-        media: bool,
         #[arg(long)]
         out: PathBuf,
         #[arg(long, default_value_t = 0)]
@@ -364,9 +361,9 @@ enum Command {
         #[command(subcommand)]
         command: HexCommand,
     },
-    /// Fetch and inspect a Connect capture ID, or inspect a local bundle (or `latest`).
+    /// Print the agent-ready summary or JSON manifest for a `.apparent` bundle (or `latest`).
     Inspect {
-        /// Connect ID (fetches evidence to ./<id>.evidence.apparent, waits 120s), local bundle, or `latest`.
+        /// Path to `.apparent` bundle directory, `apparent.json`, or `latest`.
         #[arg(default_value = "latest")]
         bundle: PathBuf,
         /// Emit raw `apparent.json` instead of `summary.md` (with `--marks`, the marks as JSON).
@@ -444,7 +441,7 @@ enum Command {
         /// Preserve recorded timing instead of speeding up long quiet holds (needs FFmpeg).
         #[arg(long)]
         no_speedup: bool,
-        /// Leave out recorded ink, pins and laser.
+        /// Leave out the red ink, pins and laser.
         #[arg(long)]
         no_ink: bool,
         /// Leave out click ripples and touch trails.
@@ -682,7 +679,7 @@ pub(crate) fn run() -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Issue(args) => super::issues::command(args),
         #[cfg(any(target_os = "macos", target_os = "linux"))]
-        Command::Fetch { id, out, wait, media: _ } => hosted::fetch(&id, &out, wait),
+        Command::Fetch { id, out, wait } => hosted::fetch(&id, &out, wait),
         #[cfg(target_os = "linux")]
         Command::LaunchHandler { command } => match command {
             LaunchHandlerCommand::Install => linux::launch_handler::install(),
@@ -1329,12 +1326,7 @@ pub(crate) fn run() -> Result<()> {
             for name in &experiments {
                 handoff::enable_experiment(name);
             }
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            let bundle = hosted::inspect_source(&bundle)?;
             let (dir, loaded) = handoff::load_bundle(&bundle)?;
-            if dir.join(".evidence-only.json").exists() {
-                eprintln!("Evidence snapshot: video/audio not downloaded. Use apparent fetch <id> --media --out <new-directory> for the complete recording.");
-            }
             if marks {
                 let entries = agent_context::mark_entries(&loaded);
                 if json {
@@ -1699,7 +1691,14 @@ mod tests {
                 assert!(text.contains("apparent connect"), "{text}");
                 assert!(!text.contains("apparent cloud"), "{text}");
             }
-            assert!(Cli::try_parse_from(["apparent", name, "login"]).is_ok());
+            let error = Cli::try_parse_from(["apparent", name, "login"])
+                .err()
+                .unwrap()
+                .to_string();
+            assert!(
+                error.contains("apparent connect login --server <SERVER>"),
+                "{error}"
+            );
         }
     }
 
@@ -1708,8 +1707,6 @@ mod tests {
     fn hosted_connect_and_cloud_parse_identical_commands_and_flags() {
         use clap::CommandFactory;
         for tail in [
-            vec!["login"],
-            vec!["login", "--browser"],
             vec!["login", "--server", "https://hosted.tryapparent.com"],
             vec![
                 "login",
@@ -1752,7 +1749,7 @@ mod tests {
         }
         for name in ["connect", "cloud"] {
             for tail in [
-                vec!["login", "--browser", "--no-browser"],
+                vec!["login"],
                 vec![
                     "login",
                     "--server",

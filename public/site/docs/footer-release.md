@@ -1,29 +1,28 @@
-# Homepage footer
+# Frog theatre footer
 
-The photo section leads into “We made this. Show us what you can do.”
-`src/footer/` owns its markup, styling and lifecycle-scoped behavior.
+The accepted footer is concept 04: paper above, theatre below. The generated artwork is the original owner-selected frog theatre, encoded as `public/site/public/assets/pond/footer-theatre.webp` (1672×941, quality 90). It contains no capture screenshots or personal data. Private studies and feedback recordings must never be packaged.
 
-Keep the playful “Try apparent” invitation: its personality is intentional. The
-first activation requests `apparent://open` and changes the same button to
-“Not installed yet? No worries—click again to download ↗”. The next activation uses
-the hero's platform/CPU-aware download link, including its busy guard and release-list
-fallback. No timer downloads anything. The site does not detect installation,
-confirm native launch, start capture, upload or send feedback. Reconnecting the
-footer preserves the explicit download state.
+`public/site/src/footer/Footer.tsx` and `src/footer/` are the canonical implementation. Desktop keeps the 688px scene but combines the wordmark, rotating credit and GitHub link in one 84px base row, removing the separate credit row. Narrow layouts keep a compact two-row base without squeezing or clipping the full phrases. The four phrases include their prepositions. Hover/focus pause rotation, clicking toggles pause, hidden documents stop timers and reduced motion disables rotation. The custom element removes listeners and pending animation work when detached.
 
-The native social dialog links directly to Olivia and Simon's LinkedIn profiles.
-Escape and Close return focus to its opener. The bottom credit retains its
-pauseable rotation; reduced motion disables it. Actions use square brand frames.
+The primary button first attempts `apparent://open`. Before that navigation, its text changes to “Not installed yet? No worries—click again to download ↗”. The next click activates the existing hero download link, retaining its platform/CPU selection, latest-release lookup, busy guard and release-list fallback. Without a supported hero download, it opens the Mac/Linux release chooser. There is no installation detection, timer or automatic download. The label remains in its download state until the page reloads, including after a custom-element reconnect. Hero and footer share `public/site/src/cta.css`, using the footer’s rounded style.
 
-## Verification
+Opening the app requires native URL-handler support from #159 / #162 and an app release with that feature enabled (`nativeLaunch` is off by default in that candidate). Older installs or a rejected browser prompt leave the explicit download action available; a website cannot verify that launch succeeded. Website tests prove the requested URL and download routing, not native launch on macOS or Linux. Opening must not start capture, upload or send feedback. The LinkedIn chooser retains its native dialog, Escape, focus containment and focus return.
 
-Build and package the Public artifact, then run
-`node --test scripts/pages/test-public-homepage.ts` and
-`SITE_ARTIFACT=/absolute/artifact SITE_EVIDENCE=/private/evidence npm run test:try-button`.
-The latter uses synthetic release responses and a text download fixture, with
-Mac/Linux CPU variants, unknown/unsupported platforms, API failure, keyboard
-activation and reconnect coverage. It proves web routing, not native launch or
-native protocol-consent behavior. Evidence stays outside served content.
+## Verification and publication
 
-Publication remains subject to the current review hold. Normal main-branch Pages
-CD and rollback are described in `pages-deploy.md`.
+Build with `APPARENT_PUBLIC_SITE=1 npm run build`, package with `node scripts/site-build/package-apparent.mjs`, and run the `node:test` scripts (not standalone browser programs without their environment). `SITE_ARTIFACT=/absolute/artifact SITE_EVIDENCE=/private/evidence node scripts/commerce/test-footer-browser.mjs` exercises desktop/mobile, all phrases, pause/resume, reduced motion, dialog focus and detach cleanup. `SITE_URL=https://app.tryapparent.com/` selects live acceptance instead. Evidence stays outside public assets.
+
+`SITE_ARTIFACT=/absolute/artifact SITE_EVIDENCE=/private/evidence npm run test:try-button` exercises the two-click flow at 320/390/768/1280px, with mocked Mac ARM and Linux x86/ARM browser hints, unknown CPUs, unsupported platforms, failed release API, keyboard activation and custom-element reconnect. It observes the exact protocol navigation and asserts no release request after the first click, then downloads only a clearly labeled text fixture on the second. It never opens a real app or fetches a real installer.
+
+The headless test uses real mouse/keyboard input for launch and a DOM-dispatched follow-up click for download routing: browser-owned external-protocol prompts can block later automated input. It does not certify native consent/dismissal. Use a desktop browser to verify both physical clicks and the native prompt before release.
+
+The packaging baseline must be a real directory, not a symlink; use `readlink -f` to inspect the release target first. A symlink baseline is rejected before any candidate write because copying the link itself would otherwise let later writes reach the live release. Packaging tests first copy the resolved baseline to a disposable directory, then test symlink rejection, idempotence and conflicts against that copy. Set `ACORN_MODULE` to an installed Acorn package if it is not available through normal module resolution.
+
+Deploy only a scoped overlay: `node scripts/commerce/package-footer-release.mjs BASELINE NEW_CANDIDATE EXTERNAL_MANIFEST`. It uses the same markup, footer/shared-CTA CSS and behavior as the source build, replaces the SSR and React footer, and asserts every unrelated HTML byte and pre-existing asset is preserved. Shared CTA CSS intentionally also rounds the hero download; its existing JavaScript still selects the download. It reuses byte-identical immutable files and refuses conflicting ones. `SITE_BASELINE=/absolute/active-release node --test scripts/commerce/test-footer-packaging.mjs` covers initial/repeated publication and conflict refusal. Run both browser programs against the packaged overlay as well as the source artifact before publication.
+
+Production activation and rollback now use only Pages (`pages-deploy.md`). The
+Clanker activator, serving block and release link are retired; do not recreate
+them. Reconcile the tested overlay into `published-homepage/` and its checksum
+contract before main-branch publication. Verify the canonical homepage and new
+assets against the accepted package afterward. No Caddy, appcast, installer or
+unrelated route change is needed.

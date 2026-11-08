@@ -24,7 +24,26 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
     ...(process.env.PUBLIC_SHARE_VIDEO ? {recordVideo:{dir:process.env.PUBLIC_SHARE_VIDEO,size:{width:920,height:760}}}:{}),
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') },
   });
+  let phase = 'launch';
+  let phaseStarted = Date.now();
+  const progress = (next) => {
+    phase = next;
+    phaseStarted = Date.now();
+    console.log(`Synthetic preview phase: ${phase}`);
+  };
+  // Synchronous owned-fixture metadata only: diagnostics must not wait on the
+  // renderer/IPC that may be stalled, or delay the original test deadline.
+  const diagnose = () => console.log('Synthetic preview state: ' + JSON.stringify({
+    phase, phaseMs: Date.now() - phaseStarted, requests: requests.length,
+    publicRequests: requests.filter(request => request.includes('"publicShare"')).length,
+    socketListening: server?.listening ?? false,
+    windows: application.windows().length,
+    pid: application.process().pid, exitCode: application.process().exitCode,
+  }));
+  let diagnosticTimer;
   t.after(async () => {
+    clearInterval(diagnosticTimer);
+    diagnose();
     await application.close();
     if(process.env.PUBLIC_SHARE_VIDEO && page.video()) await page.video().saveAs(path.join(process.env.PUBLIC_SHARE_VIDEO,'sender-electron.webm'));
     if (server) await new Promise((resolve) => server.close(resolve));
@@ -36,7 +55,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Not connected', { exact: true }).waitFor();
   assert.deepEqual(await page.evaluate(() => ({
     keys: Object.keys(window.apparent), require: typeof window.require, process: typeof window.process,
-  })), { keys: ['readDrawing', 'undoDrawing', 'readMicrophoneEnabled', 'setMicrophoneEnabled', 'readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'startPublicShare', 'readPublicShare', 'cancelPublicShare', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
+  })), { keys: ['readMicrophoneEnabled', 'setMicrophoneEnabled', 'readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'startPublicShare', 'readPublicShare', 'cancelPublicShare', 'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation',
     'readErrorReporting', 'setErrorReporting', 'readConnectSettings', 'connectSettings', 'allowConnectUploads', 'cancelConnectSettings', 'checkConnectConnection',
     'disableConnectUploads', 'disconnectConnectSettings', 'requestDisableConnectUploads', 'requestDisconnectConnectSettings', 'openConnectSharedLinks',
     'openConnectBrowser', 'readRetention', 'saveRetention', 'resetRetention', 'readCaptureUsage', 'navigateSettings', 'showCaptureFolder'], require: 'undefined', process: 'undefined' });
@@ -65,10 +84,7 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   server = net.createServer((socket) => socket.once('data', (data) => {
     requests.push(data.toString());
     const request = data.toString().startsWith('{') ? JSON.parse(data.toString()) : null;
-    if (request?.drawing) {
-      if (request.drawing === 'undo') assert.equal(request.expected, '0123456789abcdef');
-      socket.end(JSON.stringify({ drawing: { revision: '0123456789abcdef', strokes: request.drawing === 'undo' ? 0 : 1 } }) + '\n');
-    } else if (request?.reference) {
+    if (request?.reference) {
       socket.end('{"reference":{"id":"synthetic.apparent","copied":false}}\n');
     } else if(request?.publicShare) {
       if(request.publicShare==='deliver' && publicFailure) socket.end('{"error":"clipboard_failed"}\n');
@@ -93,13 +109,6 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await new Promise((resolve) => setTimeout(resolve, 1100));
   await page.getByRole('button', { name: 'Refresh state' }).click();
   await page.getByText('Connected · idle', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Refresh drawing', exact: true }).click();
-  await page.getByText('1 marks · screen recording active', { exact: true }).waitFor();
-  await page.getByRole('button', { name: 'Undo last mark', exact: true }).click();
-  await page.getByText('0 marks · screen recording active', { exact: true }).waitFor();
-  await expect(page.getByRole('button', { name: 'Undo last mark', exact: true })).toBeDisabled();
-  assert.equal(requests.filter(r => r.includes('"drawing":"undo"')).length, 1);
-
   const reporting = page.getByRole('region', { name: 'Send technical error reports', exact: true });
   await reporting.getByRole('button', { name: 'Refresh reporting setting' }).click();
   const toggle = reporting.getByRole('checkbox', { name: 'Send technical error reports' });
@@ -134,43 +143,55 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
   await page.getByText('Connected · processing', { exact: true }).waitFor();
   assert.equal(await page.getByText('private', { exact: true }).count(), 0);
   assert.ok(requests.length >= 3);
-  assert.ok(requests.every((request) => request === 'state\n' || ['read', 'undo'].includes(JSON.parse(request).drawing) || JSON.parse(request).microphone === 'read' || ['read', 'locationfacts', 'probelocation', 'retention', 'usage'].includes(JSON.parse(request).storage) || JSON.parse(request).reference === 'read' || JSON.parse(request).connect === 'settings' ||
-    (JSON.parse(request).connect === 'backend' && JSON.parse(request).version === 1 &&
-      Object.keys(JSON.parse(request)).every((key) => ['connect', 'version', 'deadline'].includes(key))) ||
+  assert.ok(requests.every((request) => request === 'state\n' || JSON.parse(request).microphone === 'read' || JSON.parse(request).storage === 'read' || JSON.parse(request).reference === 'read' || JSON.parse(request).connect === 'settings' ||
     ['read', 'set'].includes(JSON.parse(request).errorReporting)));
   assert.deepEqual(errors, []);
   const screenshot = path.join(os.tmpdir(), `apparent-foundation-${process.pid}.png`);
   await page.screenshot({ path: screenshot, fullPage: true });
   console.log(`Synthetic Electron screenshot: ${screenshot}`);
 
+  diagnosticTimer = setInterval(diagnose, 5000);
+  diagnosticTimer.unref();
+  progress('refresh capture reference: click');
   await page.getByRole('button',{name:'Refresh capture reference',exact:true}).click();
+  progress('refresh capture reference: readback');
   await page.getByText('synthetic.apparent',{exact:true}).waitFor();
   const beforeShare=requests.filter(r=>r.includes('"publicShare"')).length;
+  progress('public link: open confirmation');
   await page.getByRole('button',{name:'Copy public link',exact:true}).click();
+  progress('public link: disclosure visible');
   await expect(page.getByText('Anyone with this link can view this capture. Shared captures are not end-to-end encrypted.',{exact:true})).toBeVisible();
   assert.equal(requests.filter(r=>r.includes('"publicShare"')).length,beforeShare);
   if(process.env.PUBLIC_SHARE_VIDEO) await page.waitForTimeout(1500);
+  progress('public link: create');
   await page.getByRole('button',{name:'Create and copy public link',exact:true}).click();
+  progress('public link: copied readback');
   await page.getByText('Link copied · upload may still be preparing. Open the link to check readiness.',{exact:true}).waitFor();
   if(process.env.PUBLIC_SHARE_VIDEO) {await page.screenshot({path:path.join(process.env.PUBLIC_SHARE_VIDEO,'sender-copied.png')});await page.waitForTimeout(1500);}
   assert.equal(requests.filter(r=>r.includes('"publicShare":"deliver"')).length,1);
   publicFailure=true;
+  progress('public link failure: open confirmation');
   await page.getByRole('button',{name:'Copy public link',exact:true}).click();
+  progress('public link failure: create');
   await page.getByRole('button',{name:'Create and copy public link',exact:true}).click();
+  progress('public link failure: error readback');
   await page.getByText('Public link was not confirmed copied. Check your clipboard and refresh before trying again. Local Paste remains available.',{exact:true}).waitFor();
 
   // Do this after interaction checks: Playwright tracks even a cancelled Electron
   // navigation as pending; the actual webContents URL remains authoritative.
   const originalUrl = page.url();
+  progress('isolation: external navigation attempt');
   await page.evaluate(() => {
     const link = document.createElement('a');
     link.href = 'https://example.com'; document.body.append(link); link.click(); link.remove();
     window.open('https://example.com');
   });
+  progress('isolation: owned URL readback');
   assert.equal(await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].webContents.getURL()), originalUrl);
   assert.equal(application.windows().length, 1);
 
   // A second renderer with the same preload still cannot invoke the bridge.
+  progress('isolation: second renderer bridge refusal');
   assert.equal(await application.evaluate(async ({ BrowserWindow }, root) => {
     const other = new BrowserWindow({ show: false, webPreferences: {
       preload: root + '/electron/preload.cjs', sandbox: true, contextIsolation: true, nodeIntegration: false,
@@ -180,7 +201,156 @@ test('Electron preview, read-only bridge and isolation', { timeout: 45000 }, asy
       return await other.webContents.executeJavaScript(`Promise.all(['readRuntimeState', 'readCaptureReference', 'copyCaptureReference', 'startPublicShare', 'readPublicShare', 'cancelPublicShare'].map(k => window.apparent[k]().then(() => false, () => true))).then(r => r.every(Boolean))`);
     } finally { other.destroy(); }
   }, path.join(__dirname, '..')), true);
+  progress('complete');
 });
 
-// Shared identity rendering and click-through checks use the shipped renderer.
-require('./build/identity.smoke.ts');
+// Rust state is synthetic; the main/preload/renderer and OS window resizing are real.
+for(const mode of ['--onboarding'])test(`onboarding fixed window shrinks to coach and restores setup ${mode}`, { timeout: 30000 }, async (t) => {
+  const { spawn } = require('node:child_process');
+  const { chromium } = require('@playwright/test');
+  const profile = await fs.mkdtemp(path.join(os.tmpdir(), 'onboarding-window-'));
+  const child = spawn(require('electron'), [path.join(__dirname, '..'), mode, '--remote-debugging-port=0', ...(process.platform === 'linux' ? ['--no-sandbox'] : [])], {
+    env: { ...process.env, APPARENT_UI_PROFILE: profile }, stdio: ['pipe', 'pipe', 'pipe'],
+  });
+  let browser;
+  t.after(async () => {
+    if (child.exitCode === null) {
+      const exited = new Promise(resolve => child.once('exit', resolve));
+      child.stdin.end('{"type":"close"}\n');
+      const timer = setTimeout(() => child.kill(), 3000);
+      await exited; clearTimeout(timer);
+    }
+    await browser?.close();
+    await fs.rm(profile, { recursive: true, force: true });
+  });
+  const endpoint = await new Promise((resolve, reject) => {
+    let log = '';
+    const timer = setTimeout(() => reject(Error('No Electron debugger endpoint')), 10000);
+    child.once('error', reject);
+    child.once('exit', () => { clearTimeout(timer); reject(Error('Electron exited before connection')); });
+    child.stderr.on('data', bytes => {
+      log += bytes;
+      const match = log.match(/DevTools listening on (ws:\/\/[^\s]+)/);
+      if (match) { clearTimeout(timer); resolve(match[1]); }
+    });
+  });
+  browser = await chromium.connectOverCDP(endpoint);
+  const context=browser.contexts()[0];
+  const page=context.pages()[0]||await context.waitForEvent('page');
+  const send = patch => child.stdin.write(JSON.stringify({ type:'state', step:'welcome', rows:[], ready:true,
+    index:0, count:5, testInstance:true, shortcut:'⌃⌥⇧9', ...patch })+'\n');
+  let output='';child.stdout.on('data',bytes=>output+=bytes);
+  await page.emulateMedia({reducedMotion:'no-preference'});
+  send({ penPicker:true });
+  await expect(page.getByRole('heading', { name:'Pick your pen.', exact:true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(760);
+  assert.deepEqual(await page.locator('.native-pencils button').allTextContents(),['','','','']);
+  await page.evaluate(()=>document.fonts.ready);
+  await expect(page.locator('.native-setup')).toHaveCSS('font-family', '"Host Grotesk", system-ui, sans-serif');
+  await expect(page.getByRole('heading',{name:'Pick your pen.',exact:true})).toHaveCSS('font-size','36px');
+  await expect(page.getByRole('button',{name:'Use this pen',exact:true})).toHaveCSS('font-size','18px');
+  for(const scheme of ['light','dark','light']){
+    await page.emulateMedia({colorScheme:scheme});
+    await expect(page.locator('.native-setup')).toHaveCSS('background-color',scheme==='light'?'rgb(245, 240, 232)':'rgb(2, 1, 2)');
+    await expect(page.getByRole('button',{name:'Use this pen',exact:true})).toHaveCSS('background-color','rgb(122, 88, 199)');
+    await expect(page.getByRole('button',{name:'Use this pen',exact:true})).toHaveCSS('color','rgb(245, 240, 232)');
+    const tip=await page.locator('.native-pencils button span').first().evaluate(el=>getComputedStyle(el,'::after').borderTopColor);
+    assert.notEqual(tip,scheme==='light'?'rgb(245, 240, 232)':'rgb(2, 1, 2)','pen tip must remain visible against the page');
+  }
+
+  await page.getByRole('button',{name:'purple pen',exact:true}).click();
+  await expect.poll(()=>output).toContain('pen:purple');
+  send({penPicker:true,penSelected:true,penRgb:[122,88,199]});
+  await expect(page.locator('.native-puddle path')).toHaveCSS('fill','rgb(122, 88, 199)');
+  const centres=await page.evaluate(()=>{
+    const h=document.querySelector('.native-pen-picker h1').getBoundingClientRect();
+    const button=[...document.querySelectorAll('footer button')].at(-1).getBoundingClientRect();
+    return [h.x+h.width/2,button.x+button.width/2,innerWidth/2];
+  });
+  assert.ok(Math.abs(centres[0]-centres[2])<2&&Math.abs(centres[1]-centres[2])<2);
+  // Hold the first image decode, as on a cold launch. No wall-clock timeout may skip the hop.
+  await page.locator('.native-pond-frog').evaluate(img=>{const decode=img.decode.bind(img);img.decode=()=>decode().then(()=>new Promise(resolve=>{window.releasePenImage=resolve}));});
+  const before=await page.locator('.native-pond-frog').boundingBox();
+  await page.getByRole('button',{name:'Use this pen',exact:true}).click();
+  await expect(page.getByRole('button',{name:'Use this pen',exact:true})).toBeDisabled();
+  await new Promise(resolve=>setTimeout(resolve,1400));
+  assert.equal(output.includes('"action":"continue"'),false,'cold image readiness must not be bypassed by a timer');
+  await page.evaluate(()=>window.releasePenImage());
+  await expect(page.locator('.native-pond')).toHaveAttribute('data-landing','true');
+  const minimum=await page.evaluate(()=>new Promise(resolve=>{
+    const frog=document.querySelector('.native-pond-frog');let min=frog.getBoundingClientRect().y;const began=performance.now();
+    function sample(){min=Math.min(min,frog.getBoundingClientRect().y);if(performance.now()-began<1000)requestAnimationFrame(sample);else resolve(min)}requestAnimationFrame(sample);
+  }));
+  assert.ok(minimum<before.y-25,'frog must rise visibly before landing');
+  await expect.poll(()=>output).toContain('"action":"continue"');
+  assert.equal(output.match(/"action":"continue"/g)?.length,1);
+  send({step:'try-it',practice:'screen'});
+  await expect(page.getByRole('heading',{name:'Choose Screen.',exact:true})).toBeVisible();
+  send({ step:'try-it', practice:'whiteboard', anchor:[300,30,320,50] });
+  await expect(page.getByRole('heading', { name:'Open Whiteboard.', exact:true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(380);
+  assert.equal(await page.evaluate(() => {
+    const rect=document.querySelector('main').getBoundingClientRect();
+    return rect.left>=0 && rect.right<=innerWidth && rect.bottom<=innerHeight;
+  }), true);
+  send({step:'try-it',practice:'copy-failed'});
+  await page.getByRole('button',{name:'Find saved capture',exact:true}).click();
+  await expect.poll(()=>output).toContain('practice-locate');
+  send({ step:'try-it', practice:'locate', anchor:[900,0,24,24] });
+  await expect(page.getByRole('heading', { name:'apparent lives here.', exact:true })).toBeVisible();
+  await expect(page.getByText('Find the apparent icon in your menu bar. Click it, then choose Open Latest Capture.', { exact:true })).toBeVisible();
+  await expect(page.locator('.native-coach')).toHaveAttribute('data-arrow','true');
+  for(const phase of ['start','screen','whiteboard','board-ink','screen-ink','stop','preparing','copied','paste','locate','complete','retry','copy-failed']){
+    send({step:'try-it',practice:phase});
+    await expect(page.locator('.native-coach')).toHaveAttribute('data-stage',phase);
+    const layout=await page.locator('.native-coach').evaluate(card=>{
+      const content=card.querySelector('.native-coach-content'),rect=card.getBoundingClientRect();
+      const buttons=[...card.querySelectorAll('button')].map(button=>({font:parseFloat(getComputedStyle(button).fontSize),radius:getComputedStyle(button).borderRadius,...(()=>{const r=button.getBoundingClientRect();return{width:r.width,height:r.height}})()}));
+      return{bottom:rect.bottom,viewport:innerHeight,horizontal:content.scrollWidth>content.clientWidth,scroll:content.scrollHeight>content.clientHeight,buttons};
+    });
+    assert.ok(layout.bottom<=layout.viewport,phase+' coach is clipped');
+    assert.equal(layout.horizontal,false,phase+' content overflows horizontally');
+    assert.equal(layout.scroll,false,phase+' needs scrolling at normal text size');
+    for(const button of layout.buttons){assert.ok(button.font>=18&&button.width>=44&&button.height>=44,phase+' button violates brand minimum');assert.equal(button.radius,'0px');}
+  }
+  await page.evaluate(()=>document.documentElement.style.fontSize='200%');
+  await expect(page.locator('.native-coach p')).toHaveCSS('font-size','36px');
+  assert.equal(await page.locator('.native-coach-content').evaluate(el=>el.scrollWidth<=el.clientWidth),true);
+  await page.getByRole('button',{name:'Try later',exact:true}).scrollIntoViewIfNeeded();
+  await expect(page.getByRole('button',{name:'Try later',exact:true})).toBeInViewport();
+  await page.evaluate(()=>document.documentElement.style.fontSize='');
+
+  send({ step:'permissions' });
+  await expect(page.getByRole('heading', { name:'We need three things.', exact:true })).toBeVisible();
+  await expect.poll(() => page.evaluate(() => innerWidth)).toBe(760);
+  assert.equal(await page.locator('.native-setup section > p').count(),0);
+  send({step:'shortcut',shortcutChosen:true});
+  await expect(page.getByRole('heading',{name:'Start and stop with your shortcut.',exact:true})).toBeVisible();
+  assert.equal(await page.locator('.native-setup section > p').count(),0);
+  await expect(page.getByRole('button',{name:'Change shortcut',exact:true})).toBeVisible();
+  send({step:'shortcut',shortcutChosen:false,platform:'macos',shortcutEditor:{recording:false,externallyManaged:false}});
+  await page.getByRole('button',{name:'Use this shortcut',exact:true}).click();
+  await expect.poll(()=>output).toContain('use-current-shortcut');
+  send({step:'shortcut',shortcutEditor:{recording:true,externallyManaged:false}});
+  await page.getByRole('group',{name:'Shortcut recorder'}).press('Control+Alt+k');
+  await expect.poll(()=>output).toContain('"keyCode":40');
+  await expect.poll(()=>output).toContain('"modifiers":6144');
+  await page.getByRole('group',{name:'Shortcut recorder'}).evaluate(element=>element.dispatchEvent(new KeyboardEvent('keydown',{key:'ß',code:'KeyS',altKey:true,bubbles:true})));
+  await expect.poll(()=>output).toContain('"keyCode":1,"modifiers":2048,"key":"s"');
+  await page.getByRole('group',{name:'Shortcut recorder'}).press('Tab');
+  await expect(page.getByRole('button',{name:'Cancel',exact:true})).toBeFocused();
+  await page.getByRole('button',{name:'Cancel',exact:true}).press('Enter');
+  await expect.poll(()=>output).toContain('cancel-shortcut');
+
+
+  await page.emulateMedia({reducedMotion:'reduce'});
+  send({penPicker:true,penSelected:true,penRgb:[59,121,189]});
+  await expect(page.getByRole('heading',{name:'Pick your pen.',exact:true})).toBeVisible();
+  await page.getByRole('button',{name:'Use this pen',exact:true}).click();
+  await expect.poll(()=>output.match(/"action":"continue"/g)?.length).toBe(2);
+  await expect(page.locator('.native-pond-frog')).toHaveCSS('animation-name','none');
+  await page.setViewportSize({width:320,height:720});
+  assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth<=innerWidth),true,'pen picker must reflow at 320 CSS pixels');
+  await page.setViewportSize({width:760,height:720});
+
+});

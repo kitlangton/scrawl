@@ -2,18 +2,6 @@
 use super::*;
 use std::net::{TcpListener, TcpStream};
 
-#[test]
-fn electron_exception_categories_are_unhandled_and_content_free() {
-    for failure in [Failure::ElectronMainException, Failure::ElectronMainRejection,
-        Failure::ElectronRendererException, Failure::ElectronRendererRejection] {
-        let report = Report::new(failure, std::panic::Location::caller(), Consent { generation: "private".into() });
-        let payload = report.payload("phc_synthetic").unwrap();
-        assert_eq!(payload["properties"]["$exception_list"][0]["mechanism"]["handled"], false);
-        assert_eq!(payload["properties"]["operation"], failure.code());
-        assert!(!payload.to_string().contains("private"));
-    }
-}
-
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {
@@ -68,45 +56,21 @@ fn consent_defaults_on_but_corrupt_or_unreadable_config_never_enables_reporting(
 fn narrow_settings_bridge_reads_default_and_persists_explicit_changes_without_dropping_keys() {
     let scratch = Scratch::new();
     let path = scratch.config();
-    assert_eq!(
-        error_reporting_bridge_in(&path, "read", None, || true),
-        Ok(true)
-    );
+    assert_eq!(error_reporting_bridge_in(&path, "read", None, || true), Ok(true));
     std::fs::write(&path, r#"{"sentinel":"keep"}"#).unwrap();
-    assert_eq!(
-        error_reporting_bridge_in(&path, "set", Some(false), || true),
-        Ok(false)
-    );
+    assert_eq!(error_reporting_bridge_in(&path, "set", Some(false), || true), Ok(false));
     let saved: Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
     assert_eq!(saved["sentinel"], "keep");
     assert_eq!(saved["errorReporting"], false);
-    assert_eq!(
-        error_reporting_bridge_in(&path, "read", None, || true),
-        Ok(false)
-    );
-    assert_eq!(
-        error_reporting_bridge_in(&path, "set", Some(true), || true),
-        Ok(true)
-    );
-    assert_eq!(
-        error_reporting_bridge_in(&path, "unknown", None, || true),
-        Err("invalid_request")
-    );
+    assert_eq!(error_reporting_bridge_in(&path, "read", None, || true), Ok(false));
+    assert_eq!(error_reporting_bridge_in(&path, "set", Some(true), || true), Ok(true));
+    assert_eq!(error_reporting_bridge_in(&path, "unknown", None, || true), Err("invalid_request"));
     let before = std::fs::read(&path).unwrap();
-    assert_eq!(
-        error_reporting_bridge_in(&path, "set", Some(false), || false),
-        Err("admission_expired")
-    );
+    assert_eq!(error_reporting_bridge_in(&path, "set", Some(false), || false), Err("admission_expired"));
     assert_eq!(std::fs::read(&path).unwrap(), before);
     std::fs::write(&path, "malformed").unwrap();
-    assert_eq!(
-        error_reporting_bridge_in(&path, "read", None, || true),
-        Err("config_read_failed")
-    );
-    assert_eq!(
-        error_reporting_bridge_in(&path, "set", Some(true), || true),
-        Err("config_write_failed")
-    );
+    assert_eq!(error_reporting_bridge_in(&path, "read", None, || true), Err("config_read_failed"));
+    assert_eq!(error_reporting_bridge_in(&path, "set", Some(true), || true), Err("config_write_failed"));
     assert_eq!(std::fs::read_to_string(&path).unwrap(), "malformed");
 }
 
@@ -297,14 +261,7 @@ fn worker_drops_pre_optout_reports_even_after_reenable() {
     });
     let reporter =
         Reporter::start(path.clone(), "phc_synthetic_public_token".into(), endpoint).unwrap();
-    reporter.capture_error(
-        Failure::ScreenStart,
-        std::panic::Location::caller(),
-        Some(
-            &anyhow::Error::new(std::io::Error::from_raw_os_error(libc::EACCES))
-                .context("private startup error"),
-        ),
-    );
+    reporter.capture(Failure::ScreenStart, std::panic::Location::caller());
     entered_rx.recv_timeout(Duration::from_secs(4)).unwrap();
     reporter.capture(Failure::AudioStart, std::panic::Location::caller());
     set_enabled_in(&path, false).unwrap();
@@ -314,11 +271,6 @@ fn worker_drops_pre_optout_reports_even_after_reenable() {
     release_tx.send(()).unwrap();
     let (first, second) = server.join().unwrap();
     assert_eq!(first["properties"]["operation"], "screen_start_failed");
-    assert_eq!(
-        first["properties"]["diagnostics"]["io_errors"][0]["os_code"],
-        libc::EACCES
-    );
-    assert!(!first.to_string().contains("private startup error"));
     assert_eq!(second["properties"]["operation"], "video_export_failed");
 }
 
@@ -404,120 +356,4 @@ fn real_panic_hook_flushes_sanitized_event_chains_hook_and_respects_optout() {
             );
         }
     }
-}
-
-#[test]
-fn typed_diagnostics_preserve_nested_steps_os_code_and_capture_setup_without_error_text() {
-    use crate::capture::engine::bundle::diagnostics::{CaptureFacts, Diagnose, Step};
-    let error = Err::<(), _>(anyhow::Error::new(std::io::Error::from_raw_os_error(
-        libc::EACCES,
-    )))
-    .diagnostic(Step::ArtifactWrite)
-    .diagnostic(Step::BundleBuild)
-    .unwrap_err()
-    .context("private /Users/customer/secret.apparent https://private.example?token=secret");
-    let error = CaptureFacts {
-        mode: crate::shared::model::CaptureMode::Region,
-        duration_ms: Some(1234),
-        candidate_frames: Some(3),
-        has_video: Some(true),
-        microphone_recorded: Some(false),
-        width: 320.0,
-        height: 200.0,
-        scale: 2.0,
-        notes_pending: true,
-        strokes: 2,
-        interactions: 4,
-    }
-    .attach(error);
-    let mut report = Report::new(
-        Failure::FinalizeCapture,
-        std::panic::Location::caller(),
-        Consent {
-            generation: "initial".into(),
-        },
-    );
-    report.diagnostics = Some(diagnostics(&error));
-    let payload = report.payload("phc_synthetic_public_token").unwrap();
-    let data = &payload["properties"]["diagnostics"];
-    assert_eq!(data["steps"][0]["step"], "bundle_build");
-    assert_eq!(data["steps"][1]["step"], "artifact_write");
-    assert_eq!(data["io_errors"][0]["kind"], "PermissionDenied");
-    assert_eq!(data["io_errors"][0]["os_code"], libc::EACCES);
-    assert_eq!(data["capture"]["mode"], "region");
-    assert_eq!(data["capture"]["duration_ms"], 1234);
-    assert_eq!(data["capture"]["microphone_recorded"], false);
-    assert_eq!(
-        payload["properties"]["$exception_list"][0]["value"],
-        "capture_finalization_failed: artifact_write (PermissionDenied)"
-    );
-    assert_eq!(
-        payload["properties"]["$exception_list"][0]["stacktrace"]["frames"][1]["function"],
-        "artifact_write"
-    );
-    assert!(!payload.to_string().contains("private"));
-    assert!(!payload.to_string().contains("secret"));
-    assert!(!payload.to_string().contains("customer"));
-}
-
-#[test]
-fn real_empty_capture_reports_no_frames_without_leaking_target_or_video_path() {
-    use crate::capture::engine::{bundle::bundle_processing, runtime::ScreenRecording};
-    let scratch = Scratch::new();
-    let target = serde_json::from_value(json!({
-        "mode":"display", "displayId":17, "app":"private-app", "windowTitle":"private-title",
-        "frame":{"x":123,"y":456,"width":320,"height":200,"scale":1}
-    }))
-    .unwrap();
-    let error = bundle_processing::finalize_capture_bundle(
-        &scratch.0,
-        target,
-        ScreenRecording {
-            frames: vec![],
-            video: Some(scratch.0.join("private-movie.mp4")),
-            duration_ms: 1000,
-            video_offset_ms: 0,
-        },
-        vec![],
-        vec![],
-        None,
-        None,
-        Default::default(),
-        None,
-    )
-    .unwrap_err();
-    // Adding diagnostic context must preserve the existing user-facing no-frames detection.
-    assert!(
-        error
-            .to_string()
-            .starts_with("No screen frames were captured")
-    );
-    let data = diagnostics(&error);
-    assert_eq!(data["steps"][0]["step"], "no_screen_frames");
-    assert!(!data.to_string().contains("private"));
-    assert!(
-        !data
-            .to_string()
-            .contains(&scratch.0.to_string_lossy().to_string())
-    );
-}
-
-#[test]
-fn reporting_never_formats_unknown_error_messages_and_bounds_cyclic_sources() {
-    #[derive(Debug)]
-    struct Private;
-    impl std::fmt::Display for Private {
-        fn fmt(&self, _: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-            panic!("must not format arbitrary errors");
-        }
-    }
-    impl std::error::Error for Private {
-        fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
-            Some(self)
-        }
-    }
-    let data = diagnostics(&anyhow::Error::new(Private));
-    assert_eq!(data["chain_depth"], 32);
-    assert_eq!(data["steps"], json!([]));
-    assert!(data["capture"].is_null());
 }

@@ -42,10 +42,7 @@ class PreparationTests(unittest.TestCase):
 
     def test_real_input_closure_and_unrun_gates(self):
         receipt = prepare.prepare(self.repo, self.head)
-        self.assertEqual({item['path'] for item in receipt['inputs']}, set(prepare.INPUTS))
-        self.assertIn('engine/native/Export.swift', prepare.INPUTS)
-        self.assertIn(prepare.INK_FIXTURE, prepare.INPUTS)
-        self.assertEqual(receipt['scenario'], 'engine-native-swift-closure')
+        self.assertEqual(len(receipt['inputs']), 5)
         self.assertEqual(set(receipt['gates'].values()), {'UNRUN'})
         self.assertEqual(receipt['command'], ['python3', prepare.ENTRY])
 
@@ -70,17 +67,17 @@ class PreparationTests(unittest.TestCase):
         self.assertFalse(output.exists())
 
     def test_missing_swift_fixture_in_committed_packet(self):
-        self.git('rm', prepare.LIVE_FIXTURE)
+        self.git('rm', prepare.INPUTS[1])
         self.git('commit', '-qm', 'incomplete packet')
         with self.assertRaisesRegex(ValueError, 'missing'):
             prepare.prepare(self.repo, self.git('rev-parse', 'HEAD').strip())
 
     def test_dirty_and_hidden_input(self):
-        fixture = self.repo / prepare.LIVE_FIXTURE
+        fixture = self.repo / prepare.INPUTS[1]
         fixture.write_text('broken')
         with self.assertRaisesRegex(ValueError, 'clean'):
             prepare.prepare(self.repo, self.head)
-        self.git('update-index', '--assume-unchanged', prepare.LIVE_FIXTURE)
+        self.git('update-index', '--assume-unchanged', prepare.INPUTS[1])
         with self.assertRaisesRegex(ValueError, 'hidden index'):
             prepare.prepare(self.repo, self.head)
 

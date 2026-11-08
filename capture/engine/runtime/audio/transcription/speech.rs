@@ -10,11 +10,7 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
-use apparent_capture_engine::audio::speech::Recognizer;
-#[cfg(test)]
-use apparent_capture_engine::audio::speech::init_backends;
-#[cfg(test)]
-use transcribe_cpp::{Model, RunOptions};
+use transcribe_cpp::{Model, RunOptions, Session, TimestampKind};
 
 use crate::capture::desktop::helper::SpeechModelLine;
 use crate::shared::model::{TranscriptData, TranscriptSegment, WordTiming};
@@ -25,7 +21,7 @@ const CLIP_PAD_MS: u64 = 200;
 
 /// Reuse one Parakeet session across speech chunks discovered during a recording.
 pub struct Incremental {
-    session: Recognizer,
+    session: Session,
     name: String,
 }
 
@@ -36,14 +32,20 @@ impl Incremental {
     }
 
     pub fn load(path: &Path) -> Result<Self> {
-        let session = Recognizer::load(path)?;
+        init_backends()?;
+        let session = Model::load(path)?.session()?;
         Ok(Self { session, name: model_name(path) })
     }
 
     pub fn transcribe(&mut self, samples: &[f32], offset_ms: u64) -> Result<TranscriptData> {
+        let options = RunOptions {
+            timestamps: TimestampKind::Word,
+            language: Some("en".into()),
+            ..Default::default()
+        };
         // One-shot runs replace native results (including word times); the binding
         // materializes owned output. Do not use a streaming context across captures.
-        let result = self.session.run(samples)?;
+        let result = self.session.run(samples, &options)?;
         let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
         let at = |ms: i64| offset_ms + ms.max(0) as u64;
         let mut transcript = TranscriptData {
@@ -206,8 +208,14 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         return Ok(transcript);
     }
 
-    let mut session = Recognizer::load(&path)
-        .with_context(|| format!("Could not load {}", path.display()))?;
+    init_backends()?;
+    let model = Model::load(&path).with_context(|| format!("Could not load {}", path.display()))?;
+    let mut session = model.session()?;
+    let options = RunOptions {
+        timestamps: TimestampKind::Word,
+        language: Some("en".into()),
+        ..Default::default()
+    };
     let mut texts = Vec::new();
     for (start, end) in clips {
         let from_ms = start.saturating_sub(CLIP_PAD_MS);
@@ -216,7 +224,7 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
         if from >= to {
             continue;
         }
-        let result = session.run(&samples[from..to])?;
+        let result = session.run(&samples[from..to], &options)?;
         let text = result.text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             continue;
@@ -264,6 +272,18 @@ pub fn transcribe(audio: &Path) -> Result<TranscriptData> {
     }
     transcript.text = texts.join(" ");
     Ok(transcript)
+}
+
+/// Register the runtime-selected CPU backend once, before any thread loads a model.
+/// The native registry cannot be mutated concurrently with model loading.
+fn init_backends() -> Result<()> {
+    static INIT: std::sync::OnceLock<std::result::Result<(), String>> = std::sync::OnceLock::new();
+    INIT.get_or_init(|| {
+        transcribe_cpp::disable_logging();
+        transcribe_cpp::init_backends_default().map_err(|error| format!("{error:#}"))
+    })
+    .clone()
+    .map_err(|error| anyhow::anyhow!("transcribe.cpp backends: {error}"))
 }
 
 /// Makes sure a model is on disk: `installed` when Hex's or Apparent's own is there, else downloads
@@ -460,40 +480,14 @@ mod tests {
     #[test]
     #[ignore]
     fn downloads_and_runs_parakeet() {
-        let started = std::time::Instant::now();
-        let phase = |name| eprintln!("speech smoke phase={name} elapsed_ms={}", started.elapsed().as_millis());
         let kept = std::env::var_os("APPARENT_TEST_MODEL_DIR").map(PathBuf::from);
         let dir = kept.clone().unwrap_or_else(|| temp_dir("parakeet"));
         let fresh = !dir.join(PARAKEET.filename).is_file();
         let mut last = 0.0;
-        phase("download_verify_start");
         let model = download(&PARAKEET, &dir, &mut |done| last = done).unwrap();
-        phase("download_verify_complete");
         if fresh {
             assert_eq!(last, 1.0);
         }
-        run_parakeet(&model);
-        if kept.is_none() {
-            let _ = std::fs::remove_dir_all(&dir);
-        }
-    }
-
-    /// The packaging harness first runs downloads_and_runs_parakeet natively on
-    /// this same private directory. Only CPU-sensitive work belongs under SDE;
-    /// hashing the entire model there obscures the compatibility proof.
-    #[test]
-    #[ignore]
-    fn runs_prepared_parakeet() {
-        let dir = PathBuf::from(std::env::var_os("APPARENT_TEST_MODEL_DIR")
-            .expect("native model preparation must provide APPARENT_TEST_MODEL_DIR"));
-        let model = dir.join(PARAKEET.filename);
-        assert_eq!(std::fs::metadata(&model).unwrap().len(), PARAKEET.bytes);
-        run_parakeet(&model);
-    }
-
-    fn run_parakeet(model: &Path) {
-        let started = std::time::Instant::now();
-        let phase = |name| eprintln!("speech smoke phase={name} elapsed_ms={}", started.elapsed().as_millis());
         #[cfg(target_arch = "x86_64")]
         if std::env::var_os("APPARENT_TEST_NO_AVX512").is_some() {
             // Under SDE: proves the emulated CPU is the one without AVX-512 (#58).
@@ -505,12 +499,10 @@ mod tests {
             assert!(std::arch::is_x86_feature_detected!("avx512vnni"));
         }
         init_backends().unwrap();
-        phase("backends_ready");
         for device in transcribe_cpp::devices() {
             eprintln!("device: {} ({})", device.name, device.description);
         }
-        let model = Model::load(model).unwrap();
-        phase("model_loaded");
+        let model = Model::load(&model).unwrap();
         let pcm: Vec<f32> = (0..32_000)
             .map(|i| (i as f32 * 440.0 * std::f32::consts::TAU / 16_000.0).sin() * 0.1)
             .collect();
@@ -519,6 +511,8 @@ mod tests {
             .unwrap()
             .run(&pcm, &RunOptions::default())
             .unwrap();
-        phase("inference_complete");
+        if kept.is_none() {
+            let _ = std::fs::remove_dir_all(&dir);
+        }
     }
 }

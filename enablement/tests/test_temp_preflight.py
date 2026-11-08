@@ -84,36 +84,11 @@ class TempPreflightTests(unittest.TestCase):
         self.assertEqual(list(longer.iterdir()), [])
 
     def test_pr_contracts_include_preflight_tests_without_environment_admission(self):
-        with patch.dict(os.environ, TMPDIR='/missing-preflight-fixture'), patch.object(verification.subprocess, 'run') as run, patch.object(
-                verification, 'run_public_site_build') as public_build, patch.object(
-                verification, 'run_connect_client_typescript_tests') as client_tests, patch.object(
-                verification, 'run_app_shell_check') as app_check, patch.object(
-                verification, 'run_record_typescript_check') as record_check, patch.object(
-                verification, 'run_onboarding_package_check') as onboarding_check, patch.object(
-                verification, 'run_architecture_check') as architecture_check, patch.object(
-                verification, 'preflight_dependencies'):
+        with patch.dict(os.environ, TMPDIR='/missing-preflight-fixture'), patch.object(verification.subprocess, 'run') as run:
             verification.run_pr_checks()
-        architecture_check.assert_called_once_with([])  # Unknown history requests all owners.
-        public_build.assert_called_once_with()  # Unknown history includes Public feedback.
-        client_tests.assert_called_once_with()  # Keep owner checks selected without live dependency setup.
-        commands = [call.args[0] for call in run.call_args_list]
-        dependency_contracts = commands.pop(0)
-        self.assertIn('enablement/verification/dependencies/preflight.test.ts', dependency_contracts)
-        self.assertEqual(commands[2][:3], ['node', '--experimental-strip-types', '--test'])
-        self.assertIn('composition/delivery/core.test.ts', commands[2][3:])
-        self.assertIn('composition/delivery/public.test.ts', commands[2][3:])
-        self.assertTrue(all(path.startswith('composition/delivery/') and path.endswith('.test.ts') for path in commands[2][3:]))
-        patterns = [command[-1] for command in commands]
-        patterns[2] = 'delivery suites'
-        self.assertEqual(patterns, ['enablement/file-length/check.test.ts', 'shared/ui/scripts/check-theme.py', 'delivery suites', 'test_*.py',
-                                    'test_pre_push_guard.py', 'test_commit_push_checkpoint.py',
-                                    'test_signing_push.py', 'test_mac_prepare_push.py',
-                                    'test_mac_cache_push.py', 'test_verification.py',
-                                    'test_release_gate.py', 'test_temp_preflight.py',
-                                    'test_owner_lanes.py'])
-        app_check.assert_called_once_with()
-        record_check.assert_called_once_with()
-        onboarding_check.assert_called_once_with()
+        patterns = [call.args[0][-1] for call in run.call_args_list]
+        self.assertEqual(patterns, ['shared/ui/scripts/check-theme.py', 'test_*push*.py', 'test_verification.py',
+                                    'test_release_gate.py', 'test_temp_preflight.py', 'test_owner_lanes.py'])
         self.assertTrue(all(call.kwargs['check'] for call in run.call_args_list))
 
     def test_rejection_precedes_all_subprocesses(self):

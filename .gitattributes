@@ -1,0 +1,3 @@
+# Accepted deployed assets are byte snapshots, not editable source.
+# Preserve their original line endings and whitespace for hash verification.
+public/site/published-homepage/** -text -whitespace

@@ -1,6 +1,6 @@
 # Encrypted Connect handoff — issue #189 candidate
 
-Endpoint encryption is available by default with private Connect; availability is not a completed security audit. Local `.apparent` bundles remain ordinary. An explicit `experiments.hostedEncryption=false` opts out. Encrypted transfer requires an endpoint enrolled through its existing explicit Connect approval; changing the flag does not enroll a key or grant upload consent. Availability alone does not grant credentials, change a deployment, upload history, migrate plaintext or guarantee key recovery.
+This owner-local implementation is an **off-by-default candidate**, not deployed encryption or a completed security audit. Local `.apparent` bundles remain ordinary. `experiments.hostedEncryption=true` selects encryption on each endpoint before its existing Connect approval. No production setting, account access, real recording or migration is enabled by this change.
 
 ## Accepted journey and trust boundary
 
@@ -49,7 +49,7 @@ Simon confirmed these limits on 2026-11-02:
 2. **Lost keys:** losing every endpoint key makes existing ciphertext unrecoverable through password reset. No server backup/escrow or key-recovery UI is included.
 3. **Existing plaintext:** leave existing hosted plaintext untouched and clearly identified. No plaintext data migration, deletion or reupload is needed. Encrypted-mode fetch refuses plaintext unless the operator deliberately leaves that mode to retrieve legacy data.
 
-Default availability does not grant account access, upload consent or endpoint approval, and does not waive independent review and affected native/platform proof. The additive `0005.sql` schema change supports encrypted uploads; applying it is a separately authorized operational step, never a side effect of building/testing or migration of existing capture data.
+These scope decisions do not enable the disabled experiment or waive independent review and native/platform proof. The additive `0005.sql` schema change supports encrypted uploads; it is separate from migrating existing capture data and remains unapplied by this candidate.
 
 ## Verification and rollout gates
 
@@ -62,13 +62,3 @@ The first dependency scan found vulnerable `crypto-bigint 0.5.5` through the unu
 Required: public enrollment/scopes/ownership/renewal/revocation; tamper, truncation, reordered/extra/missing parts, wrong keys, context substitution, randomized independent encryptions and age finalization; durable interruption/restart/consent races; byte-identical ordinary roundtrip with no plaintext in service objects; unsupported-format and encrypted-share denial; bounded resource failures; actual changed native worker/fetch wiring on macOS and Linux. A build or synthetic auth fixture is not GUI/live-Google proof. An agent review is independent code/security review, not a professional cryptographic audit.
 
 Run normal reviewed hooks and exact CI on the final source. Do not apply `0005`, deploy, enable collection, grant production access or merge as part of this candidate. The parent batch orchestrator alone integrates main. Reconcile the tracked historical issue/PR criteria with this contract in the implementation PR rather than silently weakening their security claims.
-
-## Evidence-first private delivery (#165)
-
-New encrypted jobs pin `evidence-first-v1` delivery: summary, metadata, notes, timeline and original/annotated images are sealed separately from recording/audio. Both authenticated streams bind their group, capture, origin, account and sender. One immutable transport manifest reserves both groups under the same ID; retries reuse both ciphertext spools. Existing jobs and single-stream captures keep their original format. Older services reject the grouped paths; clients never downgrade encryption or silently omit media.
-
-The worker uploads evidence before media. Authenticated metadata distinguishes `evidenceReady` from full `status: ready`; pending captures, including usable evidence, still expire after the existing 24-hour incomplete-upload deadline. Full completion, quotas, account authorization, revocation and cleanup retain their existing rules. Public readable copies keep complete-bundle behavior.
-
-`apparent inspect <id>` downloads an immutable `./<id>.evidence.apparent` snapshot, validates every evidence file and prints its summary with a missing-media notice. `.evidence-only.json` explicitly identifies this local snapshot; the source metadata retains media references. It is not a complete bundle and must not be uploaded as one. Existing destinations are never overwritten. Inspect its absolute local path to reuse downloaded evidence. `apparent fetch <id> --media --out <new-directory> --wait 120` explicitly retrieves both groups, validates all references and atomically publishes an ordinary complete bundle. `--media` also documents the unchanged default full-fetch behavior. Use that complete directory for zoom/export or other media commands. No automatic fetch or in-place upgrade is performed. A pending/offline sender produces a bounded retry result; evidence readiness does not promise media availability.
-
-No Desktop renderer, bridge, native capture, consent or browser playback route changes. Rollback keeps existing single-stream jobs readable; old clients reject grouped transport paths rather than publishing partial bundles. New grouped uploads require the compatible service to be published first.

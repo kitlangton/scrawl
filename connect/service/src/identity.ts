@@ -3,32 +3,14 @@ import {genericOAuth} from 'better-auth/plugins';
 import {decodeJwt} from 'jose';
 import {oauthProvider,oauthDeviceAuthorization,DEVICE_CODE_GRANT_TYPE} from '@better-auth/oauth-provider';
 import type {Env} from './types.ts';
-import {admit,fail,hash,random,apiBase,apiBasePath} from './common.ts';
-
-// Workers keys environment lifetime by object identity (fetch handler parameters):
-// https://developers.cloudflare.com/workers/runtime-apis/handlers/fetch/#parameters
-// Reuse only static auth setup for an unchanged runtime binding object. Session,
-// token, grant and revocation reads remain live; cookie session caching stays off.
-const instances=new WeakMap<Env,{inputs:unknown[];auth:ReturnType<typeof createIdentity>}>();
-export function identity(env:Env) {
- const inputs=[env.DB,env.API_ORIGIN,env.SITE_ORIGIN,env.LEGACY_SITE_ORIGIN,
-  env.GOOGLE_CLIENT_ID,env.GOOGLE_CLIENT_SECRET,env.BETTER_AUTH_SECRET,env.OAUTH_DISCOVERY_URL];
- const cached=instances.get(env);
- if(cached&&inputs.every((value,index)=>value===cached.inputs[index]))return cached.auth;
- const entry={inputs,auth:createIdentity(env)};instances.set(env,entry);
- // An initialization failure must not poison subsequent requests indefinitely.
- void entry.auth.$context.catch(()=>{if(instances.get(env)===entry)instances.delete(env);});
- return entry.auth;
-}
+import {admit,fail,hash,random} from './common.ts';
 
 // Only the v1 adapters and the Google callback are exposed by the Worker.
 // In particular, server-only client administration never becomes a public route.
-function createIdentity(env: Env) {
+export function identity(env: Env) {
  if(typeof env.BETTER_AUTH_SECRET!=='string'||env.BETTER_AUTH_SECRET.length<32)fail('auth_unavailable',503);
  return betterAuth({
-  // Better Auth ignores basePath when baseURL itself contains a pathname.
-  // Keep the mount exclusively in basePath so /connect/auth routes resolve.
-  appName:'Apparent Connect',baseURL:new URL(apiBase(env)).origin,basePath:apiBasePath(env)+'/auth',secret:env.BETTER_AUTH_SECRET,
+  appName:'Apparent Connect',baseURL:env.API_ORIGIN,basePath:'/auth',secret:env.BETTER_AUTH_SECRET,
   database:env.DB,
   logger:{disabled:true},
   onAPIError:{throw:true},
@@ -45,7 +27,7 @@ function createIdentity(env: Env) {
   advanced:{useSecureCookies:true,cookiePrefix:'apparent',defaultCookieAttributes:{httpOnly:true,secure:true,sameSite:'lax',path:'/'}},
   plugins:[genericOAuth({config:[{providerId:'google',clientId:env.GOOGLE_CLIENT_ID,clientSecret:env.GOOGLE_CLIENT_SECRET,
    discoveryUrl:env.OAUTH_DISCOVERY_URL||'https://accounts.google.com/.well-known/openid-configuration',
-   redirectURI:apiBase(env)+'/auth/google/callback',scopes:['openid','email','profile'],pkce:true,requireIdTokenVerification:true,
+   redirectURI:env.API_ORIGIN+'/auth/google/callback',scopes:['openid','email','profile'],pkce:true,requireIdTokenVerification:true,
    async getUserInfo(tokens) {
     // In 1.7.15 genericOAuth verifies a present ID token (including nonce)
     // BEFORE this hook, but otherwise falls back to UserInfo. Require the token

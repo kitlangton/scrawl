@@ -13,8 +13,6 @@ const MAX_FRAME: usize = 4096;
 const FRAME_MS: u64 = 3000;
 const LEASE: Duration = Duration::from_secs(10);
 
-pub(super) mod backend;
-
 #[derive(Deserialize)]
 #[serde(tag = "connect", rename_all = "lowercase", deny_unknown_fields)]
 enum Opening { Settings { deadline: u64 } }
@@ -29,9 +27,6 @@ pub(super) fn opening_deadline(line: &str) -> Option<u64> {
     if line.len() > MAX_FRAME { return None; }
     let Opening::Settings { deadline } = serde_json::from_str(line).ok()?;
     Some(deadline)
-}
-pub(super) fn backend_opening_deadline(line: &str) -> Option<u64> {
-    backend::opening_deadline(line)
 }
 fn clock_ms() -> u64 { super::agent_capture::storage_clock_ms() }
 fn enabled(config: &Path) -> Result<(), &'static str> {
@@ -102,7 +97,7 @@ fn run(
     let backend = Arc::new(FeatureBackend { inner: backend(), config: config.to_owned() });
     let mut controller = Controller::new(backend, Arc::new(move |event| { let _ = tx.try_send(event); }));
     if clock_ms() >= deadline { refuse(&mut stream, "admission_expired"); return; }
-    if write_frame(&mut stream, &serde_json::json!({"connect":controller.electron_view()})).is_err() { return; }
+    if write_frame(&mut stream, &serde_json::json!({"connect":controller.view()})).is_err() { return; }
     let mut buffer = Vec::with_capacity(MAX_FRAME);
     let mut frame_deadline = None;
     let mut lease = Instant::now() + lease_duration;
@@ -144,7 +139,7 @@ fn run(
                         // Cancel/disable commands invalidate old requests before receipts.
                         let uri = command.and_then(|command| controller.command(command));
                         if let Err(code) = drain(&mut controller, &events, &mut worker, config) { refuse(&mut stream, code); break; }
-                        let mut reply = serde_json::json!({"connect":controller.electron_view()});
+                        let mut reply = serde_json::json!({"connect":controller.view()});
                         if let Some(uri) = uri { reply["openUri"] = uri.into(); }
                         if write_frame(&mut stream, &reply).is_err() { break; }
                         lease = Instant::now() + lease_duration;

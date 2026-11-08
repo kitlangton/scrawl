@@ -1,12 +1,7 @@
 const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
-  read: () => ipcRenderer.invoke('apparent:build-identity'),
-}));
 
 // No generic invoke/send, paths, revisions or dialog options from the renderer.
 contextBridge.exposeInMainWorld('apparent', Object.freeze({
-  readDrawing: () => ipcRenderer.invoke('apparent:read-drawing'),
-  undoDrawing: () => ipcRenderer.invoke('apparent:undo-drawing'),
   readMicrophoneEnabled: () => ipcRenderer.invoke('apparent:read-microphone-enabled'),
   setMicrophoneEnabled: (enabled) => ipcRenderer.invoke('apparent:set-microphone-enabled', enabled),
   readRuntimeState: () => ipcRenderer.invoke('apparent:read-runtime-state'),
@@ -37,10 +32,4 @@ contextBridge.exposeInMainWorld('apparent', Object.freeze({
   readCaptureUsage: () => ipcRenderer.invoke('apparent:read-capture-usage'),
   navigateSettings: (pane) => ipcRenderer.invoke('apparent:navigate-settings', pane),
   showCaptureFolder: () => ipcRenderer.invoke('apparent:show-capture-folder'),
-}));
-
-// Two fixed signals only; the renderer cannot submit error text or properties.
-contextBridge.exposeInMainWorld('apparentExceptions', Object.freeze({
-  exception: () => ipcRenderer.send('apparent:unhandled', 'renderer_exception'),
-  rejection: () => ipcRenderer.send('apparent:unhandled', 'renderer_rejection'),
 }));

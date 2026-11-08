@@ -29,10 +29,6 @@ class DirectoryWidthHookTests(unittest.TestCase):
         target = self.repo / "enablement/directory-width"
         target.mkdir(parents=True)
         shutil.copy2(CHECKER, target / "check.py")
-        length = self.repo / "enablement/file-length"
-        length.mkdir(parents=True)
-        shutil.copy2(ROOT / "enablement/file-length/check.ts", length / "check.ts")
-        shutil.copy2(ROOT / "enablement/verification.py", self.repo / "enablement/verification.py")
         self.git("config", "core.hooksPath", ".githooks")
 
     def tearDown(self) -> None:
@@ -86,95 +82,6 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(b"src/shared: 0 files, 11 subdirectories (limit 10 each)", result.stderr)
 
-    def test_root_allows_many_owner_and_dot_directories(self) -> None:
-        paths = [f"owner-{i:02d}/file.txt" for i in range(15)]
-        paths += [f"{name}/config" for name in (".cargo", ".githooks", ".github", ".unknown")]
-        for path in paths:
-            self.put(path)
-        self.stage(".")
-        result = self.run_hook()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-
-    def test_root_file_edit_does_not_enforce_directory_count(self) -> None:
-        for i in range(11):
-            self.put(f"owner-{i:02d}/file.txt")
-        self.put("README.md", "before\n")
-        self.commit("owner-*", "README.md")
-        self.put("README.md", "after\n")
-        self.stage("README.md")
-        result = self.run_hook()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-
-    def test_hidden_root_directory_contents_are_checked(self) -> None:
-        for i in range(10):
-            self.put(f"owner-{i:02d}/file.txt")
-        paths = [f".unknown/{i:02d}.txt" for i in range(11)]
-        for path in paths:
-            self.put(path)
-        self.stage(".")
-        result = self.run_hook()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b".unknown: 11 files, 0 subdirectories", result.stderr)
-
-    def test_nested_hidden_directory_counts_toward_directory_limit(self) -> None:
-        for i in range(11):
-            self.put(f"src/shared/.hidden/part-{i:02d}/file.txt")
-        self.stage("src/shared/.hidden")
-        result = self.run_hook()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b"src/shared/.hidden: 0 files, 11 subdirectories", result.stderr)
-
-    def test_root_file_limit_is_unchanged_for_dot_named_file(self) -> None:
-        for i in range(9):
-            self.put(f"root-{i:02d}.txt")
-        self.put(".cargo")
-        self.put("root-extra.txt")
-        self.put("owner/file.txt")
-        self.stage(".")
-        result = self.run_hook()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b"<root>: 11 files", result.stderr)
-
-    def test_workflow_directory_allows_exact_workflow_files(self) -> None:
-        workflows = (
-            "hermes-plugin.yml",
-            "connect-delivery.yml", "linux-updater-harness.yml", "native-proof-mac.yml",
-            "release-linux.yml", "release-mac-preview.yml", "release-windows.yml",
-            "verification-mac.yml",
-            "verification-platform.yml", "verification.yml", "web-delivery.yml",
-            "stream-agent.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
-            "stream-engine.yml",
-            "stream-onboarding.yml", "stream-platform.yml", "stream-public.yml", "stream-record.yml",
-        )
-        for name in workflows:
-            self.put(f".github/workflows/{name}")
-        self.stage(".github/workflows")
-        allowed = self.run_hook()
-        self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
-
-        self.put(".github/workflows/unreviewed.yml")
-        self.stage(".github/workflows/unreviewed.yml")
-        blocked = self.run_hook()
-        self.assertEqual(blocked.returncode, 1)
-        self.assertIn(b".github/workflows: 20 files", blocked.stderr)
-
-    def test_workflow_directory_rejects_unknown_entry_within_file_limit(self) -> None:
-        for name in (
-            "connect-delivery.yml", "linux-updater-harness.yml", "native-proof-mac.yml",
-            "release-linux.yml", "release-mac-preview.yml", "release-windows.yml",
-            "verification-mac.yml",
-            "verification-platform.yml", "verification.yml",
-            "stream-agent.yml", "stream-connect-client.yml", "stream-connect-browser.yml",
-            "stream-engine.yml",
-            "stream-onboarding.yml", "stream-platform.yml", "stream-public.yml", "stream-record.yml",
-        ):
-            self.put(f".github/workflows/{name}")
-        self.put(".github/workflows/unreviewed.yml")
-        self.stage(".github/workflows")
-        result = self.run_hook()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b".github/workflows: 18 files", result.stderr)
-
     def test_unrelated_staged_change_does_not_enforce_existing_overwidth(self) -> None:
         files = self.seed_code_files(11)
         self.commit(*files)
@@ -207,34 +114,15 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.stage("build.rs")
         result = self.run_hook()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(b"<root>: 12 files, 0 subdirectories", result.stderr)
+        self.assertIn(b": 12 files, 0 subdirectories (limit 10 each)", result.stderr)
 
-    def test_top_level_directory_count_is_unlimited(self) -> None:
+    def test_top_level_entry_change_enforces_root_width(self) -> None:
         for i in range(11):
             self.put(f"root-dir-{i:02d}/mod.rs")
         self.stage("root-dir-*")
         result = self.run_hook()
-        self.assertEqual(result.returncode, 0, result.stderr.decode())
-
-    def test_top_level_directories_do_not_hide_root_file_overflow(self) -> None:
-        paths = [f"root-dir-{i:02d}/mod.rs" for i in range(11)]
-        paths += [f"root-{i:02d}.txt" for i in range(11)]
-        for path in paths:
-            self.put(path)
-        self.stage(*paths)
-        result = self.run_hook()
         self.assertEqual(result.returncode, 1)
-        self.assertIn(b"<root>: 11 files, 11 subdirectories", result.stderr)
-        self.assertIn(b"limit 10 files; root directories unlimited", result.stderr)
-
-    def test_nested_directory_limit_survives_root_directory_exemption(self) -> None:
-        paths = [f"owner/sub-{i:02d}/mod.rs" for i in range(11)]
-        for path in paths:
-            self.put(path)
-        self.stage(*paths)
-        result = self.run_hook()
-        self.assertEqual(result.returncode, 1)
-        self.assertIn(b"owner: 0 files, 11 subdirectories", result.stderr)
+        self.assertIn(b": 0 files, 11 subdirectories (limit 10 each)", result.stderr)
 
     def test_tracked_first_party_html_beneath_public_root_is_enforced(self) -> None:
         paths = [f"public/site/public/feature-demos/page-{i}.html" for i in range(11)]
@@ -246,7 +134,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.assertIn(b"public/site/public/feature-demos: 11 files", result.stderr)
 
     def test_generated_published_homepage_bundle_is_excluded(self) -> None:
-        paths = [f"public/site/video-demo/output/generated-{i}.js" for i in range(11)]
+        paths = [f"public/site/published-homepage/assets/generated-{i}.js" for i in range(11)]
         for path in paths:
             self.put(path)
         self.stage(*paths)
@@ -324,7 +212,7 @@ class DirectoryWidthHookTests(unittest.TestCase):
 
     def test_dependency_and_known_generated_roots_are_excluded(self) -> None:
         paths = [f"vendor/pkg-{i}/lib.rs" for i in range(11)]
-        paths += [f"public/site/video-demo/output/generated-{i}.js" for i in range(11)]
+        paths += [f"public/site/published-homepage/assets/generated-{i}.js" for i in range(11)]
         paths += [f"target/gen-{i}/mod.rs" for i in range(11)]
         for path in paths:
             self.put(path)

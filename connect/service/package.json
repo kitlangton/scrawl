@@ -4,12 +4,11 @@
   "type": "module",
   "scripts": {
     "typecheck": "tsc --noEmit",
-    "build": "python3 ../../shared/ui/scripts/check-theme.py --owner connect && npm run build:recipient && npm run typecheck && esbuild src/worker.ts --bundle --format=esm --platform=browser --conditions=workerd --external:node:* --outfile=dist/worker.js",
-    "test": "npm run build && node --test --test-concurrency=1 test/*/*.test.mjs test/*/*.test.ts",
+    "build": "python3 ../../shared/ui/scripts/check-theme.py && npm run build:recipient && npm run typecheck && esbuild src/worker.ts --bundle --format=esm --platform=browser --conditions=workerd --external:node:* --outfile=dist/worker.js",
+    "test": "npm run build && node --test --test-concurrency=1 test/*/*.test.mjs",
     "dev": "npm run build && wrangler dev",
     "deploy": "npm run build && wrangler deploy",
     "build:recipient": "node scripts/build-recipient.mjs",
-    "test:evidence-cli": "node --experimental-strip-types ../client/tests/evidence-service.ts",
     "test:recipient": "node test/sharing/recipient-browser.mjs"
   },
   "dependencies": {

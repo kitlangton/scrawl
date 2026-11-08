@@ -1,8 +1,8 @@
 # Video export, retention and shrinking
 
-Read this before changing `src/export/`, `capture/engine/bundle/retention.rs`, `engine/native/Export.swift` or `engine/native/Media.swift`.
+Read this before changing `src/export/`, `capture/engine/bundle/retention.rs`, `capture/engine/native/Export.swift` or `capture/engine/native/Media.swift`.
 
-## Video export (`src/export/`, `engine/native/Export.swift`)
+## Video export (`src/export/`, `capture/engine/native/Export.swift`)
 
 `apparent export <bundle>` writes one H.264/HEVC + AAC `.mp4`; the `videoExport` setting (default on) gates **Export Last Capture as Video…** on Mac and Linux. Mac saves to `~/Movies/Apparent` with progress beside the menu bar icon; Linux asks for a destination in the desktop's Save dialog and shows progress in the tray menu. Rust decides everything; on Mac the helper renders it from a JSON plan (AVAssetReader → Core Image crop/camera → Core Graphics ink → AVAssetWriter): `crop.rs` (`--crop auto|full|x,y,w,h` — auto is `autocrop` `Scope::Whole` — even-sided output size, audio window), `ink.rs` (strokes via `sketch::freehand_outline`, laser, pins, ripples; sizes mirror `render::annotate_keyframe_in_place`), `camera.rs` (on by default, `--no-zoom` opts out: pure events → camera rects, critically damped springs, never zooms during fast cursor travel; derived from ScreenDemon's click zoom). Everything in the plan is on the video's clock (bundle time − `videoOffsetMs`); Mac `audio.wav` starts `videoOffsetMs` in, an iPhone movie uses its own audio. Output is constant frame rate (screen movies only have frames on change). Test with `cargo test export::`.
 
@@ -133,6 +133,6 @@ export. Provisioning failures are separate `narrator provisioning failed:` diagn
 An empty generated WAV is a synthesis failure, not evidence that the user did not
 speak; silent recorded samples remain a valid recorded track.
 
-## Retention and shrinking (`capture/engine/bundle/retention.rs`, `Media.shrink` in `engine/native/Media.swift`)
+## Retention and shrinking (`capture/engine/bundle/retention.rs`, `Media.shrink` in `capture/engine/native/Media.swift`)
 
 The app's `retention` worker (utility QoS) runs a pass 90 s after launch and hourly (`PASS_EVERY`): heavy media (`handoff::HEAVY_MEDIA`, plus `zoom/` from `DERIVED_MEDIA`) to the Trash after `mediaDays` (default 7, writes `.media-cleaned`), whole bundles after `bundleDays` (30); `"retention"` in `~/.config/apparent/config.json`, Settings › Storage. It skips bundles under a day old or whose folder changed (ctime) in the last day, live `.media-pending`/`.media-sending` markers, `.pinned`, `.deliver.json`, and bundles `retention::claim`ed. Cabled-iPhone `recording.mov` (> 6 Mbps) is re-encoded to HEVC at 1600 px a minute after `finalize_live_capture`, written beside the bundle and renamed over the original; sample times are kept, so `apparent.json` is unchanged. Anything reading `video` must handle it missing (`retention::missing_media_reason`). Try passes on a temp folder with `apparent clean --captures DIR --days-ahead N [--dry-run]`.

@@ -1,6 +1,6 @@
-# Connect web
+# Connect web (unlinked implementation candidate)
 
-Canonical routes are `https://app.tryapparent.com/connect`, `/connect/device?code=USERCODE`, and `/connect/shares`, including slash/no-slash variants. The legacy Public composition retains its six `/hosted` rendering aliases until cutover. The dedicated Worker instead redirects only exact GET/HEAD requests for `/hosted[/]`, `/hosted/device[/]`, `/hosted/shares[/]`, and the three existing `/hosted/{source-pond-v4,agent-pond-v4,agent-reading-v4}.png` links. It preserves query bytes, including device codes, and redirects to the fixed deployment `SITE_ORIGIN` canonical `/connect` equivalents. These are temporary **302** redirects with `no-store`, `no-referrer`, `noindex`, and no cookies, so rollback does not leave a sticky cached redirect. Other methods receive 405; unknown, encoded, private and near-prefix paths receive 404. No Connect bytes are copied into Public by this compatibility bridge. The aliases remain absent from the homepage and sitemap. This source adoption is not deployment or real sign-in proof.
+Canonical routes: `https://app.tryapparent.com/connect`, `/connect/device?code=USERCODE`, and `/connect/shares`, including slash/no-slash variants. Legacy `/hosted`, `/hosted/device` and `/hosted/shares` remain rendering aliases. All six are prerendered with a loading state, no account data, `noindex,nofollow`, and no-referrer/no-store metadata. They are absent from the homepage and sitemap. The sole Pages pipeline composes `connect/web/dist` into Public's packaged artifact. This source adoption is not deployment or real sign-in proof.
 
 The setup dialog uses `apparent connect login` and `apparent connect status`.
 It tells users to update Apparent for `connect`; older apps can use `apparent cloud`,
@@ -16,9 +16,7 @@ The frontend is aligned to `connect/docs/hosted-api.md`; `connect/web/src/api.ts
 - `GET /v1/device?userCode=...`: authenticated preview `{scope:'read'|'upload',status:'pending'|'approved'|'rejected'|'expired'}`. **Requested API improvement: include ISO `expiresAt`** so the screen can show actual expiry and reject a newly expired code locally. Until available, the UI states the documented ten-minute lifetime, handles server `expired` status, and leaves enforcement to the API. Optional `expiresAt` is supported and validated. Preview never approves anything; only an explicit confirmation click does.
 - Upload permission includes add/read/delete of account captures, per backend contract. Agent `read` is a separate read-only credential. Unknown scopes fail closed. No browser endpoint should return device secrets or bearer tokens.
 
-The canonical deployment profile uses `VITE_HOSTED_API_ORIGIN=https://app.tryapparent.com/connect`, `API_ORIGIN=https://app.tryapparent.com/connect` and `SITE_ORIGIN=https://app.tryapparent.com`. UI, API, authentication callbacks, capability links and viewer assets share this origin and mount. Browser configuration accepts only a deployment-controlled HTTPS origin or exact `/connect` base (loopback HTTP for local tests), without credentials, query or fragment. This is public configuration, never an OAuth secret. CORS and CSRF still compare exact origins, with HttpOnly/Secure/SameSite cookie protections. The currently deployed legacy profile uses `https://hosted.tryapparent.com` for the API and host-only cookies; retain it only for compatibility until the canonical gateway and provider callback are accepted. Public Pages composition is a legacy deployment path, not the canonical target.
-
-Better Auth receives the API URL's origin as `baseURL` and the full mounted `/connect/auth` path as `basePath`. A path-bearing `baseURL` makes Better Auth ignore `basePath`, breaking callback dispatch even when sign-in initiation works. The artifact verifier builds the service and runs its focused OAuth/mount tests, including the signed provider callback and authenticated session readback, before delivery can seal the artifact.
+For production builds set `VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com`; the canonical browser origin is `https://app.tryapparent.com`. The frontend publisher is Cloudflare Pages (`public/site/docs/pages-deploy.md`); the former Clanker origin is retired, not a rollback target. Use the Pages deployment rollback procedure. Keep the API, Google callback, host-only cookies and device credentials on hosted. This is credentialed **same-site, cross-origin** access, not cross-site hosting. `VITE_HOSTED_API_ORIGIN` accepts only a deployment-controlled HTTPS origin (loopback HTTP for local tests), without credentials, path, query, or fragment. It is public build configuration, never an OAuth secret. The backend uses the same explicit exact SITE_ORIGIN / optional LEGACY_SITE_ORIGIN allowlist for CORS and CSRF, preserving HttpOnly/Secure/SameSite cookie protections.
 
 Session/CSRF data stays in memory, never localStorage or DOM attributes. The human code is only passed to fixed approval endpoints and the fixed sign-in return route, never treated as a capture permission. There is no token input, private capture browser, web recorder, billing, or browser share-creation control. Capture authorization must be enforced by the API; knowing an ID is not access.
 
@@ -48,9 +46,9 @@ The recipient frontend is React + TypeScript with the canonical shadcn `Button` 
 
 Ready HTML places browser-native video beside timestamped transcript passages; phone layouts place the transcript below. Clicking a passage seeks without changing play/pause. Before metadata loads it asks the viewer to retry. There are no chapter controls, generated summary/title, frame gallery, transcript search/editing, auto-scroll or custom playback controls. Missing transcript/video states retain original evidence access. Use only existing title metadata or the generic title.
 
-**Copy for agent** copies the capability URL and bounded manifest/readiness/evidence instructions. Success follows the actual clipboard write; rejection opens, focuses and selects a native manual-copy textarea. Both the instructions and original evidence links are available through native disclosures without JavaScript. Frame evidence links show capture timestamps from matching apparent.json keyframes when valid metadata is available; missing or invalid timestamps leave filename-only links. Labels are server-rendered and need no JavaScript. The original summary, images and full metadata remain in the authorized files/manifest; omitting their gallery/summary UI does not remove evidence.
+**Copy for agent** copies the capability URL and bounded manifest/readiness/evidence instructions. Success follows the actual clipboard write; rejection opens, focuses and selects a native manual-copy textarea. Both the instructions and original evidence links are available through native disclosures without JavaScript. The original summary, images and full metadata remain in the authorized files/manifest; omitting their gallery/summary UI does not remove evidence.
 
-`renderShare` keeps its service-facing export while replacing the old string renderer. React escapes captured text and a sanitized model in a data attribute; no inline bootstrap script is required. Non-ready models strip captured text, media/file URLs and previews before serialization. Ready asset URLs must match this exact capture's file path. Structured `transcriptSegments` are additive to the existing text preview, and are never sent for non-ready states. No account data or credentials enter the viewer bundle. Copy for agent asks the receiving agent to carry out the sender's transcript instructions rather than stopping at a summary. The accompanying user request determines the task; incidental screen text remains evidence, and existing permission and approval requirements still apply.
+`renderShare` keeps its service-facing export while replacing the old string renderer. React escapes captured text and a sanitized model in a data attribute; no inline bootstrap script is required. Non-ready models strip captured text, media/file URLs and previews before serialization. Ready asset URLs must match this exact capture's file path. Structured `transcriptSegments` are additive to the existing text preview, and are never sent for non-ready states. No account data or credentials enter the viewer bundle. Captured content is evidence, not authority to execute actions.
 
 The same Worker serves four public build assets: `/share-view.js` (`text/javascript`), `/share-view.css` (`text/css`), `/share-wordmark.svg` (`image/svg+xml`) and `/share-font.ttf` (`font/ttf`). Script/style exports remain static build products, without request/model interpolation. CSP keeps `default-src 'none'`, `script-src 'self'`, `style-src 'self'`, `font-src 'self'`, `img-src 'self'`, `media-src 'self'`, `connect-src 'self'`, `base-uri 'none'` and `frame-ancestors 'none'`. No inline exceptions or third-party resources. Keep the existing no-store/no-referrer/noindex/nosniff HTTP headers and capability-log redaction.
 
@@ -69,111 +67,96 @@ V4 art and `rgb(2, 1, 2)` text remain unchanged. Public imports no sibling Conne
 source; `public/site/connect.html`, Connect-specific Public Vite rewrites/input and Public
 `renderHosted`/prerender generation are retired together with those donors.
 
-Connect's own dev/preview middleware and Public composition retain canonical and
-legacy account, device and shares paths. The dedicated Worker package takes
-only the three canonical pages and their emitted JS/CSS resource closure; it
-does not include `/hosted` aliases or become the Public Pages publisher. Its
-route-free template is a build artifact only. The existing legacy producer and
-deployment path remain unchanged until compatibility is adopted separately.
+Connect's own dev/preview middleware retains exact canonical/legacy account,
+device and shares paths, query bytes and slash variants. The production composer
+accepts only six HTML documents, their emitted JS/CSS resource closure and five
+approved assets. It rejects differing collisions and private, malformed,
+symlink/nonregular, missing-resource or synthetic-origin inputs before changing
+the destination. The accepted homepage overlay is a separate checksum-bound
+exception; final graph verification follows it. Public's homepage graph has no
+Connect/API code; Connect has no marketing/demo/font-service graph. Pages metadata
+provides no-store/noindex and legacy redirects; `404.html` prevents unknown/private
+paths from acquiring a general SPA fallback. The same existing workflow and
+`public/site/scripts/cd/publish_pages.py` remain the sole publisher; no second deployment or
+Worker change is introduced. See `public/site/docs/pages-deploy.md` for composition.
 
 ## Verification
 
-For the canonical combined artifact, install the hosting package with locked npm dependencies and run its verifier with Bun 1.3.10 available:
+From `public/site/`:
 
 ```sh
-npm --prefix connect/tooling/hosting ci --include=dev
-VITE_HOSTED_API_ORIGIN=https://app.tryapparent.com/connect API_ORIGIN=https://app.tryapparent.com/connect SITE_ORIGIN=https://app.tryapparent.com npm --prefix connect/tooling/hosting run verify:artifact
+APPARENT_PUBLIC_SITE=1 VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com npm run build
+node scripts/package-apparent.mjs
+node scripts/compose-connect.mjs
+node scripts/prepare-pages.mjs
+node scripts/verify-composed.mjs
+node --test scripts/test-brand-favicon.mjs scripts/test-github-stars.mjs scripts/test-latest-download.mjs scripts/test-platform-os.mjs scripts/test-public-homepage.mjs scripts/test-video-demo.mjs
 ```
 
-The verifier installs locked web/service dependencies, builds the browser and existing service implementation, packages the gateway, and tests the compiled artifact with local ASSETS and synthetic D1/R2/auth bindings. Wrangler runtime tests load the deployable config and compiled bytes with bundling disabled. Tests cover UI hydration, anonymous session, account denial, OAuth callback URI/cookies, viewer resources and static privacy boundaries. They do not establish real provider sign-in or live deployment. Evidence stays in private temporary directories. Runtime tests use an unchanged copy of the deployment package outside `.output`; Wrangler state/cache directories never enter the sealed artifact. Tests stop the runtime process group before removing that copy, and a final inventory guard permits deployment files only. Run one build/verifier at a time per checkout.
+`test:hosted` serves the exact packaged website with a **controlled synthetic API**, not a live Connect service. It checks built route files/noindex, absent homepage/sitemap promotion, anonymous sign-in destinations, loading, zero/full count states, authenticated waitlist interest, read/upload explicit approvals, expired/rejected/unknown scope/no-code states, denied CSRF, unavailable/malformed API, mutation duplicate guards, cookie/Origin/CSRF request paths, mutation readback, logout, no token/CSRF DOM exposure or localStorage, hydration errors, and 320/390/1100px overflow. Setup checks assert the complete Connect login/status commands, configured API origin and older-app compatibility guidance in both tabs, including legacy routes. Sharing adds list/empty/revoke/denied/unconfirmed-readback interactions, escaped captured titles, no-JS recipient states, and a real pending-to-ready reload under the restrictive CSP above. Recipient media bytes are not exercised by these fixtures. Screenshots go to `$SITE_EVIDENCE` or `$TMPDIR/hosted-web-evidence`; inspect them before accepting visual changes. Set `CHROME_PATH` if the default existing Playwright Chrome path differs. `SITE_ARTIFACT` can select another package.
 
-The legacy Public composition profile still uses the origin-only API configuration until cutover. Its publisher and compatibility graph checks remain documented in `public/site/docs/pages-deploy.md`; do not use those legacy commands to prepare the canonical gateway artifact or publish synthetic fixtures. Browser, service and recipient tests remain available in their owning packages.
+Renderer verifier from the repository root: `node --test connect/service/test/sharing/share-view.test.mjs`. Genuine initial RED: an importable empty renderer failed all four behavior tests (missing evidence, escaping, status and polling). Management RED: the built old site loaded but timed out waiting for the absent management heading. The updated public build/typecheck/package, synthetic hosted browser suite (26 scenarios), renderer checks, and six-file public-site checks passed locally. Phone recipient/management and desktop denied screenshots were inspected. These are synthetic browser/renderer results, not integrated Worker, playable-media, OAuth, native sender, deployment or platform proof; those remain with the coordinator.
+
+
+First build `connect/web` independently with frozen Bun 1.3.10 dependencies and
+`VITE_HOSTED_API_ORIGIN=https://hosted.tryapparent.com`. `npm test` there retains
+the package's artifact, dev/preview routing and 62 synthetic browser scenarios.
+The site verifier remains the composed-artifact integration suite, including its
+recipient-renderer and #191 assertions. Do not confuse either with live auth.
+
+To exercise credentialed cross-origin fetches without accounts, save Public's
+`dist-apparent` before composition to private scratch, then build only Connect
+with `CONNECT_BUILD_DIR=dist-test` and
+`VITE_HOSTED_API_ORIGIN=http://127.0.0.1:18809`. From `public/site/`, set
+`COMPOSE_PUBLIC_INPUT` to that saved Public package and
+`COMPOSE_SYNTHETIC_ORIGIN=http://127.0.0.1:18809`, then run the composer,
+Pages preparation and final graph verifier. These commands select only
+`dist/synthetic-composition`; they never overwrite production. Run the site suite with
+`SITE_ARTIFACT=dist/synthetic-composition HOSTED_TEST_API_ORIGIN=http://127.0.0.1:18809`.
+Use a free port. The fixture retains cookie/Origin/CSRF, paginated revocation,
+escaped-title and no-JS recipient checks. This does not establish production
+subdomain cookies, live OAuth or actual edge routing. Never publish test output.
+
+For actual Connect Vite dev and preview middleware proof, keep the separate
+synthetic package above and run these from `public/site/` (set `CHROME_PATH` and private
+`SITE_EVIDENCE` as needed). Public no longer supplies Connect middleware:
+
+```sh
+SITE_ARTIFACT=dist/synthetic-composition VITE_HOSTED_API_ORIGIN=http://127.0.0.1:18809 HOSTED_TEST_API_ORIGIN=http://127.0.0.1:18809 HOSTED_TEST_MODE=dev npm run test:hosted
+SITE_ARTIFACT=dist/synthetic-composition VITE_HOSTED_API_ORIGIN=http://127.0.0.1:18809 HOSTED_TEST_API_ORIGIN=http://127.0.0.1:18809 HOSTED_TEST_MODE=preview npm run test:hosted
+```
+
+The verifier starts Vite on an isolated loopback port and closes it afterward.
+Each mode retains all 48 scenarios and all twelve Connect route/slash combinations,
+query preservation, selected device tab, resource requests and homepage ownership.
+The composed fixture checks unknown/private paths return 404. Built graph
+checks traverse emitted JS/CSS dependencies and modulepreloads, reject marketing
+closure on Connect and Hosted/API closure on landing, and check original assets.
+Computed text colour, geometry, focus, setup commands, consent and mutation readback
+remain assertions. Keep production and synthetic artifacts/evidence separate;
+switching test modes must not change the frozen production package. Serve the
+production package with a range-capable HTTP
+server (see `public/site/docs/pages-deploy.md`), then run the landing checks:
+
+```sh
+SITE_URL=http://127.0.0.1:PORT CHROME_PATH=/path/to/chrome node --test scripts/test-github-stars-browser.mjs
+SITE_URL=http://127.0.0.1:PORT SITE_EVIDENCE=/private/brand CHROME_PATH=/path/to/chrome node --test scripts/test-brand-selection-browser.mjs
+SITE_ARTIFACT=/absolute/production-package SITE_EVIDENCE=/private/try-button CHROME_PATH=/path/to/chrome npm run test:try-button
+```
+
+These retain the Team keyboard assertions. Synthetic checks do not establish
+live OAuth, production cookies, native behavior or deployment. Belief-specific
+overlay tests have separate packaging inputs in `public/site/docs/belief-release.md`;
+do not run a wildcard test suite without those inputs.
+
+Baseline before Connect: public build/typecheck/package, hosted browser fixtures and the six-file public site command (18 tests) passed; T3 preview and fixture phone/desktop screenshots were inspected. The general `npm run build` had an existing feature audit failure: missing `added` for `site-belief-pond`, `agent-capture-control`, `export-cli`, and `onboarding`. Connect updates only its own feature-map name/note, not those unrelated entries; use the public build mode above.
 
 ## Release prerequisites
 
-The existing capture frontend remains on Cloudflare Pages until its compatibility cutover; see `public/site/docs/pages-deploy.md` for that publisher's rollback. Preserve all six canonical/legacy Connect account/device/share-management documents, the three exact `/hosted/*-v4.png` art paths, hashed `/assets/` modules, original font/wordmark, accepted homepage and retained public assets without broadening the legacy public boundary. Legacy redirects preserve query strings, including device codes; source rendering aliases remain packaged. This hosting slice instead builds the same-origin Worker artifact described below, where anonymous capability recipients and account/API routes reach the existing service handler under `/connect`. No routes, bindings or deployment are activated. Synthetic local checks are not live OAuth or live-cookie proof, and packaged files do not prove that a host serves them. Keep these routes unlinked from the public homepage until beta deployment is verified. No database migration, provisioning or credential rotation is part of this work.
+The capture frontend publishes from main to Cloudflare Pages; see `public/site/docs/pages-deploy.md` for rollback. The old Clanker origin is retired and must not be reactivated. Preserve all six canonical/legacy Connect account/device/share-management documents, the three exact `/hosted/*-v4.png` art paths, hashed `/assets/` modules, original font/wordmark, accepted homepage and retained public assets without broadening the public boundary. Legacy redirects preserve query strings, including device codes; source rendering aliases remain packaged. Keep hosted API/auth and the registered Google callback unchanged. Anonymous capability recipients, including media, manifest, preview, `/share-view.js` and `/share-view.css`, remain on the capability-serving Worker origin, not Pages. Parent owns Worker integration, independent auth review, Google OAuth/private D1/R2 configuration and live deployment. Verify real capability access and revocation, sign-in, cookie/CORS, slot admission, quota, expiry, device approval and logout separately; synthetic browser checks are not live OAuth or full native UI proof, and packaged files do not prove the host serves them. Keep these routes unlinked from the public homepage until beta deployment is verified. No deployment, database migration, provisioning or credential rotation is part of this reconciliation.
 
 ## React recipient verification
 
 From `connect/service`, run `npm ci`, `npm run build`, then the affected backend tests (`node --test --test-concurrency=1 test/sharing/*.test.mjs test/access/encryption.test.mjs`). `npm test` retains the full service suite. Source renderer tests and Public's composed browser fixtures require the generated recipient renderer from the service build first.
 
 For actual local Worker + D1/R2 browser checks, run `npm run test:recipient` with installed Chromium (`CHROME_PATH`) and FFmpeg. Set an existing private `RECIPIENT_EVIDENCE` directory or let the check create one under the OS temp directory. It generates synthetic four-second media, uploads it through the actual service, exercises pending→ready, native playback, transcript seek, actual clipboard and refusal fallback, no-JS evidence, responsive layout and revocation. No real account or cloud service is contacted. Screenshots and receipts remain outside git; these do not establish deployed hosting, ChatGPT-web retrieval or native Desktop acceptance.
-
-## Same-origin Connect hosting source
-
-`connect/tooling/hosting` builds one `apparent-connect-web` Worker. It serves
-the canonical `/connect`, `/connect/device` and `/connect/shares` documents,
-then dispatches `/connect/v1/*`, `/connect/auth/*`, `/connect/s/*` and recipient
-viewer assets to the existing `connect/service/src/worker.ts` module. This
-preserves the service's authorization, D1/R2 access, OAuth cookies, CSRF/CORS
-and privacy headers. There is no generic proxy or SPA fallback: only exact
-browser routes and packaged `/connect/assets/*` files
-reach ASSETS, with credentials stripped first. The service's existing
-scheduled handler remains the single cleanup implementation. The Wrangler
-template has no routes, preview exposure, provider resource IDs or credentials;
-operator configuration and activation remain separate.
-
-The gateway also preserves the existing API/auth/viewer contract on the exact
-`https://hosted.tryapparent.com` host: `/v1[/...]`, `/auth[/...]`, `/s/...`, and
-the four recipient viewer assets dispatch unchanged to the service under its
-legacy root-origin profile. The legacy profile is cached per runtime environment
-and refreshed when its bindings or secrets change, preserving Better Auth's
-environment-scoped initialization behavior. Other hosts and unknown legacy
-paths do not reach the service. Scheduled cleanup delegates once to that same
-service handler; deployment into the existing Worker must retain its current
-bindings and sole cron. This is synthetic compatibility evidence only; it does
-not authorize or prove provider activation.
-
-The web package retains its canonical and legacy documents for Public
-composition. The hosting packager includes only the three canonical documents,
-rewrites browser assets and illustrations under `/connect`, and rejects
-unexpected inputs and missing resource edges before replacing generated output.
-The Worker separately retains only the exact legacy redirect map described
-above; it does not render or package legacy `/hosted` documents or assets.
-Its build profile uses `VITE_HOSTED_API_ORIGIN` and `API_ORIGIN` set to
-`https://app.tryapparent.com/connect`, with `SITE_ORIGIN` set to
-`https://app.tryapparent.com`. Public's legacy producer profile is unchanged
-until cutover.
-
-Hosting source inputs include `connect/tooling/hosting/`, `connect/service/`
-and the full browser build closure: `connect/web/{package.json,bun.lock,tsconfig.json,
-index.html,vite.config.ts,src/**,scripts/**}`, `shared/ui/{src/**,
-scripts/check-theme.py}`, `shared/analytics/{config.ts,browser.ts}`, and the five
-approved files `public/site/public/assets/{hosted/{source-pond-v4,agent-pond-v4,
-agent-reading-v4}.png,fonts/HostGrotesk-Variable.ttf,brand/apparent-wordmark.svg}`.
-The parent CI entrypoints are `npm ci`, `npm run typecheck`, `npm run build`, and
-`npm test` from `connect/tooling/hosting`; the common CI lane calls
-`npm run verify:artifact`, which installs locked web dependencies, prepares browsers,
-runs the browser suite and the real local Worker checks, and builds the final
-asset/runtime payload. PR verification isolates its synthetic analytics environment
-from this publishable graph by disabling analytics there; production main keeps
-its configured, fingerprinted analytics values and rejects fixture contamination.
-Install Connect web with
-`bun install --frozen-lockfile` from `connect/web` first. Build output is
-`connect/tooling/hosting/.output/dist`: three `index.html` documents, one hashed
-JS/CSS pair under `connect/assets/`, the font and wordmark under that same
-namespace, and three `/connect/hosted/*.png` images (10 files total).
-Wrangler's static asset binding consumes this directory. `.output/worker.js` bundles
-the locked Connect service implementation and `.output/wrangler.json` is its route-free deployment config;
-publication consumes these verified bytes with `--no-bundle` rather than building
-source. Rewritten assets revalidate rather than using their pre-rewrite filenames
-as immutable content identities. This package does not change delivery artifact schema, route
-inventory, or producer names and does not require Cargo or rustc.
-
-`npm test` starts Wrangler's local Workers runtime against the packaged static
-asset directory and exercises the six canonical route/slash forms, query
-preservation, resource fetches, service-owned API/viewer dispatch, HEAD/GET,
-method denial, unknown and encoded paths, and privacy/security headers. A
-handler boundary test checks sensitive request headers and device-code queries
-are removed before the static asset binding; the browser-visible query is retained.
-The runtime test hydrates the rewritten package in Chromium with the synthetic
-session endpoint intercepted, checking same-origin sign-in destinations and
-device-code preservation. Run the existing browser
-suite separately from `connect/web` with a private evidence directory, for
-example `CONNECT_EVIDENCE=/tmp/connect-web-hosting-evidence npm test`; it covers
-synthetic account/device/share states, analytics, no-JS loading HTML and
-artifact/resource closure. Neither lane logs in or accesses private recordings.
-The local Worker run does not establish zone route activation, live cookies,
-OAuth, provider configuration, or deployment.
-
-Legacy `https://hosted.tryapparent.com/s/<capability>` HTML document requests (GET/HEAD) redirect temporarily to `https://app.tryapparent.com/connect/s/<capability>`, with no-store/no-referrer/noindex and query preservation. Metadata and file endpoints under the old link remain service requests for existing clients, not redirects. Existence and authorization are checked by the canonical destination; a redirect does not prove that a recording exists or is ready.

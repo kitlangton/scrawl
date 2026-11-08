@@ -63,6 +63,7 @@
   height: 560px;
   position: relative;
   overflow: hidden;
+  border-bottom: 1px solid var(--color-foreground);
   isolation: isolate;
 }
 

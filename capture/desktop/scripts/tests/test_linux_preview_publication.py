@@ -1,7 +1,6 @@
 """Exercise the Linux publication boundary with a fake GitHub CLI."""
 
 import hashlib
-import importlib.util
 import json
 import os
 import re
@@ -11,7 +10,6 @@ import sys
 import tempfile
 import textwrap
 import unittest
-from unittest import mock
 
 ROOT = Path(__file__).resolve().parents[4]
 SCRIPT = ROOT / "capture/desktop/scripts/linux/maintenance/publish-main-preview.py"
@@ -19,13 +17,10 @@ SHA = "a" * 40
 NEW_SHA = "b" * 40
 OLD_SHA = "c" * 40
 OTHER_SHA = "d" * 40
-SPEC = importlib.util.spec_from_file_location("publish_main_preview", SCRIPT)
-PUBLISHER = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(PUBLISHER)
 
 
 def preview(sha):
-    return dict(tag_name=f"linux-main-v2-{sha}", draft=False, prerelease=True)
+    return dict(tag_name=f"linux-main-{sha}", draft=False, prerelease=True)
 
 
 class LinuxPreviewPublicationTest(unittest.TestCase):
@@ -143,7 +138,7 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
         self.assertLess(next(i for i, c in enumerate(calls) if c[:2] == ["release", "view"]),
                         next(i for i, c in enumerate(calls) if c[:2] == ["release", "edit"]))
         create = next(c for c in calls if c[:2] == ["release", "create"])
-        self.assertEqual(create[2], f"linux-main-v2-{SHA}")
+        self.assertEqual(create[2], f"linux-main-{SHA}")
         self.assertEqual(create[create.index("--target") + 1], SHA)
         for flag in ("--draft", "--prerelease", "--latest=false"):
             self.assertIn(flag, create)
@@ -274,180 +269,105 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
 
     def test_main_preview_job_runs_the_checked_publisher(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
-        job = workflow.split("  publish:\n", 1)[1]
-        build = workflow.split("  linux:\n", 1)[1].split("  publish:\n", 1)[0]
+        job = workflow.split("  main-preview:\n", 1)[1]
+        build = workflow.split("  linux:\n", 1)[1].split("  attach-release:\n", 1)[0]
         self.assertNotIn("actions: write", workflow)
         self.assertIn("--json isDraft --jq .isDraft", workflow)
-        self.assertIn("ref: ${{ needs.admit.outputs.sha }}", build)
-        self.assertIn('test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"', build)
-        self.assertIn("ref: main", job)
-        self.assertIn('git show "$CANDIDATE_SHA:capture/desktop/linux/updates/update.rs"', job)
-        self.assertIn('strip_prefix("linux-main-v2-")', job)
-        self.assertIn('GITHUB_SHA="$CANDIDATE_SHA" cargo build', build)
+        self.assertIn("ref: ${{ inputs.tag || github.sha }}", build)
+        self.assertIn('test "$(git rev-parse HEAD)" = "$GITHUB_SHA"', build)
+        self.assertIn("ref: ${{ github.sha }}", job)
         self.assertIn("python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py", job)
         self.assertIn("inputs.verify_only != true", job)
         self.assertNotIn("exit 0", job)
 
-    def git_history(self, root):
-        repo = root / "repo"
-        repo.mkdir()
-        clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-        subprocess.run(["git", "init", "-q", str(repo)], check=True, env=clean_env)
-        subprocess.run(["git", "-C", str(repo), "config", "user.name", "Preview Test"], check=True,
-                       env=clean_env)
-        subprocess.run(["git", "-C", str(repo), "config", "user.email", "preview@example.invalid"],
-                       check=True, env=clean_env)
-
-        def commit(content):
-            (repo / "history.txt").write_text(content)
-            subprocess.run(["git", "-C", str(repo), "add", "history.txt"], check=True, env=clean_env)
-            subprocess.run(["git", "-C", str(repo), "commit", "-qm", content], check=True, env=clean_env)
-            return subprocess.run(["git", "-C", str(repo), "rev-parse", "HEAD"], check=True,
-                                  capture_output=True, text=True, env=clean_env).stdout.strip()
-
-        base = commit("base")
-        main_branch = subprocess.run(["git", "-C", str(repo), "branch", "--show-current"], check=True,
-                                     capture_output=True, text=True, env=clean_env).stdout.strip()
-        tip = commit("tip")
-        subprocess.run(["git", "-C", str(repo), "checkout", "-qb", "divergent", base], check=True,
-                       env=clean_env)
-        divergent = commit("divergent")
-        subprocess.run(["git", "-C", str(repo), "checkout", "-q", main_branch], check=True,
-                       env=clean_env)
-        return repo, base, tip, divergent
-
-    def test_local_git_comparison_covers_ancestry_without_remote_calls(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            repo, base, tip, divergent = self.git_history(root)
-            clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-            with mock.patch.dict(os.environ, clean_env, clear=True):
-                # Git honors the inherited redirect just as the publisher does in
-                # CI fixtures, while the process cwd remains isolated.
-                os.environ["GIT_DIR"] = str(repo / ".git")
-                os.environ["GIT_WORK_TREE"] = str(repo)
-                original = Path.cwd()
-                os.chdir(repo)
-                try:
-                    PUBLISHER._comparisons.clear()
-                    with mock.patch.object(PUBLISHER, "gh", side_effect=AssertionError("remote compare used")):
-                        self.assertEqual(PUBLISHER.comparison("owner/repo", base, tip, tip), "ahead")
-                        self.assertEqual(PUBLISHER.comparison("owner/repo", tip, base, tip), "behind")
-                        self.assertEqual(PUBLISHER.comparison("owner/repo", tip, divergent, tip), "diverged")
-                        self.assertEqual(PUBLISHER.comparison("owner/repo", base, base, tip), "identical")
-                finally:
-                    os.chdir(original)
-
-    def test_missing_commit_stale_main_and_shallow_history_use_api_fallback(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            repo, base, tip, _ = self.git_history(root)
-            clean_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
-            with mock.patch.dict(os.environ, clean_env, clear=True):
-                os.environ["GIT_DIR"] = str(repo / ".git")
-                os.environ["GIT_WORK_TREE"] = str(repo)
-                original = Path.cwd()
-                os.chdir(repo)
-                try:
-                    for label, current, missing, make_shallow in (
-                        ("missing", tip, "f" * 40, False),
-                        ("stale-main", base, base, False),
-                        ("shallow", tip, base, True),
-                    ):
-                        with self.subTest(reason=label):
-                            if make_shallow:
-                                (repo / ".git/shallow").write_text(tip + "\n")
-                            else:
-                                (repo / ".git/shallow").unlink(missing_ok=True)
-                            PUBLISHER._comparisons.clear()
-                            with mock.patch.object(PUBLISHER, "gh", return_value=json.dumps({"status": "ahead"})) as gh:
-                                self.assertEqual(PUBLISHER.comparison("owner/repo", missing, tip, current), "ahead")
-                                gh.assert_called_once_with("api", f"repos/owner/repo/compare/{missing}...{tip}")
-                finally:
-                    os.chdir(original)
-
-    def test_selected_candidate_reuses_exact_admission_and_rejects_other_modes(self):
-        workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
-        admit = workflow.split('  admit:\n')[1].split('  preview-needed:\n')[0]
-        self.assertIn('REQUEST_SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha || github.sha }}', admit)
-        script = textwrap.dedent(admit.split('        run: |\n')[1])
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            gate = root / 'python3'
-            gate.write_text('#!/bin/sh\nprintf "%s\\n" "$@" > "$GATE_ARGS"\n')
-            gate.chmod(0o755)
-            baseline = dict(os.environ, PATH=f'{root}:{os.environ["PATH"]}',
-                            SELECTED_SHA=SHA, REQUEST_SHA=SHA, GITHUB_EVENT_NAME='workflow_dispatch',
-                            GITHUB_REF='refs/heads/main', TAG='', VERIFY_ONLY='false', BRIDGE_COMMIT='',
-                            VERIFY_RUN_ID='', GATE_ARGS=str(root / 'args'))
-            for overrides in ({}, {'VERIFY_ONLY': 'true'}, {'TAG': 'v1.2.3'},
-                              {'BRIDGE_COMMIT': SHA}, {'GITHUB_REF': 'refs/heads/topic'},
-                              {'GITHUB_EVENT_NAME': 'schedule'}):
-                with self.subTest(overrides=overrides):
-                    (root / 'args').unlink(missing_ok=True)
-                    result = subprocess.run(['bash', '-c', script], env=baseline | overrides,
-                                            capture_output=True, text=True)
-                    if overrides:
-                        self.assertNotEqual(result.returncode, 0)
-                        self.assertFalse((root / 'args').exists())
-                    else:
-                        self.assertEqual(result.returncode, 0, result.stderr)
-                        self.assertEqual((root / 'args').read_text().splitlines(),
-                                         ['enablement/release_gate.py', '--platform', 'linux', '--sha', SHA])
-
     def test_main_push_and_retry_selection_preserve_non_canceling_serialization(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
         triggers = workflow.split("on:\n", 1)[1].split("\npermissions:", 1)[0]
-        self.assertIn("  workflow_run:\n    workflows: [Linux verification]\n    branches: [main]\n", triggers)
+        self.assertIn("  push:\n    branches: [main]\n", triggers)
         self.assertNotIn("pull_request:", triggers)
         self.assertIn("cron: '17 3 * * *'", triggers)
         self.assertIn("workflow_dispatch:", triggers)
-        concurrency = workflow.split("  publish:\n", 1)[1].split("    needs:", 1)[0]
+        concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
         self.assertIn("cancel-in-progress: false", concurrency)
         # Evaluate the actual job condition with event values, not a second
         # implementation of publication selection. Only this expression subset
         # is needed; Actions remains the authority for scheduling semantics.
-        job = workflow.split("  publish:\n", 1)[1]
-        condition = job.split("    if: ", 1)[1].splitlines()[0] + ' && ' + job.split('- name: Publish both checked AppImages\n')[1].split('        if: ', 1)[1].splitlines()[0]
+        job = workflow.split("  main-preview:\n", 1)[1]
+        condition = job.split("    if: ", 1)[1].splitlines()[0]
         for event, ref, tag, publish, verify, result, expected in (
-            ("workflow_run", "refs/heads/main", "", False, False, "success", True),
+            ("push", "refs/heads/main", "", False, False, "success", True),
             ("schedule", "refs/heads/main", "", False, False, "success", True),
             ("workflow_dispatch", "refs/heads/main", "", True, False, "success", True),
             ("workflow_dispatch", "refs/heads/main", "v1.2.3", False, False, "success", False),
             ("workflow_dispatch", "refs/heads/main", "", False, True, "success", False),
             ("workflow_dispatch", "refs/heads/topic", "", True, False, "success", False),
             ("pull_request", "refs/pull/278/merge", "", False, False, "success", False),
-            ("workflow_run", "refs/heads/main", "", False, False, "failure", False),
-            ("workflow_run", "refs/heads/main", "", False, False, "skipped", False),
+            ("push", "refs/heads/main", "", False, False, "failure", False),
+            ("push", "refs/heads/main", "", False, False, "skipped", False),
         ):
             with self.subTest(event=event, ref=ref, tag=tag, verify=verify, result=result):
                 values = {"github.event_name": event, "github.ref": ref, "inputs.tag": tag,
                           "inputs.publish_main": publish, "inputs.verify_only": verify,
-                          "needs.linux.result": result, "needs.admit.result": "success",
-                          "needs.admit.outputs.sha": SHA, "needs.preview-needed.outputs.build": "true",
-                          "inputs.bridge_commit": "", "env.BRIDGE_COMMIT": "", "env.TAG": tag,
-                          "env.PUBLISH_MAIN": str(event in ("workflow_run", "schedule") or publish).lower()}
+                          "needs.linux.result": result}
                 expression = condition
                 for key, value in values.items():
                     expression = expression.replace(key, repr(value))
                 expression = expression.replace("&&", " and ").replace("||", " or ").replace("true", "True")
-                self.assertEqual(bool(eval(expression, {"__builtins__": {}, "always": lambda: True})), expected)
-        expected_env = "PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}"
+                self.assertEqual(eval(expression, {"__builtins__": {}}), expected)
+        expected_env = "PUBLISH_MAIN: ${{ github.event_name == 'push' || github.event_name == 'schedule' || inputs.publish_main }}"
         for section in (workflow.split("  preview-needed:\n", 1)[1].split("  linux:\n", 1)[0],
-                        workflow.split("  linux:\n", 1)[1].split("  publish:\n", 1)[0]):
+                        workflow.split("  linux:\n", 1)[1].split("  attach-release:\n", 1)[0]):
             self.assertIn(expected_env, section)
 
     def test_verify_only_cannot_displace_pending_main_publication(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
-        job = workflow.split("  publish:\n", 1)[1]
-        condition = job.split("    if: ", 1)[1].splitlines()[0]
-        self.assertIn("inputs.verify_only != true", condition)
-        self.assertEqual(workflow.count('group: release-linux-publication'), 1)
-        self.assertIn('cancel-in-progress: false', job)
-        # One pending transaction contains both asset publication and feed repair;
-        # neither stage can evict the other from a separate pending slot.
-        self.assertIn('publish-main-preview.py', job)
-        self.assertIn('main-feed.ts "$CANDIDATE_SHA"', job)
+        concurrency = workflow.split("\nconcurrency:\n", 1)[1].split("\njobs:", 1)[0]
+        group = concurrency.split("  group: ", 1)[1].splitlines()[0]
+
+        def lane(event, *, verify=False, publish=False, tag='', ref='refs/heads/main'):
+            values = {'github.event_name': event, 'github.ref': ref,
+                      'inputs.verify_only': verify, 'inputs.publish_main': publish,
+                      'inputs.tag': tag}
+
+            def evaluate(match):
+                expression = match[1].strip()
+                for key, value in values.items():
+                    expression = expression.replace(key, repr(value))
+                expression = expression.replace('&&', ' and ').replace('||', ' or ')
+                expression = expression.replace('true', 'True').replace('false', 'False')
+                return str(eval(expression, {'__builtins__': {}}))
+
+            return re.sub(r'\$\{\{(.*?)\}\}', evaluate, group)
+
+        main = lane('push')
+        self.assertEqual(lane('schedule'), main)
+        self.assertEqual(lane('workflow_dispatch', publish=True), main)
+        self.assertNotEqual(lane('workflow_dispatch', tag='v1.2.3'), main)
+        self.assertNotEqual(lane('workflow_dispatch', ref='refs/heads/topic'), main)
+        # Actions has one running and one pending run per evaluated key.
+        running, pending = {}, {}
+
+        def arrive(name, key):
+            if key in running:
+                pending[key] = name
+            else:
+                running[key] = name
+
+        arrive('push A', main)
+        arrive('push B', lane('push'))
+        verify = lane('workflow_dispatch', verify=True)
+        arrive('verify V', verify)
+        arrive('verify W', verify)
+        self.assertEqual(running[main], 'push A')
+        self.assertEqual(pending[main], 'push B')
+        self.assertEqual(running[verify], 'verify V')
+        self.assertEqual(pending[verify], 'verify W')
+        arrive('nightly C', lane('schedule'))
+        arrive('manual D', lane('workflow_dispatch', publish=True))
+        self.assertEqual(running[main], 'push A')
+        self.assertEqual(pending[main], 'manual D')
+        cancel = concurrency.split('  cancel-in-progress: ', 1)[1].splitlines()[0]
+        self.assertEqual(cancel, 'false')
 
     def test_preview_needed_shell_skips_only_an_already_public_same_sha(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
@@ -478,13 +398,15 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
 
     def test_verify_only_keeps_both_architectures_and_all_native_gates(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
-        build = workflow.split("  linux:\n", 1)[1].split("  publish:\n", 1)[0]
+        build = workflow.split("  linux:\n", 1)[1].split("  attach-release:\n", 1)[0]
         self.assertIn("verify_only:", workflow)
         self.assertIn('default: false', workflow.split("      verify_only:", 1)[1].split("\n\npermissions:", 1)[0])
         for arch in ("x86_64", "aarch64"):
             self.assertIn(f"arch: {arch}", build)
         for check in (
             "cargo build --release --locked",
+            "cargo test --release --locked -- --test-threads=2",
+            "cargo test --release --locked speech:: -- --nocapture",
             "cargo test --release --locked --bin apparent --no-run --message-format=json",
             "test -f \"$test\"",
             "GGML_NATIVE:BOOL=OFF",
@@ -504,14 +426,14 @@ class LinuxPreviewPublicationTest(unittest.TestCase):
 
     def test_attach_release_step_sets_repository_context(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
-        attach = workflow.split("  publish:\n", 1)[1]
+        attach = workflow.split("  attach-release:\n", 1)[1].split("  main-preview:\n", 1)[0]
         self.assertIn("GH_REPO: ${{ github.repository }}", attach)
 
     def test_verify_only_fails_closed_and_excludes_publication(self):
         workflow = (ROOT / ".github/workflows/release-linux.yml").read_text()
-        build = workflow.split("  linux:\n", 1)[1].split("  publish:\n", 1)[0]
-        attach = workflow.split("  publish:\n", 1)[1]
-        preview = workflow.split("  publish:\n", 1)[1]
+        build = workflow.split("  linux:\n", 1)[1].split("  attach-release:\n", 1)[0]
+        attach = workflow.split("  attach-release:\n", 1)[1].split("  main-preview:\n", 1)[0]
+        preview = workflow.split("  main-preview:\n", 1)[1]
         self.assertIn('VERIFY_ONLY: ${{ inputs.verify_only }}', build)
         self.assertIn('$GITHUB_EVENT_NAME" != "workflow_dispatch', build)
         self.assertIn('-n "$TAG"', build)

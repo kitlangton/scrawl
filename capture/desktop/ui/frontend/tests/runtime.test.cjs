@@ -4,7 +4,7 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { readRuntimeState, captureLocation, storageLocation, errorReporting, captureReference, storagePreference } = require('../electron/runtime.cjs');
+const { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference } = require('../electron/runtime.cjs');
 
 async function fixture(t, reply, { mode = 0o700 } = {}) {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
@@ -70,22 +70,12 @@ for (const reply of ['not json\n', '{}\n', '{"state":{"phase":"new_phase"}}\n', 
   });
 }
 
-test('absolute deadline bounds an unresponsive server', { timeout: 2000 }, async (t) => {
-  let received;
-  const request = new Promise(resolve => { received = resolve; });
-  const f = await fixture(t, () => received());
-  // Keep real filesystem/socket I/O, but do not race its admission against a
-  // 50 ms wall-clock budget on a loaded runner. The server never replies.
-  t.mock.timers.enable({ apis: ['setTimeout'] });
-  let settled = false;
-  const pending = readRuntimeState(f.home, 50).then(result => { settled = true; return result; });
-  await request;
+test('absolute deadline bounds an unresponsive server', async (t) => {
+  const f = await fixture(t, null);
+  const before = performance.now();
+  assert.equal((await readRuntimeState(f.home, 50)).status, 'error');
+  assert.ok(performance.now() - before < 1000);
   assert.deepEqual(f.requests, ['state\n']);
-  t.mock.timers.tick(49);
-  await new Promise(setImmediate);
-  assert.equal(settled, false);
-  t.mock.timers.tick(1);
-  assert.equal((await pending).status, 'error');
 });
 
 test('capture reference is a bounded ID-only read and exact conditional copy', async (t) => {
@@ -126,24 +116,20 @@ test('copy mismatch and timeout never become success or automatic retries', asyn
 const snapshot = { savedPath: '/saved', effectivePath: '/override', displayPath: '/override',
   custom: true, source: 'environment', revision: 'a'.repeat(16) };
 test('retention and usage are explicitly projected; malformed policy fails closed', async t => {
-  const r = { revision: 'a'.repeat(16), custom: false, retention: {
-    mediaDays: { present: false, value: null }, bundleDays: { present: false, value: null } }, secret: 'hidden' };
+  const r = { revision: 'a'.repeat(16), custom: false, retention: { preset: 'week', note: 'Rust note',
+    options: ['week', 'month', 'forever'].map(id => ({ id, label: id, secret: 'hidden' })) }, secret: 'hidden' };
   const f = await fixture(t, JSON.stringify(r) + '\n');
   const decoded = await storagePreference(f.home, 'retention');
-  assert.equal(decoded.secret, undefined);
-  await storagePreference(f.home, 'saveretention', { expected: r.revision,
-    policy: { mediaDays: 30, bundleDays: 90 } });
-  assert.deepEqual({ ...JSON.parse(f.requests[1]), deadline: 0 }, { storage: 'saveretention', expected: r.revision,
-    policy: { mediaDays: 30, bundleDays: 90 }, deadline: 0 });
-  assert.throws(() => storagePreference(f.home, 'saveretention', { expected: r.revision, policy: { mediaDays: -1, bundleDays: 30 } }));
-  assert.throws(() => storagePreference(f.home, 'saveretention', { expected: r.revision,
-    policy: { mediaDays: 30, bundleDays: 90, secret: 'ignored' } }));
-  const invalid = await fixture(t, JSON.stringify({ ...r, retention: { mediaDays: { present: 'yes', value: 7 }, bundleDays: r.retention.bundleDays } }) + '\n');
+  assert.equal(decoded.secret, undefined); assert.equal(decoded.retention.options[0].secret, undefined);
+  await storagePreference(f.home, 'saveretention', { expected: r.revision, preset: 'month', secret: 'hidden' });
+  assert.deepEqual({ ...JSON.parse(f.requests[1]), deadline: 0 }, { storage: 'saveretention', expected: r.revision, preset: 'month', deadline: 0 });
+  assert.throws(() => storagePreference(f.home, 'saveretention', { expected: r.revision, preset: '/arbitrary' }));
+  const invalid = await fixture(t, JSON.stringify({ ...r, retention: { ...r.retention, options: [] } }) + '\n');
   assert.deepEqual(await storagePreference(invalid.home, 'retention'), { status: 'error', code: 'invalid_response' });
   const usage = await fixture(t, JSON.stringify({ usage: { effectivePath: '/captures', displayPath: '~/captures', formatted: '1 MB', secret: 'hidden' } }) + '\n');
   assert.deepEqual(await storagePreference(usage.home, 'usage'), { status: 'connected', usage: { effectivePath: '/captures', displayPath: '~/captures', formatted: '1 MB' } });
   const stalled = await fixture(t, null);
-  assert.deepEqual(await storagePreference(stalled.home, 'saveretention', { expected: r.revision, policy: { mediaDays: 30, bundleDays: 90 } }, 50), { status: 'error', code: 'outcome_unknown' });
+  assert.deepEqual(await storagePreference(stalled.home, 'saveretention', { expected: r.revision, preset: 'month' }, 50), { status: 'error', code: 'outcome_unknown' });
   assert.equal(stalled.requests.length, 1);
 });
 test('storage uses typed requests and projects only permitted snapshot fields', async (t) => {
@@ -158,28 +144,6 @@ test('storage uses typed requests and projects only permitted snapshot fields', 
   assert.deepEqual({ ...set, deadline: 0 }, { storage: 'set', path: '/space é/folder', expected: snapshot.revision, deadline: 0 });
   await captureLocation(f.home, 'reset', { expected: snapshot.revision });
   assert.equal(JSON.parse(f.requests[2]).storage, 'reset');
-});
-test('Settings location facts and filesystem probes use narrow owner-scoped transport', async (t) => {
-  const location = { saved: { kind: 'string', value: '~/captures' },
-    environment: { present: true, value: '' }, homePath: '/home/test', builtinPath: '/home/test/.local/share/apparent/captures',
-    revision: 'b'.repeat(16), secret: 'hidden' };
-  const facts = await fixture(t, JSON.stringify({ location, secret: 'hidden' }) + '\n');
-  assert.deepEqual(await storageLocation(facts.home, 'facts'), { status: 'connected', location: {
-    saved: { kind: 'string', value: '~/captures' }, environment: { present: true, value: '' },
-    homePath: '/home/test', builtinPath: '/home/test/.local/share/apparent/captures', revision: 'b'.repeat(16) } });
-  const decodedRequest = JSON.parse(facts.requests[0]);
-  assert.deepEqual(Object.keys(decodedRequest).sort(), ['deadline', 'storage']);
-  assert.equal(decodedRequest.storage, 'locationfacts');
-  const probe = await fixture(t, '{"probe":{"available":false},"secret":"hidden"}\n');
-  assert.deepEqual(await storageLocation(probe.home, 'probe', { path: '/safe/candidate', expected: 'b'.repeat(16) }),
-    { status: 'connected', available: false });
-  const probeRequest = JSON.parse(probe.requests[0]);
-  assert.deepEqual({ ...probeRequest, deadline: 0 }, { storage: 'probelocation', path: '/safe/candidate', expected: 'b'.repeat(16), deadline: 0 });
-  assert.throws(() => storageLocation(probe.home, 'probe', { path: 'relative', expected: 'b'.repeat(16) }));
-  const stalled = await fixture(t, null);
-  assert.deepEqual(await storageLocation(stalled.home, 'set', { path: '/safe', expected: 'b'.repeat(16) }, 50),
-    { status: 'error', code: 'outcome_unknown' });
-  assert.equal(stalled.requests.length, 1);
 });
 test('error reporting bridge projects only boolean state and accepts only typed toggles', async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
@@ -224,19 +188,6 @@ for (const [reply, expected] of [
   assert.deepEqual(await captureLocation(f.home), expected);
 });
 
-test('drawing undo binds recording identity and strips unexpected state', async (t) => {
-  const { drawing } = require('../electron/runtime.cjs');
-  const f = await fixture(t, '{"drawing":{"revision":"0123456789abcdef","strokes":2,"private":"hidden"}}\n');
-  assert.deepEqual(await drawing(f.home, 'undo', '0123456789abcdef'), { status: 'connected', revision: '0123456789abcdef', strokes: 2 });
-  const request = JSON.parse(f.requests[0]);
-  assert.equal(request.drawing, 'undo');
-  assert.equal(request.expected, '0123456789abcdef');
-  assert.ok(request.deadline > 0);
-  await assert.rejects(async () => drawing(f.home, 'undo', 'wrong'));
-  const stale = await fixture(t, '{"error":"conflict"}\n');
-  assert.deepEqual(await drawing(stale.home, 'undo', '0123456789abcdef'), { status: 'error', code: 'conflict' });
-});
-
 const {PublicShare} = require('../electron/public-share.cjs');
 test('public share requires observed selection, retains operation in main and delivers once',async t=>{
  const operation='a'.repeat(32);
@@ -279,80 +230,22 @@ test('stdin accepts fragmented lines and rejects oversized individual lines',()=
 {
   const vm = require('node:vm');
   const fs = require('node:fs');
-  test('onboarding replays parent messages received before React subscribes', () => {
-    let receive;
-    let bridge;
-    const electron = {
-      ipcRenderer: { on: (_channel, listener) => { receive = listener; }, invoke: () => Promise.resolve() },
-      contextBridge: { exposeInMainWorld: (name, value) => { if (name !== 'apparentExceptions') bridge = value; } },
-    };
-    vm.runInNewContext(fs.readFileSync(require.resolve('../electron/onboarding-preload.cjs'), 'utf8'), {
-      require: name => { assert.equal(name, 'electron'); return electron; },
-      window: { addEventListener() {} },
-    });
-    receive({}, { type: 'shortcut', label: 'Alt+Shift+S' });
-    receive({}, { type: 'state', step: 'try-it' });
-    const messages = [];
-    const unsubscribe = bridge.subscribe(value => messages.push(value));
-    assert.equal(messages[0].label, 'Alt+Shift+S');
-    assert.equal(messages[1].step, 'try-it');
-    receive({}, { type: 'shortcut', label: 'Ctrl+Alt+K' });
-    assert.equal(messages.at(-1).label, 'Ctrl+Alt+K');
-    unsubscribe();
-    receive({}, { type: 'state', step: 'done' });
-    assert.equal(messages.length, 3);
-    const replay = [];
-    bridge.subscribe(value => replay.push(value));
-    assert.equal(replay.length, 2);
-    assert.equal(replay[0].label, 'Ctrl+Alt+K');
-    assert.equal(replay[1].step, 'done');
+  test('onboarding replays parent messages received before React subscribes', async () => {
+    let bridge, receive;
+    let current={step:'try-it',shortcut:'Alt+Shift+S'};
+    const electron={ipcRenderer:{on:(_channel,listener)=>{receive=listener},removeListener:()=>{receive=null},invoke:()=>Promise.resolve(current)},contextBridge:{exposeInMainWorld:(name,value)=>{if(name==='nativeOnboarding')bridge=value}}};
+    vm.runInNewContext(fs.readFileSync(require.resolve('../electron/onboarding-preload.cjs'),'utf8'),{require:()=>electron});
+    const messages=[];const off=bridge.onState(value=>messages.push(value));
+    // The current renderer subscribes before requesting the authoritative snapshot.
+    assert.equal((await bridge.readState()).shortcut,'Alt+Shift+S');
+    current={step:'shortcut',shortcut:'Ctrl+Alt+K'};receive({},current);
+    assert.equal(messages.at(-1).shortcut,'Ctrl+Alt+K');off();assert.equal(receive,null);
+    current={step:'done',shortcut:'Ctrl+Alt+K'};
+    bridge.onState(value=>messages.push(value));
+    assert.equal((await bridge.readState()).step,'done');
+    assert.equal(messages.length,1);
   });
-}
 
-test('unhandled reports send only fixed codes and bounded deadlines', async t => {
-  const f = await fixture(t, '{"accepted":true}\n');
-  const { reportException } = require('../electron/runtime.cjs');
-  await reportException(f.home, 'renderer_rejection');
-  await reportException(f.home, 'private-token-in-error');
-  assert.equal(f.requests.length, 1);
-  const request = JSON.parse(f.requests[0]);
-  assert.deepEqual(Object.keys(request).sort(), ['deadline', 'errorReporting', 'kind']);
-  assert.equal(request.kind, 'renderer_rejection');
-  assert.equal(request.errorReporting, 'exception');
-  assert.equal(typeof request.deadline, 'number');
-});
-
-test('ordinary development hosts do not install exception hooks', () => {
-  const { spawnSync } = require('node:child_process');
-  const script = `
-    delete process.env.APPARENT_DESKTOP_REPORTING;
-    const { EventEmitter } = require('node:events');
-    const app = new EventEmitter();
-    require(${JSON.stringify(require.resolve('../electron/runtime.cjs'))}).installExceptionReporting({app});
-    if (process.listenerCount('uncaughtException') || process.listenerCount('unhandledRejection') || app.eventNames().length) process.exit(1);
-  `;
-  assert.equal(spawnSync(process.execPath, ['-e', script]).status, 0);
-});
-
-for (const kind of ['main_exception', 'main_rejection']) {
-  test(`real unhandled ${kind} reports then exits unsuccessfully`, async t => {
-    const f = await fixture(t, '{"accepted":true}\n');
-    const { spawn } = require('node:child_process');
-    const script = `
-      const {EventEmitter} = require('node:events');
-      process.env.APPARENT_DESKTOP_REPORTING = '1';
-      const app = new EventEmitter(); app.exit = code => process.exit(code);
-      require(${JSON.stringify(require.resolve('../electron/runtime.cjs'))}).installExceptionReporting({app}, process.argv[1]);
-      ${kind === 'main_exception' ? "setImmediate(() => { throw new Error('private-token'); });" : "Promise.reject(new Error('private-token'));"}
-    `;
-    const child = spawn(process.execPath, ['-e', script, f.home], { stdio: 'ignore' });
-    t.after(() => child.kill());
-    const exit = await new Promise(resolve => child.once('exit', resolve));
-    assert.equal(exit, 1);
-    assert.equal(f.requests.length, 1);
-    assert.equal(JSON.parse(f.requests[0]).kind, kind);
-    assert.ok(!f.requests[0].includes('private-token'));
-  });
 }
 
 {
@@ -372,6 +265,57 @@ for (const kind of ['main_exception', 'main_rejection']) {
   });
 }
 
-// Keep identity contract logic in TypeScript and share this existing runner entry.
-require('./build/identity.test.ts');
-require('./build/transport.test.ts');
+test('onboarding coach avoids its board and pill on offset displays, preserves identity', () => {
+  const { coachPosition, project } = require('../electron/onboarding.cjs');
+  for (const area of [{x:0,y:25,width:1440,height:875},{x:-1920,y:40,width:1920,height:1040}]) {
+    const board=[area.x+260,area.y+160,760,590], anchor=[area.x+500,area.y+15,320,50];
+    const p=coachPosition(area,anchor,board,'board-ink');
+    assert.ok(p.x>=area.x && p.y>=area.y && p.x+380<=area.x+area.width && p.y+440<=area.y+area.height);
+    for(const [x,y,w,h] of [board,anchor]) assert.ok(p.x+380<=x || p.x>=x+w || p.y+440<=y || p.y>=y+h);
+    assert.equal(p.pointsUp,false);
+  }
+  const state={type:'state',step:'try-it',rows:[],ready:true,testInstance:true,practiceBoard:[0,0,700,600]};
+  assert.equal(project(state).testInstance,true);
+  assert.deepEqual(project(state).practiceBoard,[0,0,700,600]);
+  assert.equal(project({...state,practiceBoard:[0,0,-1,600]}).practiceBoard,undefined);
+});
+
+test('onboarding output failure retires the channel once and preserves its error', async () => {
+  const { Writable }=require('node:stream');
+  const { parentChannel }=require('../electron/onboarding.cjs');
+  for(const code of ['EPIPE','EIO']){
+    const error=Object.assign(new Error(code),{code}),failures=[];
+    const output=new Writable({write(_bytes,_encoding,callback){callback(error)}});
+    const channel=parentChannel(output,failure=>failures.push(failure));
+    channel.send('continue');
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(failures,[error]);
+    assert.equal(channel.send('close'),false);
+  }
+});
+
+test('permission refresh keeps setup unfocused and avoids repeating native geometry calls',()=>{
+ const vm=require('node:vm'),fs=require('node:fs'),{EventEmitter}=require('node:events');
+ const stdin=new EventEmitter();stdin.setEncoding=stdin.resume=()=>{};
+ const stdout=new EventEmitter();stdout.write=()=>true;
+ const calls=[];let window;
+ class Window extends EventEmitter {
+  constructor(){super();window=this;this.visible=false;this.webContents=new EventEmitter();this.webContents.setWindowOpenHandler=()=>{};this.webContents.send=()=>calls.push('state');}
+  removeMenu(){} loadURL(){} isDestroyed(){return false} isVisible(){return this.visible}
+  show(){this.visible=true;calls.push('show')} showInactive(){this.visible=true;calls.push('showInactive')} hide(){this.visible=false}
+  setAlwaysOnTop(){calls.push('top')} setHasShadow(){calls.push('shadow')} setVisibleOnAllWorkspaces(){calls.push('spaces')}
+  setMaximumSize(){calls.push('max')} setMinimumSize(){calls.push('min')} setSize(){calls.push('size')}
+  setPosition(){calls.push('position')} getBounds(){return{x:0,y:0,width:760,height:720}}
+ }
+ const area={x:0,y:0,width:1440,height:900};
+ const electron={app:{setName(){},getPath(){return'/tmp'},setPath(){},whenReady(){return{then:fn=>fn()}},dock:{hide(){}},quit(){}},BrowserWindow:Window,ipcMain:{handle(){}},screen:{getCursorScreenPoint:()=>({x:0,y:0}),getDisplayNearestPoint:()=>({workArea:area})},session:{defaultSession:{setPermissionRequestHandler(){},setPermissionCheckHandler(){}}}};
+ vm.runInNewContext('(function(){'+fs.readFileSync(require.resolve('../electron/onboarding.cjs'),'utf8')+'})()',{require:name=>name==='electron'?electron:require('node:module').createRequire(require.resolve('../electron/onboarding.cjs'))(name),__dirname:path.resolve(__dirname,'../electron'),module:{exports:{}},process:{versions:{electron:'fixture'},env:{},argv:[],stdin,stdout},console});
+ const send=status=>stdin.emit('data',JSON.stringify({type:'state',step:'permissions',rows:[{permission:'microphone',status,required:true}],ready:false})+'\n');
+ send('not-determined');const initial=calls.slice();send('granted');
+ assert.equal(calls.filter(x=>x==='state').length,2);
+ assert.equal(calls.filter(x=>x==='show').length,1,'permission refresh must not reactivate setup over OS prompts');
+ assert.equal(calls.filter(x=>x==='size').length,1,'same mode must not resize its native window again');
+ assert.equal(calls.filter(x=>x==='position').length,1,'same mode must preserve a user-moved window');
+ stdin.emit('data','{"type":"show"}\n');
+ assert.equal(calls.filter(x=>x==='show').length,2,'explicit parent show may reactivate setup');
+});

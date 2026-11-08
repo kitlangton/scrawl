@@ -22,9 +22,6 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-#[cfg(target_os = "macos")]
-pub(crate) mod permission_helper;
-
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Permission {
@@ -221,6 +218,7 @@ pub enum Input {
     },
     /// ⌥⇧S was pressed while a required permission is off.
     Blocked,
+    CaptureSelecting,
     CaptureStarted,
     CaptureEnded {
         completed: bool,
@@ -315,9 +313,16 @@ pub struct Flow {
     first_capture_completed: bool,
     shortcut_pending: bool,
     practice_recording: bool,
+    skip_intro: bool,
 }
 
 impl Flow {
+    /// The shared pen picker is followed directly by permissions or shortcut setup.
+    fn with_intro_skipped(mut self, skipped: bool) -> Self {
+        self.skip_intro=skipped && self.mode==Mode::Tour;
+        if self.skip_intro && self.step==Step::HowItWorks { self.step=self.forward_from(self.step); }
+        self
+    }
     /// Opt into the first-capture onboarding experiment, restoring durable milestones.
     pub fn with_first_capture(mut self, required: bool, chosen: bool, completed: bool) -> Self {
         self.first_capture_required = required && self.mode == Mode::Tour;
@@ -379,6 +384,7 @@ impl Flow {
             first_capture_completed: false,
             shortcut_pending: false,
             practice_recording: false,
+            skip_intro: false,
         }
     }
 
@@ -475,6 +481,7 @@ impl Flow {
                 }
                 Effect::Show
             }
+            Input::CaptureSelecting => Effect::None,
             Input::CaptureStarted if !self.hidden => {
                 self.practice_recording = std::mem::take(&mut self.shortcut_pending);
                 self.hidden = true;
@@ -578,7 +585,7 @@ impl Flow {
 
     /// A step the tour passes: the permissions screen once everything on it works.
     fn passes(&self, step: Step) -> bool {
-        step == Step::Permissions && self.done()
+        (step == Step::HowItWorks && self.skip_intro) || (step == Step::Permissions && self.done())
     }
 
     fn forward_from(&self, mut step: Step) -> Step {
@@ -891,6 +898,38 @@ pub enum Event {
     /// The inline recorder uses the same actions and validation as Settings.
     Shortcut(crate::capture::desktop::settings::Action),
     Exited,
+    /// Reader callbacks belong to the session that created their transport.
+    Session { source: u64, event: Box<Event> },
+    /// A fallback replaces a transport inside the same Session.
+    Transport { generation: u64, event: Box<Event> },
+}
+
+impl Event {
+    pub fn for_current_transport(self, active: Option<u64>) -> Option<Self> {
+        match self {
+            Self::Transport { generation, event } if Some(generation) == active => match *event {
+                Self::Transport { .. } | Self::Session { .. } => None,
+                event => Some(event),
+            },
+            Self::Transport { .. } => None,
+            event => Some(event),
+        }
+    }
+    pub fn for_current_session(self, active: Option<u64>) -> Option<Self> {
+        match self {
+            Self::Session { source, event } if Some(source) == active => match *event {
+                Self::Session { .. } => None,
+                event => Some(event),
+            },
+            Self::Session { .. } => None,
+            event => Some(event), // App-wide launch and OS grant notifications.
+        }
+    }
+}
+
+fn next_session_source() -> u64 {
+    static NEXT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+    NEXT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
 }
 
 /// Reads what's granted now from a fresh helper, except Accessibility: the separately
@@ -962,10 +1001,13 @@ pub fn poll_grants(
 /// The open welcome window: the `Flow` and the window drawing it. On macOS the app
 /// supplies permission updates even while this window is closed; other platforms poll here.
 pub struct Session {
+    source: u64,
+    transport_generation: u64,
     flow: Flow,
-    fallback: Option<Box<dyn Fn() -> anyhow::Result<Transport>>>,
+    fallback: Option<Box<dyn Fn(u64) -> anyhow::Result<Transport>>>,
     fallback_pending: bool,
     transport: Transport,
+    permission_adapter: Option<Transport>,
     polling: std::sync::Arc<std::sync::atomic::AtomicBool>,
     last_view: String,
     shortcut_label: String,
@@ -975,6 +1017,15 @@ pub struct Session {
     saved_shortcut_chosen: bool,
     saved_first_capture_completed: bool,
     clock: std::time::Instant,
+    practice: Option<super::practice::Practice>,
+    anchor: Option<[f32;4]>,
+    practice_board: Option<[f32;4]>,
+    practice_completed: bool,
+    practice_bundle: Option<std::path::PathBuf>,
+    editor: Option<crate::capture::desktop::settings::ShortcutView>,
+    pen_picker: bool,
+    pen_selected: bool,
+    pen_error: bool,
 }
 
 impl Session {
@@ -982,10 +1033,13 @@ impl Session {
     #[cfg(test)]
     pub(crate) fn for_test(flow: Flow) -> Self {
         Self {
+            source: next_session_source(),
+            transport_generation: next_session_source(),
             flow,
             fallback: None,
             fallback_pending: false,
             transport: Transport::InProcess(None),
+            permission_adapter: None,
             polling: std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false)),
             last_view: String::new(),
             shortcut_label: String::new(),
@@ -995,6 +1049,10 @@ impl Session {
             saved_shortcut_chosen: false,
             saved_first_capture_completed: false,
             clock: std::time::Instant::now(),
+            practice: None,
+            anchor: None,
+            practice_board: None,
+            practice_completed:false,practice_bundle:None,editor:None,pen_picker: false,pen_selected:false,pen_error:false,
         }
     }
 
@@ -1007,6 +1065,9 @@ impl Session {
         #[cfg(not(target_os = "macos"))]
         use std::sync::atomic::Ordering;
 
+        let source = next_session_source();
+        let transport_generation = next_session_source();
+        let events = Self::scope_events(source, events);
         let polling = std::sync::Arc::new(AtomicBool::new(true));
         let event_alive = polling.clone();
         let events = move |event| {
@@ -1015,7 +1076,8 @@ impl Session {
         let electron = super::presentation::assets().filter(|(app, _)| app.join("dist/onboarding.html").is_file() && app.join("electron/onboarding.cjs").is_file());
         let native_events = events.clone();
         let native_shortcut = shortcut.to_owned();
-        let native = move || {
+        let native = move |generation| {
+            let native_events = Self::scope_transport(generation, native_events.clone());
             if cfg!(target_os = "macos") {
                 Self::spawn_helper(&native_shortcut, native_events.clone())
             } else {
@@ -1029,14 +1091,12 @@ impl Session {
             }
         };
         let attempted = electron.and_then(|(app, runtime)| {
-            let mut command = std::process::Command::new(runtime);
-            crate::capture::ui_process::configure_build_identity(&mut command);
-            crate::capture::desktop::workflow::error_reporting::configure_child(&mut command);
-            Self::spawn_transport(command.arg(app).arg("--onboarding"), events.clone()).ok()
+            Self::spawn_renderer_transport(std::process::Command::new(runtime).arg(app).arg("--onboarding"), transport_generation, events.clone()).ok()
         });
+        let shell = attempted.is_some();
         let (transport, fallback) = match attempted {
-            Some(transport) => (transport, Some(Box::new(native) as Box<dyn Fn() -> anyhow::Result<Transport>>)),
-            None => (native()?, None),
+            Some(transport) => (transport, Some(Box::new(native) as Box<dyn Fn(u64) -> anyhow::Result<Transport>>)),
+            None => (native(transport_generation)?, None),
         };
 
         #[cfg(not(target_os = "macos"))]
@@ -1056,15 +1116,19 @@ impl Session {
         let progress = Progress::load();
         let allowed = relaunch_allowed(&progress, unix_ms());
         let mut session = Self {
+            source,
+            transport_generation,
             flow: flow
                 .with_auto_relaunch(allowed)
                 .with_tutorial(progress.tutorial)
+                .with_intro_skipped(shell)
                 .with_first_capture(
                     crate::shared::handoff::experiment("onboardingFirstCapture"),
                     progress.shortcut_chosen,
                     progress.first_capture_completed,
                 ),
             transport,
+            permission_adapter: None,
             fallback,
             fallback_pending: false,
             polling,
@@ -1076,10 +1140,29 @@ impl Session {
             saved_shortcut_chosen: progress.shortcut_chosen,
             saved_first_capture_completed: progress.first_capture_completed,
             clock: std::time::Instant::now(),
+            practice: shell.then(super::practice::Practice::default),
+            anchor: None,
+            practice_board: None,
+            practice_completed:false,practice_bundle:None,editor:None,pen_picker: false,pen_selected:false,pen_error:false,
         };
         session.shortcut_changed(shortcut);
         session.sync();
         Ok(session)
+    }
+
+    pub fn source(&self) -> u64 { self.source }
+    pub fn transport_generation(&self) -> u64 { self.transport_generation }
+
+    fn scope_transport(generation: u64, events: impl Fn(Event) + Send + Sync + Clone + 'static)
+        -> impl Fn(Event) + Send + Sync + Clone + 'static
+    {
+        move |event| events(Event::Transport { generation, event: Box::new(event) })
+    }
+
+    fn scope_events(source: u64, events: impl Fn(Event) + Send + Sync + Clone + 'static)
+        -> impl Fn(Event) + Send + Sync + Clone + 'static
+    {
+        move |event| events(Event::Session { source, event: Box::new(event) })
     }
 
     fn spawn_helper(
@@ -1089,7 +1172,6 @@ impl Session {
         use std::process::{Command, Stdio};
 
         let mut command = Command::new(crate::capture::desktop::helper::path()?);
-        crate::capture::ui_process::configure_build_identity(&mut command);
         command
             .args(["onboarding", "--shortcut", shortcut, "--paste"])
             .arg(crate::capture::desktop::settings::paste_label())
@@ -1103,16 +1185,26 @@ impl Session {
         Self::spawn_transport(&mut command, events)
     }
 
+    fn spawn_renderer_transport(
+        command: &mut std::process::Command,
+        generation: u64,
+        events: impl Fn(Event) + Send + Sync + Clone + 'static,
+    ) -> anyhow::Result<Transport> {
+        Self::spawn_transport(command, Self::scope_transport(generation, events))
+    }
+
     fn spawn_transport(command: &mut std::process::Command, events: impl Fn(Event) + Send + Sync + Clone + 'static) -> anyhow::Result<Transport> {
-        use std::io::BufRead;
         command.stdin(std::process::Stdio::piped()).stdout(std::process::Stdio::piped()).stderr(std::process::Stdio::null());
         let mut child = command.spawn()?;
         let stdin = child.stdin.take();
-        let stdout = child.stdout.take();
+        if let Some(stdout) = child.stdout.take() { Self::read_actions(stdout, events); }
+        Ok(Transport::Helper { child: crate::capture::ui_process::UiChild::new(child), stdin })
+    }
 
+    fn read_actions(stdout: std::process::ChildStdout, events: impl Fn(Event)+Send+Sync+Clone+'static) {
         std::thread::spawn(move || {
             let mut closed = false;
-            if let Some(stdout) = stdout {
+            {
                 let mut reader = std::io::BufReader::new(stdout);
                 loop {
                     let mut line = Vec::new();
@@ -1126,6 +1218,20 @@ impl Session {
                         continue;
                     };
                     let action = action.to_owned();
+                    #[cfg(target_os="linux")]
+                    if action=="shortcut-key" {
+                        if let (Some(key),Some(modifiers))=(value["key"].as_str(),value["modifiers"].as_u64()) {
+                            if key.len()<=32 && modifiers & !0x1b00 == 0 {
+                                if let Some(key_code)=crate::capture::desktop::settings::settings_window::key_code(key) {
+                                    events(Event::Shortcut(crate::capture::desktop::settings::Action::Shortcut {
+                                        kind:crate::capture::engine::runtime::ShortcutKind::Record,
+                                        pressed:crate::capture::desktop::settings::Pressed {key_code,modifiers:modifiers as u32,key:key.to_owned(),reserved:false},
+                                    }));
+                                }
+                            }
+                        }
+                        continue;
+                    }
                     if matches!(
                         action.as_str(),
                         "shortcut" | "cancel-shortcut" | "reset-shortcut"
@@ -1153,10 +1259,11 @@ impl Session {
             }
             if !closed { events(Event::Exited); }
         });
-        Ok(Transport::Helper { child: crate::capture::ui_process::UiChild::new(child), stdin })
     }
 
     pub fn restore_native(&mut self) -> bool {
+        // Invalidate queued actions/EOF before dropping the old child's input.
+        if self.fallback.is_some() { self.transport_generation = next_session_source(); }
         if self.fallback.is_some() && self.flow.hidden {
             // A replacement native window may map before a queued hide reaches it.
             // Defer creating any replacement until capture completion reveals the flow.
@@ -1167,11 +1274,15 @@ impl Session {
         }
         self.fallback_pending = false;
         let Some(fallback) = self.fallback.take() else { return false; };
+        if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
         let old = std::mem::replace(&mut self.transport, Transport::InProcess(None));
         retire_transport(old);
-        match fallback() {
+        match fallback(self.transport_generation) {
             Ok(transport) => {
                 self.transport = transport;
+                // The native fallback has its own optional/required practice presentation.
+                self.practice = None;
+                self.pen_picker = false;
                 self.last_view.clear();
                 let label = self.shortcut_label.clone();
                 self.shortcut_changed(&label);
@@ -1201,7 +1312,28 @@ impl Session {
     /// Feeds the flow and carries out what the window can do itself. Returns what needs the
     /// app: `Close` or `Relaunch`.
     pub fn input(&mut self, input: Input) -> Effect {
+        if self.practice.is_some() && self.flow.step()==Step::TryIt && !self.fallback_pending {
+            match &input {
+                Input::CaptureSelecting => self.practice.as_mut().unwrap().selecting(),
+                Input::CaptureStarted => {
+                    self.practice_completed=false;
+                    self.practice_bundle=None;
+                    self.practice=Some(super::practice::Practice::default());
+                },
+                Input::CaptureEnded { completed:true } => {
+                    self.practice_completed=self.flow.practice_recording;
+                    // A finished capture owns no live shortcut/hidden state. Coaching
+                    // keeps its own eligibility until the person finishes the lesson.
+                    self.flow.on(Input::CaptureEnded{completed:false});
+                    self.sync();return Effect::None;
+                },
+                Input::CaptureEnded { completed:false } => self.practice.as_mut().unwrap().cancelled(),
+                _=>{},
+            }
+        }
+        let started=matches!(input,Input::CaptureStarted);
         let effect = self.flow.on(input);
+        if started && self.flow.practice_recording {if let Some(p)=self.practice.as_mut(){p.started();}}
         // The in-process window feeds the flow on every refresh: log only what changed.
         static LAST: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
         let line = format!("onboarding: {:?} -> {effect:?}", self.flow.step());
@@ -1264,6 +1396,26 @@ impl Session {
 
     /// An action string from the helper as an `Input`.
     pub fn action(&mut self, action: &str) -> Effect {
+        if self.practice.is_some() && self.flow.step()==Step::Welcome {
+            if action=="continue" && !self.pen_picker {self.pen_picker=true;self.sync();return Effect::None;}
+            if let Some(name)=action.strip_prefix("pen:") {
+                if self.pen_picker {self.pen_error=crate::shared::handoff::pen::save(name).is_err();self.pen_selected=!self.pen_error;self.sync();}
+                return Effect::None;
+            }
+            if action=="continue" && !self.pen_selected {return Effect::None;}
+        }
+
+        if action.starts_with("practice-") {
+            if let Some(practice)=self.practice.as_mut() {
+                if practice.action(action) && action=="practice-finish" && self.practice_completed {
+                    self.flow.first_capture_completed=true;
+                    self.flow.step=Step::Done;
+                    self.sync();
+                    return self.input(Input::Continue);
+                }
+            }
+            self.sync();return Effect::None;
+        }
         let input = match action {
             "continue" => Input::Continue,
             "back" => Input::Back,
@@ -1304,7 +1456,9 @@ impl Session {
     pub fn shortcut_editor(&mut self, editor: &crate::capture::desktop::settings::ShortcutView) {
         let message = serde_json::json!({"type": "shortcut-editor", "shortcut": editor});
         self.shortcut_state = Some(message.clone());
+        self.editor = Some(editor.clone());
         self.send(&message);
+        self.sync();
     }
 
     pub(crate) fn local_practice(&self) -> bool {
@@ -1315,6 +1469,28 @@ impl Session {
         self.flow.step() == Step::Shortcut
     }
 
+    pub fn observe_practice(&mut self, board:bool, screen:usize, processing:bool, saved:Option<bool>) {
+        if self.flow.step()!=Step::TryIt {return;}
+        if let Some(practice)=self.practice.as_mut() {
+            practice.observe_ink(board,screen);
+            if processing {practice.processing();}
+            if let Some(copied)=saved {practice.saved(copied);}
+        }
+        self.sync();
+    }
+    pub fn practice_anchor(&mut self,anchor:Option<[f32;4]>) {self.anchor=anchor;}
+    pub fn practice_board(&mut self, frame: Option<[f32;4]>) {
+        self.practice_board=frame;
+        if let Some(p)=self.practice.as_mut() { p.whiteboard_visible(frame.is_some()); }
+    }
+    pub fn practice_active(&self)->bool {self.practice.is_some() && self.flow.step()==Step::TryIt}
+    pub fn practice_locating(&self)->bool {self.practice.as_ref().is_some_and(|p|p.stage==super::practice::Stage::Locate)}
+    pub fn practice_screen_stage(&self)->bool {self.practice.as_ref().is_some_and(|p|p.stage==super::practice::Stage::ScreenInk)}
+    pub fn practice_whiteboard(&mut self) {if let Some(p)=self.practice.as_mut(){p.whiteboard();}self.sync();}
+    pub fn practice_saved_bundle(&mut self, path: &Path) { if self.practice_active() { self.practice_bundle=Some(path.to_owned()); } }
+    pub fn practice_opened_bundle(&mut self, path: &Path) { if self.practice_bundle.as_deref()==Some(path) {self.practice_latest();} }
+    pub fn practice_latest(&mut self) {if let Some(p)=self.practice.as_mut(){p.opened_latest();}self.sync();}
+
     pub fn editing_shortcut(&self) -> bool {
         self.flow.step() == Step::Shortcut && self.flow.shortcut_editing
     }
@@ -1324,17 +1500,27 @@ impl Session {
         if matches!(self.transport, Transport::InProcess(None)) {
             return;
         }
-        #[cfg(target_os = "macos")]
-        {
-            for row in self.flow.view().rows.iter().filter(|row| row.status == Status::Granted) {
-                permission_helper::close_guide(row.permission);
-            }
-        }
         let mut view = serde_json::to_value(self.flow.view()).unwrap_or_default();
         view["type"] = "state".into();
+        if let Some(practice)=self.practice.as_ref() {view["practice"]=serde_json::json!(practice.stage);}
+        view["shortcut"]=self.shortcut_label.clone().into();
+        view["platform"]=std::env::consts::OS.into();
+        view["shortcutEditor"]=serde_json::json!(self.editor);
+        view["anchor"]=serde_json::json!(self.anchor);
+        view["practiceBoard"]=serde_json::json!(self.practice_board);
+        view["testInstance"]=false.into();
+        view["penPicker"]=self.pen_picker.into();view["penSelected"]=self.pen_selected.into();view["penError"]=self.pen_error.into();
+        view["penRgb"]=serde_json::json!(crate::shared::handoff::pen::rgb());
         view["speech"] = serde_json::to_value(crate::capture::engine::runtime::audio::transcription::speech_model::current()).unwrap_or_default();
         let text = view.to_string();
         if text != self.last_view {
+            #[cfg(target_os = "macos")]
+            if let Some(Transport::Helper { stdin: Some(pipe), .. }) = self.permission_adapter.as_mut() {
+                use std::io::Write;
+                for message in permission_guide_messages(&self.flow.view()) {
+                    let _ = writeln!(pipe, "{message}").and_then(|()| pipe.flush());
+                }
+            }
             self.send(&view);
             self.last_view = text;
         }
@@ -1374,10 +1560,38 @@ impl Session {
         #[cfg(target_os = "linux")]
         crate::capture::desktop::linux::privacy::open_settings(permission);
         #[cfg(target_os = "macos")]
-        match permission_helper::dispatch(action, permission, None, None) {
-            permission_helper::Dispatch::Queued => {}
-            permission_helper::Dispatch::Busy => crate::capture::engine::runtime::apparent_log("permission helper busy"),
-            permission_helper::Dispatch::Unavailable => crate::capture::engine::runtime::apparent_log("permission helper unavailable"),
+        {
+            let adapter_dead = match self.permission_adapter.as_mut() {
+                Some(Transport::Helper { child, stdin }) => stdin.is_none() || !matches!(child.try_wait(), Ok(None)),
+                Some(_) => true,
+                None => false,
+            };
+            if adapter_dead {
+                if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
+                if self.restore_native() { self.permission_action(action, permission); }
+                return;
+            }
+            if self.permission_adapter.is_none() {
+                let Ok(path) = crate::capture::desktop::helper::path() else {
+                    if self.restore_native() { self.permission_action(action, permission); }
+                    return;
+                };
+                let mut command = std::process::Command::new(path);
+                command.args(["onboarding", "--permissions-only"]);
+                self.permission_adapter = Self::spawn_transport(&mut command, |_| {}).ok();
+                if self.permission_adapter.is_none() {
+                    if self.restore_native() { self.permission_action(action, permission); }
+                    return;
+                }
+            }
+            if let Some(Transport::Helper { stdin: Some(pipe), .. }) = self.permission_adapter.as_mut() {
+                use std::io::Write;
+                let message = serde_json::json!({"type": action, "permission": permission});
+                if writeln!(pipe, "{message}").and_then(|()| pipe.flush()).is_err() {
+                    if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
+                    if self.restore_native() { self.permission_action(action, permission); }
+                }
+            }
         }
     }
 
@@ -1405,6 +1619,15 @@ impl Session {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
+fn permission_guide_messages(view: &View) -> Vec<serde_json::Value> {
+    if view.step != Step::Permissions {
+        return vec![serde_json::json!({"type":"cancel-guides"})];
+    }
+    view.rows.iter().filter(|row|row.status==Status::Granted)
+        .map(|row|serde_json::json!({"type":"close-guide","permission":row.permission})).collect()
+}
+
 fn read_protocol_line(reader: &mut impl std::io::BufRead, line: &mut Vec<u8>) -> std::io::Result<usize> {
     use std::io::BufRead;
     std::io::Read::take(reader, 65_537).read_until(b'\n', line)
@@ -1428,6 +1651,7 @@ impl Drop for Session {
     fn drop(&mut self) {
         self.polling
             .store(false, std::sync::atomic::Ordering::Release);
+        if let Some(adapter) = self.permission_adapter.take() { retire_transport(adapter); }
         self.send(&serde_json::json!({"type": "close"}));
         let transport = std::mem::replace(&mut self.transport, Transport::InProcess(None));
         retire_transport(transport);
@@ -1493,7 +1717,995 @@ pub fn relaunch() {
 }
 
 #[cfg(test)]
-mod tests;
+mod tests {
+    fn coached_session()->Session {
+        let mut session=Session::for_test(Flow::tour(Step::TryIt,Some(grants(&Permission::REQUIRED))).with_first_capture(true,true,false));
+        session.practice=Some(super::super::practice::Practice::default());session
+    }
+    #[test]
+    fn shared_pen_setup_skips_retired_intro_in_both_directions_and_on_resume() {
+        let mut flow=Flow::tour(Step::Welcome,Some(grants(&[]))).with_intro_skipped(true);
+        flow.on(Input::Continue);assert_eq!(flow.step(),Step::Permissions);
+        flow.on(Input::Back);assert_eq!(flow.step(),Step::Welcome);
+        let resumed=Flow::tour(Step::HowItWorks,Some(grants(&[]))).with_intro_skipped(true);
+        assert_eq!(resumed.step(),Step::Permissions);
+        let mut ready=Flow::tour(Step::Welcome,Some(grants(&Permission::REQUIRED))).with_intro_skipped(true);
+        ready.on(Input::Continue);assert_eq!(ready.step(),Step::Shortcut);
+        ready.on(Input::Back);assert_eq!(ready.step(),Step::Welcome);
+        assert!(!ready.view().fix);
+        for skipped in [false,true] {
+            let resumed=Flow::tour(Step::Permissions,Some(grants(&Permission::REQUIRED))).with_intro_skipped(skipped);
+            assert_eq!(resumed.step(),Step::Permissions,"a ready resumed permission page stays visible");
+            let repair=Flow::fix(Permission::REQUIRED.to_vec(),Some(grants(&Permission::REQUIRED))).with_intro_skipped(skipped);
+            assert_eq!(repair.step(),Step::Permissions);assert!(repair.view().fix);
+        }
+    }
+
+    #[test]
+    fn replay_rejects_queued_events_from_the_retired_transport() {
+        let old=coached_session();
+        let (sender,receiver)=flume::unbounded();
+        let emit=Session::scope_events(old.source(),move |event| {sender.send(event).unwrap();});
+        // The old stream may queue actions before closing, and Exited after it closes.
+        emit(Event::Action("continue".into()));
+        drop(old);
+        let replacement=coached_session();
+        emit(Event::Exited);
+        for event in receiver.try_iter() {
+            assert!(event.for_current_session(Some(replacement.source())).is_none());
+        }
+        let (sender,receiver)=flume::unbounded();
+        let emit=Session::scope_events(replacement.source(),move |event| {sender.send(event).unwrap();});
+        emit(Event::Action("continue".into()));
+        emit(Event::Exited);
+        assert!(matches!(receiver.recv().unwrap().for_current_session(Some(replacement.source())),Some(Event::Action(_))));
+        assert!(matches!(receiver.recv().unwrap().for_current_session(Some(replacement.source())),Some(Event::Exited)));
+        assert!(matches!(Event::Launch(grants(&Permission::REQUIRED)).for_current_session(None),Some(Event::Launch(_))));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn renderer_pipe_tags_actions_and_eof_before_fallback() {
+        let mut session = coached_session();
+        let generation = session.transport_generation();
+        let (tx, rx) = flume::unbounded();
+        let events = Session::scope_events(session.source(), move |event| { tx.send(event).unwrap(); });
+        let transport = Session::spawn_renderer_transport(
+            std::process::Command::new("/bin/sh").args(["-c", "printf '%s\\n' '{\"action\":\"continue\"}'"]),
+            generation, events,
+        ).unwrap();
+        let action = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        let eof = rx.recv_timeout(std::time::Duration::from_secs(5)).unwrap();
+        assert!(matches!(&action, Event::Session { event, .. } if matches!(event.as_ref(), Event::Transport { generation: g, .. } if *g == generation)));
+        let (sender, _receiver) = flume::unbounded();
+        session.fallback = Some(Box::new(move |_| Ok(Transport::InProcess(Some(sender.clone())))));
+        assert!(session.restore_native());
+        for event in [action, eof] {
+            assert!(event.for_current_session(Some(session.source())).unwrap()
+                .for_current_transport(Some(session.transport_generation())).is_none());
+        }
+        retire_transport(transport);
+    }
+
+    #[test]
+    fn locate_requires_the_current_practice_bundle() {
+        let mut s = coached_session();
+        let first = Path::new("/synthetic/first.apparent");
+        let other = Path::new("/synthetic/other.apparent");
+        s.input(Input::ShortcutTriggered);
+        s.input(Input::CaptureStarted);
+        s.practice_whiteboard();
+        s.observe_practice(true, 0, false, None);
+        s.observe_practice(true, 1, true, Some(true));
+        s.practice_saved_bundle(first);
+        s.input(Input::CaptureEnded { completed: true });
+        s.action("practice-paste");
+        s.action("practice-pasted");
+        s.practice_opened_bundle(other);
+        assert!(s.practice_locating());
+        assert_eq!(s.action("practice-finish"), Effect::None);
+        s.practice_opened_bundle(first);
+        assert_eq!(s.practice.as_ref().unwrap().stage, super::super::practice::Stage::Complete);
+
+        s.input(Input::ShortcutTriggered);
+        s.input(Input::CaptureStarted);
+        assert!(s.practice_bundle.is_none());
+        s.practice_whiteboard();
+        s.observe_practice(true, 0, false, None);
+        s.observe_practice(true, 1, true, Some(true));
+        s.practice_saved_bundle(other);
+        s.input(Input::CaptureEnded { completed: true });
+        s.action("practice-paste");
+        s.action("practice-pasted");
+        s.practice_opened_bundle(first);
+        assert!(s.practice_locating());
+        s.practice_opened_bundle(other);
+        assert_eq!(s.action("practice-finish"), Effect::Close);
+    }
+
+    #[test]
+    fn target_selection_precedes_recording_and_partial_capture_still_reaches_the_menu_lesson() {
+        let mut s=coached_session();s.input(Input::ShortcutTriggered);s.input(Input::CaptureSelecting);
+        assert_eq!(s.practice.as_ref().unwrap().stage,super::super::practice::Stage::Screen);
+        s.input(Input::CaptureStarted);s.practice_whiteboard();s.observe_practice(true,0,true,Some(true));
+        s.input(Input::CaptureEnded{completed:true});s.action("practice-paste");s.action("practice-pasted");
+        assert!(s.practice_locating());s.practice_latest();assert_eq!(s.action("practice-finish"),Effect::None);
+        assert!(!s.flow.first_capture_completed);
+    }
+
+    #[test]
+    fn menu_bar_lesson_remains_after_paste_and_requires_opening_own_capture() {
+        let mut s=coached_session();
+        s.input(Input::ShortcutTriggered);s.input(Input::CaptureStarted);
+        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.observe_practice(true,1,true,Some(true));
+        s.input(Input::CaptureEnded{completed:true});
+        assert!(!s.practice_locating());
+        s.action("practice-paste");assert!(!s.practice_locating());
+        s.action("practice-pasted");assert!(s.practice_locating());
+        assert_eq!(s.action("practice-finish"),Effect::None);
+        s.practice_latest();assert_eq!(s.action("practice-finish"),Effect::Close);
+    }
+
+    #[test]
+    fn coaching_finishes_after_completion_pill_dismissal() {
+        let mut s=coached_session();s.input(Input::ShortcutTriggered);s.input(Input::CaptureStarted);
+        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.observe_practice(true,1,false,None);
+        s.observe_practice(false,0,true,Some(true));s.input(Input::CaptureEnded{completed:true});
+        assert!(!s.flow.practice_recording);assert!(!s.flow.hidden);
+        s.input(Input::CaptureEnded{completed:false}); // normal 25-second pill dismissal
+        s.action("practice-paste");s.action("practice-pasted");s.practice_latest();
+        assert_eq!(s.action("practice-finish"),Effect::Close);assert!(s.flow.first_capture_completed);
+    }
+    #[test]
+    fn menu_retry_cannot_inherit_completed_shortcut_attempt() {
+        let mut s=coached_session();s.input(Input::ShortcutTriggered);s.input(Input::CaptureStarted);
+        s.observe_practice(false,0,true,Some(true));s.input(Input::CaptureEnded{completed:true});
+        s.input(Input::CaptureStarted); // menu start, without ShortcutTriggered
+        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.observe_practice(true,1,true,Some(true));
+        s.input(Input::CaptureEnded{completed:true});s.action("practice-paste");s.action("practice-pasted");s.practice_latest();
+        assert_eq!(s.action("practice-finish"),Effect::None);assert!(!s.flow.first_capture_completed);
+    }
+    #[test]
+    fn first_capture_close_resumes_until_success_without_trapping_the_user() {
+        let mut progress = Progress::default();
+        let mut flow = Flow::tour(Step::Shortcut, Some(grants(&Permission::REQUIRED)))
+            .with_first_capture(true, false, false);
+        assert_eq!(flow.on(Input::Closed), Effect::Close);
+        progress.leave(&flow);
+        assert!(!progress.seen);
+        assert_eq!(progress.resume, Some(Step::Shortcut));
+        flow.on(Input::ShortcutChosen);
+        flow.on(Input::Continue);
+        assert_eq!(flow.on(Input::Later), Effect::Close);
+        progress.leave(&flow);
+        assert!(!progress.seen);
+        assert_eq!(progress.resume, Some(Step::TryIt));
+        flow.on(Input::ShortcutTriggered);
+        flow.on(Input::CaptureStarted);
+        flow.on(Input::CaptureEnded { completed: true });
+        progress.leave(&flow);
+        assert!(progress.seen);
+        assert_eq!(progress.resume, None);
+    }
+
+    #[test]
+    fn first_capture_resume_rechecks_milestones_and_preserves_legacy_and_repairs() {
+        let ready = Some(grants(&Permission::REQUIRED));
+        let missing = Flow::tour(Step::TryIt, ready.clone()).with_first_capture(true, false, false);
+        assert_eq!(missing.step(), Step::Shortcut);
+        let unfinished = Flow::tour(Step::Done, ready.clone()).with_first_capture(true, true, false);
+        assert_eq!(unfinished.step(), Step::TryIt);
+        let completed = Flow::tour(Step::TryIt, ready.clone()).with_first_capture(true, true, true);
+        assert_eq!(completed.step(), Step::Done);
+        let legacy = Flow::tour(Step::Shortcut, ready.clone()).with_first_capture(false, false, false);
+        let mut progress = Progress::default();
+        progress.leave(&legacy);
+        assert!(progress.seen, "the default flow still allows dismissal");
+        let repair = Flow::fix(Permission::REQUIRED.to_vec(), ready).with_first_capture(true, false, false);
+        assert!(!repair.view().first_capture_required);
+        let before = progress.clone();
+        progress.leave(&repair);
+        assert_eq!(progress, before, "permission repair does not complete or reset a tour");
+    }
+
+    #[test]
+    fn first_capture_requires_explicit_shortcut_choice() {
+        let mut flow = Flow::tour(Step::Shortcut, Some(grants(&Permission::REQUIRED)))
+            .with_first_capture(true, false, false);
+        assert_eq!(flow.on(Input::Continue), Effect::None);
+        assert_eq!(flow.step(), Step::Shortcut, "an existing shortcut is not a choice");
+        flow.on(Input::ChangeShortcut);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::Shortcut, "opening the recorder is not a saved choice");
+        flow.on(Input::ShortcutChosen);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::TryIt);
+    }
+
+    #[test]
+    fn first_capture_requires_shortcut_start_and_successful_finish() {
+        let mut flow = Flow::tour(Step::TryIt, Some(grants(&Permission::REQUIRED)))
+            .with_first_capture(true, true, false);
+        assert_eq!(flow.on(Input::Continue), Effect::None, "Try it cannot finish the tour");
+        flow.on(Input::CaptureEnded { completed: true });
+        assert_eq!(flow.step(), Step::TryIt, "a stale completion cannot count");
+        flow.on(Input::CaptureStarted);
+        flow.on(Input::CaptureEnded { completed: true });
+        assert_eq!(flow.step(), Step::TryIt, "menu recordings do not prove the shortcut works");
+        flow.on(Input::ShortcutTriggered);
+        flow.on(Input::CaptureStarted);
+        flow.on(Input::CaptureEnded { completed: false });
+        assert_eq!(flow.step(), Step::TryIt, "cancelled captures do not count");
+        flow.on(Input::CaptureStarted);
+        flow.on(Input::CaptureEnded { completed: true });
+        assert_eq!(flow.step(), Step::TryIt, "cancel clears the shortcut attempt");
+        flow.on(Input::ShortcutTriggered);
+        flow.on(Input::CaptureStarted);
+        flow.on(Input::CaptureEnded { completed: true });
+        assert_eq!(flow.step(), Step::Done);
+    }
+
+    use super::*;
+
+    use Permission::{Accessibility, Camera, InputMonitoring, Microphone, ScreenRecording};
+
+    const ALL: [Permission; 3] = [ScreenRecording, Microphone, Accessibility];
+
+    fn grants(granted: &[Permission]) -> Grants {
+        Grants {
+            statuses: granted.iter().map(|p| (*p, Status::Granted)).collect(),
+            screen_needs_relaunch: false,
+        }
+    }
+
+    /// The helper says Screen Recording is granted, but this copy can't capture yet.
+    fn stale(granted: &[Permission]) -> Grants {
+        Grants {
+            screen_needs_relaunch: true,
+            ..grants(granted)
+        }
+    }
+
+    fn tick(flow: &mut Flow, g: &Grants, now_ms: u64) -> Effect {
+        flow.on(Input::Grants {
+            grants: g.clone(),
+            now_ms,
+        })
+    }
+
+    fn rows(flow: &Flow) -> Vec<Permission> {
+        flow.view().rows.iter().map(|r| r.permission).collect()
+    }
+
+    #[test]
+    fn shortcut_step_edits_inline_and_continue_leaves_the_editor() {
+        let mut flow = Flow::tour(Step::Welcome, Some(grants(&[])));
+        assert_eq!(flow.view().count, 5);
+        flow.on(Input::Continue);
+        flow.on(Input::Continue);
+        flow.on(Input::Grants {
+            grants: grants(&ALL),
+            now_ms: 0,
+        });
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::Shortcut);
+        assert_eq!(flow.resume_point(), Some(Step::Shortcut));
+        assert_eq!(flow.on(Input::ChangeShortcut), Effect::EditShortcut);
+        assert_eq!(flow.step(), Step::Shortcut);
+        assert!(flow.view().shortcut_editing);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::TryIt);
+        assert!(!flow.view().shortcut_editing);
+        flow.on(Input::Back);
+        assert_eq!(flow.step(), Step::Shortcut);
+
+        let mut fix = Flow::fix(vec![Permission::Microphone], Some(grants(&[])));
+        assert_eq!(fix.on(Input::ChangeShortcut), Effect::None);
+    }
+
+    #[test]
+    fn the_tour_has_a_shortcut_screen_with_every_permission_on_one() {
+        let mut flow = Flow::tour(Step::Welcome, Some(grants(&[])));
+        assert_eq!(flow.view().count, 5);
+        assert_eq!(flow.on(Input::Continue), Effect::None);
+        assert_eq!(flow.step(), Step::HowItWorks);
+        assert_eq!(flow.on(Input::Continue), Effect::None);
+        assert_eq!(flow.step(), Step::Permissions);
+        assert_eq!(rows(&flow), Permission::REQUIRED);
+        assert!(flow.view().rows.iter().all(|r| r.required));
+        // Camera is asked for when used, never in the tour.
+        assert!(!rows(&flow).contains(&Camera));
+        // Continue does nothing until the required ones are on.
+        assert!(!flow.view().ready);
+        assert_eq!(flow.on(Input::Continue), Effect::None);
+        assert_eq!(flow.step(), Step::Permissions);
+        assert_eq!(flow.on(Input::Back), Effect::None);
+        assert_eq!(flow.step(), Step::HowItWorks);
+    }
+
+    #[test]
+    fn speech_recognition_is_an_optional_row_only_where_the_helper_reports_it() {
+        use Permission::SpeechRecognition;
+        // macOS 26: the helper doesn't report it, so it isn't on the screen or in Settings.
+        assert!(!SpeechRecognition.asked(Some(&grants(&[]))));
+        assert!(!SpeechRecognition.asked(None));
+        let flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        assert!(!rows(&flow).contains(&SpeechRecognition));
+
+        // macOS 15: a fourth row after the required ones, asked for with Apple's prompt.
+        let mut asking = grants(&[]);
+        asking
+            .statuses
+            .insert(SpeechRecognition, Status::NotDetermined);
+        let mut flow = Flow::tour(Step::Permissions, Some(asking));
+        assert_eq!(
+            rows(&flow),
+            [
+                ScreenRecording,
+                Microphone,
+                Accessibility,
+                SpeechRecognition
+            ]
+        );
+        let row = flow.view().rows[3].clone();
+        assert!(!row.required);
+        assert_eq!(
+            flow.on(Input::Grant(SpeechRecognition)),
+            Effect::Request(SpeechRecognition)
+        );
+        assert_eq!(
+            flow.on(Input::Grant(SpeechRecognition)),
+            Effect::OpenSettings(SpeechRecognition)
+        );
+
+        // It never holds up Continue.
+        let mut required = grants(&ALL);
+        required.statuses.insert(SpeechRecognition, Status::Denied);
+        tick(&mut flow, &required, 0);
+        assert!(flow.view().ready);
+        assert_eq!(flow.on(Input::Continue), Effect::None);
+        assert_eq!(flow.step(), Step::Shortcut);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::TryIt);
+    }
+
+    #[test]
+    fn the_demo_can_be_skipped_and_adds_no_screen() {
+        let mut flow = Flow::tour(Step::HowItWorks, Some(grants(&[])));
+        assert_eq!(flow.view().count, 5);
+        assert_eq!(flow.view().tutorial, None);
+        // Skip goes straight on, like Continue, and is remembered.
+        assert_eq!(flow.on(Input::Skip), Effect::None);
+        assert_eq!(flow.step(), Step::Permissions);
+        assert_eq!(flow.tutorial(), Some(Tutorial::Skipped));
+        // Skip, Watched and Practiced mean nothing on another screen.
+        assert_eq!(flow.on(Input::Skip), Effect::None);
+        assert_eq!(flow.on(Input::Practiced), Effect::None);
+        assert_eq!(flow.step(), Step::Permissions);
+        assert_eq!(flow.tutorial(), Some(Tutorial::Skipped));
+        // Back to it and watched through: the button reads Continue from then on.
+        flow.on(Input::Back);
+        assert_eq!(flow.step(), Step::HowItWorks);
+        flow.on(Input::Watched);
+        assert_eq!(flow.view().tutorial, Some(Tutorial::Watched));
+        assert_eq!(flow.step(), Step::HowItWorks, "watching doesn't move on");
+        // A mark drawn on the demo wins over watching, and watching again doesn't undo it.
+        flow.on(Input::Practiced);
+        flow.on(Input::Watched);
+        assert_eq!(flow.tutorial(), Some(Tutorial::Practiced));
+        // Skip after watching moves on without forgetting the mark.
+        flow.on(Input::Skip);
+        assert_eq!(flow.step(), Step::Permissions);
+        assert_eq!(flow.tutorial(), Some(Tutorial::Practiced));
+        // With every permission on, Skip passes the permissions screen too.
+        let mut flow = Flow::tour(Step::HowItWorks, Some(grants(&ALL)));
+        flow.on(Input::Skip);
+        assert_eq!(flow.step(), Step::Shortcut);
+        // A fix never shows the demo.
+        let mut fix = Flow::fix(Permission::REQUIRED.to_vec(), Some(grants(&[])));
+        assert_eq!(fix.on(Input::Skip), Effect::None);
+        assert_eq!(fix.tutorial(), None);
+    }
+
+    #[test]
+    fn the_demo_outcome_comes_back_after_a_quit() {
+        let progress = Progress {
+            resume: Some(Step::HowItWorks),
+            tutorial: Some(Tutorial::Watched),
+            ..Progress::default()
+        };
+        let flow = launch_plan(&progress, &grants(&[]))
+            .expect("the tour")
+            .with_tutorial(progress.tutorial);
+        assert_eq!(flow.step(), Step::HowItWorks);
+        assert_eq!(flow.view().tutorial, Some(Tutorial::Watched));
+        // The view carries it to the helper as kebab-case, or null before anything happened.
+        let json = serde_json::to_value(flow.view()).unwrap();
+        assert_eq!(json["tutorial"], "watched");
+        let fresh = serde_json::to_value(Flow::tour(Step::Welcome, None).view()).unwrap();
+        assert!(fresh["tutorial"].is_null());
+        // An older config without the key loads as nothing yet.
+        let old: Progress = serde_json::from_str(r#"{"seen":false,"resume":"how-it-works"}"#).unwrap();
+        assert_eq!(old.tutorial, None);
+    }
+
+    #[test]
+    fn screen_recording_is_the_first_row_and_accessibility_the_third() {
+        assert_eq!(Permission::REQUIRED, ALL);
+        let flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        assert_eq!(rows(&flow), ALL);
+        let fix = Flow::fix(Permission::REQUIRED.to_vec(), Some(grants(&[])));
+        assert_eq!(rows(&fix)[0], ScreenRecording);
+        assert_eq!(rows(&fix)[2], Accessibility);
+        assert!(Accessibility.required() && Accessibility.draggable());
+    }
+
+    #[test]
+    fn input_monitoring_is_never_requested() {
+        assert!(!InputMonitoring.required());
+        assert!(!InputMonitoring.draggable());
+        let mut flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        assert!(!rows(&flow).contains(&InputMonitoring));
+        assert_eq!(flow.on(Input::Grant(InputMonitoring)), Effect::None);
+        assert!(missing_to_record(Some(&grants(&ALL)), true, true).is_empty());
+        // Nothing in Apparent or its helper asks macOS for it.
+        let sources = [
+            include_str!("../mod.rs"),
+            include_str!("../../engine/runtime/platform/macos.rs"),
+            include_str!("../ui/macos.rs"),
+            include_str!("onboarding.rs"),
+            include_str!("settings.rs"),
+            include_str!("mod.rs"),
+            include_str!("../native/Onboarding.swift"),
+            include_str!("../native/Settings.swift"),
+            include_str!("../native/PermissionPanel.swift"),
+        ];
+        let calls = [
+            concat!("CGRequest", "ListenEventAccess"),
+            concat!("CGPreflight", "ListenEventAccess"),
+            concat!("IOHIDRequest", "Access"),
+            concat!("IOHIDCheck", "Access"),
+            concat!("kCGEventTapOption", "ListenOnly"),
+        ];
+        for source in sources {
+            for call in calls {
+                assert!(!source.contains(call), "{call} is still called");
+            }
+        }
+        // A 0.3.x config that remembers it granted still loads.
+        let old: Progress = serde_json::from_str(
+            r#"{"seen":true,"granted":["screen-recording","microphone","input-monitoring"]}"#,
+        )
+        .unwrap();
+        assert!(old.seen);
+    }
+
+    #[test]
+    fn permissions_are_granted_in_any_order_then_continue_moves_on() {
+        let mut flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        // A list the app can be dragged into goes straight to System Settings and the panel.
+        assert_eq!(
+            flow.on(Input::Grant(Accessibility)),
+            Effect::OpenSettings(Accessibility)
+        );
+        assert_eq!(
+            flow.on(Input::Grant(Microphone)),
+            Effect::Request(Microphone)
+        );
+        // A second press opens System Settings.
+        assert_eq!(
+            flow.on(Input::Grant(Microphone)),
+            Effect::OpenSettings(Microphone)
+        );
+        let some = grants(&[Microphone, Accessibility]);
+        tick(&mut flow, &some, 0);
+        let view = flow.view();
+        assert_eq!(view.rows[1].status, Status::Granted);
+        assert!(!view.rows[0].requested && !view.ready);
+        // No auto-advance in the tour, even long after.
+        let all = grants(&ALL);
+        tick(&mut flow, &all, 1);
+        tick(&mut flow, &all, 10_000);
+        assert_eq!(flow.step(), Step::Permissions);
+        assert!(flow.view().ready);
+        // A granted row's button does nothing.
+        assert_eq!(flow.on(Input::Grant(Microphone)), Effect::None);
+        assert_eq!(flow.on(Input::Continue), Effect::None);
+        assert_eq!(flow.step(), Step::Shortcut);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::TryIt);
+        // Back visits Shortcut, then passes the finished permissions screen.
+        flow.on(Input::Back);
+        assert_eq!(flow.step(), Step::Shortcut);
+        flow.on(Input::Back);
+        assert_eq!(flow.step(), Step::HowItWorks);
+    }
+
+    #[test]
+    fn a_denied_permission_goes_straight_to_settings() {
+        let mut denied = grants(&[]);
+        denied.statuses.insert(Microphone, Status::Denied);
+        let mut flow = Flow::tour(Step::Permissions, Some(denied));
+        assert_eq!(
+            flow.on(Input::Grant(Microphone)),
+            Effect::OpenSettings(Microphone)
+        );
+    }
+
+    #[test]
+    fn granted_permissions_pass_the_screen_and_leave_the_dots() {
+        let all = grants(&ALL);
+        let mut flow = Flow::tour(Step::HowItWorks, Some(all.clone()));
+        assert_eq!(flow.view().count, 4);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::Shortcut);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::TryIt);
+        assert_eq!(flow.view().index, 3);
+        // A tour resumed past the screen goes back to it while something is missing.
+        let some = grants(&[Microphone]);
+        assert_eq!(
+            Flow::tour(Step::TryIt, Some(some)).step(),
+            Step::Permissions
+        );
+        // Resumed on the screen itself, it stays there with every check showing.
+        let resumed = Flow::tour(Step::Permissions, Some(all));
+        assert_eq!(resumed.step(), Step::Permissions);
+        assert!(resumed.view().ready);
+    }
+
+    #[test]
+    fn a_screen_recording_grant_this_copy_cant_use_relaunches_by_itself_once() {
+        let mut flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        // The user drags Apparent into Screen Recording; macOS offers Quit & Reopen and the user
+        // picks Later (or nothing): the helper says granted, this process still can't capture.
+        let granted = stale(&[ScreenRecording]);
+        assert_eq!(tick(&mut flow, &granted, 1_000), Effect::None);
+        let row = flow.view().rows[0].clone();
+        assert_eq!(row.status, Status::Granted);
+        assert!(row.reopening && !row.relaunch);
+        // Not ready: Continue can't skip past a grant that doesn't work yet.
+        assert_eq!(flow.on(Input::Continue), Effect::None);
+        // The check shows a moment, then Apparent relaunches, back on this screen, even though
+        // the other two rows are still off.
+        assert_eq!(tick(&mut flow, &granted, 1_500), Effect::None);
+        let relaunch = Effect::Relaunch {
+            resume: Some(Step::Permissions),
+        };
+        assert_eq!(tick(&mut flow, &granted, 1_000 + RELAUNCH_AFTER_MS), relaunch);
+        // Never twice from one window.
+        assert_eq!(tick(&mut flow, &granted, 9_000), Effect::None);
+        assert_eq!(flow.on(Input::Grant(ScreenRecording)), Effect::None);
+        // A grant this copy can use (ScreenCaptureKit works without a relaunch, or macOS's
+        // Quit & Reopen already restarted it) relaunches nothing.
+        let mut flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        assert_eq!(
+            tick(&mut flow, &grants(&[ScreenRecording]), 0),
+            Effect::ConfirmScreen
+        );
+        for t in [5_000, 60_000] {
+            assert_eq!(tick(&mut flow, &grants(&[ScreenRecording]), t), Effect::None);
+        }
+        assert!(!flow.view().rows[0].reopening);
+    }
+
+    #[test]
+    fn once_screen_recording_works_the_window_picker_question_comes_up_explained() {
+        let mut flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        assert_eq!(tick(&mut flow, &grants(&[Microphone]), 0), Effect::None);
+        assert!(!flow.view().picker_note);
+        // Not while the grant needs a relaunch to work: listing the screen would fail.
+        assert_eq!(
+            tick(&mut flow, &stale(&[ScreenRecording]), 100),
+            Effect::None
+        );
+        assert_eq!(
+            tick(&mut flow, &grants(&[ScreenRecording]), 200),
+            Effect::ConfirmScreen
+        );
+        assert!(flow.view().picker_note);
+        assert_eq!(
+            tick(&mut flow, &grants(&[ScreenRecording]), 300),
+            Effect::None
+        );
+        // Answered by the time Try it shows: no note there.
+        flow.on(Input::Grants {
+            grants: grants(&Permission::REQUIRED),
+            now_ms: 400,
+        });
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::Shortcut);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::TryIt);
+        assert!(!flow.view().picker_note);
+        // Everything already on: it comes up on Try it instead, before the first capture.
+        let mut flow = Flow::tour(Step::TryIt, Some(grants(&Permission::REQUIRED)));
+        assert_eq!(flow.step(), Step::TryIt);
+        assert_eq!(
+            tick(&mut flow, &grants(&Permission::REQUIRED), 0),
+            Effect::ConfirmScreen
+        );
+        assert!(flow.view().picker_note);
+        // Gone from the last screen.
+        flow.on(Input::CaptureEnded { completed: true });
+        assert_eq!(flow.step(), Step::Done);
+        assert!(!flow.view().picker_note);
+    }
+
+    #[test]
+    fn a_fix_relaunches_too_and_reopens_after() {
+        let mut flow = Flow::fix(Permission::REQUIRED.to_vec(), Some(grants(&[Microphone])));
+        let granted = stale(&[ScreenRecording, Microphone]);
+        tick(&mut flow, &granted, 0);
+        assert_eq!(
+            tick(&mut flow, &granted, RELAUNCH_AFTER_MS),
+            Effect::Relaunch { resume: None }
+        );
+        let mut progress = Progress {
+            seen: true,
+            ..Progress::default()
+        };
+        progress.relaunching(None, 42);
+        assert!(progress.reopen_fix && progress.seen);
+        let flow = launch_plan(&progress, &grants(&[ScreenRecording, Microphone])).expect("fix");
+        assert_eq!((flow.mode(), flow.step()), (Mode::Fix, Step::Permissions));
+        assert_eq!(rows(&flow), Permission::REQUIRED);
+    }
+
+    #[test]
+    fn right_after_a_relaunch_it_never_relaunches_by_itself_again() {
+        let now = 1_000_000;
+        let mut progress = Progress::default();
+        assert!(relaunch_allowed(&progress, now));
+        progress.relaunching(Some(Step::Permissions), now);
+        assert!(!relaunch_allowed(&progress, now + 5_000));
+        assert!(!relaunch_allowed(&progress, now + RELAUNCH_GUARD_MS - 1));
+        assert!(relaunch_allowed(&progress, now + RELAUNCH_GUARD_MS));
+        // The fresh copy still can't capture (something else is wrong): no loop. The row offers
+        // Reopen, and only pressing it relaunches.
+        let mut flow = Flow::tour(Step::Permissions, Some(grants(&[]))).with_auto_relaunch(false);
+        let granted = stale(&[ScreenRecording]);
+        for t in [0, RELAUNCH_AFTER_MS, 60_000] {
+            assert_eq!(tick(&mut flow, &granted, t), Effect::None);
+        }
+        let row = flow.view().rows[0].clone();
+        assert!(row.relaunch && !row.reopening);
+        assert_eq!(
+            flow.on(Input::Grant(ScreenRecording)),
+            Effect::Relaunch {
+                resume: Some(Step::Permissions)
+            }
+        );
+        assert_eq!(flow.on(Input::Grant(ScreenRecording)), Effect::None);
+    }
+
+    #[test]
+    fn after_either_kind_of_relaunch_the_tour_resumes_on_the_permissions_screen() {
+        // Apparent's own relaunch (the user picked Later, or nothing).
+        let mut progress = Progress::default();
+        progress.relaunching(Some(Step::Permissions), 7);
+        assert_eq!(progress.resume, Some(Step::Permissions));
+        assert!(!progress.seen);
+        let fresh = grants(&[ScreenRecording]);
+        let flow = launch_plan(&progress, &fresh).expect("the tour");
+        assert_eq!((flow.mode(), flow.step()), (Mode::Tour, Step::Permissions));
+        let view = flow.view();
+        assert_eq!(view.rows[0].status, Status::Granted);
+        assert!(!view.rows[0].reopening && !view.rows[0].relaunch);
+        // The next row to do is Microphone.
+        assert_eq!(
+            view.rows.iter().find(|r| r.status != Status::Granted).map(|r| r.permission),
+            Some(Microphone)
+        );
+        // macOS's Quit & Reopen: Apparent never noted a relaunch, but the step it saved while
+        // the window was open brings it back to the same place.
+        let progress = Progress {
+            resume: Flow::tour(Step::Permissions, Some(grants(&[]))).resume_point(),
+            ..Progress::default()
+        };
+        assert_eq!(progress.relaunched_at, None);
+        let flow = launch_plan(&progress, &fresh).expect("the tour");
+        assert_eq!((flow.mode(), flow.step()), (Mode::Tour, Step::Permissions));
+        // Screen Recording was the last one: the screen shows every check and Continue goes on.
+        let mut flow = launch_plan(&progress, &grants(&ALL)).expect("the tour");
+        assert_eq!(flow.step(), Step::Permissions);
+        assert!(flow.view().ready);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::Shortcut);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(), Step::TryIt);
+    }
+
+    #[test]
+    fn a_tour_quit_midway_resumes_where_it_was() {
+        let mut flow = Flow::tour(Step::Welcome, Some(grants(&[])));
+        assert_eq!(flow.resume_point(), Some(Step::Welcome));
+        flow.on(Input::Continue);
+        flow.on(Input::Continue);
+        assert_eq!(flow.resume_point(), Some(Step::Permissions));
+        let progress = Progress {
+            resume: flow.resume_point(),
+            ..Progress::default()
+        };
+        let flow = launch_plan(&progress, &grants(&[ScreenRecording])).expect("the tour");
+        assert_eq!(flow.step(), Step::Permissions);
+        assert_eq!(
+            Flow::fix(vec![Camera], None).resume_point(),
+            None,
+            "a fix has nothing to resume"
+        );
+    }
+
+    #[test]
+    fn set_up_later_and_closing_end_the_tour() {
+        let mut flow = Flow::tour(Step::Permissions, Some(grants(&[])));
+        assert_eq!(flow.on(Input::Later), Effect::Close);
+        assert_eq!(flow.on(Input::Closed), Effect::Close);
+    }
+
+    #[test]
+    fn the_shortcut_with_a_permission_off_starts_nothing_and_opens_the_window_on_release() {
+        // Mic and Accessibility on, Screen Recording not usable in this process.
+        let some = grants(&[Microphone, Accessibility]);
+        let missing = missing_to_record(Some(&some), false, true);
+        assert_eq!(missing, [ScreenRecording]);
+        // Accessibility is read live in this process, not from the last helper read.
+        assert_eq!(
+            missing_to_record(Some(&grants(&ALL)), true, false),
+            [Accessibility]
+        );
+        let mut gate = Gate::default();
+        assert!(!gate.press(missing.clone()), "nothing starts");
+        // Pressing again while it waits starts nothing either.
+        assert!(!gate.press(Vec::new()));
+        // Nothing shows while ⌥⇧ is held.
+        assert_eq!(gate.tick(true), None);
+        let asks = gate.tick(false).expect("the window, once the keys are up");
+        assert_eq!(gate.tick(false), None);
+        assert!(!gate.is_pending());
+        // The window lists every required permission so the user sees what's left.
+        let mut flow = Flow::fix(Permission::REQUIRED.to_vec(), Some(some.clone()));
+        assert_eq!(asks, missing);
+        assert_eq!(flow.step(), Step::Permissions);
+        assert_eq!(
+            flow.on(Input::Grant(ScreenRecording)),
+            Effect::OpenSettings(ScreenRecording)
+        );
+        // With everything on, the shortcut goes through.
+        assert!(missing_to_record(Some(&grants(&ALL)), true, true).is_empty());
+        assert!(gate.press(Vec::new()));
+        // A tour that's still explaining jumps to the permissions screen.
+        let mut tour = Flow::tour(Step::Welcome, Some(some));
+        assert_eq!(tour.on(Input::Blocked), Effect::Show);
+        assert_eq!(tour.step(), Step::Permissions);
+        // Unknown grants (the launch read failed): only what's read here blocks.
+        assert!(missing_to_record(None, true, true).is_empty());
+    }
+
+    #[test]
+    fn camera_is_asked_for_on_its_own_when_first_used() {
+        let mut flow = Flow::fix(vec![Camera], Some(grants(&[ScreenRecording])));
+        assert_eq!(rows(&flow), [Camera]);
+        let view = flow.view();
+        assert!(view.fix && !view.ready && !view.rows[0].required);
+        assert_eq!(flow.on(Input::Grant(Camera)), Effect::Request(Camera));
+        // A permission that isn't on this screen can't be asked for from it.
+        assert_eq!(flow.on(Input::Grant(Microphone)), Effect::None);
+        let camera = grants(&[Camera]);
+        assert_eq!(tick(&mut flow, &camera, 100), Effect::None);
+        assert!(flow.view().ready);
+        assert_eq!(
+            tick(&mut flow, &camera, 100 + AUTO_ADVANCE_MS),
+            Effect::Close
+        );
+        // ⌥⇧V after Accessibility was turned off asks for just that row.
+        let mut flow = Flow::fix(vec![Accessibility], Some(grants(&[])));
+        assert_eq!(flow.on(Input::Later), Effect::Close);
+        // A fix never steps back into the tour.
+        assert_eq!(flow.on(Input::Back), Effect::None);
+        assert_eq!(flow.step(), Step::Permissions);
+    }
+
+    #[test]
+    fn a_capture_hides_the_window_and_finishing_from_try_it_shows_done() {
+        let mut flow = Flow::tour(Step::TryIt, None);
+        assert_eq!(flow.on(Input::CaptureStarted), Effect::Hide);
+        assert_eq!(flow.on(Input::CaptureStarted), Effect::None);
+        assert_eq!(
+            flow.on(Input::CaptureEnded { completed: true }),
+            Effect::Show
+        );
+        assert_eq!(flow.step(), Step::Done);
+        assert_eq!(flow.on(Input::Settings), Effect::Settings);
+        assert_eq!(flow.on(Input::Continue), Effect::Close);
+        // A cancelled capture comes back to the same step.
+        let mut flow = Flow::tour(Step::TryIt, None);
+        flow.on(Input::CaptureStarted);
+        assert_eq!(
+            flow.on(Input::CaptureEnded { completed: false }),
+            Effect::Show
+        );
+        assert_eq!(flow.step(), Step::TryIt);
+    }
+
+    #[test]
+    fn launch_shows_the_tour_once_then_only_a_lost_permission() {
+        let all = grants(&ALL);
+        let mut progress = Progress::default();
+        assert_eq!(
+            launch_plan(&progress, &all).map(|f| (f.mode(), f.step())),
+            Some((Mode::Tour, Step::Welcome))
+        );
+        progress.seen = true;
+        assert!(progress.note(&all));
+        assert!(!progress.note(&all));
+        assert!(launch_plan(&progress, &all).is_none());
+        // Accessibility went away: the permissions screen, as a fix.
+        let lost = grants(&[ScreenRecording, Microphone]);
+        let flow = launch_plan(&progress, &lost).expect("a fix");
+        assert_eq!((flow.mode(), flow.step()), (Mode::Fix, Step::Permissions));
+        assert_eq!(rows(&flow), Permission::REQUIRED);
+        // Never granted (put off in the tour): no nagging at launch.
+        progress.granted.remove(&Accessibility);
+        assert!(launch_plan(&progress, &lost).is_none());
+    }
+
+    #[test]
+    fn progress_is_kept_beside_the_rest_of_the_config() {
+        let dir = std::env::temp_dir().join(format!("apparent-onboarding-{}", std::process::id()));
+        let path = dir.join("config.json");
+        std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        std::fs::write(&path, r#"{"agentHost":"studio","autocrop":false}"#).unwrap();
+        assert_eq!(Progress::load_from(&path), Progress::default());
+        let progress = Progress {
+            seen: true,
+            resume: Some(Step::Permissions),
+            granted: [Microphone].into_iter().collect(),
+            relaunched_at: Some(1_792_000_000_000),
+            reopen_fix: true,
+            tutorial: Some(Tutorial::Practiced),
+            shortcut_chosen: true,
+            first_capture_completed: true,
+        };
+        progress.save_to(&path).unwrap();
+        assert_eq!(Progress::load_from(&path), progress);
+        let config: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(config["agentHost"], "studio");
+        assert_eq!(config["autocrop"], false);
+        assert_eq!(config["onboarding"]["resume"], "permissions");
+        assert_eq!(config["onboarding"]["relaunchedAt"], 1_792_000_000_000_u64);
+        assert_eq!(config["onboarding"]["reopenFix"], true);
+        assert_eq!(config["onboarding"]["tutorial"], "practiced");
+        // A resume point saved by 0.3.2's one-permission-per-step tour still loads.
+        std::fs::write(
+            &path,
+            r#"{"onboarding":{"seen":false,"resume":"microphone","granted":[]}}"#,
+        )
+        .unwrap();
+        assert_eq!(Progress::load_from(&path).resume, Some(Step::Permissions));
+        std::fs::write(&path, r#"{"onboarding":{"resume":"draw"}}"#).unwrap();
+        assert_eq!(Progress::load_from(&path).resume, Some(Step::HowItWorks));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
+    fn helper_statuses_parse_into_grants() {
+        let statuses: BTreeMap<Permission, Status> = serde_json::from_str(
+            r#"{"screen-recording":"granted","microphone":"denied","camera":"not-determined"}"#,
+        )
+        .unwrap();
+        let g = Grants {
+            statuses,
+            screen_needs_relaunch: false,
+        };
+        assert!(g.granted(ScreenRecording));
+        assert_eq!(g.status(Microphone), Status::Denied);
+        assert_eq!(g.status(Accessibility), Status::NotDetermined);
+    }
+
+    #[test]
+    fn accessibility_matches_the_app_without_hiding_screen_revocation() {
+        let helper = BTreeMap::from([
+            (Accessibility, Status::NotDetermined),
+            (ScreenRecording, Status::NotDetermined),
+            (Microphone, Status::Granted),
+        ]);
+        let statuses = reconcile_accessibility(helper, true);
+        assert_eq!(statuses[&Accessibility], Status::Granted);
+        // A cached positive screen preflight is not evidence against a fresh denial.
+        assert_eq!(statuses[&ScreenRecording], Status::NotDetermined);
+        assert_eq!(statuses[&Microphone], Status::Granted);
+
+        let helper = BTreeMap::from([
+            (Accessibility, Status::Granted),
+            (ScreenRecording, Status::Granted),
+            (Microphone, Status::Granted),
+        ]);
+        let statuses = reconcile_accessibility(helper, false);
+        assert_eq!(statuses[&Accessibility], Status::NotDetermined);
+        // The helper may see a new screen grant before the running app does.
+        assert_eq!(statuses[&ScreenRecording], Status::Granted);
+        assert_eq!(statuses[&Microphone], Status::Granted);
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn screen_revocation_blocks_recording_despite_a_cached_success() {
+        let mut grants = Grants {
+            statuses: BTreeMap::from([
+                (Accessibility, Status::Granted),
+                (ScreenRecording, Status::Granted),
+                (Microphone, Status::Granted),
+            ]),
+            screen_needs_relaunch: false,
+        };
+        assert!(missing_to_record(Some(&grants), true, true).is_empty());
+        for status in [Status::NotDetermined, Status::Denied] {
+            grants.statuses.insert(ScreenRecording, status);
+            assert_eq!(
+                missing_to_record(Some(&grants), true, true),
+                vec![ScreenRecording],
+                "a fresh screen denial must override a cached successful probe"
+            );
+        }
+        grants.statuses.insert(ScreenRecording, Status::Granted);
+        assert!(missing_to_record(Some(&grants), true, true).is_empty());
+        grants.screen_needs_relaunch = true;
+        assert_eq!(
+            missing_to_record(Some(&grants), true, true),
+            vec![ScreenRecording]
+        );
+        assert_eq!(
+            missing_to_record(Some(&grants), false, true),
+            vec![ScreenRecording]
+        );
+    }
+
+    #[test]
+    fn app_permission_refresh_observes_revocation_without_a_window() {
+        let mut reads = vec![
+            Some(grants(&ALL)),
+            None, // A failed helper read must not end the app-wide worker.
+            Some(Grants {
+                statuses: BTreeMap::from([
+                    (Accessibility, Status::Granted),
+                    (ScreenRecording, Status::Denied),
+                    (Microphone, Status::Granted),
+                ]),
+                screen_needs_relaunch: false,
+            }),
+            Some(grants(&ALL)),
+        ]
+        .into_iter();
+        let mut admission = Vec::new();
+        let mut pauses = 0;
+        // No Session/Settings exists here: the application owns the refresh and delivery.
+        poll_grants(
+            || reads.next().expect("the receiver must stop the worker"),
+            |fresh| {
+                admission.push(missing_to_record(Some(&fresh), true, true));
+                admission.len() < 3
+            },
+            || pauses += 1,
+        );
+        assert_eq!(pauses, 3);
+        assert_eq!(admission.len(), 3);
+        assert!(admission[0].is_empty());
+        if cfg!(target_os = "macos") {
+            assert_eq!(admission[1], vec![ScreenRecording]);
+        } else {
+            // Linux admission remains portal-owned, even with a cached helper denial.
+            assert!(admission[1].is_empty());
+        }
+        assert!(admission[2].is_empty());
+    }
+}
 
 #[cfg(test)]
 mod local_practice_tests {
@@ -1545,13 +2757,56 @@ mod adapter_regressions {
         assert_eq!(line.len(), 65_537);
     }
     #[test]
+    fn back_from_permissions_cancels_guides_without_claiming_a_grant() {
+        let mut flow=Flow::tour(Step::Permissions,None).with_intro_skipped(true);
+        assert!(permission_guide_messages(&flow.view()).is_empty());
+        flow.on(Input::Back);
+        assert_eq!(flow.step(),Step::Welcome);
+        assert_eq!(permission_guide_messages(&flow.view()),vec![serde_json::json!({"type":"cancel-guides"})]);
+        let granted=Flow::tour(Step::Permissions,Some(Grants{statuses:BTreeMap::from([(Permission::Accessibility,Status::Granted)]),screen_needs_relaunch:false}));
+        assert!(permission_guide_messages(&granted.view()).iter().any(|m|m["type"]=="close-guide"&&m["permission"]=="accessibility"));
+    }
+
+    #[test]
+    fn fallback_retires_queued_events_from_its_old_transport_but_keeps_grants() {
+        let mut session=Session::for_test(Flow::tour(Step::Permissions,None));
+        let old=session.transport_generation();
+        let (tx,_rx)=flume::unbounded();
+        session.fallback=Some(Box::new(move |_|Ok(Transport::InProcess(Some(tx.clone())))));
+        assert!(session.restore_native());
+        assert_ne!(old,session.transport_generation());
+        for event in [Event::Exited,Event::Action("close".into())] {
+            let queued=Event::Session{source:session.source(),event:Box::new(Event::Transport{generation:old,event:Box::new(event)})};
+            assert!(queued.for_current_session(Some(session.source())).unwrap().for_current_transport(Some(session.transport_generation())).is_none());
+        }
+        let current=Event::Transport{generation:session.transport_generation(),event:Box::new(Event::Action("continue".into()))};
+        assert!(matches!(current.for_current_transport(Some(session.transport_generation())),Some(Event::Action(_))));
+        assert!(matches!(Event::Grants(Grants{statuses:BTreeMap::new(),screen_needs_relaunch:false}).for_current_transport(Some(session.transport_generation())),Some(Event::Grants(_))));
+    }
+
+    #[test]
+    fn coached_capture_completion_reveals_a_pending_native_fallback() {
+        let mut flow=Flow::tour(Step::TryIt,None).with_first_capture(true,true,false);
+        flow.on(Input::ShortcutTriggered);flow.on(Input::CaptureStarted);
+        let mut session=Session::for_test(flow);
+        session.practice=Some(super::super::practice::Practice::default());
+        let (tx,rx)=flume::unbounded();
+        session.fallback=Some(Box::new(move |_|Ok(Transport::InProcess(Some(tx.clone())))));
+        assert!(session.restore_native());assert!(session.fallback_pending);
+        session.input(Input::CaptureEnded{completed:true});
+        assert!(!session.fallback_pending);assert!(session.practice.is_none());
+        assert_eq!(session.flow.step(),Step::Done);
+        assert!(rx.try_iter().any(|m|m["type"]=="show"));
+    }
+
+    #[test]
     fn hidden_fallback_waits_until_capture_ends_before_creating_native_window() {
         let mut flow = Flow::tour(Step::TryIt, None);
         flow.hidden = true;
         let mut session = Session::for_test(flow);
         session.shortcut_label = "Test shortcut".into();
         let (tx, rx) = flume::unbounded();
-        session.fallback = Some(Box::new(move || Ok(Transport::InProcess(Some(tx.clone())))));
+        session.fallback = Some(Box::new(move |_| Ok(Transport::InProcess(Some(tx.clone())))));
         assert!(session.restore_native());
         assert!(rx.try_recv().is_err(), "no replacement transport is created while hidden");
         assert!(session.fallback_pending);
@@ -1576,14 +2831,6 @@ fn native_shortcut_reserved(key: u32, modifiers: u32) -> bool {
     command.args(["onboarding", "--validate-shortcut", &key.to_string(), &modifiers.to_string()]);
     query_shortcut_reservation(&mut command, Duration::from_secs(2))
 }
-
-#[cfg(target_os = "macos")]
-pub(crate) fn host_shortcut_reserved(key: u32, modifiers: u32) -> bool {
-    native_shortcut_reserved(key, modifiers)
-}
-
-#[cfg(target_os = "linux")]
-pub(crate) fn host_shortcut_reserved(_key: u32, _modifiers: u32) -> bool { false }
 
 #[cfg(any(target_os = "macos", test))]
 fn query_shortcut_reservation(command: &mut std::process::Command, timeout: std::time::Duration) -> bool {

@@ -1,39 +1,216 @@
-name: Connect publication follow-up
+name: Website and Connect — checks & deploy
 
 on:
   workflow_dispatch:
 
 permissions:
   contents: read
-  actions: read
+
+# Never cancel a deployment halfway through publication. Every publisher also
+# checks current main; Actions concurrency is not a FIFO queue.
+concurrency:
+  group: web-delivery-production
+  cancel-in-progress: false
 
 jobs:
-  worker:
-    permissions:
-      contents: write
-      actions: read
-      id-token: write
-      attestations: write
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main' && github.event_name == 'workflow_run' && github.event.workflow_run.name == 'Connect producer' && github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository && vars.HOSTED_CD_ENABLED == 'true'
-    uses: ./.github/workflows/connect-delivery.yml
-    with:
-      producer-run: ${{ format('{0}', github.event.workflow_run.id) }}
-    secrets: inherit
-
-  runtime-budget:
-    if: always()
-    needs: [worker]
+  admit:
+    if: github.repository == 'tryapparent/apparent' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository))
     permissions:
       contents: read
       actions: read
-    name: Workflow runtime budget
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    outputs:
+      sha: ${{ steps.gate.outputs.sha }}
+    steps:
+      # Admission code comes from trusted main, never an unchecked event SHA.
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - id: gate
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REQUEST_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
+          VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Superseded automatic candidates need no more runner time.
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git rev-parse origin/main)" != "$REQUEST_SHA" ]]; then
+            echo 'Skipping superseded main candidate'
+            exit 0
+          fi
+          args=(--platform linux --sha "$REQUEST_SHA")
+          if [[ -n "$VERIFY_RUN_ID" ]]; then args+=(--run-id "$VERIFY_RUN_ID"); fi
+          python3 enablement/release_gate.py "${args[@]}"
+
+  verify:
+    needs: admit
+    if: needs.admit.outputs.sha != ''
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
     steps:
       - uses: actions/checkout@v4
         with:
-          ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - uses: ./.github/actions/runtime-budget
+          ref: ${{ needs.admit.outputs.sha }}
+      - uses: actions/setup-node@v4
         with:
-          platform: web
+          node-version: '22.23.0'
+          cache: npm
+          cache-dependency-path: connect/service/package-lock.json
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - name: Test publication contracts
+        run: python3 -m unittest discover -s public/site/scripts/cd -p 'test_*.py'
+      - name: Verify Worker in local workerd with synthetic accounts
+        working-directory: connect/service
+        run: npm ci && npm test
+      - name: Install locked website dependencies and browser
+        working-directory: public/site
+        run: |
+          bun install --frozen-lockfile
+          ./node_modules/.bin/playwright-core install --with-deps chromium firefox
+          echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
+      - name: Independently build and verify Connect browser package
+        working-directory: connect/web
+        env:
+          VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+          CONNECT_EVIDENCE: ${{ runner.temp }}/connect-package-evidence
+        run: bun install --frozen-lockfile && npm test
+      - name: Build and test production website package
+        working-directory: public/site
+        env:
+          APPARENT_PUBLIC_SITE: '1'
+          VITE_HOSTED_API_ORIGIN: https://hosted.tryapparent.com
+        run: |
+          npm run build
+          node scripts/site-build/package-apparent.mjs
+          node --test scripts/brand/test-brand-favicon.mjs scripts/browser-proof/test-github-stars.mjs scripts/pages/test-latest-download.mjs scripts/pages/test-platform-os.mjs scripts/pages/test-public-homepage.mjs scripts/browser-proof/test-video-demo.mjs
+          node --test scripts/commerce/test-package-text.mjs scripts/site-build/test-expected-canonical-packaging.mjs scripts/browser-proof/test-upstream-link-guard.mjs scripts/commerce/test-package-feature-grid.mjs scripts/browser-proof/test-og-stage-redirect.mjs scripts/browser-proof/test-og-video-stage-browser.mjs
+          cp -a dist-apparent "$RUNNER_TEMP/public-artifact"
+          node scripts/connect/compose-connect.mjs
+      - name: Reconcile accepted live homepage and prepare Pages-only artifact
+        working-directory: public/site
+        run: |
+          node --test scripts/connect/test-compose-connect.mjs scripts/pages/test-pages-package.mjs scripts/pages/test-pages-video.mjs scripts/pages/test-pages-video-runtime.mjs
+          node scripts/pages/prepare-pages.mjs
+          node scripts/site-build/verify-composed.mjs
+          PUBLIC_THEME_ARTIFACT=public/site/dist-apparent THEME_SURFACES=public,connect,recipient node ../../shared/ui/test/appearance.mjs
+          node scripts/pages/prepare-pages-video.mjs
+      - uses: actions/upload-artifact@v4
+        with:
+          name: website-${{ needs.admit.outputs.sha }}
+          path: public/site/dist-apparent/
+          if-no-files-found: error
+          # The checked public demos use .local-media; do not drop their assets.
+          include-hidden-files: true
+          retention-days: 7
+      - name: Verify Connect browser behavior across credentialed origins
+        working-directory: public/site
+        env:
+          APPARENT_PUBLIC_SITE: '1'
+          VITE_HOSTED_API_ORIGIN: http://127.0.0.1:18809
+          HOSTED_TEST_API_ORIGIN: http://127.0.0.1:18809
+          COMPOSE_SYNTHETIC_ORIGIN: http://127.0.0.1:18809
+          COMPOSE_PUBLIC_INPUT: ${{ runner.temp }}/public-artifact
+          SITE_ARTIFACT: dist/synthetic-composition
+          TMPDIR: ${{ runner.temp }}
+          SITE_EVIDENCE: ${{ runner.temp }}/connect-evidence
+        run: |
+          (cd ../../connect/web && CONNECT_BUILD_DIR=dist-test npm run build)
+          node scripts/connect/compose-connect.mjs
+          node scripts/pages/prepare-pages.mjs
+          node scripts/site-build/verify-composed.mjs
+          npm run test:hosted
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: synthetic-connect-evidence
+          path: ${{ runner.temp }}/connect-evidence/
+          retention-days: 3
+          if-no-files-found: ignore
+
+  website:
+    needs: [admit, verify]
+    if: github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.WEBSITE_CD_ENABLED == 'true'
+    environment:
+      name: website-production
+      url: https://app.tryapparent.com
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.admit.outputs.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: website-${{ needs.admit.outputs.sha }}
+          path: public/site/dist-apparent
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+          cache: npm
+          cache-dependency-path: connect/service/package-lock.json
+      - run: npm ci
+        working-directory: connect/service
+      - name: Publish checked main to Cloudflare Pages (never Clanker or the Worker)
+        env:
+          WEBSITE_PAGES_API_TOKEN: ${{ secrets.WEBSITE_PAGES_API_TOKEN }}
+        run: GITHUB_SHA="${{ needs.admit.outputs.sha }}" python3 public/site/scripts/cd/publish_pages.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: website-deployment-receipt
+          path: website-receipt.json
+          if-no-files-found: ignore
+
+  hosted:
+    needs: [admit, verify]
+    if: github.repository == 'tryapparent/apparent' && github.event_name != 'pull_request' && github.ref == 'refs/heads/main' && vars.HOSTED_CD_ENABLED == 'true'
+    environment:
+      name: hosted-production
+      url: https://hosted.tryapparent.com
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      CLOUDFLARE_ACCOUNT_ID: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+      HOSTED_D1_ID: ${{ vars.HOSTED_D1_ID }}
+      HOSTED_R2_BUCKET: ${{ vars.HOSTED_R2_BUCKET }}
+      HOSTED_GOOGLE_CLIENT_ID: ${{ vars.HOSTED_GOOGLE_CLIENT_ID }}
+      WRANGLER_SEND_METRICS: 'false'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+          ref: ${{ needs.admit.outputs.sha }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+          cache: npm
+          cache-dependency-path: connect/service/package-lock.json
+      - run: npm ci && npm run build
+        working-directory: connect/service
+      - name: Render approved resource bindings (never apply migrations)
+        run: python3 public/site/scripts/cd/hosted_config.py
+      - name: Deploy current checked main and read back version and anonymous CORS
+        env:
+          CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+        run: |
+          set -euo pipefail
+          export GITHUB_SHA="${{ needs.admit.outputs.sha }}"
+          test -n "$CLOUDFLARE_API_TOKEN"
+          test "$(git ls-remote origin refs/heads/main | cut -f1)" = "$GITHUB_SHA"
+          cd connect/service
+          ./node_modules/.bin/wrangler deploy --config wrangler.cd.json --tag "$GITHUB_SHA" --message "GitHub Actions $GITHUB_RUN_ID commit $GITHUB_SHA" --strict --no-autoconfig
+          cd ../..
+          python3 public/site/scripts/cd/verify_worker.py "$GITHUB_SHA" > connect-service-receipt.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: hosted-deployment-receipt
+          path: connect-service-receipt.json
+          if-no-files-found: ignore

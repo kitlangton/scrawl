@@ -2,7 +2,7 @@
 use anyhow::{Context, Result};
 pub use apparent_connect_client::{
     AccountView, CloudConfig, ConnectCommand, HOSTED_SHARING, HOSTED_SYNC, PreparedLink,
-    SharesCommand, UploadQueueKind, UploadSizeFailure,
+    SharesCommand,
 };
 use apparent_connect_client::{Client, ConfigProvider};
 // Package call sites own the concrete flags; this adapter preserves override semantics.
@@ -63,22 +63,6 @@ pub fn settings_backend(
     Arc::new(SettingsBackend(client_at(config.into()), config.into()))
 }
 
-// Private fact reader, consumed only by Connect's main-process state policy.
-pub(crate) fn settings_facts(config: &Path) -> std::result::Result<serde_json::Value, settings_controller::SafeError> {
-    let backend = SettingsBackend(client_at(config.to_owned()), config.to_owned());
-    let mut facts = backend.0.settings_facts().map_err(settings_error)?;
-    facts["sharedLinksUrl"] = settings_controller::Backend::shared_links_url(&backend).into();
-    Ok(facts)
-}
-
-// Temporary private device transaction/HTTP executor for the TypeScript flow.
-pub(crate) fn begin_device_login(config: &Path, server: &str, allowed: Arc<dyn Fn() -> bool + Send + Sync>) -> Result<apparent_connect_client::DeviceLogin> {
-    client_at(config.to_owned()).begin_device_login(server, "upload", true, allowed)
-}
-pub(crate) fn device_error(error: &anyhow::Error, allowed: &dyn Fn() -> bool) -> settings_controller::SafeError {
-    settings_error(client_settings::safe_error(error, allowed))
-}
-
 struct SettingsBackend(Client, PathBuf);
 use crate::capture::desktop::settings::connect as settings_controller;
 use apparent_connect_client::settings as client_settings;
@@ -113,8 +97,6 @@ impl settings_controller::Backend for SettingsBackend {
                 connected: state.connected,
                 uploads_enabled: state.uploads_enabled,
                 reauthorization_required: state.reauthorization_required,
-                renewal_required: state.renewal_required,
-                account_initial: state.account_initial,
             })
             .map_err(settings_error)
     }
@@ -178,9 +160,6 @@ pub fn connect_sharing(allowed: &dyn Fn() -> bool) -> Result<()> {
         .context("Configure the hosted API server with apparent connect login first")?;
     client().login_allowed(&server, "upload", true, true, allowed)
 }
-pub fn upload_size_failure(bundle: &Path, kind: UploadQueueKind) -> Option<UploadSizeFailure> {
-    client().upload_size_failure(bundle, kind)
-}
 pub fn sharing_progress(bundle: &Path) -> String {
     client().sharing_progress(bundle)
 }
@@ -204,8 +183,7 @@ pub fn command(command: ConnectCommand) -> Result<()> {
             scope,
             consent_upload,
             no_browser,
-            browser,
-        } => client.login(&client.login_server(server.as_deref())?, &scope, consent_upload, browser && !no_browser),
+        } => client.login(&server, &scope, consent_upload, !no_browser),
         ConnectCommand::Status { account } => {
             println!(
                 "{}",
@@ -249,47 +227,6 @@ pub fn fetch(id: &str, out: &Path, wait: u64) -> Result<()> {
     println!("{}", client().fetch(id, out, wait)?.display());
     Ok(())
 }
-/// Only a bare canonical Connect ID implies a download. Explicit local paths
-/// retain local inspection semantics; fetch never overwrites existing output.
-pub fn inspect_source(source: &Path) -> Result<PathBuf> {
-    let Some(id) = inspect_capture_id(source) else {
-        return Ok(source.to_path_buf());
-    };
-    client().fetch_evidence(id, &PathBuf::from(format!("./{id}.evidence.apparent")), 120)
-}
-
-fn inspect_capture_id(source: &Path) -> Option<&str> {
-    source.to_str().filter(|id| {
-        id.len() == 32
-            && id
-                .bytes()
-                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-    })
-}
-
-#[cfg(test)]
-mod inspect_tests {
-    use super::*;
-
-    #[test]
-    fn only_bare_canonical_ids_trigger_connect_fetch() {
-        let id = "0123456789abcdef0123456789abcdef";
-        assert_eq!(inspect_capture_id(Path::new(id)), Some(id));
-        for local in [
-            format!("./{id}"),
-            format!("/{id}"),
-            format!("{id}.apparent"),
-            id.to_uppercase(),
-            "latest".into(),
-            "apparent.json".into(),
-            "0123456789abcdef0123456789abcde".into(),
-            "g123456789abcdef0123456789abcdef".into(),
-        ] {
-            assert_eq!(inspect_capture_id(Path::new(&local)), None, "{local}");
-        }
-    }
-}
-
 pub fn completed(bundle: &Path) {
     if cfg!(test) {
         return;

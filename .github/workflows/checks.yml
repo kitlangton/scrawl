@@ -1,0 +1,32 @@
+name: Repository checks
+
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repository-checks-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  contracts:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Verify theme, push guards, selection and publication admission
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: python3 enablement/verification.py --base "$BASE_SHA" --pr
+      - name: Validate workflow syntax and job dependencies
+        uses: docker://rhysd/actionlint:1.7.12
+        with:
+          args: -shellcheck= -pyflakes= .github/workflows/checks.yml .github/workflows/linux-updater-harness.yml .github/workflows/verification.yml .github/workflows/verification-mac.yml .github/workflows/verification-platform.yml .github/workflows/release-linux.yml .github/workflows/release-mac-preview.yml .github/workflows/web-delivery.yml

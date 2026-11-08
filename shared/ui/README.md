@@ -1,14 +1,12 @@
 # Shared UI sources
 
 Canonical React/shadcn controls and system appearance for every value stream.
-Named icon exports from `@apparent/ui/icons` use pinned `lucide-react` so
-consumers share one icon source. Live microphone levels remain data-driven bars.
 Desktop, Connect account and recording recipient pages, and Public consume the
 same framework-independent tokens. Engine and Agent frontends must use them too. Application policy,
 account state and capture state do not belong here.
 
-Button, Tabs, Collapsible, Alert and `cn` come from shadcn/ui's MIT-licensed `new-york` registry,
-retrieved from `https://ui.shadcn.com/r/styles/new-york/{button,tabs,collapsible,alert}.json`.
+Button, Tabs and `cn` come from shadcn/ui's MIT-licensed `new-york` registry,
+retrieved from `https://ui.shadcn.com/r/styles/new-york/{button,tabs}.json`.
 Only import paths and formatting were adapted. Review source changes on updates;
 update underlying Radix and utility packages normally. Add controls here, not
 separate Desktop/Connect copies. Theme tokens are shared, not OS-native skins.
@@ -45,7 +43,7 @@ and existing Electron routing selects its existing surfaces. No legacy native
 renderer is removed by theme adoption.
 
 Every frontend build and repository PR verification runs
-`node shared/ui/scripts/check-theme.ts` (the legacy Python entrypoint forwards to the same implementation). The per-file legacy color inventory
+`python3 shared/ui/scripts/check-theme.py`. The per-file legacy color inventory
 reserves existing demo/artwork and unmigrated literals; new files have no
 allowance. Reduce it when migrating an old surface. New exceptions require a
 reviewed explanation; it is a ratchet, not proof of visual correctness.

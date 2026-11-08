@@ -7,26 +7,6 @@ import CoreText
 import Speech
 import SwiftUI
 
-private struct RunningBuildLabel: View {
-  private var text: String {
-    let value = ProcessInfo.processInfo.environment["APPARENT_RUNNING_BUILD_LABEL"] ?? "build unknown"
-    if value == "build unknown" { return value }
-    let parts = value.components(separatedBy: " · ")
-    guard parts.count == 2 else { return "build unknown" }
-    let candidate = parts[1]
-    if candidate == "build unknown" || candidate.range(of: "^[0-9a-fA-F]{7}( \\+modified)?$", options: .regularExpression) != nil {
-      return candidate
-    }
-    return "build unknown"
-  }
-  var body: some View {
-    Text(text).font(.system(size: 10, weight: .medium, design: .monospaced))
-      .foregroundStyle(.secondary).padding(.horizontal, 5).padding(.vertical, 2)
-      .background(.ultraThinMaterial, in: Capsule()).allowsHitTesting(false)
-      .accessibilityLabel("Running build \(text)")
-  }
-}
-
 // `apparent-helper onboarding`: the welcome window. Apparent decides what it shows
 // (`src/onboarding.rs`) and sends it as JSON lines on stdin:
 //   {"type":"state","step":"permissions","index":2,"count":4,"rows":[{"permission":"microphone",
@@ -102,6 +82,12 @@ enum Permissions {
     if let url = URL(string: "x-apple.systempreferences:com.apple.settings.PrivacySecurity.extension?\(anchor)") {
       NSWorkspace.shared.open(url)
     }
+  }
+
+  static func closeAllGuides() {
+    let owned = panels
+    panels.removeAll()
+    for panel in owned.values { PermissionPanel.tell(panel, "cancel") }
   }
 
   static func closeGuide(_ permission: String) {
@@ -610,7 +596,6 @@ struct OnboardingView: View {
     .animation(Motion.state, value: state.ready)
     .animation(Motion.state, value: state.tutorialSeen)
     .frame(width: 620, height: state.height)
-    .overlay(alignment: .topTrailing) { RunningBuildLabel().padding(5) }
   }
 
   @ViewBuilder private var page: some View {
@@ -1086,12 +1071,15 @@ final class Onboarding: NSObject, NSApplicationDelegate, NSWindowDelegate {
         let state = type == "state" ? try? JSONDecoder().decode(OnboardingState.self, from: data) : nil
         DispatchQueue.main.async {
           if CommandLine.arguments.contains("--permissions-only"),
-             !["request", "open-settings", "close-guide", "close"].contains(type) { return }
+             !["request", "open-settings", "close-guide", "cancel-guides", "close"].contains(type) { return }
           if ["request", "open-settings", "close-guide"].contains(type),
              !["screen-recording", "microphone", "camera", "accessibility", "speech-recognition"].contains(permission) { return }
           switch type {
           case "state":
             guard let state else { return }
+            // Native fallback owns its permission guide lifetime.
+            for row in state.rows where row.granted { Permissions.closeGuide(row.permission) }
+            if state.step != "permissions" { Permissions.closeAllGuides() }
             if state.step != "shortcut" || !state.shortcutEditing {
               self.listenForShortcut(false)
               self.model.shortcutEditor = nil
@@ -1107,6 +1095,8 @@ final class Onboarding: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
           // The user has moved on to another row: answering an earlier question mustn't pull
           // this window over the System Settings pane they're working in.
+          case "cancel-guides":
+            Permissions.closeAllGuides()
           case "close-guide":
             Permissions.closeGuide(permission)
           case "request":
@@ -1131,8 +1121,7 @@ final class Onboarding: NSObject, NSApplicationDelegate, NSWindowDelegate {
           case "hide": self.window?.orderOut(nil)
           case "show": self.present()
           case "close":
-            for panel in Permissions.panels.values { PermissionPanel.tell(panel, "cancel") }
-            Permissions.panels.removeAll()
+            Permissions.closeAllGuides()
             self.keys.handBack()
             exit(0)
           default: break

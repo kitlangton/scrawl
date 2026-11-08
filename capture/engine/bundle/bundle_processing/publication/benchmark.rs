@@ -76,7 +76,7 @@ mod tests {
         let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
         let source = root.join("source.apparent");
         let source_dir = Directory::open(&source, true).unwrap();
-        let movie = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/engine/core/tests/fixtures/tiny.mp4"));
+        let movie = include_bytes!(concat!(env!("CARGO_MANIFEST_DIR"), "/capture/engine/bundle/bundle_processing/publication/fixtures/tiny.mp4"));
         source_dir.write("recording.mp4", movie).unwrap();
         source_dir
             .write("apparent.json", b"source manifest sentinel")

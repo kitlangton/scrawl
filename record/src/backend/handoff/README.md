@@ -1,5 +1,0 @@
-# Local handoff formatting
-
-`formatLocalHandoff` is a pure formatter for the local copy/paste prompt. It accepts a caller-attested saved bundle path, semantic `ProcessingInput`, warnings, optional preserved full-frame directory, and the effective `requestVideoProof` value. It validates shape and path consistency only; it does not authenticate the publication, inspect a bundle, or prove clipboard, paste, open, or delivery success.
-
-The local prompt starts with a shell-quoted `apparent inspect` command, CLI setup, and local image/crop guidance. It then carries supplied warnings, screen/context changes and Record semantic text with duration and the absolute bundle path. Destination/routing metadata is omitted; unlike an archive summary, no path footer or duplicate image/crop guidance follows the final timed request. Callers supply approved semantic context, never SDK owner tokens or credentials. The existing publication producer and native clipboard effect remain adoption gates. Connect link policy is outside this API.

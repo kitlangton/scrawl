@@ -46,7 +46,7 @@ Hex-failure fallback. Models may ignore language hints (e.g. Parakeet v3).
 
 Apple's model (`capture/engine/runtime/audio/transcription/speech_model.rs`, `apparent-helper speech-model [--install]`) is SpeechTranscriber where the Mac supports it, else DictationTranscriber (VMs and Macs where `SpeechTranscriber.isAvailable` is false). Its language is `"appleLocale"` (Settings › Recording › Language, e.g. `"zh-TW"`; absent or `auto` is Automatic: the user's locale, the nearest supported one, or en-US). Rust passes it as `--locale ID` to the helper's `transcribe`, `transcribe-stream` and `speech-model`, which match it by `Locale.language.maximalIdentifier` (`zh_TW`, `zh-TW` and `zh-Hant-TW` match, `zh-Hans-TW` doesn't); an unsupported one gets the Automatic pick. `speech-model` lines carry `locales`, the supported ids, for the Settings menu, which marks a saved language this Mac lacks "(not available)" and names the one used. `appleLocale` is Apple's alone: Hex has `hexLanguage`.
 
-Each app reserves the model for itself through `AssetInventory` (attributed to `dev.kitlangton.apparent.helper`), one slot per language (at the limit the helper releases languages Apparent no longer uses), and a fresh Mac doesn't have it, so the app checks and installs it in the background at launch (not when the transcriber is Hex) and retries a failed install. Changing the language (`speech_model::restart`) bumps the worker's generation: the superseded helper is killed, its late lines are ignored, and the new language is checked. Onboarding's Microphone row, Try it and Settings › Recording show the download. `transcribe` never downloads for long: without a model it returns `missing` (`downloading`, `unsupported`, `failed`), the summary gets a `No transcript: …` line (`TranscriptData::missing`), and a retryable bundle gets `.transcript-pending` and is transcribed again in place, `apparent.json` and `summary.md` rewritten, when the model arrives (`apparent retranscribe <bundle>` by hand). On macOS 15 there's no SpeechAnalyzer or `AssetInventory`: the model is SFSpeechRecognizer's on-device Dictation model (`Recognizer` in `engine/native/Media.swift`), SFSpeechRecognizer needs the Speech Recognition permission, which onboarding asks for as an optional fourth row (`Permission::SpeechRecognition`, shown only when `apparent-helper permissions` reports it, i.e. before macOS 26; also in Settings › Permissions). `speech-model` never prompts: without the permission its status is `permission` (`State::NeedsPermission`, no retries; a fresh grant seen by `read_grants` starts the check again), and otherwise it checks the model by recognizing half a second of silence (`supportsOnDeviceRecognition` can be true before Dictation's model is downloaded), a failed check being `failed` with an `error` that says to turn on Dictation. Recognition is on device only. `transcribe` never prompts either; without the permission it returns `missing: permission`, without the model `missing: dictation`, and both bundles get `.transcript-pending`.
+Each app reserves the model for itself through `AssetInventory` (attributed to `dev.kitlangton.apparent.helper`), one slot per language (at the limit the helper releases languages Apparent no longer uses), and a fresh Mac doesn't have it, so the app checks and installs it in the background at launch (not when the transcriber is Hex) and retries a failed install. Changing the language (`speech_model::restart`) bumps the worker's generation: the superseded helper is killed, its late lines are ignored, and the new language is checked. Onboarding's Microphone row, Try it and Settings › Recording show the download. `transcribe` never downloads for long: without a model it returns `missing` (`downloading`, `unsupported`, `failed`), the summary gets a `No transcript: …` line (`TranscriptData::missing`), and a retryable bundle gets `.transcript-pending` and is transcribed again in place, `apparent.json` and `summary.md` rewritten, when the model arrives (`apparent retranscribe <bundle>` by hand). On macOS 15 there's no SpeechAnalyzer or `AssetInventory`: the model is SFSpeechRecognizer's on-device Dictation model (`Recognizer` in `helper/Media.swift`), SFSpeechRecognizer needs the Speech Recognition permission, which onboarding asks for as an optional fourth row (`Permission::SpeechRecognition`, shown only when `apparent-helper permissions` reports it, i.e. before macOS 26; also in Settings › Permissions). `speech-model` never prompts: without the permission its status is `permission` (`State::NeedsPermission`, no retries; a fresh grant seen by `read_grants` starts the check again), and otherwise it checks the model by recognizing half a second of silence (`supportsOnDeviceRecognition` can be true before Dictation's model is downloaded), a failed check being `failed` with an `error` that says to turn on Dictation. Recognition is on device only. `transcribe` never prompts either; without the permission it returns `missing: permission`, without the model `missing: dictation`, and both bundles get `.transcript-pending`.
 
 ## Keyframe selection (`capture/engine/keyframes.rs`)
 
@@ -91,7 +91,7 @@ disables it; provisioning is separate and export does not download models.
 See [export audio](export-and-retention.md#explicit-export-audio) for the versioned
 timed script, integrity pins, limits, provenance and failure/recovery contract.
 
-## Experiment `liveTranscribe` (`capture/engine/runtime/audio/transcription/live_transcribe.rs`, `engine/native/LiveTranscribe.swift`)
+## Experiment `liveTranscribe` (`capture/engine/runtime/audio/transcription/live_transcribe.rs`, `capture/engine/native/LiveTranscribe.swift`)
 
 Off by default. With Apple Speech selected, this uses one continuous SpeechAnalyzer,
 with the preferred SpeechTranscriber or existing DictationTranscriber fallback and
@@ -115,7 +115,7 @@ keep their existing paths. `apparent reprocess B --out O --bench 1 --live-speed 
 replays audio and logs the streamed sample count and tail latency. Helper proof does
 not establish preferred-engine availability or installed-app capture acceptance.
 
-On macOS with Swift 6.2+, `python3 engine/native/tests/live-transcribe.py`
+On macOS with Swift 6.2+, `python3 capture/engine/native/tests/live-transcribe.py`
 checks the actual production source/converter/completion seams using generated PCM
 without speech models or audio devices. The macOS Rust suite invokes it too. These
 regressions do not replace actual selected-module and installed-app capture proof.
@@ -186,7 +186,6 @@ Every successfully built bundle has `finish-trace.json` beside `apparent.json`, 
 ## Click-based visual handoff (`shared/handoff/mod.rs`, `capture/engine/sketch.rs`)
 
 The old automatic OpenCode attachment policy is inactive. The full capture, keyframes, contact sheet, and video are still built and saved. Manual Paste remains image-first; `apparent zoom` is available for closer inspection.
-Clipboard instructions ask recipients to install or update the latest published CLI once per agent session; the [installation guide](../../agent/docs/installation.md) owns setup and private read approval. This instruction does not change saved bundle text or grant access.
 `apparent copy` is text-only by default, and its confirmation points to the contact sheet. Copying or dispatching Paste does not prove a receiving composer accepted the image. Check the unsent draft; if the image is absent, attach the saved `contact-sheet.png` manually. An agent that cannot open an unattached local path must ask for the image instead of guessing a click target from coordinates or “element unavailable.”
 
 ## Passive auto-crop safety (`capture/engine/autocrop/autocrop.rs`)
@@ -281,16 +280,14 @@ To compare a summary experiment on real captures, `capture/agent/scripts/agent-e
 
 During screen capture, Shift-click opens a compact Electron text field at the
 point; Shift drawing is unchanged. Enter or Attach saves; empty Enter keeps
-only the pin. Escape preserves the in-capture draft. A deliberate Shift-move
-outside the editor retains its draft and returns to drawing; stationary Shift
-presses and movement inside the editor keep typing protected. The count reflects durable
+only the pin. Escape preserves the in-capture draft. The count reflects durable
 saved notes; its compact list edits/deletes them. Unsubmitted drafts are not
 handoff content and do not survive ending/restarting the capture.
 
 Rust stores submitted text plus the pin's original timestamp and normalized
 position in `notes.json`. Finalization/recovery includes it as typed `note`
-events in `apparent.json` and timed Typed note entries alongside speech in
-`summary.md`, with the pin's keyframe link where available. Reprocessing replaces these
+events in `apparent.json` and an explicit Typed note section in `summary.md`,
+with the pin's keyframe link where available. Reprocessing replaces these
 events from the local notes file rather than duplicating them. The note's
 clock/anchor never moves to the time typing or editing finished. Text stays
 semantic; popup controls are not rasterized captions.

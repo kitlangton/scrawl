@@ -14,10 +14,11 @@ export function mountFooter(root: HTMLElement): () => void {
   const tryButton = root.querySelector<HTMLButtonElement>('.footer-try')!
   listen(tryButton, 'click', () => {
     if (tryButton.dataset.launchAttempted !== 'true') {
-      // Keep the playful invitation and an explicit, user-initiated fallback.
+      // Change the action before leaving the page. Browsers cannot confirm
+      // installation or launch; the next click always downloads by choice.
       tryButton.dataset.launchAttempted = 'true'
       tryButton.textContent = 'Not installed yet? No worries—click again to download ↗'
-      try { window.location.assign('apparent://open') } catch { /* Download remains available. */ }
+      try { window.location.assign('apparent://open') } catch { /* Keep the download action available. */ }
       return
     }
     // Reuse the actual hero link, including its platform/CPU selection, busy

@@ -6,55 +6,36 @@ const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
 // Transport/UI security fixture only. Actual consent policy is tested in Rust.
-for (const mode of ['foundation', 'installed', 'installed-action', 'semantic']) {
-const installed = mode !== 'foundation', initial = mode === 'installed-action';
-const semantic = mode === 'semantic';
-test(`${mode} Connect shipped Electron IPC, consent presentation, browser action and lifecycle ownership`, { timeout: 45000 }, async t => {
+test('Connect shipped Electron IPC, consent presentation, browser action and lifecycle ownership', { timeout: 45000 }, async t => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ec-'));
-  const clients = new Set(), requests = [];
-  let server, application;
-  t.after(async () => {
-    try { await application?.close(); }
-    finally {
-      for (const client of clients) client.destroy();
-      try { if (server?.listening) await new Promise(resolve => server.close(resolve)); }
-      finally { await fs.rm(home, { recursive: true, force: true }); }
-    }
-  });
   const directory = path.join(home, '.config/apparent/agent-control');
   await fs.mkdir(directory, { recursive: true, mode: 0o700 });
   await fs.chmod(directory, 0o700);
+  const clients = new Set(), requests = [];
   let closes = 0, stage = 'initial', hold, holdAction;
   const button = (command, title) => ({ command, title, enabled: true });
   const view = () => {
     const buttons = stage === 'initial' ? [button('connect', 'Connect')]
       : stage === 'consent' ? [button('allow', 'Allow & continue'), button('cancel', 'Not now')]
-      : ['connected', 'renewal'].includes(stage) ? [button('check','Check connection'), button('request-disable','Turn off uploads'), button('request-disconnect','Disconnect this computer')]
+      : stage === 'connected' ? [button('check','Check connection'), button('request-disable','Turn off uploads'), button('request-disconnect','Disconnect this computer')]
       : stage === 'disable-confirm' ? [button('disable','Turn off uploads'),button('cancel','Keep uploads on')]
       : stage === 'off' ? [button('connect','Enable uploads'),button('check','Check connection'),button('request-disconnect','Disconnect this computer')]
       : [button('open-browser', 'Open browser'), button('cancel', 'Cancel')];
-    const headline = {initial:'Help others see what you mean.',consent:'Allow new capture uploads?',approval:'Finish connecting in your browser.',connected:'You’re connected.',renewal:'Connection needs a refresh.',off:'Uploads are off.','disable-confirm':'Turn uploads off?'}[stage];
+    const headline = {initial:'Help others see what you mean.',consent:'Allow new capture uploads?',approval:'Finish connecting in your browser.',connected:'You’re connected.',off:'Uploads are off.','disable-confirm':'Turn uploads off?'}[stage];
     return { title:'Apparent Connect', status:stage === 'connected' ? 'Uploads on' : 'Not connected',
       detail:stage === 'consent' ? 'Explicit upload consent required.' : 'Synthetic transport fixture.',
       server:'https://api.example.com', note:'No old captures or public links.',
       userCode:stage === 'approval' ? 'TEST-CODE' : null,
       verificationUri:stage === 'approval' ? 'https://example.com/device?code=TEST-CODE' : null,
       buttons,
-      ...(semantic ? { presentationState: {
-        snapshot: {connected:['connected','disable-confirm','off'].includes(stage), uploadsEnabled:['connected','disable-confirm'].includes(stage),
-          renewalRequired:stage === 'renewal', reauthorizationRequired:false, accountInitial:stage === 'connected' ? 'M' : null},
-        health:null,error:null,localError:null,consent:stage === 'consent',approval:stage === 'approval',
-        operation:stage === 'approval' ? 'login' : null,logout:false,retryDisable:null,
-        confirmation:stage === 'disable-confirm' ? false : null,closed:false,sharedLinksUrl:null,
-      }} : {presentation:{tone:stage === 'connected' ? 'success' : stage === 'approval' ? 'progress' : stage === 'disable-confirm' ? 'warning' : 'neutral',
+      presentation:{tone:stage === 'connected' ? 'success' : stage === 'approval' ? 'progress' : stage === 'disable-confirm' ? 'warning' : 'neutral',
         headline,detail:stage === 'consent' ? 'Explicit upload consent required.' : 'Synthetic transport fixture.',note:'',
         artwork:['initial','consent','approval','connected'].includes(stage),compact:stage === 'connected',
-        accountMenu:['connected','renewal','off'].includes(stage),buttons,
-        ...(stage === 'connected' ? {accountInitial:'M'} : {}),
-        menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command) && !(stage === 'renewal' && b.command === 'check')).map(b=>b.command),sharedLinksUrl:null }})
+        accountMenu:['connected','off'].includes(stage),buttons,
+        menuActions:buttons.filter(b=>['check','request-disable','request-disconnect'].includes(b.command)).map(b=>b.command),sharedLinksUrl:null }
     };
   };
-  server = net.createServer(socket => {
+  const server = net.createServer(socket => {
     clients.add(socket); socket.on('error', () => {});
     let connect = false, bytes = '';
     socket.on('close', () => { clients.delete(socket); if (connect) closes += 1; });
@@ -64,7 +45,6 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
         const end = bytes.indexOf('\n'), line = bytes.slice(0, end); bytes = bytes.slice(end + 1);
         if (line === 'state') { socket.end('{"state":{"phase":"idle"}}\n'); continue; }
         const request = JSON.parse(line);
-        if (request.connect === 'backend') { socket.end('{"error":"invalid_request"}\n'); continue; }
         if (request.microphone === 'read') { socket.end('{"microphone":{"enabled":true}}\n'); continue; }
         if (request.errorReporting === 'read') { socket.end('{"errorReporting":{"enabled":true}}\n'); continue; }
         if (request.storage || request.reference) { socket.end('{"error":"feature_disabled"}\n'); continue; }
@@ -75,7 +55,6 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
         if (request.command === 'cancel') stage = stage === 'disable-confirm' ? 'connected' : 'initial';
         if (request.command === 'request-disable') stage = 'disable-confirm';
         if (request.command === 'disable') stage = 'off';
-        if (request.command === 'check' && stage === 'renewal') stage = 'connected';
         const response = { connect: { ...view(), privateCredential: 'synthetic-secret' },
           ...(request.command === 'open-browser' ? { openUri: view().verificationUri } : {}) };
         if (request.command && request.command === holdAction) { hold = () => socket.write(JSON.stringify(response) + '\n'); continue; }
@@ -85,31 +64,17 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   });
   const address = path.join(directory, 'capture.sock');
   await new Promise(resolve => server.listen(address, resolve)); await fs.chmod(address, 0o600);
-  application = await electron.launch({ args: [path.join(__dirname, '../..'), ...(installed ? ['--settings-connect'] : []), ...(initial ? ['--connect-action=connect'] : [])],
+  const application = await electron.launch({ args: [path.join(__dirname, '../..')],
     env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
+  t.after(async () => {
+    await application.close(); for (const client of clients) client.destroy();
+    await new Promise(resolve => server.close(resolve)); await fs.rm(home, { recursive: true, force: true });
+  });
   await application.evaluate(({ shell }) => { global.openedUris = []; shell.openExternal = async uri => { global.openedUris.push(uri); }; });
   const page = await application.firstWindow();
   const card = page.getByRole('region', { name: 'Apparent Connect' });
-  if (installed) {
-    await expect(page).toHaveTitle('Apparent Settings — Connect');
-    assert.equal(await page.evaluate(() => typeof window.apparent.readCaptureUsage), 'undefined');
-    assert.deepEqual(await page.evaluate(() => [typeof window.apparent.readMicrophoneEnabled, typeof window.apparent.setMicrophoneEnabled]), ['undefined', 'undefined']);
-    assert.equal(await application.evaluate(async ({ ipcMain, BrowserWindow }) => {
-      const sender = BrowserWindow.getAllWindows()[0].webContents;
-      for (const channel of ['apparent:read-capture-usage', 'apparent:read-capture-location', 'apparent:read-retention', 'apparent:read-runtime-state', 'apparent:show-capture-folder']) {
-        try { await ipcMain._invokeHandlers.get(channel)({ sender, senderFrame: sender.mainFrame }); return false; } catch {}
-      }
-      for (const [channel, args] of [['apparent:read-microphone-enabled', []], ['apparent:set-microphone-enabled', [false]]]) {
-        try { await ipcMain._invokeHandlers.get(channel)({ sender, senderFrame: sender.mainFrame }, ...args); return false; } catch {}
-      }
-      return true;
-    }), true);
-    assert.equal(requests.filter(request => Object.hasOwn(request, 'microphone')).length, 0);
-    if (!initial) assert.equal(requests.filter(r => r.command).length, 0);
-  }
-  if (!initial) await card.getByRole('button', { name: 'Connect', exact: true }).click();
-  await expect(card.getByText(semantic ? 'New captures upload privately, including recordings, images, audio, transcripts, context and other capture assets.' : 'Explicit upload consent required.')).toBeVisible();
-  assert.equal(requests.filter(r => r.command === 'connect').length, 1);
+  await card.getByRole('button', { name: 'Connect', exact: true }).click();
+  await expect(card.getByText('Explicit upload consent required.')).toBeVisible();
   assert.equal(requests.filter(r => r.command === 'allow').length, 0);
   assert.deepEqual(await application.evaluate(() => global.openedUris), []);
   await card.getByRole('button', { name: 'Allow & continue', exact: true }).click();
@@ -124,14 +89,7 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   // Real renderer, typed semantic state, and a separate Rust confirmation command.
   stage = 'connected';
   await expect(card.getByText('You’re connected.', {exact:true})).toBeVisible();
-  await expect(card.getByRole('button', {name:'Account and connection options'})).toContainText('M');
   await expect(card.locator('[data-tone="success"]')).toHaveCSS('border-inline-start-color','rgb(20, 107, 67)');
-  stage = 'renewal';
-  await expect(card.getByText('Connection needs a refresh.', {exact:true})).toBeVisible();
-  await expect(card.getByRole('button', {name:'Account and connection options'})).not.toContainText('A');
-  await expect(card.getByRole('button', {name:'Connect', exact:true})).toHaveCount(0);
-  await card.getByRole('button', {name:'Check connection', exact:true}).click();
-  await expect(card.getByText('You’re connected.', {exact:true})).toBeVisible();
   await card.getByRole('button',{name:'Account and connection options'}).click();
   await card.getByRole('button',{name:'Turn off uploads',exact:true}).click();
   await expect(card.getByText('Turn uploads off?',{exact:true})).toBeVisible();
@@ -167,11 +125,9 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
     global.oldConnect = ipcMain._invokeHandlers.get('apparent:connect-open-browser')({ sender, senderFrame: sender.mainFrame });
   });
   await expect.poll(() => typeof hold).toBe('function');
-  const connectCommandsBeforeReload = requests.filter(r => r.command === 'connect').length;
   await page.reload();
   assert.deepEqual(await application.evaluate(() => global.oldConnect), { status: 'cancelled' });
   await expect.poll(() => closes).toBe(1);
-  assert.equal(requests.filter(r => r.command === 'connect').length, connectCommandsBeforeReload);
   holdAction = undefined; hold();
   await expect(card.getByRole('button', { name: 'Connect', exact: true })).toBeVisible();
   assert.deepEqual(await application.evaluate(() => global.openedUris), ['https://example.com/device?code=TEST-CODE']);
@@ -180,5 +136,3 @@ test(`${mode} Connect shipped Electron IPC, consent presentation, browser action
   await page.screenshot({ path: shot, fullPage: true });
   console.log(`Synthetic Connect screenshot: ${shot}`);
 });
-
-}

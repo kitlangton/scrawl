@@ -1,29 +1,30 @@
 name: Linux updater harness
 
 on:
-  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - '.github/workflows/linux-updater-harness.yml'
+      - 'capture/desktop/scripts/linux/gui/**'
+      - 'capture/desktop/scripts/linux/updater/**'
+      - 'capture/desktop/scripts/linux/updater/updater-fixture.py'
+      - 'capture/desktop/linux/update.rs'
+      - 'capture/desktop/settings/settings.rs'
+      - 'capture/desktop/settings/settings_window.rs'
 
 permissions:
   contents: read
-  actions: read
 
 jobs:
   contracts:
     name: Harness contracts (not GUI proof)
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 5
     steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Install disk-image contract dependency (no KVM required)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-utils
       - name: Install OCR preprocessing dependency
@@ -31,25 +32,10 @@ jobs:
       - name: Test OCR, release fixture and disposable-runner contracts
         run: |
           python3 capture/desktop/scripts/linux/updater/test-updater-gui.py
-          node --experimental-strip-types enablement/native/linux/contracts.ts
+          python3 capture/desktop/scripts/linux/gui/test-gui-vm.py
+          python3 capture/desktop/scripts/linux/gui/test-capture-smoke.py
       - name: Check driver syntax
         run: |
-          python3 -m py_compile enablement/native/linux/gui-vm.py enablement/native/linux/gui-vm-reaper.py capture/desktop/scripts/linux/updater/updater-gui.py capture/desktop/scripts/linux/updater/updater-fixture.py enablement/native/linux/test-gui-vm.py
+          python3 -m py_compile capture/desktop/scripts/linux/gui/gui-vm.py capture/desktop/scripts/linux/gui/gui-vm-reaper.py capture/desktop/scripts/linux/updater/updater-gui.py capture/desktop/scripts/linux/updater/updater-fixture.py capture/desktop/scripts/linux/gui/test-gui-vm.py
           python3 -m py_compile capture/desktop/scripts/linux/gui/capture-smoke.py capture/desktop/scripts/linux/gui/test-capture-smoke.py
           bash -n capture/desktop/scripts/linux/updater/updater-gui-scenario.sh
-
-  runtime-budget:
-    if: always()
-    needs: [contracts]
-    permissions:
-      contents: read
-      actions: read
-    name: Workflow runtime budget
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: ./.github/actions/runtime-budget

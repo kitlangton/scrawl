@@ -18,36 +18,31 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   let revision = 'a'.repeat(16);
   let holdRead = false;
   let releaseRead;
-  const facts = () => ({ saved: saved === null ? { kind: 'absent' } : { kind: 'string', value: saved },
-    environment: { present: false, value: null }, homePath: home, builtinPath: '/builtin', revision });
+  const snapshot = () => ({ savedPath: saved, effectivePath: saved ?? '/builtin', displayPath: saved ?? '/builtin',
+    custom: saved !== null, source: saved ? 'configured' : 'builtin', revision, secret: 'hidden' });
   const server = net.createServer((socket) => socket.once('data', (data) => {
     if (data.toString() === 'state\n') return socket.end('{"state":{"phase":"idle"}}\n');
     const request = JSON.parse(data.toString());
     if (request.errorReporting === 'read') return socket.end('{"errorReporting":{"enabled":true}}\n');
     if (request.connect) return socket.end('{"error":"feature_disabled"}\n');
     if (request.reference) return socket.end('{"error":"feature_disabled"}\n');
-    if (!['locationfacts', 'probelocation', 'setlocation', 'resetlocation'].includes(request.storage)) return socket.end('{"error":"invalid_request"}\n');
+    if (!['read', 'set', 'reset'].includes(request.storage)) return socket.end('{"error":"invalid_request"}\n');
     requests.push(request);
-    if (request.storage === 'locationfacts' && holdRead) {
+    if (request.storage === 'read' && holdRead) {
       holdRead = false;
-      const old = facts();
-      releaseRead = () => socket.end(JSON.stringify({ location: old }) + '\n');
+      const old = snapshot();
+      releaseRead = () => socket.end(JSON.stringify({ storage: old }) + '\n');
       return;
     }
-    if (request.storage === 'probelocation') return socket.end('{"probe":{"available":true}}\n');
-    if (request.storage === 'setlocation' || request.storage === 'resetlocation') {
-      if (request.expected !== revision) return socket.end('{"error":"conflict"}\n');
-      if (request.storage === 'setlocation') { saved = request.path; revision = 'b'.repeat(16); }
-      else { saved = null; revision = 'c'.repeat(16); }
-    }
-    socket.end(JSON.stringify({ location: facts(), secret: 'hidden' }) + '\n');
+    if (request.storage === 'set') { saved = request.path; revision = 'b'.repeat(16); }
+    if (request.storage === 'reset') { saved = null; revision = 'c'.repeat(16); }
+    socket.end(JSON.stringify({ storage: snapshot(), secret: 'hidden' }) + '\n');
   }));
   const address = path.join(directory, 'capture.sock');
   await new Promise((resolve) => server.listen(address, resolve));
   await fs.chmod(address, 0o600);
-  const appEnv = { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') };
-  delete appEnv.APPARENT_CAPTURES_DIR;
-  const application = await electron.launch({ args: [path.join(__dirname, '..')], env: appEnv });
+  const application = await electron.launch({ args: [path.join(__dirname, '..')],
+    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
   t.after(async () => {
     releaseRead?.();
     await application.close();
@@ -66,7 +61,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
       return new Promise((resolve) => { global.resolvePicker = resolve; });
     };
   });
-  const mutations = () => requests.filter((r) => !['locationfacts', 'probelocation'].includes(r.storage)).length;
+  const mutations = () => requests.filter((r) => r.storage !== 'read').length;
   const waitPicker = async (count) => expect.poll(() => application.evaluate(() => global.pickers.length)).toBe(count);
   await page.getByRole('button', { name: 'Change…', exact: true }).click();
   await waitPicker(1);
@@ -78,41 +73,30 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
   assert.deepEqual(options.properties, ['openDirectory', 'createDirectory']);
   assert.equal(options.defaultPath, '/');
 
-  // A config edit while the native dialog is open conflicts at the sole Rust writer.
-  await page.getByRole('button', { name: 'Change…', exact: true }).click();
-  await waitPicker(2);
-  revision = 'd'.repeat(16);
-  await application.evaluate(() => global.resolvePicker({ canceled: false, filePaths: ['/stale-choice'] }));
-  await page.getByText('The saved location changed while the picker was open. Refresh before choosing again.', { exact: true }).waitFor();
-  assert.equal(mutations(), 1);
-  assert.equal(await page.getByText('/stale-choice', { exact: true }).count(), 0);
-  await page.getByRole('button', { name: 'Refresh location', exact: true }).click();
-  await page.getByText('/saved', { exact: true }).waitFor();
-
   // A read started before a save may finish afterward, but must not publish old state.
   holdRead = true;
   await page.evaluate(() => { window.oldRead = window.apparent.readCaptureLocation(); });
   await expect.poll(() => typeof releaseRead).toBe('function');
   await page.getByRole('button', { name: 'Change…', exact: true }).click();
-  await waitPicker(3);
+  await waitPicker(2);
   await application.evaluate(() => global.resolvePicker({ canceled: false, filePaths: ['/new é captures'] }));
   await page.getByText('/new é captures', { exact: true }).waitFor();
   releaseRead(); releaseRead = undefined;
   assert.deepEqual(await page.evaluate(() => window.oldRead), { status: 'cancelled' });
-  assert.equal(mutations(), 2);
-  assert.equal(requests.find((r) => r.storage === 'setlocation' && r.path === '/new é captures').expected, 'd'.repeat(16));
+  assert.equal(mutations(), 1);
+  assert.equal(requests.find((r) => r.storage === 'set').expected, 'a'.repeat(16));
   await page.getByRole('button', { name: 'Reset', exact: true }).click();
   await page.getByText('/builtin', { exact: true }).waitFor();
   await expect(page.getByRole('button', { name: 'Reset', exact: true })).toBeDisabled();
-  assert.equal(mutations(), 3);
+  assert.equal(mutations(), 2);
 
   await page.getByRole('button', { name: 'Change…', exact: true }).click();
-  await waitPicker(4);
+  await waitPicker(3);
   await page.reload();
   await page.getByText('/builtin', { exact: true }).waitFor();
   await application.evaluate(() => global.resolvePicker({ canceled: false, filePaths: ['/must-not-save'] }));
   await expect(page.getByRole('button', { name: 'Change…', exact: true })).toBeEnabled();
-  assert.equal(mutations(), 3);
+  assert.equal(mutations(), 2);
   assert.equal(await page.getByText('/must-not-save', { exact: true }).count(), 0);
   await application.evaluate(({ BrowserWindow }) => BrowserWindow.getAllWindows()[0].setSize(640, 760));
   assert.equal(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth), true);
@@ -152,7 +136,7 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     });
   });
   await beginLifecyclePicker();
-  await waitPicker(5);
+  await waitPicker(4);
   assert.deepEqual(await application.evaluate(async ({ BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents;
     const original = sender.getURL();
@@ -163,9 +147,9 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     global.resolvePicker({ canceled: false, filePaths: ['/must-not-save-after-navigation'] });
     return await global.lifecycleMutation;
   }), { status: 'cancelled' });
-  assert.equal(mutations(), 3);
+  assert.equal(mutations(), 2);
   await beginLifecyclePicker();
-  await waitPicker(6);
+  await waitPicker(5);
   assert.deepEqual(await application.evaluate(async ({ BrowserWindow }) => {
     const owned = BrowserWindow.getAllWindows()[0];
     // Keep the app alive long enough to resolve and inspect its pending dialog.
@@ -174,5 +158,5 @@ test('Storage IPC, cancel, reset/readback, stale reads and reload invalidate pic
     global.resolvePicker({ canceled: false, filePaths: ['/must-not-save-after-close'] });
     return await global.lifecycleMutation;
   }), { status: 'cancelled' });
-  assert.equal(mutations(), 3);
+  assert.equal(mutations(), 2);
 });

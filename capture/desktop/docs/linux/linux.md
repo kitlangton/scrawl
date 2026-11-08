@@ -39,12 +39,6 @@ Verified in an Ubuntu 24.04 arm64 VM with GNOME 46 (Wayland and X11) and Plasma 
 
 ### Clicks and ink on Wayland
 
-Installed Electron Connect/Storage Settings explicitly uses X11/XWayland, like
-GPUI and the note editor. This keeps Settings under the same Shift-overlay input
-and window-stacking route while giving feedback; a native Wayland Settings window
-can otherwise receive the click underneath that overlay. The compositor socket
-remains available to portal/native helpers. The Mac launch route is unchanged.
-
 `apparent record --duration N` is a separate timed recorder, not a shortcut-driven app session. Even with input access it does not collect click or Shift ink events; its manifest and summary explicitly mark that interaction-telemetry gap. Use `apparent shortcut record` with the app to start and finish when those events matter. The permission and pointer-position limits below still apply to the shortcut path.
 
 `apparent export <bundle> --out movie.mp4` renders a saved Linux capture as an MP4 with ink, pins, click ripples and the saved WAV when those tracks exist. Install `ffmpeg` and `ffprobe` with H.264/AAC encoders; HEVC export needs `libx265`. Export uses FFmpeg decoding even if the capture's GStreamer full-quality keyframe decoder fell back to candidate images. By default the tray also offers **Export Last Capture as Video…**, a native SaveFile destination dialog, visible busy/progress and error states, and retry after cancellation or failure. It needs a FileChooser portal backend such as GTK or KDE. Top-level `"videoExport": false` hides the action; see [Linux tray export](../../../engine/docs/export-and-retention.md#linux-tray-export). A timed CLI capture has no click/ink telemetry to burn into the movie; use the app shortcut for an annotated recording. See `capture/engine/docs/export-and-retention.md`.
@@ -95,14 +89,6 @@ ID in `clients -j`; it never guesses from the active window. A missing identity
 or failed pin is retried briefly and logged, not replaced with a broad app rule.
 Verified with Hyprland in the isolated Omarchy VM. Lua uses an explicit set-pin
 action; legacy hyprlang dispatches pin only after observing the capsule unpinned.
-
-Electron pin admission is scoped to the current visible capture presentation.
-Hiding the controls or changing capture generation invalidates an outstanding
-pin attempt, including a compositor reply that arrives after cancellation.
-Clock updates do not restart its bounded retry budget. A pin failure for the
-still-current visible presentation restores native controls through the existing
-coordinator fallback; process exit and renderer/activation timeouts retain that
-fallback too. This changes no routing flag and does not remove the native path.
 
 XWayland sees the pointer only over X11 windows and keeps the last place it saw it over the rest, which picked the wrong display for a recording and started an area selection in the wrong place. On Hyprland `linux::cursor_position` asks Hyprland (`j/cursorpos`) and maps the point to the same place on the same output in XWayland's layout (`hyprland::cursor_in_x_space`): XWayland can put a monitor at y 0 where Hyprland has it at y 1080, so outputs are matched by name and the point is moved by the difference.
 
@@ -176,7 +162,7 @@ Sources: [ScreenCast portal interface](https://flatpak.github.io/xdg-desktop-por
 - **H.264 decoder:** Apparent checks its own GStreamer registry at launch and in Settings › Recording. If no usable H.264 decoder factory exists, it warns with the host distribution's installation command (Arch/Omarchy: `sudo pacman -S gst-libav`; Debian/Ubuntu: `sudo apt install gstreamer1.0-libav`; Fedora: `sudo dnf install gstreamer1-plugin-libav`). Apparent never runs the command. A capture whose MP4 decode fails keeps the **whole** smaller candidate frames in `frames/` and `contact-sheet.png` rather than cropping around an idle cursor; these are already the full candidate images, so there is no duplicate `frames-full/`. It writes an `Image quality:` explanation in `summary.md`; the Linux GUI also notifies. Successful full-quality decode still uses normal autocrop and preserves `frames-full/` when cropped. A decoder factory does not guarantee that a particular stream can be decoded, so the packaging check actually decodes a small H.264 MP4 inside the AppImage.
 - **Transcription:** Parakeet through `transcribe.cpp` (`speech.rs`). Local recordings transcribe completed speech during recording by default after 700 ms of quiet, with a three-second minimum chunk and 200 ms margins. Stop processes the remaining saved audio; any pause-worker failure falls back to whole-WAV transcription. Hex and command selections do not use the pause worker. See [pause transcription](../../../engine/docs/keyframes-and-text.md#linux-pause-transcription-srcpause_transcribers-srcspeechrs). Apparent downloads the model once at launch through `speech_model::ensure` (731 MB with `curl` or `wget`, pinned Hugging Face revision, checked against its SHA-256, into `~/.local/share/apparent/models`) unless Hex already has one; Settings › Recording shows its progress. A capture made before it lands says so in `summary.md` and is marked `.transcript-pending`, and is transcribed again in place when the download finishes.
 - **Tray:** a StatusNotifierItem (`ksni`); left click starts a recording, the menu is the macOS menu bar menu. GNOME shows it with the AppIndicator extension (on by default on Ubuntu). Without a tray, Apparent says so in a notification, and launching it again opens Settings (`linux::ipc`, a socket at `$XDG_RUNTIME_DIR/apparent.sock`).
-- **Clipboard:** text and PNG use the X clipboard (`linux::clipboard`) on X11. Wayland uses native clipboard data-control access because background XWayland selections do not reliably reach native apps; single-format offers use `wl-copy`, and rich offers use a Rust owner that serves each exact MIME payload until the selection changes.
+- **Clipboard:** text and PNG through the X clipboard (`linux::clipboard`) on X11 and GNOME; KDE Wayland uses `wl-copy` (bundled in the AppImage) because KWin does not reliably bridge background XWayland selections to native apps.
 - **Launch at login:** `~/.config/autostart/apparent.desktop`; an explicit `launchAtLogin: true` in config refreshes a stale `Exec=` path when the AppImage moves, but respects a desktop-disabled entry. **Trash:** the freedesktop trash. **Captures:** `~/.local/share/apparent/captures`; **log:** `~/.local/share/apparent/Logs/apparent.log`.
 - **Command-line tool:** Settings › Agents links `~/.local/bin/apparent` to the AppImage (`$APPIMAGE`).
 
@@ -260,7 +246,7 @@ Linux previews can be published manually from checked AppImage artifacts as `lin
 Settings › About › Channel selects Stable releases (default) or Latest main. Only an AppImage owned by the user and stored under their home directory auto-updates; a debug build, symlink or system-owned install stays untouched. At launch and hourly, Apparent checks its selected release channel. It downloads the matching architecture's AppImage, checks its SHA-256 against that release's checksum, atomically swaps the executable, and keeps the previous image beside it. The running process stays on the old image; the new one starts at the next launch. Settings and the tray's Check for Updates… trigger the same check. Errors are logged without replacing the installed image.
 In Settings, a manual check immediately changes the button to “Checking…” and disables repeat clicks. When it finishes, a result shows the pixel frog and one line: “Update available” (including an image staged for the next launch), “No update available”, or “Update check failed”. The result does not show raw diagnostics; failures go to the log. Available offers Update now (relaunch the staged image) and Update later (dismiss); Tab focuses a choice, Enter or Space activates it, and Escape defers. Without a focused choice Enter chooses now. Other results have an OK button; Enter, Escape or OK dismisses them. If the new image exits before GPUI initializes, or initialization times out, Apparent restores the previous image and version marker at the installed path and skips that failed release until a newer one is published. A later crash after initialization is not treated as a failed update. The tray and automatic checks remain silent except for the existing installed-update notification and log.
 
-Stable reads the newest non-prerelease GitHub release on `tryapparent/apparent`, which must include the Linux AppImage and its `.sha256` asset. Main reads published `linux-main-v2-<sha>` prereleases from that repository's paginated Releases API, not raw source or a mutable feed branch. The workflow pins checkout and artifact identity to the event SHA. Both architectures must pass the full Rust suite, packaging, model/codec and CPU checks; all four asset digests must match the private draft before publication. Pushes share one non-canceling workflow lane: the running build can finish and publish, while redundant pending runs coalesce to the latest pending event. A checked ancestor of current `main` may publish even after the branch advances. Diverged history and an older rerun behind an already published eligible Main build cannot promote. Published SHA releases are immutable; a failed build leaves the last good release available. The 03:17 UTC schedule retries an unpublished head; an existing published SHA skips the build. Manual `publish_main=true` with an empty `tag` uses the same checks.
+Stable reads the newest non-prerelease GitHub release on `tryapparent/apparent`, which must include the Linux AppImage and its `.sha256` asset. Main reads published `linux-main-<sha>` prereleases from that repository's paginated Releases API, not raw source or a mutable feed branch. The workflow pins checkout and artifact identity to the event SHA. Both architectures must pass the full Rust suite, packaging, model/codec and CPU checks; all four asset digests must match the private draft before publication. Pushes share one non-canceling workflow lane: the running build can finish and publish, while redundant pending runs coalesce to the latest pending event. A checked ancestor of current `main` may publish even after the branch advances. Diverged history and an older rerun behind an already published eligible Main build cannot promote. Published SHA releases are immutable; a failed build leaves the last good release available. The 03:17 UTC schedule retries an unpublished head; an existing published SHA skips the build. Manual `publish_main=true` with an empty `tag` uses the same checks.
 
 Main therefore means the newest *successfully verified and published* build, not an immediate download after every merge. Build/test/package time comes first; the app then checks at launch or within its hourly interval (or immediately through Settings). Commit identity, not a semantic-version bump, distinguishes Main updates. Before staging over a known Main revision, the updater asks GitHub to confirm forward ancestry. An older feed leaves the newer installed/staged image intact; divergence, an unavailable comparison or an invalid response fails closed. Fresh CI packages use their embedded SHA when no installed marker exists. Legacy images without a revision can migrate once. Explicit Stable/Main channel switches retain their existing semantics, including potentially lower versions. Choosing Main accepts unreviewed code.
 
@@ -285,56 +271,3 @@ cargo build -j 2 --offline
 ```
 
 GPUI needs Vulkan (`mesa-vulkan-drivers`; llvmpipe works in a VM). Tests: `cargo test`. A desktop test runs in a Tart Ubuntu VM on the Mac mini (`macvm`, see `~/code/home/tools/macvm`): GNOME on Wayland by default, X11 with `WaylandEnable=false` in `/etc/gdm3/custom.conf`. Never test on Kit's desktop session.
-
-Live desktop ink uses one native XWayland surface per output, retaining X output
-rectangles for telemetry and separate Hyprland layout rectangles for placement.
-Painting converts physical output pixels into each surface's backing units.
-Output transitions split painted and saved segments so reordered X outputs cannot
-create fictitious connecting lines; Undo still removes the entire gesture. Picker
-and device overlays remain local. Other compositors retain raw X placement.
-
-### Signing-history migration (November 2026)
-
-Main previews now use `linux-main-v2-<source SHA>`. Old updaters ignore that
-namespace and keep seeing a permanent `linux-main-<bridge SHA>` compatibility
-release, even after later v2 releases. Do not delete the bridge or publish another
-v1 release after it. Main itself must retain only the corrected signed history.
-
-The bridge tag points to a signed commit with exactly two parents: the frozen
-legacy tip `a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a`, then the verified canonical
-source. Its tree is exactly the source tree. The release aliases both byte-identical
-AppImages and checksums from the already public v2 release; the binaries retain
-the canonical source SHA, not the bridge tag SHA. This is an artifact alias, not
-an exact-build verification receipt for the bridge commit.
-
-After restart the new updater follows v2. If the installed marker still names
-the bridge, it validates those exact parents and source tree through GitHub's
-immutable commit API, then checks forward ancestry from its embedded canonical
-SHA. Arbitrary divergence, wrong parents/trees, unavailable metadata and backwards
-updates remain refused. Ordinary staged v2 markers keep their own identity.
-Settings, capture admission and rollback use their existing shared flow; this
-protocol repair adds no Desktop presentation or routing change.
-
-After the source PR passes native acceptance, merges, verifies on main and has
-both public v2 AppImages, run from the clean canonical checkout:
-
-```sh
-node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts prepare <verified-source-SHA>
-```
-
-The tool checks the exact Linux receipt, correct account/signing identity, equal
-trees and ancestry coverage of every public v1 release before pushing only the
-signed bridge tag. Run the printed `gh workflow run` command on main. The
-`bridge_commit` dispatch uses the existing Linux publication concurrency lock,
-rechecks admission/coverage/tag identity and copies the verified assets into a
-private draft before promotion. Existing running v1 publishers must finish first;
-never cancel or bypass their lock. New publishers exclusively use v2. A failed
-public readback must be investigated before retry; never overwrite a public bridge.
-
-Rollback before promotion leaves v1 users on their existing build. After promotion,
-retain the bridge and fix forward on v2; reverting the publisher to v1 would break
-late migrations. No user config, captures or manual reinstall is required.
-Native acceptance must cover a checksum-verified old released AppImage discovering,
-staging and restarting into the bridge, then checking/staging/rechecking a later v2
-release, plus a late old client with newer v2 releases present. Unit and fixture
-contracts alone do not establish that packaged upgrade sequence.

@@ -11,27 +11,22 @@ async function authorize(f,a,scope='upload') {
  const response=await f.call('/v1/device/poll',{method:'POST',body:{deviceCode:d.deviceCode}});
  assert.equal(response.status,200);const tokens=await response.json();
  assert.equal(tokens.status,'approved');assert.equal(typeof tokens.refreshToken,'string');
- assert.equal('email' in tokens,false);
  assert.ok(tokens.expiresIn>0);assert.ok(tokens.refreshExpiresIn>tokens.expiresIn);assert.ok(tokens.grantId);
  return {...tokens,deviceCode:d.deviceCode};
 }
 
 test('device authorization renews immutable scope and grant; revocation isolates sibling grants',async()=>{
  const f=await fixture();try{
- const a=await f.identity('morgan'),one=await authorize(f,a,'read'),two=await authorize(f,a);
- assert.equal(one.accountInitial,'M');assert.equal(two.accountInitial,'M');
+ const a=await f.identity('renewal'),one=await authorize(f,a,'read'),two=await authorize(f,a);
  const renew=()=>f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:one.refreshToken,scope:'upload'}});
  const response=await renew();assert.equal(response.status,200);const next=await response.json();
  assert.equal(next.scope,'read');assert.equal(next.grantId,one.grantId);assert.notEqual(next.refreshToken,one.refreshToken);
- assert.equal(next.accountInitial,one.accountInitial);assert.equal('email' in next,false);
  assert.equal((await f.call('/v1/account',{token:next.accessToken})).status,200);
  assert.equal((await f.call('/v1/token/revoke',{token:next.accessToken,method:'POST'})).status,200);
  for(const token of [one.accessToken,next.accessToken])assert.equal((await f.call('/v1/account',{token})).status,401);
  assert.equal((await f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:next.refreshToken}})).status,401);
  assert.equal((await f.call('/v1/account',{token:two.accessToken})).status,200);
- await f.db.prepare('UPDATE auth_user SET emailVerified=0 WHERE id=?').bind('morgan').run();
- const unverified=await f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:two.refreshToken}});
- assert.equal(unverified.status,200);assert.equal('accountInitial' in await unverified.json(),false);
+ assert.equal((await f.call('/v1/token/refresh',{method:'POST',body:{refreshToken:two.refreshToken}})).status,200);
  }finally{await f.close();}
 });
 

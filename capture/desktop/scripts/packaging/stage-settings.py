@@ -45,36 +45,16 @@ def main():
     parser.add_argument("destination", type=Path)
     parser.add_argument("--sign", help="macOS signing identity; '-' for ad hoc")
     parser.add_argument("--keychain", type=Path, help="job-private macOS signing keychain")
-    parser.add_argument("--popups-destination", type=Path,
-                        help="stage popup assets from the same fresh frontend build")
     args = parser.parse_args()
     if sys.platform not in ("darwin", "linux"):
         parser.error("Settings packaging supports macOS and Linux")
-    if args.popups_destination:
-        settings = args.destination.resolve()
-        popups = args.popups_destination.resolve()
-        if settings == popups or settings in popups.parents or popups in settings.parents:
-            parser.error("Settings and popup staging destinations must not overlap")
     root = Path(__file__).resolve().parents[4]
     frontend = root / "capture/desktop/ui/frontend"
     env = os.environ.copy()
     env.pop("ELECTRON_SKIP_BINARY_DOWNLOAD", None)
-    # The frontend's file dependency resolves @apparent/record exports from
-    # record/dist. npm ci runs the package's existing prepare build from its
-    # lockfile, so produce those exports before installing/building the consumer.
-    subprocess.run(["npm", "--prefix", str(root / "record"), "ci", "--no-audit", "--no-fund"],
-                   cwd=root, env=env, check=True)
     subprocess.run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=frontend, env=env, check=True)
     subprocess.run(["node", "node_modules/electron/install.js"], cwd=frontend, env=env, check=True)
     subprocess.run(["npm", "run", "build"], cwd=frontend, env=env, check=True)
-    if args.popups_destination:
-        # Use the existing guarded stager only after a successful locked build.
-        # Standalone popup packaging still prepares its own frontend normally.
-        subprocess.run(["node", "--input-type=module", "-e",
-                        "import { stagePopupAssets } from './scripts/popup-entries.mjs'; "
-                        "await stagePopupAssets(process.cwd(), process.argv[1]);",
-                        str(args.popups_destination.absolute())],
-                       cwd=frontend, env=env, check=True)
     destination = args.destination.absolute()
     if destination.is_symlink():
         parser.error("Refusing a symlink staging destination")
@@ -91,8 +71,6 @@ def main():
     shutil.copytree(frontend / "dist/assets", app / "dist/assets",
                     ignore=shutil.ignore_patterns("foundation-*"))
     shutil.copy2(frontend / "dist/settings.html", app / "dist/settings.html")
-    (app / "dist/pill").mkdir()
-    shutil.copy2(frontend / "dist/pill/index.html", app / "dist/pill/index.html")
     shutil.copy2(frontend / "dist/onboarding.html", app / "dist/onboarding.html")
     (app / "package.json").write_text(json.dumps({"name": "apparent-settings", "version": "0.0.0", "main": "electron/settings.cjs"}) + "\n")
     shutil.copytree(frontend / "node_modules/electron/dist", destination / "runtime", symlinks=True)

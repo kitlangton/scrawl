@@ -8,7 +8,7 @@ legacy site, API service, deployment composition or native capture code.
   Keep copies behavior-identical until integration tests the composed artifact,
   switches routing, and removes legacy implementation in one reversible change.
 - Browser/backend contract: `../../connect/docs/hosted-api.md`; selected visuals:
-  `docs/design.md`. No redesign or shared marketing CSS.
+  `../../public/site/docs/hosted-design.md`. No redesign or shared marketing CSS.
 - Run `bun install --frozen-lockfile`, then `npm test`. `bun run build` also works.
   Use maintained dependencies and the generated Bun lock, not a fabricated npm lock.
 - `dist` is production route-only output. `dist-test` uses an explicitly synthetic

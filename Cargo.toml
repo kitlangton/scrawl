@@ -10,8 +10,6 @@ name = "apparent"
 path = "main.rs"
 
 [dependencies]
-apparent-capture = { path = "capture/agent/control-client" }
-apparent-capture-engine = { path = "engine/core", features = ["publication", "audio-codec", "recording-notes", "local-speech"] }
 apparent-connect-client = { path = "connect/client" }
 anyhow = "1.0.104"
 clap = { version = "4.6.7", features = ["derive"] }
@@ -28,8 +26,6 @@ serde_json = "1.0.151"
 apparent-connect-client = { path = "connect/client", features = ["test-support"] }
 
 [target.'cfg(target_os = "macos")'.dependencies]
-apparent-capture-engine = { path = "engine/core", features = ["macos-capture"] }
-sha2 = "0.10.9"
 block2 = "0.6.2"
 core-foundation = "0.10.0"
 core-graphics = "0.24.0"
@@ -107,7 +103,6 @@ windows = { version = "0.61.3", features = [
 embed-resource = "3"
 
 [target.'cfg(target_os = "linux")'.dependencies]
-apparent-capture-engine = { path = "engine/core", features = ["linux-media", "linux-portal"] }
 ab_glyph = "0.2.32"
 arboard = { version = "3.6.1", default-features = false, features = ["image-data"] }
 ashpd = { version = "0.11", default-features = false, features = ["async-std"] }
@@ -124,15 +119,12 @@ sha2 = "0.10.9"
 # Runtime CPU selection; never compile ggml for the CI runner's CPU (#82).
 # x86_64 gets one module per ISA tier; aarch64 gets a portable CPU module.
 transcribe-cpp = { version = "=0.2.4", default-features = false, features = ["dynamic-backends"] }
-wl-clipboard-rs = "0.9.5"
 x11rb = { version = "0.13.1", features = ["allow-unsafe-code", "randr", "shape", "xfixes", "xinput", "xtest", "res"] }
 zbus = { version = "5", default-features = false, features = ["async-io", "blocking-api"] }
 
 [profile.dev]
 debug = 0
-# Keep the large application crate quick to rebuild; hot dependencies retain
-# their optimized dev settings below. Release builds use their own profile.
-opt-level = 0
+opt-level = 2
 
 [profile.dev.package."*"]
 opt-level = 2

@@ -48,7 +48,7 @@ cargo test -j 1 --offline -- --test-threads=2
 GITHUB_SHA=$(git rev-parse HEAD) cargo build -j 1 --offline
 ./capture/desktop/scripts/linux/appimage/appimage.sh target/debug/apparent
 python3 capture/desktop/scripts/linux/updater/test-updater-gui.py
-python3 enablement/native/linux/test-gui-vm.py
+python3 capture/desktop/scripts/linux/gui/test-gui-vm.py
 
 python3 capture/desktop/scripts/linux/updater/updater-gui.py \
   --template "$GUI_TEMPLATE/system.qcow2" \
@@ -106,19 +106,23 @@ retain the build/package logs alongside the evidence.
 
 `--channel main` persists Main in the private config and keeps the same loading,
 HTTP failure/retry, checksum, staging, Later, Escape and restart assertions.
-Startup advertises `linux-main-v2-<source HEAD>` matching the embedded revision;
-no AppImage may be downloaded. The fixture serves the static Main manifest;
-every API route returns HTTP403. Asset URLs retain the canonical GitHub release
-path. The synthetic newer revision is forty `b` characters (the runner refuses a
-matching source HEAD). Its ancestor list includes source HEAD. Before staging,
-a controlled divergent list must fail without replacing the image or marker.
+Startup advertises `linux-main-<source HEAD>` matching the embedded revision;
+no AppImage may be downloaded. The fixture serves the canonical paginated
+GitHub releases API: an unrelated stable release on page 1, the usable Main
+prerelease on page 2, and an empty page 3. Asset URLs retain the canonical GitHub
+release path. The synthetic newer revision is forty `b` characters (the runner
+refuses a matching source HEAD). Its compare response for `source...bbbb…` is
+`ahead`; the reverse is `behind`. Before checksum/staging, a controlled `diverged`
+response must produce a failure without replacing the image or installed marker.
+Comparisons use `?per_page=1&page=2`; `base_commit.sha` is the base revision in
+each direction, not the candidate revision.
 
 After staging, the fixture advertises the original source revision again. A real
-manual check must reject the stale manifest, preserve the staged Main ID and
-target/backup inodes, and not download another image. `stale-feed.json` retains
-the status. Request assertions forbid API requests and require exactly two image
-downloads: the rejected checksum and successful stage. Restart must report the
-synthetic Main ID with pending restart cleared.
+manual check must still offer the pending update, preserve the staged Main ID
+and target/backup inodes, and not download another image. `stale-feed.json`
+retains the status. Request assertions require the reverse comparison and exactly
+two total image downloads: the rejected checksum and successful stage. Restart
+must report the synthetic Main ID with pending restart cleared.
 
 Immediately before restart, Main also starts an owned capture through
 `capture start --request-id <32hex>` without waiting for portal consent. It
@@ -190,73 +194,3 @@ Distinguish harness/environment failure from a reproduced app defect before
 changing runtime code. Fix concrete harness issues and repeat against the same
 image hash; do not hide failed attempts or manufacture an updater change merely
 to give this acceptance work a runtime diff.
-
-### Signing migration variant
-
-Add `--channel main --legacy-appimage /private/path/legacy.AppImage` to the
-controller command to exercise the November 2026 signing-history migration. The
-controller accepts only the published x86_64 `a5cf47d` asset digest and stages it
-as a separate fixture file. The guest first runs that real old AppImage, discovers
-the synthetic permanent v1 bridge despite a later v2 release, and uses actual
-Settings clicks to stage and restart into the exact packaged candidate. It then
-checks the same-source v2 feed, stages a later synthetic v2 identity, defers and
-rechecks before restarting again. Both payload downloads use the exact candidate
-bytes. Assertions bind the old/new running revisions, all three installed markers,
-request counts and both restart receipts. This proves the packaged compatibility
-protocol in isolation; production signing, publication and asset reachability
-remain separate checks.
-
-### Failed-check cooldown
-
-Failed discovery, validation or installation checks persist a one-hour cooldown
-in `.APPIMAGE_NAME.update-retry` beside the owned AppImage, under its transaction
-lock. Startup, Settings and CLI checks share it across process restarts. Checks
-within that interval fail explicitly with remaining seconds; they do not report
-“up to date” or request metadata again. A backwards clock adjustment removes a
-future timestamp. This is runtime retry state, not a user preference. Successful
-checks keep the existing hourly cadence. Native acceptance must exercise a failed
-check, a second Settings check and a restarted app against the fixture, verifying
-no additional requests during cooldown, then expiry and successful installation.
-
-### Static Main feed contract
-
-Normal Main checks fetch only
-`https://github.com/tryapparent/apparent/releases/download/linux-main-feed/main.json`.
-Schema 1 has `source` (full lowercase SHA), sanitized `release` (v2 tag,
-publication flags/time and four exact asset names/URLs), `checksums` (AppImage
-name to original checksum text), `ancestors` (complete source history including
-source), and `bridges` (`id` and canonical `source` pairs). The manifest is bounded
-to 4 MiB, 50,000 ancestor identities and 100 bridges; metadata requests have a
-30-second deadline. Truncated, duplicate, malformed, stale or diverged identities
-fail closed. Main has no release-list/API fallback. Stable retains its existing
-single-release API path.
-
-The producer `maintenance/main-feed.ts` runs in the existing Linux workflow
-publication lock, rechecks exact Linux admission, requires full Git history and
-source membership in trusted Main, and verifies the immutable v2 tag and both
-remote artifact/checksum digests before publishing. Bridge mappings require the
-legacy parent, canonical source parent and identical trees. It never moves or
-rewrites existing tags or v2/legacy assets; only `main.json` is replaced and read
-back. GitHub asset replacement can briefly return 404; clients fail closed and
-retry after cooldown. A same-source feed is left untouched, and stale/divergent
-publication is rejected. The separate metadata job also runs when an already
-published v2 release skips rebuilding, recovering interrupted first publication.
-
-Consumers validate the installed Main identity against ancestry on every check,
-including cache hits. A bridge identity additionally requires its exact compiled
-canonical source. Explicit channel switching retains its existing semantics.
-Download SHA-256 verification, failed-image suppression, atomic installation and
-rollback are unchanged. Automatic checks may reuse structurally validated metadata
-for five minutes in memory. Explicit Settings/CLI checks refresh metadata; failed
-refresh never falls back to cached data. Failure cooldown spans process restarts;
-success clears it. Invalid/oversized/future-dated retry markers are removed under
-the transaction lock. There is no persistent metadata cache to trust after restart.
-
-The isolated Main fixture returns HTTP403 for every API route and serves the
-static manifest via the real HTTPS URL. Its Settings checks cover success,
-network failure/cooldown, divergence, checksum rejection and stale-feed rejection
-without API requests. Old API fixtures remain solely for pre-feed legacy updater
-migration. The permanent bridge and v2 publication namespaces remain available to
-late upgraders; older installed binaries still use their original discovery path.
-Actual GUI and installed-upgrade evidence must be recorded separately from the
-fixture and Rust contract tests.

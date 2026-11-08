@@ -112,21 +112,11 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "330a5ed07fa54e4702c9d6c4174f74427fc0ef6e214bbd677ae50a5099946470"
 
 [[package]]
-name = "apparent-config-native"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "libc",
- "serde_json",
-]
-
-[[package]]
 name = "apparent-connect-client"
 version = "0.1.0"
 dependencies = [
  "age",
  "anyhow",
- "apparent-config-native",
  "clap",
  "ed25519-dalek",
  "libc",

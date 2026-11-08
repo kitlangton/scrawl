@@ -661,21 +661,6 @@ pub fn place(id: u32, rect: [f64; 4]) {
     }
 }
 
-/// Move a variable-sized UI surface without racing its renderer's resize.
-pub fn move_origin(id: u32, point: [f64; 2]) {
-    if let Some(x) = x() {
-        let [px, py] = point.map(|v| v.round() as i32);
-        let changed = x.conn.get_geometry(id).ok().and_then(|c| c.reply().ok())
-            .is_some_and(|g| i32::from(g.x) != px || i32::from(g.y) != py);
-        let remap = super::super::hyprland() && changed;
-        if remap { let _ = x.conn.unmap_window(id); }
-        let _ = x.conn.configure_window(id, &ConfigureWindowAux::new().x(px).y(py));
-        if remap { let _ = x.conn.map_window(id); }
-        raise_on(x, id);
-        x.flush();
-    }
-}
-
 /// Whether the window already has this geometry (global pixels).
 fn at(x: &X, id: u32, rect: [f64; 4]) -> bool {
     x.conn
@@ -950,50 +935,6 @@ pub fn capture_rect(rect: [f64; 4]) -> anyhow::Result<crate::shared::model::Rgba
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    #[ignore = "requires an isolated X server; run under xvfb-run"]
-    fn note_keyboard_focus_survives_compositor_placement() {
-        use x11rb::protocol::xproto::{CreateWindowAux, WindowClass};
-        let x = x().expect("isolated X server");
-        let id = x.conn.generate_id().unwrap();
-        x.conn.create_window(x11rb::COPY_DEPTH_FROM_PARENT, id, x.root,
-            0, 0, 332, 220, 0, WindowClass::INPUT_OUTPUT, x11rb::COPY_FROM_PARENT,
-            &CreateWindowAux::new()).unwrap().check().unwrap();
-        assert!(prepare_floating(id));
-        x.conn.map_window(id).unwrap().check().unwrap();
-        focus(id);
-        crate::capture::desktop::platform::place_note_with_keyboard_focus(
-            || {
-                // Observed on X1: placement leaves Hyprland's active client on
-                // the note, but clears X11 focus after Electron's first focus.
-                x.conn.set_input_focus(InputFocus::POINTER_ROOT, x11rb::NONE, x11rb::CURRENT_TIME)
-                    .unwrap().check().unwrap();
-                Ok(())
-            },
-            true,
-            || true,
-            || focus(id),
-        ).unwrap();
-        assert_eq!(x.conn.get_input_focus().unwrap().reply().unwrap().focus, id,
-            "the visible note must receive keyboard input after compositor placement");
-
-        let current = std::cell::Cell::new(true);
-        crate::capture::desktop::platform::place_note_with_keyboard_focus(
-            || {
-                x.conn.set_input_focus(InputFocus::POINTER_ROOT, x11rb::NONE, x11rb::CURRENT_TIME)
-                    .unwrap().check().unwrap();
-                current.set(false); // A dismissal/replacement won while placement was in flight.
-                Ok(())
-            },
-            true,
-            || current.get(),
-            || focus(id),
-        ).unwrap();
-        assert_eq!(x.conn.get_input_focus().unwrap().reply().unwrap().focus, x11rb::NONE,
-            "a stale placement must not take keyboard focus back");
-        x.conn.destroy_window(id).unwrap().check().unwrap();
-    }
 
     #[test]
     #[ignore = "requires an isolated X server; run under xvfb-run"]

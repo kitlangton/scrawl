@@ -26,8 +26,6 @@ pub struct Presentation {
     pub artwork: bool,
     pub compact: bool,
     pub account_menu: bool,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub account_initial: Option<String>,
     pub buttons: Vec<Button>,
     pub menu_actions: Vec<Command>,
     pub shared_links_url: Option<String>,
@@ -43,7 +41,6 @@ impl Controller {
             ..Default::default()
         };
         let snapshot = self.snapshot.as_ref();
-        p.account_initial = snapshot.and_then(|s| s.account_initial.clone());
         if snapshot.is_some_and(|s| s.uploads_enabled) {
             p.headline = "You’re connected.".into();
             p.detail = "New captures upload privately.".into();
@@ -53,12 +50,6 @@ impl Controller {
             p.headline = "Uploads are off.".into();
             p.detail = "You’re still signed in. New captures stay local.".into();
             p.artwork = false;
-        }
-        if snapshot.is_some_and(|s| s.renewal_required) {
-            p.headline = "Connection needs a refresh.".into();
-            p.detail = "You're still signed in. Check connection to renew this computer's access. Local recording still works.".into();
-            p.tone = Tone::Warning;
-            p.compact = false; p.artwork = false;
         }
         if let Some(health) = self.health {
             match health {
@@ -124,8 +115,7 @@ impl Controller {
         }
         // Preserve the backend's emergency/retry controls, including while state
         // readback is unavailable. The account control asserts no email identity.
-        let renewal = snapshot.is_some_and(|s| s.renewal_required);
-        p.account_menu = snapshot.is_some_and(|s| s.connected || s.reauthorization_required || s.renewal_required)
+        p.account_menu = snapshot.is_some_and(|s| s.connected || s.reauthorization_required)
             || view.buttons.iter().any(|b| matches!(b.command, Command::Disable | Command::Disconnect));
         p.shared_links_url = self.backend.shared_links_url();
         if p.shared_links_url.is_some() {
@@ -155,8 +145,7 @@ impl Controller {
                     other => other,
                 };
             }
-            if matches!(b.command, Command::Check | Command::RequestDisable | Command::RequestDisconnect | Command::Disable | Command::Disconnect) && !self.disabling()
-                && !(renewal && b.command == Command::Check) {
+            if matches!(b.command, Command::Check | Command::RequestDisable | Command::RequestDisconnect | Command::Disable | Command::Disconnect) && !self.disabling() {
                 p.menu_actions.push(b.command);
             }
         }

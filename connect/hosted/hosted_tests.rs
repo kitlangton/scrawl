@@ -165,12 +165,6 @@ fn hosted_transport_network_timeout_and_cancellation() {
     test_support::hosted_transport_network_timeout_and_cancellation();
 }
 #[test]
-fn hosted_oversized_upload_retains_actionable_details_across_restart() {
-    setup();
-    test_support::hosted_oversized_upload_retains_actionable_details_across_restart();
-}
-
-#[test]
 fn hosted_paths_symlinks_oversize_and_unknown_assets() {
     setup();
     test_support::hosted_paths_symlinks_oversize_and_unknown_assets();
@@ -272,16 +266,4 @@ fn hosted_constructed_client_and_prepared_link_read_current_provider() {
 fn hosted_provider_write_failure_never_reports_disabled_or_login_success() {
     setup();
     test_support::hosted_provider_write_failure_never_reports_disabled_or_login_success();
-}
-
-#[test]
-fn hosted_notes_assets_preserve_semantics_and_exclude_local_ui_log() {
-    setup();
-    test_support::hosted_notes_assets_preserve_semantics_and_exclude_local_ui_log();
-}
-
-#[test]
-fn hosted_size_failure_projection_separates_queue_intents() {
-    setup();
-    test_support::hosted_size_failure_projection_separates_queue_intents();
 }

@@ -5,26 +5,6 @@ import Combine
 import CoreText
 import SwiftUI
 
-private struct RunningBuildLabel: View {
-  private var text: String {
-    let value = ProcessInfo.processInfo.environment["APPARENT_RUNNING_BUILD_LABEL"] ?? "build unknown"
-    if value == "build unknown" { return value }
-    let parts = value.components(separatedBy: " · ")
-    guard parts.count == 2 else { return "build unknown" }
-    let candidate = parts[1]
-    if candidate == "build unknown" || candidate.range(of: "^[0-9a-fA-F]{7}( \\+modified)?$", options: .regularExpression) != nil {
-      return candidate
-    }
-    return "build unknown"
-  }
-  var body: some View {
-    Text(text).font(.system(size: 10, weight: .medium, design: .monospaced))
-      .foregroundStyle(.secondary).padding(.horizontal, 5).padding(.vertical, 2)
-      .background(.ultraThinMaterial, in: Capsule()).allowsHitTesting(false)
-      .accessibilityLabel("Running build \(text)")
-  }
-}
-
 // `apparent-helper settings [--pane P] [--icon PNG] [--render DIR]`: the Settings window.
 // Apparent decides everything (`src/settings.rs`) and sends what to show as JSON lines on stdin:
 //   {"type":"state","version":"0.3.2","login":{"on":false,"available":true,"needsApproval":false},
@@ -197,7 +177,6 @@ struct ConnectPresentation: Decodable, Equatable {
   var artwork: Bool
   var compact: Bool
   var accountMenu: Bool
-  var accountInitial: String?
   var buttons: [ConnectButton]
   var menuActions: [String]
   var sharedLinksUrl: String?
@@ -214,7 +193,7 @@ private struct ConnectCard: View {
   private let carbon = connectColor(0x020102)
   private var p: ConnectPresentation {
     connect.presentation ?? ConnectPresentation(tone: "neutral", headline: connect.status,
-      detail: connect.detail, note: "", artwork: false, compact: false, accountMenu: false, accountInitial: nil,
+      detail: connect.detail, note: "", artwork: false, compact: false, accountMenu: false,
       buttons: connect.buttons, menuActions: [], sharedLinksUrl: nil)
   }
   private var color: Color { connectColor(["success":0x146b43, "progress":0x7a58c7, "warning":0xffbe2e, "failure":0xb42318][p.tone] ?? 0xcbc4bc) }
@@ -936,7 +915,6 @@ struct SettingsView: View {
     }
     .frame(width: SettingsMetrics.width, height: SettingsMetrics.height)
     .environment(\.settingsTheme, theme)
-    .overlay(alignment: .topTrailing) { RunningBuildLabel().padding(5) }
   }
 
   // Sidebar
@@ -1043,7 +1021,7 @@ struct SettingsView: View {
                 model.act("connect", ["command":button.command])
               } label: { Text(button.title) }.disabled(!button.enabled)
             }
-          } label: { Group { if let initial = p.accountInitial { Text(initial).font(.custom("HostGrotesk_700wght", size: 18)) } else { Image(systemName: "person.crop.circle") } }.frame(width: 44, height: 44) }
+          } label: { Text("A").font(.custom("HostGrotesk_700wght", size: 18)).frame(width: 44, height: 44) }
             .menuStyle(.borderlessButton).fixedSize().accessibilityLabel("Account and connection options")
         }
       }

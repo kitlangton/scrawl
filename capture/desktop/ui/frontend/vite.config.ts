@@ -1,18 +1,17 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { checkDependencyFreshness } from './scripts/check-dependency-freshness.ts';
+import { readFileSync } from 'node:fs';
 
 // file: dependencies are snapshots. Refuse a build using stale shared controls.
-checkDependencyFreshness();
+for (const file of ['button.tsx', 'tabs.tsx', 'utils.ts', 'theme.css', 'tokens.css', 'window-theme.cjs', 'status-card.tsx', 'disclosure-menu.tsx', 'status.css']) {
+  const canonical = readFileSync(new URL(`../../../../shared/ui/src/${file}`, import.meta.url), 'utf8');
+  const installed = readFileSync(new URL(`./node_modules/@apparent/ui/src/${file}`, import.meta.url), 'utf8');
+  if (canonical !== installed) throw new Error('Shared UI changed. Run npm ci before building.');
+}
 
-export default defineConfig(({ mode }) => ({
+export default defineConfig({
   base: './',
   plugins: [react(), tailwindcss()],
-  build: {
-    outDir: mode === 'onboarding-feedback' ? 'node_modules/.cache/onboarding-renderer' : 'dist',
-    rollupOptions: { input: mode === 'onboarding-feedback'
-      ? 'onboarding.html'
-      : { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html', pill: 'pill/index.html' } },
-  },
-}));
+  build: { rollupOptions: { input: { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html' } } },
+});

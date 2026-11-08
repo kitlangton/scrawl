@@ -29,16 +29,11 @@ export async function stagePopupAssets(root, destination) {
 }
 export async function stagePopupEntries(root, destination) {
   await mkdir(path.join(destination, 'electron'), { recursive: true });
-  await cp(path.join(root, 'electron/runtime.cjs'), path.join(destination, 'electron/runtime.cjs'));
   for (const surface of ['notes', 'share']) {
     const source = path.join(root, 'electron', surface);
     try { await stat(source); }
     catch (error) { if (surface === 'share' && error.code === 'ENOENT') continue; throw error; }
     await stat(path.join(source, 'main.cjs'));
-    if (surface === 'share') {
-      const target = path.join(destination, 'electron', surface);
-      await mkdir(target, { recursive: true });
-      for (const entry of ['main.cjs', 'preload.cjs']) await cp(path.join(source, entry), path.join(target, entry));
-    } else await cp(source, path.join(destination, 'electron', surface), { recursive: true, force: true });
+    await cp(source, path.join(destination, 'electron', surface), { recursive: true, force: true });
   }
 }

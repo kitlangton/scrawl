@@ -1,7 +1,4 @@
 const { contextBridge, ipcRenderer } = require('electron');
-contextBridge.exposeInMainWorld('apparentBuild', Object.freeze({
-  read: () => ipcRenderer.invoke('apparent:build-identity'),
-}));
 contextBridge.exposeInMainWorld('captureNotes', Object.freeze({
   onSnapshot: (callback) => {
     const receive = (_event, state) => callback(state);
@@ -14,9 +11,3 @@ contextBridge.exposeInMainWorld('captureNotes', Object.freeze({
 
 // Ordered behind this renderer's already-issued save invocations. Not exposed to page JS.
 ipcRenderer.on('notes:finish', () => { void ipcRenderer.invoke('notes:finish-ready'); });
-
-// Two fixed signals only; the renderer cannot submit error text or properties.
-contextBridge.exposeInMainWorld('apparentExceptions', Object.freeze({
-  exception: () => ipcRenderer.send('apparent:unhandled', 'renderer_exception'),
-  rejection: () => ipcRenderer.send('apparent:unhandled', 'renderer_rejection'),
-}));

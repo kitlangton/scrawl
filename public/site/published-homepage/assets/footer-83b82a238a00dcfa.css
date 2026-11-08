@@ -1,0 +1,48 @@
+.frog-footer { background: #f5f0e8; color: #19161d; }
+apparent-footer { display: block; }
+.frog-footer .footer-scene { height: 688px; position: relative; isolation: isolate; overflow: hidden; }
+.frog-footer .footer-art { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; object-position: center bottom; z-index: -2; }
+.frog-footer .footer-scene::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: -1; background: linear-gradient(to bottom, #f5f0e8 0%, #f5f0e8 20%, rgb(245 240 232 / .98) 37%, rgb(245 240 232 / .72) 53%, rgb(245 240 232 / .12) 66%, transparent 75%); }
+.frog-footer .footer-invite { position: absolute; top: 40px; left: 24px; right: 24px; text-align: center; }
+.frog-footer .footer-greeting { font-size: 17px; line-height: 1.5; margin: 0 0 20px; }
+.frog-footer #footer-heading { font-size: clamp(36px, 4.5vw, 62px); font-weight: 550; line-height: 1.02; letter-spacing: -.045em; margin: 0 0 22px; }
+.frog-footer .footer-body { font-size: 20px; line-height: 1.5; max-width: 760px; margin: 0 auto 24px; }
+.frog-footer .footer-body img, .frog-footer .footer-dialog p img { display: inline; width: 104px; height: auto; vertical-align: -.2em; }
+.frog-footer .footer-actions { display: flex; align-items: center; justify-content: center; gap: 20px; }
+.frog-footer button { font: inherit; color: inherit; cursor: pointer; touch-action: manipulation; }
+.frog-footer .footer-try { border: 0; border-radius: 8px; background: #19161d; color: #f5f0e8; padding: 15px 22px; font-size: 17px; font-weight: 550; min-height: 53px; }
+.frog-footer .footer-hi { border: 0; background: transparent; padding: 12px 0; font-size: 15px; min-height: 44px; text-decoration: underline; text-underline-offset: 4px; }
+.frog-footer .footer-try:hover { background: #39313f; }
+.frog-footer .footer-hi:hover, .frog-footer a:hover { color: #6c4a8c; }
+.frog-footer .footer-base { display: flex; align-items: center; gap: 28px; padding: 24px 48px; min-height: 83px; }
+.frog-footer .footer-brand { display: flex; flex-shrink: 0; }
+.frog-footer .footer-brand img { display: block; width: 132px; height: auto; }
+.frog-footer .footer-credit { display: flex; align-items: center; gap: 6px; font-size: 18px; white-space: nowrap; }
+.frog-footer .footer-wheel { display: inline-flex; align-items: center; justify-content: center; height: 36px; padding: 0 11px; border: 0; background: #b7a5d8; overflow: hidden; perspective: 250px; transition: width .34s ease; }
+.frog-footer .footer-wheel > span { display: block; flex-shrink: 0; white-space: nowrap; transition: transform .22s ease, opacity .22s ease; }
+.frog-footer .footer-wheel[data-step="out"] > span { transform: translateY(-100%) rotateX(65deg); opacity: 0; }
+.frog-footer .footer-wheel[data-step="in"] > span { transform: translateY(100%) rotateX(-65deg); opacity: 0; transition: none; }
+.frog-footer .footer-github { margin-left: auto; font-size: 14px; text-underline-offset: 4px; }
+.frog-footer a:focus-visible, .frog-footer button:focus-visible { outline: 3px solid #7a58c7; outline-offset: 5px; }
+.frog-footer .footer-dialog { position: fixed; inset: 0; width: min(520px, calc(100% - 40px)); max-height: calc(100% - 40px); margin: auto; border: 1px solid #b7a5d8; background: #f5f0e8; color: #19161d; padding: 36px; font: inherit; }
+.frog-footer .footer-dialog::backdrop { background: rgb(25 22 29 / .5); }
+.frog-footer .footer-dialog h2 { margin: 0 24px 20px 0; font-size: 30px; line-height: 1.1; letter-spacing: -.035em; }
+.frog-footer .footer-dialog p { line-height: 1.6; margin: 0 0 18px; }
+.frog-footer .footer-dialog .footer-release-note { font-size: 14px; }
+.frog-footer .footer-close { position: absolute; top: 8px; right: 12px; padding: 4px 10px; font-size: 28px; border: 0; background: transparent; }
+@media (max-width: 700px) {
+  .frog-footer .footer-scene { height: 569px; }
+  .frog-footer .footer-invite { top: 24px; }
+  .frog-footer #footer-heading { font-size: clamp(31px, 7.9vw, 43px); }
+  .frog-footer .footer-greeting { font-size: 16px; margin-bottom: 18px; }
+  .frog-footer .footer-body { font-size: 18px; max-width: 440px; }
+  .frog-footer .footer-actions { flex-direction: column; gap: 7px; }
+  .frog-footer .footer-art { object-position: 62% bottom; }
+  .frog-footer .footer-scene::after { background: linear-gradient(to bottom, #f5f0e8 0%, #f5f0e8 49%, rgb(245 240 232 / .97) 60%, transparent 80%); }
+  .frog-footer .footer-base { display: grid; grid-template-columns: auto 1fr; padding: 20px 24px; gap: 12px 20px; }
+  .frog-footer .footer-credit { font-size: 16px; grid-row: 2; grid-column: 1 / -1; }
+  .frog-footer .footer-github { grid-column: 2; grid-row: 1; margin-left: auto; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .frog-footer .footer-wheel, .frog-footer .footer-wheel > span { transition: none; }
+}

@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Publish checked main ancestors without superseding a newer checked preview.
 
-Publication jobs serialize without cancellation; automatic builds supersede old builds.
+The workflow serializes builds/publication without canceling the running release.
 Ancestry, not completion time or version numbers, orders Main previews.
 """
 
@@ -34,77 +34,16 @@ def checked_sha(value):
     return value
 
 
-_comparisons = {}
-
-
-def comparison(repo, base, tip, current_main=None):
-    # Immutable SHA pairs retain their ancestry across both admission checks.
-    # Current main and release history are still fetched afresh each time.
-    key = (repo, base, tip)
-    if key in _comparisons:
-        return _comparisons[key]
-    local = local_comparison(base, tip, current_main)
-    if local is not None:
-        status = local
-    else:
-        status = json.loads(gh("api", f"repos/{repo}/compare/{base}...{tip}"))["status"]
-        if status not in ("ahead", "behind", "identical", "diverged"):
-            raise RuntimeError(f"Unknown ancestry comparison: {status!r}")
-    _comparisons[key] = status
+def comparison(repo, base, tip):
+    status = json.loads(gh("api", f"repos/{repo}/compare/{base}...{tip}"))["status"]
+    if status not in ("ahead", "behind", "identical", "diverged"):
+        raise RuntimeError(f"Unknown ancestry comparison: {status!r}")
     return status
-
-
-def git(*args, env=None):
-    result = subprocess.run(["git", *args], check=False, capture_output=True, text=True, env=env)
-    return result
-
-
-def local_comparison(base, tip, current_main):
-    """Compare commits locally only when this checkout proves complete main history."""
-    # A shallow or stale checkout cannot establish remote ancestry. The caller
-    # has already fetched the authoritative current main SHA from GitHub.
-    no_replace = dict(os.environ, GIT_NO_REPLACE_OBJECTS="1")
-    shallow = git("rev-parse", "--is-shallow-repository", env=no_replace)
-    if shallow.returncode or shallow.stdout.strip() != "false":
-        return None
-    if current_main is None:
-        return None
-    head = git("rev-parse", "--verify", "HEAD^{commit}", env=no_replace)
-    if head.returncode or checked_sha(head.stdout.strip()) != checked_sha(current_main):
-        return None
-
-    # Grafts can invent ancestry without changing the commit objects. Avoid
-    # trusting that local view; replace refs are disabled for all Git queries.
-    graft_path = git("rev-parse", "--git-path", "info/grafts", env=no_replace)
-    if graft_path.returncode:
-        return None
-    graft_file = Path(graft_path.stdout.strip())
-    if not graft_file.is_absolute():
-        graft_file = Path.cwd() / graft_file
-    if graft_file.exists() and graft_file.read_text().strip():
-        return None
-
-    for sha in (base, tip):
-        if git("cat-file", "-e", f"{checked_sha(sha)}^{{commit}}", env=no_replace).returncode:
-            return None
-    if base == tip:
-        return "identical"
-    base_is_ancestor = git("merge-base", "--is-ancestor", base, tip, env=no_replace).returncode
-    if base_is_ancestor == 0:
-        return "ahead"
-    if base_is_ancestor != 1:
-        return None
-    tip_is_ancestor = git("merge-base", "--is-ancestor", tip, base, env=no_replace).returncode
-    if tip_is_ancestor == 0:
-        return "behind"
-    if tip_is_ancestor != 1:
-        return None
-    return "diverged"
 
 
 def publication_needed(repo, sha):
     current = checked_sha(json.loads(gh("api", f"repos/{repo}/git/ref/heads/main"))["object"]["sha"])
-    if comparison(repo, sha, current, current) not in ("ahead", "identical"):
+    if comparison(repo, sha, current) not in ("ahead", "identical"):
         raise RuntimeError(f"Checked commit {sha} is not an ancestor of main {current}")
 
     # Fetch every page before deciding. A failed request or malformed history
@@ -117,16 +56,16 @@ def publication_needed(repo, sha):
         for item in page:
             if not isinstance(item, dict) or not isinstance(item.get("tag_name"), str):
                 raise RuntimeError("Malformed release history entry")
-            if not item["tag_name"].startswith("linux-main-v2-"):
+            if not item["tag_name"].startswith("linux-main-"):
                 continue
             if not isinstance(item.get("draft"), bool) or not isinstance(item.get("prerelease"), bool):
                 raise RuntimeError("Malformed Main release flags")
             if item["draft"] or not item["prerelease"]:
                 continue
-            published = checked_sha(item["tag_name"][len("linux-main-v2-"):])
-            if comparison(repo, published, current, current) not in ("ahead", "identical"):
+            published = checked_sha(item["tag_name"][len("linux-main-"):])
+            if comparison(repo, published, current) not in ("ahead", "identical"):
                 continue
-            if comparison(repo, sha, published, current) in ("ahead", "identical"):
+            if comparison(repo, sha, published) in ("ahead", "identical"):
                 newer = published
     if newer:
         print(f"Main preview {sha} not promoted: eligible preview {newer} is already published")
@@ -139,7 +78,7 @@ def main():
     sha = checked_sha(os.environ["GITHUB_SHA"])
     if os.environ["GITHUB_REF"] != "refs/heads/main":
         raise RuntimeError("Main previews require refs/heads/main")
-    tag = f"linux-main-v2-{sha}"
+    tag = f"linux-main-{sha}"
     dist = Path("dist")
     images = sorted(dist.glob("*.AppImage"))
     expected = {f"Apparent-{os.environ['APPARENT_VERSION']}-linux-{arch}.AppImage"

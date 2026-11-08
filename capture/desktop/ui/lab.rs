@@ -238,10 +238,7 @@ struct Backdrop {
 
 impl Render for Backdrop {
     fn render(&mut self, _: &mut gpui::Window, _: &mut gpui::Context<Self>) -> impl IntoElement {
-        div()
-            .size_full()
-            .relative()
-            .child(match self.theme.as_str() {
+        match self.theme.as_str() {
             "light" | "white" => div()
                 .size_full()
                 .bg(rgb(0xfafafc))
@@ -309,8 +306,7 @@ impl Render for Backdrop {
                         .child(div().w(px(108.0)).h(px(11.0)).rounded(px(4.0)).bg(rgb(0xcbd5e1))),
                 ),
             _ => div().size_full().bg(rgb(0xd9d9de)),
-        })
-            .child(crate::capture::desktop::running_build_badge())
+        }
     }
 }
 

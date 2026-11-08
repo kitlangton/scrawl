@@ -1,6 +1,6 @@
 use std::ffi::c_void;
 use std::mem::size_of;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 
 use core_graphics_types::geometry::CGSize;
@@ -21,9 +21,7 @@ use objc2_foundation::{NSPoint, NSRect};
 use objc2_quartz_core::CALayer;
 
 use crate::capture::engine::runtime::SharedCaptureTelemetry;
-use crate::capture::engine::sketch::{
-    pin_pulse, slice_laser_window, smooth_ink_points, smooth_laser_points,
-};
+use crate::capture::engine::sketch::{pin_pulse, slice_laser_window, smooth_ink_points, smooth_laser_points};
 
 const TAIL_DURATION_SEC: f32 = 0.42;
 const MAX_SEGMENTS: usize = 16_384;
@@ -55,9 +53,10 @@ struct LaserUniforms {
     tile_rows: u32,
     tile_size: f32,
     _pad2: f32,
+    ink: [f32;4],
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq)]
 struct PathSegment {
     a: [f32; 2],
@@ -66,22 +65,14 @@ struct PathSegment {
     w1: f32,
     kind: f32,
     width: f32,
-    // Zero preserves the historical red; otherwise 1 + packed 0xRRGGBB sRGB.
-    rgb: u32,
 }
 
-#[repr(C, align(8))]
+#[repr(C)]
 #[derive(Clone, Copy, Default, PartialEq)]
 struct PinMarker {
     pos: [f32; 2],
     radius: f32,
     alpha: f32,
-    rgb: u32,
-}
-
-fn packed_rgb(rgb: Option<[u8; 3]>) -> u32 {
-    rgb.map(|[r, g, b]| 1 + (u32::from(r) << 16) + (u32::from(g) << 8) + u32::from(b))
-        .unwrap_or(0)
 }
 
 /// The start glow, the longest timed effect of the recording frame, is over 1.1 s in; from then
@@ -98,8 +89,6 @@ impl LaserUniforms {
 }
 
 pub struct MetalLaserOverlay {
-    desktop: Vec<MetalLaserOverlay>,
-    telemetry: Arc<SharedCaptureTelemetry>,
     window: Retained<NSPanel>,
     display_link: CVDisplayLink,
     display_link_context: *const SharedMetalOverlay,
@@ -116,10 +105,7 @@ fn pick_screen(
     let screens = crate::capture::engine::runtime::screens::current();
     let index = on
         .and_then(|r| crate::capture::engine::runtime::screens::index_for_rect(&screens, r))
-        .or_else(|| {
-            crate::capture::engine::runtime::screens::pointer()
-                .and_then(|p| crate::capture::engine::runtime::screens::index_at(&screens, p))
-        })
+        .or_else(|| crate::capture::engine::runtime::screens::pointer().and_then(|p| crate::capture::engine::runtime::screens::index_at(&screens, p)))
         .or(if screens.is_empty() { None } else { Some(0) })?;
     let screen = screens[index];
     let primary_h = NSScreen::screens(mtm).firstObject()?.frame().size.height;
@@ -137,14 +123,6 @@ impl MetalLaserOverlay {
         telemetry: Arc<SharedCaptureTelemetry>,
         on: Option<[f64; 4]>,
     ) -> Result<Self, String> {
-        Self::open_kind(telemetry, on, false)
-    }
-
-    fn open_kind(
-        telemetry: Arc<SharedCaptureTelemetry>,
-        on: Option<[f64; 4]>,
-        ink_only: bool,
-    ) -> Result<Self, String> {
         let mtm = MainThreadMarker::new().ok_or("Metal overlay requires the main thread")?;
         let (screen, frame) =
             pick_screen(mtm, on).ok_or("No screen available for Metal overlay")?;
@@ -152,14 +130,13 @@ impl MetalLaserOverlay {
         let [ox, oy, _, _] = screen.frame;
 
         let shared = Arc::new(SharedMetalOverlay::new(
-            Arc::clone(&telemetry),
+            telemetry,
             [ox as f32, oy as f32],
             frame.size.width as f32,
             frame.size.height as f32,
             scale,
         )?);
 
-        shared.ink_only.store(ink_only, Ordering::Release);
         let window = NSPanel::initWithContentRect_styleMask_backing_defer(
             mtm.alloc(),
             frame,
@@ -215,8 +192,6 @@ impl MetalLaserOverlay {
         let _ = display_link.start();
 
         Ok(Self {
-            desktop: Vec::new(),
-            telemetry,
             window,
             display_link,
             display_link_context,
@@ -224,28 +199,8 @@ impl MetalLaserOverlay {
         })
     }
 
-    /// Keep one scale-correct, click-through panel on each display during capture.
-    pub fn cover_desktop(&mut self) -> Result<Vec<u32>, String> {
-        let mut overlays = Vec::new();
-        for screen in crate::capture::engine::runtime::screens::current() {
-            if !same_rect(screen.frame, self.screen) {
-                let overlay =
-                    Self::open_kind(Arc::clone(&self.telemetry), Some(screen.frame), true)?;
-                overlays.push(overlay);
-            }
-        }
-        let ids = overlays.iter().map(Self::window_number).collect();
-        self.desktop = overlays;
-        Ok(ids)
-    }
-
     pub fn window_number(&self) -> u32 {
         self.window.windowNumber().max(0) as u32
-    }
-
-    /// The picker owns only the original panel; other displays need no ink layer.
-    pub fn prepare_picker(&mut self) {
-        self.desktop.clear();
     }
 
     /// The screen it covers, global points.
@@ -315,7 +270,6 @@ extern "C" fn display_link_callback(
 }
 
 struct SharedMetalOverlay {
-    ink_only: AtomicBool,
     telemetry: Arc<SharedCaptureTelemetry>,
     renderer: Mutex<MetalLaserRenderer>,
 }
@@ -362,7 +316,6 @@ impl SharedMetalOverlay {
         let pipelines = OverlayPipelines::new(&device)?;
 
         Ok(Self {
-            ink_only: AtomicBool::new(false),
             telemetry,
             renderer: Mutex::new(MetalLaserRenderer {
                 command_queue: device.new_command_queue(),
@@ -479,12 +432,6 @@ impl SharedMetalOverlay {
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
-        let desktop_ink = self
-            .telemetry
-            .desktop_ink
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clone();
         let active_laser = self
             .telemetry
             .active_laser
@@ -498,12 +445,8 @@ impl SharedMetalOverlay {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .clone();
 
-        let mut strokes: Vec<(crate::shared::model::Stroke, bool)> = committed_strokes
-            .into_iter()
-            .filter(|s| s.laser || s.pin.is_some())
-            .chain(desktop_ink)
-            .map(|s| (s, false))
-            .collect();
+        let mut strokes: Vec<(crate::shared::model::Stroke, bool)> =
+            committed_strokes.into_iter().map(|s| (s, false)).collect();
         if let Some(laser) = active_laser {
             strokes.push((laser, true));
         }
@@ -524,7 +467,6 @@ impl SharedMetalOverlay {
                         pos: to_screen(nx, ny),
                         radius,
                         alpha,
-                        rgb: packed_rgb(stroke.rgb),
                     });
                 }
                 continue;
@@ -545,7 +487,6 @@ impl SharedMetalOverlay {
                         w1,
                         kind: 0.0,
                         width: 3.0,
-                        rgb: packed_rgb(stroke.rgb),
                     });
                 }
             } else {
@@ -577,7 +518,6 @@ impl SharedMetalOverlay {
                         w1: pair[1].1,
                         kind: 1.0,
                         width: fade_alpha,
-                        rgb: packed_rgb(stroke.rgb),
                     });
                 }
             }
@@ -618,18 +558,13 @@ impl SharedMetalOverlay {
             } else {
                 segments.len().min(MAX_SEGMENTS)
             };
-            let ink_only = self.ink_only.load(Ordering::Acquire);
             let uniforms = LaserUniforms {
                 resolution: [
                     renderer.width * renderer.scale,
                     renderer.height * renderer.scale,
                 ],
                 scale: renderer.scale,
-                now_sec: if ink_only {
-                    now_sec.max(SETTLED_SEC)
-                } else {
-                    now_sec
-                },
+                now_sec,
                 tail_duration: picker_fade,
                 tip_active: if is_active && shift_held { 1.0 } else { 0.0 },
                 tip_pos: pointer,
@@ -639,16 +574,12 @@ impl SharedMetalOverlay {
                 } else {
                     pins.len().min(MAX_PINS) as u32
                 },
-                constrain_rect: if is_constrained && !ink_only {
-                    1.0
-                } else {
-                    0.0
-                },
-                _pad1: if ink_only { 0.0 } else { mode_code },
+                constrain_rect: if is_constrained { 1.0 } else { 0.0 },
+                _pad1: mode_code,
                 target_rect: [tx, ty, tw, th],
                 glow: [
                     f32::from(u8::from(
-                        is_active && !ink_only && self.telemetry.start_glow.load(Ordering::Acquire),
+                        is_active && self.telemetry.start_glow.load(Ordering::Acquire),
                     )),
                     0.0,
                     0.0,
@@ -657,14 +588,8 @@ impl SharedMetalOverlay {
                 tile_cols,
                 tile_rows,
                 tile_size: TILE_PT,
-                _pad2: if shift_held {
-                    self.telemetry
-                        .stroke_rgb()
-                        .map(|rgb| f32::from_bits(0x8000_0000 | packed_rgb(Some(rgb))))
-                        .unwrap_or(0.0)
-                } else {
-                    0.0
-                },
+                _pad2: 0.0,
+                ink: {let [r,g,b]=crate::shared::handoff::pen::rgb();[r as f32/255.0,g as f32/255.0,b as f32/255.0,1.0]},
             };
             let frame = ShownFrame::new(uniforms, &segments, &pins);
             if renderer.shown.as_ref() == Some(&frame) {
@@ -913,17 +838,6 @@ fn encode_overlay(
 mod tests {
     use super::*;
 
-    #[test]
-    fn gpu_color_records_match_metal_stride_and_keep_default_distinct_from_black() {
-        assert_eq!(size_of::<PathSegment>(), 40);
-        assert_eq!(size_of::<PinMarker>(), 24);
-        assert_eq!(std::mem::offset_of!(PathSegment, rgb), 32);
-        assert_eq!(std::mem::offset_of!(PinMarker, rgb), 16);
-        assert_eq!(packed_rgb(None), 0);
-        assert_eq!(packed_rgb(Some([0, 0, 0])), 1);
-        assert_eq!(packed_rgb(Some([255, 255, 255])), 0x0100_0000);
-    }
-
     /// `setFragmentBytes` aborts in the driver past 4 KB.
     const SET_BYTES_LIMIT: usize = 4096;
 
@@ -1014,7 +928,6 @@ mod tests {
             w1: 1.0,
             kind: 1.0,
             width: 1.0,
-            rgb: 0,
         };
         let mut segments = vec![off_screen; MAX_SEGMENTS];
         segments[MAX_SEGMENTS - 1] = PathSegment {
@@ -1049,52 +962,6 @@ mod tests {
         let [b, g, r, a] = bgra(32, 32);
         assert!(a > 200 && r > 200 && g < 100 && b < 100, "stroke pixel {:?}", [b, g, r, a]);
         assert_eq!(bgra(32, 4)[3], 0, "nothing drawn away from the stroke");
-
-        segments[MAX_SEGMENTS - 1].rgb = packed_rgb(Some([0, 0, 0]));
-        let Some(black) = render_offscreen(Shader::Picked, &uniforms, &segments, &[PinMarker::default()]) else { return; };
-        let i = ((32 * size + 32) * 4) as usize;
-        assert!(black[i] < 5 && black[i + 1] < 5 && black[i + 2] < 5 && black[i + 3] > 200,
-            "explicit black must differ from the legacy red default: {:?}", &black[i..i + 4]);
-
-        segments[MAX_SEGMENTS - 1].rgb = packed_rgb(Some([59, 121, 189]));
-        let Some(blue) = render_offscreen(Shader::Picked, &uniforms, &segments, &[PinMarker::default()]) else { return; };
-        assert!(blue[i] > 150 && blue[i + 1] > 80 && blue[i + 2] < 100 && blue[i + 3] > 200,
-            "explicit sRGB channels should reach BGRA8Unorm in display order: {:?}", &blue[i..i + 4]);
-    }
-
-    #[test]
-    fn colored_laser_bloom_keeps_its_hue_outside_the_body() {
-        let size = 64_u64;
-        let blue = PathSegment {
-            a: [8.0, 16.0], b: [56.0, 16.0], w0: 1.0, w1: 1.0,
-            kind: 0.0, width: 3.0, rgb: packed_rgb(Some([0, 0, 255])),
-        };
-        let green = PathSegment {
-            a: [8.0, 48.0], b: [56.0, 48.0],
-            rgb: packed_rgb(Some([0, 255, 0])), ..blue
-        };
-        let uniforms = LaserUniforms {
-            resolution: [size as f32, size as f32], scale: 1.0, now_sec: 1.0,
-            tail_duration: 1.0, segment_count: 2,
-            target_rect: [0.0, 0.0, size as f32, size as f32],
-            tile_cols: 2, tile_rows: 2, tile_size: TILE_PT, ..Default::default()
-        };
-        let Some(pixels) = render_offscreen(Shader::Picked, &uniforms, &[blue, green], &[PinMarker::default()]) else { return; };
-        let pixel = |y: u64| {
-            let i = ((y * size + 32) * 4) as usize;
-            &pixels[i..i + 4]
-        };
-        // At 5.5 points from the segment, body/core are zero but bloom remains.
-        let b = pixel(21);
-        assert!(b[0] > 3 && b[1] <= 1 && b[2] <= 1 && b[3] > 10, "blue bloom became another hue: {b:?}");
-        let g = pixel(53);
-        assert!(g[1] > 3 && g[0] <= 1 && g[2] <= 1 && g[3] > 10, "green bloom became another hue: {g:?}");
-        let weak = PathSegment { w0: 0.5, w1: 0.5, rgb: 0, ..blue };
-        let strong = PathSegment { rgb: packed_rgb(Some([0, 255, 0])), ..blue };
-        let Some(overlap) = render_offscreen(Shader::Picked, &uniforms, &[weak, strong], &[PinMarker::default()]) else { return; };
-        let i = ((21 * size + 32) * 4) as usize;
-        let p = &overlap[i..i + 4];
-        assert!(p[1] > 3 && p[0] <= 1 && p[2] <= 1, "dominant green bloom inherited legacy red: {p:?}");
     }
 
     /// The real shader draws a pin's pulse as a faint ring with nothing inside it, and draws
@@ -1104,20 +971,11 @@ mod tests {
         let (size, scale) = (80_u64, 2.0_f32);
         let points = size as f32 / scale;
         let centre = points / 2.0;
-        for age in [
-            0,
-            40,
-            90,
-            150,
-            220,
-            300,
-            crate::capture::engine::sketch::PIN_PULSE_MS,
-        ] {
+        for age in [0, 40, 90, 150, 220, 300, crate::capture::engine::sketch::PIN_PULSE_MS] {
             let pin = pin_pulse(age).map_or(PinMarker::default(), |(radius, alpha)| PinMarker {
                 pos: [centre, centre],
                 radius,
                 alpha,
-                rgb: 0,
             });
             let uniforms = LaserUniforms {
                 resolution: [size as f32, size as f32],
@@ -1131,9 +989,12 @@ mod tests {
                 tile_size: TILE_PT,
                 ..Default::default()
             };
-            let Some(pixels) =
-                render_offscreen(Shader::Picked, &uniforms, &[PathSegment::default()], &[pin])
-            else {
+            let Some(pixels) = render_offscreen(
+                Shader::Picked,
+                &uniforms,
+                &[PathSegment::default()],
+                &[pin],
+            ) else {
                 return;
             };
             let max_alpha = pixels.chunks_exact(4).map(|p| p[3]).max().unwrap_or(0);
@@ -1174,7 +1035,6 @@ mod tests {
                 w1: pair[1].1,
                 kind: 1.0,
                 width: 1.0,
-                rgb: 0,
             })
             .collect();
         // Ink at full pressure and a laser at full weight reach the furthest, both crossing
@@ -1186,7 +1046,6 @@ mod tests {
             w1: 1.15,
             kind: 1.0,
             width: 1.0,
-            rgb: 0,
         }));
         segments.extend((0..12).map(|i| PathSegment {
             a: [20.0 + i as f32 * 18.0, 30.0 + i as f32 * 11.0],
@@ -1195,7 +1054,6 @@ mod tests {
             w1: 1.25,
             kind: 0.0,
             width: 3.0,
-            rgb: 0,
         }));
         let n = segments.len() as u32;
         let uniforms = LaserUniforms {
@@ -1228,11 +1086,7 @@ mod tests {
         )
         .unwrap();
         assert!(tiled.iter().any(|&b| b != 0), "the scene draws something");
-        let differ = tiled
-            .chunks(4)
-            .zip(untiled.chunks(4))
-            .filter(|(a, b)| a != b)
-            .count();
+        let differ = tiled.chunks(4).zip(untiled.chunks(4)).filter(|(a, b)| a != b).count();
         assert_eq!(differ, 0, "{differ} pixels differ from the untiled frame");
     }
 
@@ -1266,10 +1120,7 @@ mod tests {
         let scribble: Vec<[f32; 2]> = (0..2_400)
             .map(|i| {
                 let t = i as f32 * 0.05;
-                [
-                    1028.0 + 600.0 * (t * 1.3).sin(),
-                    600.0 + 330.0 * (t * 1.7).cos(),
-                ]
+                [1028.0 + 600.0 * (t * 1.3).sin(), 600.0 + 330.0 * (t * 1.7).cos()]
             })
             .collect();
         let queue = device.new_command_queue();
@@ -1285,7 +1136,6 @@ mod tests {
                     w1: pair[1].1,
                     kind: 1.0,
                     width: 1.0,
-                    rgb: 0,
                 })
                 .collect();
             let uniforms = LaserUniforms {
@@ -1371,7 +1221,6 @@ mod tests {
                 w1: pair[1].1,
                 kind: 1.0,
                 width: 1.0,
-                rgb: 0,
             })
             .collect()
     }
@@ -1424,7 +1273,6 @@ mod tests {
             pos: [width * 0.7, height * 0.3],
             radius,
             alpha,
-            rgb: 0,
         }];
         let none = vec![PathSegment::default()];
         let no_pin = vec![PinMarker::default()];
@@ -1599,7 +1447,6 @@ mod tests {
                 pos: [128.0, 96.0],
                 radius,
                 alpha,
-                rgb: 0,
             });
             let uniforms = LaserUniforms {
                 pin_count: u32::from(pin.is_some()),
@@ -1607,11 +1454,7 @@ mod tests {
                 ..base
             };
             let pins = [pin.unwrap_or_default()];
-            (
-                ShownFrame::new(uniforms, &[PathSegment::default()], &pins),
-                uniforms,
-                pins,
-            )
+            (ShownFrame::new(uniforms, &[PathSegment::default()], &pins), uniforms, pins)
         };
         let refresh_ms = 8;
         let mut shown = frame_at(0).0;
@@ -1626,10 +1469,7 @@ mod tests {
         let pulse_frames = (crate::capture::engine::sketch::PIN_PULSE_MS - 1) / refresh_ms;
         let last = *drawn.last().expect("the pulse draws");
         assert_eq!(drawn.len() as u64, pulse_frames + 1, "drawn at {drawn:?}");
-        assert!(
-            last >= crate::capture::engine::sketch::PIN_PULSE_MS,
-            "the frame after the pulse is drawn"
-        );
+        assert!(last >= crate::capture::engine::sketch::PIN_PULSE_MS, "the frame after the pulse is drawn");
         assert!(
             last < crate::capture::engine::sketch::PIN_PULSE_MS + refresh_ms,
             "nothing drawn once it's cleared: {drawn:?}"
@@ -1641,10 +1481,7 @@ mod tests {
         else {
             return;
         };
-        assert!(
-            pixels.iter().all(|&b| b == 0),
-            "the frame after the pulse is clear"
-        );
+        assert!(pixels.iter().all(|&b| b == 0), "the frame after the pulse is clear");
     }
 
     /// GPU time per kind of frame on a 5120×2160 display, the general shader (every frame before
@@ -1733,9 +1570,6 @@ mod tests {
             .next()
             .and_then(|v| v.parse().ok())
             .expect("target has a major version");
-        assert!(
-            major <= 15,
-            "laser shader targets macOS {major}, newer than 15.0"
-        );
+        assert!(major <= 15, "laser shader targets macOS {major}, newer than 15.0");
     }
 }

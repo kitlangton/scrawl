@@ -109,10 +109,7 @@ class PreviewReleaseTest(unittest.TestCase):
         for asset in ('menubar-icon@2x.png', 'menubar-light@2x.png'):
             self.assertIn(f'include_bytes!("../../../capture/desktop/assets/{asset}")', source)
         self.assertIn('image.setTemplate(false)', source)
-        self.assertIn('appearance_app.effectiveAppearance()', source)
-        self.assertNotIn('button.effectiveAppearance()', source)
-        self.assertIn('msg_send![&*appearance_app, addObserver:', source)
-        self.assertIn('msg_send![&*self._appearance_app, removeObserver:', source)
+        self.assertIn('button.effectiveAppearance()', source)
         self.assertIn('bestMatchFromAppearancesWithNames:', source)
         self.assertIn('addObserver:', source)
         self.assertIn('removeObserver:', source)
@@ -158,8 +155,8 @@ class PreviewReleaseTest(unittest.TestCase):
         self.assertNotIn("  push:", workflow)
         self.assertIn("github.ref == 'refs/heads/main'", workflow)
         self.assertIn("runs-on: macos-latest", workflow)
-        self.assertIn("github.run_number", workflow)
-        self.assertIn("github.run_attempt", workflow)
+        self.assertIn("GITHUB_RUN_NUMBER", workflow)
+        self.assertIn("GITHUB_RUN_ATTEMPT", workflow)
         self.assertIn("--prerelease", workflow)
         self.assertIn("--latest=false", workflow)
         self.assertIn("gh release create", workflow)
@@ -169,9 +166,9 @@ class PreviewReleaseTest(unittest.TestCase):
         self.assertIn("sign_update", workflow)
         self.assertIn("swift capture/desktop/scripts/release/verify-preview-sparkle-key.swift", workflow)
         self.assertIn("capture/desktop/scripts/release/preview_appcast.py", workflow)
-        self.assertLess(workflow.index("gh release create"), workflow.index("capture/desktop/scripts/release/preview_appcast.py"))
+        self.assertLess(workflow.index("gh release create"), workflow.rindex("capture/desktop/scripts/release/preview_appcast.py"))
         self.assertIn("preview-mac-feed", workflow)
-        self.assertIn('tag_args=(--target "$CANDIDATE_SHA")', workflow)
+        self.assertIn('tag_args=(--target "$GITHUB_SHA")', workflow)
         self.assertNotIn("--clobber", workflow)
         self.assertNotIn("release-app.sh", workflow)
 
@@ -181,7 +178,7 @@ class PreviewReleaseTest(unittest.TestCase):
         workflow = (ROOT / ".github/workflows/release-mac-preview.yml").read_text()
         self.assertIn('releases/tags/${tag}', workflow)
         self.assertIn('existing_sha', workflow)
-        self.assertIn('"$existing_sha" != "$CANDIDATE_SHA"', workflow)
+        self.assertIn('"$existing_sha" != "$GITHUB_SHA"', workflow)
         self.assertIn('--verify-tag', workflow)
         self.assertIn(r'\(HTTP 404\)$', workflow)
         self.assertIn('"$tag_type" != "commit"', workflow)
@@ -218,7 +215,7 @@ class PreviewReleaseTest(unittest.TestCase):
                         print('gh: Not Found (HTTP 404)', file=sys.stderr)
                         sys.exit(1)
                     kind = 'tag' if scenario == 'annotated' else 'commit'
-                    sha = 'wrong' if scenario == 'wrong' else os.environ['CANDIDATE_SHA']
+                    sha = 'wrong' if scenario == 'wrong' else os.environ['GITHUB_SHA']
                     print(kind + ' ' + sha)
                     sys.exit(0)
                 sys.exit(2)
@@ -231,8 +228,10 @@ class PreviewReleaseTest(unittest.TestCase):
                 created.unlink(missing_ok=True)
                 env = dict(os.environ, PATH=f'{root / "bin"}:{os.environ["PATH"]}',
                            SCENARIO=scenario, CREATED=str(created), RUNNER_TEMP=tmp,
-                           GITHUB_REPOSITORY="tryapparent/apparent", CANDIDATE_SHA="abc123",
-                           GITHUB_RUN_NUMBER="3", GITHUB_RUN_ATTEMPT="1")
+                           GITHUB_REPOSITORY="tryapparent/apparent", GITHUB_SHA="abc123",
+                           GITHUB_RUN_NUMBER="3", GITHUB_RUN_ATTEMPT="1",
+                           APPARENT_PREVIEW_VERSION="0.3.1", APPARENT_PREVIEW_BUILD_NUMBER="3.1",
+                           APPARENT_PREVIEW_TAG="preview-mac-3-1")
                 env['APPARENT_PREVIEW_NOTARIZE'] = 'true' if scenario == 'matching_signed' else 'false'
                 result = subprocess.run(["bash", "-c", script], cwd=root, env=env,
                                         capture_output=True, text=True)
@@ -246,3 +245,31 @@ class PreviewReleaseTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class ScopedPublicationFeedTests(unittest.TestCase):
+    def test_live_feed_cannot_repeat_or_overtake_candidate_before_publication(self):
+        workflow = (ROOT / '.github/workflows/release-mac-preview.yml').read_text()
+        marker = '      - name: Recheck scoped candidate against live feed before public release\n'
+        self.assertLess(workflow.index(marker), workflow.index('      - name: Publish a uniquely versioned prerelease'))
+        block = workflow.split(marker, 1)[1].split('      - name:', 1)[0]
+        script = textwrap.dedent(block.split('        run: |\n', 1)[1])
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            helper = root / 'capture/desktop/scripts/release/preview_appcast.py'
+            helper.parent.mkdir(parents=True)
+            helper.write_bytes((ROOT / 'capture/desktop/scripts/release/preview_appcast.py').read_bytes())
+            (root / 'dist').mkdir()
+            (root / 'dist/Apparent-Preview-0.12.2-arm64.zip').write_bytes(b'x')
+            (root / 'preview-signature-attributes').write_text('sparkle:edSignature="' + base64.b64encode(bytes(64)).decode() + '" length="1"')
+            (root / 'bin').mkdir()
+            gh = root / 'bin/gh'
+            gh.write_text('#!/bin/sh\nprintf "%s" "$FEED_CONTENT"\n')
+            gh.chmod(0o755)
+            for build, allowed in [('12.1', True), ('12.2', False), ('12.3', False), ('13.1', False)]:
+                feed = '<rss version="2.0" xmlns:sparkle="http://www.andymatuschak.org/xml-namespaces/sparkle"><channel><title>Preview</title><item><sparkle:version>' + build + '</sparkle:version></item></channel></rss>'
+                env = dict(os.environ, PATH=str(root/'bin')+':'+os.environ['PATH'], RUNNER_TEMP=tmp,
+                           FEED_CONTENT=base64.b64encode(feed.encode()).decode(), GITHUB_REPOSITORY='tryapparent/apparent',
+                           APPARENT_PREVIEW_VERSION='0.12.2', APPARENT_PREVIEW_BUILD_NUMBER='12.2', APPARENT_PREVIEW_TAG='preview-mac-12-2')
+                result = subprocess.run(['bash', '-c', script], cwd=root, env=env, text=True, capture_output=True)
+                self.assertEqual(result.returncode == 0, allowed, (build, result.stderr))

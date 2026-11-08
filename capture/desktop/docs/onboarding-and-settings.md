@@ -5,9 +5,8 @@
 The Mac status item keeps the approved lowercase “a” at 18 points. It uses Lilac
 on Carbon in dark appearance and the website's darker purple (`#7a58c7`) on
 Paper (`#faf9f6`) in light appearance. The latter has 4.93:1 internal contrast.
-It follows the application's inherited system appearance through AppKit KVO,
-including live changes. A full-screen menu bar can stay dark in both system
-modes, so the status button's own appearance must not select the icon variant.
+It follows the actual status button's effective appearance through AppKit KVO,
+including live changes, rather than checking the app's theme only at launch.
 There is no app appearance setting or restart requirement. The Dock/app icon
 keeps its Carbon/Lilac colors. Linux's tray is unchanged.
 This is an OS adapter change, not a new Settings workflow;
@@ -16,8 +15,7 @@ the development Electron Settings window does not create a second tray icon.
 Regenerate the light variant from the approved menu bar raster with
 `swift capture/desktop/scripts/native/make-menu-bar-light.swift`; append
 `--check` to verify shape, colors and contrast. Native acceptance still needs the running
-candidate's status item in Light and Dark mode, in full-screen and normal windows,
-a live transition without restarting the app, and an
+candidate's status item on light and dark menu bars, a live transition, and an
 open menu. An asset check or successful build alone is not that proof.
 
 Read this before changing `capture/desktop/settings/onboarding.rs`, `capture/desktop/settings/settings.rs`, `composition/command_line.rs` or the helper's `Onboarding.swift`, `PermissionPanel.swift` and `Settings.swift`.
@@ -42,38 +40,18 @@ Desktop startup installs reporting only when packaging supplies the publishable
 `APPARENT_POSTHOG_TOKEN` (`phc_…`) for the intended EU project. Without it, builds
 never send. The fixed destination is `https://eu.i.posthog.com/i/v0/e/`; `curl`
 must be available. CLI commands/tests never install the global reporter.
-Live ingestion and grouping require bounded synthetic verification in an isolated
-project or an explicitly approved test target before release; local HTTP tests
-are not that proof. Alert configuration and delivery verification are deferred
-from the initial Electron exception-capture slice; capture does not imply notifications.
+Live ingestion, grouping and alerts require bounded synthetic verification in an
+isolated project before release; local HTTP tests are not that proof.
 
-Reports include a fixed failure category, version/build, OS/architecture and
-repo-relative source call site. Operation errors also include typed processing
-breadcrumbs (step and source line), OS error kind/number, JSON error category and
-position when present, and bounded error-chain depth. Finalization failures include
-capture mode, dimensions/scale, duration, candidate-frame count, video/microphone
-presence when known, pending-notes status and stroke/interaction counts. These
-describe reproduction inputs, not their contents. Unknown third-party messages
-remain local; diagnostics never format an arbitrary error. Error groups distinguish
-the deepest known step and OS error kind per platform; breadcrumb frames are
-synthetic failure boundaries, not an unwound stack. No raw error/panic text, logs, recordings,
+The payload allows only a static failure category, version/build, OS/architecture
+and repo-relative source call site. No raw error/panic text, logs, recordings,
 screenshots, transcripts, clipboard contents, window/device names, capture IDs,
 share URLs or user paths. Each event gets a random identity; person profiles and
 geolocation are disabled. No session replay/usage tracking. The receiving service
 still sees the connection's IP address; transport is not anonymous.
 
 Coverage: desktop recording storage/audio/screen/phone startup, capture finalization,
-video export and Rust panics after startup. Electron main uncaught exceptions and
-unhandled rejections, plus renderer error/unhandledrejection events, send fixed
-categories through the same-user Rust socket and the same consent/queue limits.
-Main failures exit with status 1 after at most 600 ms of best-effort enqueue;
-renderer reporting does not cancel the browser event. No exception payload is read.
-Only release Rust launches with an installed reporter enable these hooks; ordinary
-Electron development/test launches and debug Rust builds do not send them.
-Preload initialization exceptions and native renderer crashes remain outside coverage.
-These reports identify the runtime/category, not the original JavaScript stack.
-A missing Rust process, socket contention or exhausted queue can lose the report.
-This does not add native crash, handled fallback or Connect/CLI reporting. This is a synthetic call-site frame,
+video export and Rust panics after startup. This is a synthetic call-site frame,
 **not a full unwound stack or native crash dump**. Segfaults, forced exits,
 Swift/Objective-C crashes and failures before startup are not captured. The queue
 holds at most 16 events, with 20 attempts/minute and a two-second HTTP timeout.
@@ -133,75 +111,14 @@ and permission-repair windows retain their existing behavior.
 
 ## Settings (`capture/desktop/settings/settings.rs`, `capture/desktop/native/Settings.swift`)
 
-Settings' owned presentation and helper wire models live in
-`settings/settings/models.rs`, reexported through `settings.rs`. GPUI consumes the
-same typed snapshot in process; only the Swift helper state crosses a serialized
-process boundary. GPUI-only playback defaults are omitted from that wire payload.
-Storage and Connect continue to receive their narrow socket projections, with the
-existing native fallbacks and routing. This extraction adds no config writer or
-route switch; native presentations remain until their shared replacement is accepted.
-
-### Settings ownership inventory and Storage transition
-
-This bounded inventory records the current control contracts before the Settings
-shell migration. “Native” means the established Rust/platform Settings path remains
-the fallback until that workflow is accepted. Config-file edits are read at each
-setting’s stated application point; native OS state must be queried and reconciled
-through its adapter.
-
-| Control | Schema, default and validator/writer | Effect, timing, native dependency and fallback |
-|---|---|---|
-| General: appearance | No persisted key; system appearance is the default. Electron theme follows system. | Presentation only; live changes follow the OS. Native Settings remains the route for other General controls. |
-| General: launch at login | OS login-registration state, not proof from a config value; adapter validates the supported registration action. | OS-owned registration applies on change. Keep native registration/status reconciliation until the shared route is accepted. |
-| General: Record / Paste shortcuts | `shortcuts.record` and `shortcuts.paste`; absent uses ⌥⇧S / ⌥⇧V, `paste: null` disables Paste. `settings::validate` rejects reserved or conflicting combinations; runtime registration and rollback are authoritative. | New shortcut takes effect immediately after OS registration; config edits are read when Settings opens. Native recorder remains fallback; Linux’s managed Hyprland binding can override the saved Record shortcut. |
-| General: technical error reports | `errorReporting`, default `true`; Boolean only, written by the shared config transaction. | Consent setting applies to later reports; keep native consent/presentation fallback. |
-| General: Connect and sharing | `cloud.*`, `experiments.hostedSync`, `hostedEncryption`, `connectSettings`; Connect owns schemas, validation, credentials, consent and its controller under #529. | Compose Connect’s published controller/panel; do not mirror its policy in Desktop. Native Connect presentation remains fallback until its owner’s acceptance. |
-| Recording: microphone for next capture | `microphoneEnabled`, default `true`; Boolean. Selected device remains a separate `microphone.id/name` preference. | Frozen at permission admission and applies to the next capture. Rust retains permission/device opening and capture execution; native control is fallback. |
-| Recording: input device | `microphone.id/name`; absent means system default. Native enumeration validates available identifiers; unavailable selections fall back to the current default. | Reconciled while Settings is open; a new capture opens the selected device. OS audio enumeration and meter remain native mechanics/fallback. |
-| Recording: transcription language/provider | `appleLocale`; Automatic removes the key. Only helper-supported locales are offered; language changes return the speech-model effect. | Applies to the next model check/capture; preserve native provider and model lifecycle. |
-| Recording: playback ducking | `lowerPlayback`, default `false`; `playbackLevel`, default `20`, integer range 0–100. Settings validates and writes the two top-level values; playback implementation is `capture/desktop/playback.rs`. | Desktop setting intent controls the next recording-time playback effect. Audio device/session mechanics stay native; existing native control remains until its workflow is accepted. |
-| Recording: video export | `videoExport`, top-level Boolean, default `true`; Engine config accessor and menu behavior are in `shared/handoff/mod.rs`, documented in `capture/engine/docs/export-and-retention.md`. | Engine owns export availability and execution; Desktop may host its control but does not move export policy into a second owner. |
-| Recording: transcription engine | `transcriber` defaults to Apple; accepted values are `apple`, `hex`, `command`. `hexModel` defaults to the first ready preferred Hex model; `hexLanguage` defaults to `en`, with `auto` supported and validation in `shared/hex.rs`. Apple locale is separate (`appleLocale`). | Engine owns model/provider readiness, transcription execution and fallback. Settings composes those published facts; no provider/token data enters a Desktop policy facade. |
-| Storage: capture location | `capturesDir`; absent selects the built-in folder. `APPARENT_CONFIG` selects the config file; `APPARENT_CAPTURES_DIR` wins even when empty or relative, then the saved preference, then built-in. TypeScript owns saved-value normalization, tilde/absolute validation, precedence and Settings fallback presentation; native returns presence-aware facts and performs a revision-checked filesystem probe. CAS covers only this owner key. | New captures continue to use the existing native resolver and safety fallback; existing captures never move. A running cleanup/transcript worker retains its startup folder until app restart. Native Storage stays the opt-out/crash fallback. |
-| Storage: retention | `retention.mediaDays` / `bundleDays`; absent defaults to **7 media / 30 bundle days**, explicit JSON `null` means forever. Week is 7/30, Month is **30/90**, Forever is null/null. TypeScript validates stored fields, owns labels/notes/presets and sends only these two values; Rust’s config-lock CAS executor is temporary mechanics debt. | Successful save nudges the existing cleanup worker for about five seconds later, deferred during recording; manual edits apply on its next pass (normally hourly). Startup-folder lifetime is unchanged. Native page is still the fallback. |
-| Storage: folder usage / Show folder | Read-only. Rust measures logical bytes without following symlinks, with depth/entry bounds; Show folder uses the native shell opener. | Scans only on Storage open or explicit refresh. Error/timeout never presents a stale total; native OS opener and usage executor remain. |
-| Permissions: camera, screen, microphone, speech and accessibility | OS-owned grant facts; native adapter checks actual permissions and allows only fixed permission actions. No config Boolean substitutes for a grant. | Requests/open-settings actions reconcile with the OS; Screen Recording may require relaunch. Keep native permission panels and platform proof. |
-| Agents: command-line tool and skill installation | Agent installer/skill owner validates executable and target paths; installation state is read from actual files. Its installed Settings workflow and donor/routing retirement are being handled in PR #376. | Agent owns CLI/skill behavior; Desktop composes that page. Parent #530 will consume the accepted owner route later and will not duplicate its policy. |
-| Agents: demo-video preference | `experiments.agentDemoVideo`, default enabled; Agent reads it at handoff and owns the instruction/behavior (`shared/handoff/mod.rs`, `capture/engine/docs/keyframes-and-text.md`). | Settings placement belongs to the existing Agents page owner (PR #376); Agent behavior stays with Agent. Config edits apply on the next copy/paste. |
-| About: updates, version, GitHub link and welcome tour | Version/build identity is compiled metadata; `updateChannel` is `stable` by default or `main`, consumed by Linux update state; URL is fixed; tour is a native action. | Desktop/Linux updater owns channel selection and launch effects; update checks and package state remain native mechanics. Electron must not infer installed/update success from presentation state. |
-
-Baseline at the start of #530, in the bound worktree before edits: frontend
-dependencies were absent and there was no Cargo `target/` cache. `npm ci
---ignore-scripts` took 1.47 s; `npm run build` took 3.85 s; `npm test` took
-0.50 s (76 tests passed). Rust invocations: 0. These are owner-local edit-to-test
-baseline measurements, not a speedup claim. The Storage slice keeps the TS build
-and test lane independent of Rust; its changed native bridge still needs one
-focused Rust↔Electron integration check.
-
-### Apparent Connect
+### Apparent Connect (experiment)
 
 **General → Connect** appears by default above Launch at login on
 macOS and Linux. Opening it does not sign in, grant upload consent or enable
-uploads. Private Connect and endpoint encryption are available by default; explicit
-`experiments.hostedSync=false` or `experiments.hostedEncryption=false` retains an
-opt-out. Availability never changes `cloud.enabled` or `cloud.uploadConsent`, and
-onboarding practice remains local-only. To hide the controls, set `"connectSettings": false` in the existing
+uploads. To hide the controls, set `"connectSettings": false` in the existing
 `experiments` object in `~/.config/apparent/config.json`, then close and reopen
 Settings. It adds no onboarding step and does not require `hostedSharing`. Without a configured `cloud.server`, sign-in uses
 `https://hosted.tryapparent.com`; an existing valid custom origin is preserved.
-
-Connection actions in General open the packaged shared Electron Connect view.
-It uses the existing Rust controller and a Connect-only bridge; navigating back
-returns to the existing Settings pages. Missing assets or a failed Electron window
-retain the native General fallback. Closing/reloading cancels pending approval;
-the native action that opened the view is consumed once and is never replayed by
-reload. Keep the native fallback until shared consent/cancellation/recovery and
-navigation pass Linux checks and affected launch/browser/focus/fallback seams pass
-on their OS under [Desktop verification](native-testing.md). Do not repeat the
-shared matrix on Mac; reuse applicable native evidence for unchanged inputs.
-Ordinary Settings opens
-no longer measure capture history; the native Storage fallback measures only on
-an explicit Storage visit, and Electron Storage uses its bounded usage request.
 
 **Sign in to Connect… → Allow and continue → Open browser** explains the full
 upload scope before starting device authorization. The browser link carries the public code automatically; approve there, then return
@@ -219,12 +136,6 @@ already uploaded data. Cancelled jobs cannot silently resume after a later login
 **Check connection** performs a bounded authenticated background probe; ordinary
 Settings refresh reads local state only. Offline, reauthorization, denied/expired
 approval and local storage failures retain local capture and offer recovery.
-An expired access token with a valid refresh grant shows **Connection needs a
-refresh**, with **Check connection** directly on the card. It does not ask for
-another sign-in or claim that renewal has completed. Checking renews access
-through the existing client; expired refresh grants and revoked authorization
-still require sign-in. Reopening Settings or updating the app preserves this
-distinction without making a network request merely to display the page.
 If a disable/disconnect could not finish because local state was busy, uploads
 remain blocked across restart. Use Disable uploads or Disconnect again to finish;
 do not delete the client's pending revocation files. Failed state writes are not
@@ -234,10 +145,9 @@ raw errors, tokens and device secrets never enter its presentation contract.
 
 Connect uses the accepted Paper card and the shared frog artwork, without a separate
 section heading. The invitation reads “Help others see what you mean.”; successful
-local activation becomes a compact confirmation. The top-right account control shows
-the initial derived from the verified email on the active local grant, without
-exposing the email to Desktop. Older credentials and unavailable identity use a
-neutral person icon. Disable and disconnect first show a local confirmation; declining
+local activation becomes a compact confirmation. The top-right A opens connection
+controls, not an asserted account identity: the current Desktop contract has no
+verified email. Disable and disconnect first show a local confirmation; declining
 it does not revoke or cancel anything. Confirmed commands retain the existing
 revocation and pending-login cancellation semantics. Shared-link management is
 available only through its existing feature gate and validated credential site.
@@ -256,8 +166,7 @@ and test instructions are in `../ui/frontend/README.md`. Its persistent socket
 belongs to that window: reload/close/crash or an expired idle lease cancels pending
 sign-in, including late authorization receipts. Local refreshes do not probe the
 server. This does not change installed Settings routing; legacy controls remain
-the rollback until shared behavior and affected native seams are accepted under
-[Desktop verification](native-testing.md).
+the rollback until equivalent native Linux and macOS acceptance is complete.
 
 The shared config writer serializes CLI and GUI processes with a private
 `config.json.lock` sidecar, held from before the file read until atomic publication.
@@ -285,61 +194,17 @@ Recording without speech: `microphoneEnabled` in `~/.config/apparent/config.json
 
 Shift-click opens an Electron note near the click on release; Shift-drag still draws. Enter/Attach saves, Shift+Enter inserts a newline, and empty Enter closes without saving or erasing a saved note. Escape or clicking outside closes while keeping a draft for this capture. The counter follows the recording capsule, opens the compact notes list, and counts only durable saves. Notes can be edited or deleted from the list. Finish waits for already submitted saves; a failed receipt retains recording assets for recovery. Drafts are not exported as note metadata or summary text. Linux display video includes the popup while visible, including text not yet attached. This notes surface uses Electron by default; the existing capture controls and platform input adapters remain in use. Packaging includes its runtime. Removing this routing requires restoring an accepted notes surface, not silently dropping typed feedback. See the frontend README for routing and native acceptance gates.
 
-On Linux, Shift-click also annotates the native and Electron Settings windows
-during a capture. Only those live Settings surfaces opt in; ordinary clicks on
-Apparent, the recording pill and the notes editor retain their input exclusions.
-Electron Settings uses XWayland, matching capture's overlay and note editor, so
-the Shift overlay owns the pointer before a Settings control can act. Native
-window/process lifetime guards remove admission when Settings closes or its child
-exits. macOS's own-window input route is unchanged and still excludes Settings
-self-annotation. Reverting this admission restores the old Settings exclusion;
-the shared Electron editor and already saved notes remain compatible.
-
 Recording › Microphone (`capture/engine/runtime/audio/mic.rs`): `"microphone": {"id","name"}` holds an input id in `~/.config/apparent/config.json`; the name only labels a missing device. Absent = System default. Mac uses CoreAudio UIDs (also `AVCaptureDevice.uniqueID`). Linux with a PulseAudio-compatible server (including PipeWire) and `pactl` lists source names as `pulse:<name>`; `capture/desktop/linux/microphone.rs` opens the chosen source with GStreamer's `pulsesrc`, converting it to 16 kHz mono samples for the same capture buffer and Settings meter. A new capture waits for its first sample before accepting the source; a disconnected or unopenable choice falls back to the Pulse default shown in Settings, then to CPAL only if that default cannot open. It never changes the system default. Linux without a working Pulse server / `pactl` falls back to CPAL's available inputs; this may expose only the shared `default` or `pipewire` device, so distinct microphones cannot be selected there. Windows is unsupported; retained code is not a parity target. `mic::Watch` re-lists inputs while Settings is open: CoreAudio listeners on Mac, one-second checks elsewhere. `AudioRecorder` opens the chosen input on its worker thread, otherwise the current system default; a disconnected or unopenable choice remains saved but does not stop a new capture (`mic::Pick` explains the fallback in Settings and `note_pick` logs once). An error partway through a capture keeps samples heard so far. Mac's helper `MicMeter` uses AVCaptureSession; Linux GPUI Settings starts a separate input stream, stops it when leaving Recording, and expires stale level readings after 300 ms. The meter shows input samples, not recognized words or speaker identity; #16 owns no-transcript messaging. `apparent mic list|set <id|default>|watch` reports and changes the same saved selection.
 
-Storage › Location (`CapturesDirView`): Change… opens the helper's folder picker and stores an absolute `capturesDir`; Reset removes only that key. The installed TypeScript Settings policy owns preference normalization, `~` expansion, absolute-path validation, environment precedence and fallback presentation from bounded native facts. `APPARENT_CAPTURES_DIR` wins even when empty or relative, then a usable saved preference, then `builtin_captures_dir`. The native config-lock CAS is the sole durable writer; the capture-time resolver remains an independent safety reader used by actual captures and legacy consumers. New captures and fresh CLI/size lookups use the native effective location; already-running retention/transcript workers keep their startup directory until the Rust app restarts. Captures already made aren't moved. The default Electron Storage route, native fallback and proof limits are documented in `capture/desktop/ui/frontend/README.md`. State kept beside captures (`inbox.json`, `last-mode`, legacy `config.json`) stays under `builtin_captures_dir`'s parent.
+Storage › Location (`CapturesDirView`): Change… opens the helper's folder picker and sends `set capturesDir` with an absolute path; Reset sends `""`, which removes the key. `handoff::default_captures_dir` reads it on every call (`APPARENT_CAPTURES_DIR` wins, then `"capturesDir"`, then `builtin_captures_dir`; `~` expands, a relative path is logged and skipped; tests never read the config). New captures and fresh CLI/size lookups use the new location; already-running retention/transcript workers keep their startup directory until the Rust app restarts. Captures already made aren't moved. The default Electron Storage route, native fallback and its proof limits are documented in `capture/desktop/ui/frontend/README.md`. A folder that can't be created or written falls back to the built-in one (logged once). State kept beside the captures (`inbox.json`, `last-mode`, legacy `config.json`) stays under `builtin_captures_dir`'s parent. The legacy config path stays under `builtin_captures_dir`.
 
-Storage opens the branded Electron Settings page by default; other Settings pages keep their native presentation. Set `experiments.electronCaptureLocation=false` and reopen Settings to use native Storage. Missing packaged assets or an Electron crash also restore native Storage. TypeScript owns capture-location precedence, path normalization, Settings fallback presentation and retention defaults/validation/preset policy; it sends allowlisted persistence intent. Native code returns presence-aware location facts, probes only the TS-selected folder, and keeps the existing config-lock CAS executor, usage scan and cleanup nudge; the renderer never reads files. The native capture-time resolver remains an independent safety reader for actual captures and existing supported consumers. The config transaction executor is temporary shared-writer debt until a coordinated all-writer cutover. Malformed known retention values still display the cleanup reader's Week defaults without projecting the malformed config values. Saving/resetting schedules the existing retention worker for about five seconds later (deferred while recording); file edits are read on the next pass, normally hourly. Running workers keep their startup folder until restart. The native Storage presentation remains the opt-out and failure fallback. Activation, rollback, failed/stale results, usage scan limits and the exact old-UI removal condition are in `capture/desktop/ui/frontend/README.md#storage-retention-and-usage-291`.
+Storage now opens the branded Electron Settings page by default; other Settings pages keep their native presentation. Set `experiments.electronCaptureLocation=false` and reopen Settings to use native Storage. Missing packaged assets or an Electron crash also restore native Storage. Rust supplies the policy/options/note, saves through the existing config transaction and measures the effective folder; the renderer never reads files. Saving/resetting schedules the existing retention worker for about five seconds later (deferred while recording); file edits are read on the next pass, normally hourly. Running workers keep their startup folder until restart. The native Storage presentation remains the opt-out and failure fallback. Activation, rollback, failed/stale results, usage scan limits and the exact old-UI removal condition are in `capture/desktop/ui/frontend/README.md#storage-retention-and-usage-291`.
 
 Recording › Language shows under Transcription while it's Apple Speech: Automatic, then the helper's supported `locales` by name. It writes `appleLocale` (Automatic removes the key) and returns `Effect::SpeechModel`, which restarts the model check for the new language (see `capture/engine/docs/keyframes-and-text.md`).
 
 The sidebar is the helper's alone: a row selects on mouse-down and its pane replaces the last on the next frame, with no transition (keep it that way; a fade read as lag; the level meter starts after the Recording pane has drawn). Rust's `state` never carries the pane (only `show` does, when Settings is opened again), so a reply can't move the selection.
 
 About shows the package version and the running binary's build-time commit, for example `Version 0.3.13 · ad8d4b1`. Tracked local edits add `+modified`; builds without Git metadata or a valid CI revision say `build unknown`. This identifies the compiled build, not the selected update channel or an update staged for the next launch. Both the Mac helper and Linux GPUI Settings use the same label.
-
-### Window corner build identity
-
-Visible Apparent windows carry a passive short commit label, enabled by default,
-except the recording pill and transparent ink/laser canvases, which are explicitly
-exempt. The Linux ink overlay remains free of version text in recorded pixels.
-It uses the same build-time `APPARENT_VERSION_LABEL` as About, shortened to the
-commit and optional `+modified`. Missing identity reads `build unknown`. It does
-not read the user's checkout, identify Electron's version, or describe a staged
-update. It takes no keyboard focus and has no action.
-
-Rust supplies `APPARENT_RUNNING_BUILD_LABEL` explicitly when launching Electron
-or Swift helpers, overriding inherited shell metadata. Electron freezes the
-value at startup and exposes only a read-only request from owned packaged main
-frames through the isolated preload. Standalone frontend launches have no
-backend identity and show `build unknown`. This adds no settings writer or flag.
-
-| Surface | Presentation owners |
-| --- | --- |
-| Onboarding/tour and permission guides | React onboarding, GPUI onboarding, Swift onboarding/PermissionPanel |
-| Settings | React Settings, GPUI Settings, Swift Settings |
-| Foundation, share/completion and notes | Shared React component; native completion/review fallback where reachable |
-| Target picker | Existing GPUI platform adapters; recording pill is exempt |
-| Whiteboard and lab | Existing GPUI rendering adapters |
-
-Decommissioned iPhone/mirror surfaces are outside this inventory.
-The offscreen Linux keepalive window is intentionally invisible. Transient
-transparent note-flight sprites carry no controls and are also left clear. Labels do not
-keep transient overlays mapped, change capture exclusion, or activate a different
-renderer. Existing routing and fallback remain authoritative. Rollback removes
-the common label and its read-only transport together; native counterparts are
-removed only when their route, consumers and packaging are independently retired.
-The React label migrates this presentation slice without moving capture policy,
-permission decisions or unrelated Settings workflows.
 
 About has a Star on GitHub button below the update control. Its heading, action and caption share one box in the Mac helper and Linux GPUI Settings. It opens `https://github.com/tryapparent/apparent` in the browser; starring remains the user's choice on GitHub.
 
@@ -399,7 +264,7 @@ Agents › Ask for a Apparent video on complex changes toggles `"experiments": {
 
 Render every pane (dark, light, each shortcut state: held, listening, partial, refused, accepted, custom; microphone chosen/missing/not allowed) with `apparent-helper settings --render DIR`, and one take on the shortcuts as 60 fps PNGs for a video with `--render DIR --shortcut-clip [--light]`; test with `cargo test settings::`.
 
-## Lower other audio while recording (`capture/desktop/playback.rs`, `engine/native/PlaybackVolume.swift`)
+## Lower other audio while recording (`capture/desktop/playback.rs`, `capture/engine/native/PlaybackVolume.swift`)
 
 Off by default. General › Lower other audio while recording (`"lowerPlayback": true`) ramps the default output device's volume over one second to `playbackLevel` percent of what it was (Lower to, default 20%; 0 mutes) from the moment the shortcut is pressed or a recording starts, Mac or cabled iPhone, and back when it finishes, is cancelled or the picker closes without recording. `apparent-helper playback-volume --server`, started at launch while the setting is on, does the CoreAudio work and takes `start N` / `stop` lines on stdin. It reads every writable output channel's volume scalar before writing any (the master volume only when the channels have none), so balance and silent channels come back as they were; it never touches the mute flag or any input device. It restores when told to stop, when Apparent exits or crashes (stdin closes) and at once on SIGTERM, SIGINT or SIGHUP; it leaves the volume alone if someone changed it during the recording, and a device switched to mid-recording isn't lowered (the original device is restored). Fixed-volume outputs are left unchanged. Linux does nothing. `apparent-helper playback-volume --self-test` runs the ramp tests on fake devices; `--inspect` prints the current device's volume controls without changing them.
 
@@ -415,3 +280,14 @@ or a renderer crash restore the native presentation. During capture, constructio
 of a crashed presentation’s native replacement waits until capture ends. The
 first-capture opt-out changes the workflow requirements; it does not select a
 second competing onboarding surface.
+
+
+The release-baseline onboarding candidate uses the existing packaged Electron route
+for the approved pen picker, permission checklist, shortcut editor and floating
+practice coaches. The lesson follows real whiteboard/screen ink, completion and
+clipboard receipts, then asks the person to confirm a manual paste and open the
+same practice bundle. Confirmation does not establish destination focus or audio
+quality; installed platform acceptance remains required. `penColor` accepts
+`coral`, `purple`, `blue` or `green`, loads at app startup and applies immediately
+when saved in setup. Legacy strokes without a color retain red. Config writes
+preserve unrelated keys. See [candidate admission and proof](onboarding-release-candidate.md).

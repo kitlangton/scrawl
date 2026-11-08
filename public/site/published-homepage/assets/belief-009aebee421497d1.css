@@ -1,0 +1,41 @@
+.pond-page .pond-purpose { max-width: none; margin: 0; padding: 0; }
+.pond-purpose .belief-pond { display: grid; min-height: 100svh; place-items: center; padding: 56px 40px 36px; }
+.pond-purpose .belief-pond #study { width: 100%; max-width: 1160px; text-align: center; }
+.pond-purpose .belief-pond h2 { margin: 0 auto; max-width: 1140px; font-size: clamp(42px, 6.25vw, 84px); line-height: 1.02; letter-spacing: -.052em; font-weight: 650; text-wrap: balance; }
+.pond-purpose .belief-pond .word { display: inline-block; position: relative; isolation: isolate; white-space: nowrap; }
+.pond-purpose .belief-pond .word svg { position: absolute; pointer-events: none; overflow: visible; }
+.pond-purpose .belief-pond .work svg { inset: -15% -12%; width: 124%; height: 130%; z-index: 2; }
+.pond-purpose .belief-pond .work-circle { fill: none; stroke: #d84b45; stroke-width: 5; stroke-linecap: round; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.pond-purpose .belief-pond .enjoyable svg { left: -3%; top: 0; width: 106%; height: 110%; z-index: 0; }
+.pond-purpose .belief-pond .enjoyable > span { position: relative; z-index: 1; }
+.pond-purpose .belief-pond .enjoy-highlight { fill: none; stroke: #b7a5d8; stroke-opacity: .65; stroke-width: 53; stroke-linecap: butt; stroke-dasharray: 1; stroke-dashoffset: 1; }
+.pond-purpose .belief-pond .scene { position: relative; width: min(100%, 1080px); height: 350px; margin: 80px auto 0; isolation: isolate; }
+.pond-purpose .belief-pond .frog { position: absolute; display: block; height: auto; bottom: 105px; image-rendering: pixelated; user-select: none; pointer-events: none; }
+.pond-purpose .belief-pond .pair-left { width: 19.333%; left: 58%; z-index: 2; }
+.pond-purpose .belief-pond .pair-right { width: 18%; left: 82%; z-index: 2; }
+.pond-purpose .belief-pond .newcomer { width: 26.333%; left: -3.4%; aspect-ratio: 588 / 371; z-index: 3; transform-origin: 50% 100%; }
+.pond-purpose .belief-pond .pose { position: absolute; inset: 0; width: 100%; height: 100%; image-rendering: pixelated; }
+.pond-purpose .belief-pond .air { opacity: 0; }
+.pond-purpose .belief-pond [data-pose="air"] .rest { opacity: 0; }
+.pond-purpose .belief-pond [data-pose="air"] .air { opacity: 1; }
+.pond-purpose .belief-pond .hug { width: 32%; left: 63.5%; opacity: 0; z-index: 4; transform-origin: 50% 100%; }
+.pond-purpose .belief-pond .pad { position: absolute; bottom: 105px; transform: translateY(50%); height: auto; z-index: 0; pointer-events: none; }
+.pond-purpose .belief-pond .pad-small { width: 23%; left: -1.75%; }
+.pond-purpose .belief-pond .pad-large { width: 48%; left: 52%; }
+.pond-purpose .belief-pond button { position: absolute; left: 9.75%; bottom: 0; transform: translateX(-50%); appearance: none; font: inherit; font-size: 21px; font-weight: 550; line-height: 1.2; min-width: 148px; min-height: 56px; padding: 15px 25px; border: 0; border-radius: 20px; background: #c3afe6; color: #211d29; cursor: pointer; touch-action: manipulation; }
+.pond-purpose .belief-pond button:hover { background: #bca4e2; }
+.pond-purpose .belief-pond button:focus-visible { outline: 3px solid #332640; outline-offset: 5px; }
+.pond-purpose .belief-pond button:active { background: #ae94d9; }
+.pond-purpose .belief-pond button[aria-disabled="true"] { cursor: progress; }
+.pond-purpose .belief-pond #status { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+.pond-purpose .belief-pond [data-state="hugged"] .pair-left, .pond-purpose .belief-pond [data-state="hugged"] .pair-right, .pond-purpose .belief-pond [data-state="hugged"] .newcomer { opacity: 0; }
+.pond-purpose .belief-pond [data-state="hugged"] .hug { opacity: 1; }
+@media (max-width: 600px) {
+  .pond-purpose .belief-pond { padding: 40px 20px 32px; }
+  .pond-purpose .belief-pond h2 { font-size: clamp(36px, 10.9vw, 58px); line-height: 1.04; letter-spacing: -.045em; }
+  .pond-purpose .belief-pond .scene { margin-top: 46px; height: 220px; }
+  .pond-purpose .belief-pond button { min-width: 96px; min-height: 48px; padding: 12px 17px; font-size: 17px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .pond-purpose .belief-pond *, .pond-purpose .belief-pond *::before, .pond-purpose .belief-pond *::after { animation: none !important; transition: none !important; }
+}

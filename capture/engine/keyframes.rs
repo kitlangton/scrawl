@@ -1,8 +1,5 @@
-use crate::capture::engine::sketch::{describe_event, describe_mark, settled_events};
 use crate::shared::model::*;
-use apparent_capture_engine::observations::{
-    LumaGrid, luma_grid_up_to_128, luma_thumbnail64x36,
-};
+use crate::capture::engine::sketch::{describe_event, describe_mark, settled_events};
 
 const THUMB_WIDTH: usize = 64;
 const THUMB_HEIGHT: usize = 36;
@@ -11,7 +8,26 @@ const FRAME_GAP_MS: u64 = 750;
 
 /// Sample the centers of a fixed grid; cost is independent of capture resolution.
 fn luma_thumbnail(frame: &RgbaFrame) -> [f32; THUMB_PIXELS] {
-    luma_thumbnail64x36(&frame.rgba, frame.width, frame.height)
+    let mut thumbnail = [0.0; THUMB_PIXELS];
+    if frame.width == 0 || frame.height == 0 {
+        return thumbnail;
+    }
+    let width = frame.width as usize;
+    let height = frame.height as usize;
+    for y in 0..THUMB_HEIGHT {
+        let sy = ((2 * y + 1) * height / (2 * THUMB_HEIGHT)).min(height - 1);
+        for x in 0..THUMB_WIDTH {
+            let sx = ((2 * x + 1) * width / (2 * THUMB_WIDTH)).min(width - 1);
+            let offset = (sy * width + sx) * 4;
+            if let Some(pixel) = frame.rgba.get(offset..offset + 3) {
+                thumbnail[y * THUMB_WIDTH + x] = (0.2126 * pixel[0] as f32
+                    + 0.7152 * pixel[1] as f32
+                    + 0.0722 * pixel[2] as f32)
+                    / 255.0;
+            }
+        }
+    }
+    thumbnail
 }
 
 fn thumbnail_diff(a: &[f32; THUMB_PIXELS], b: &[f32; THUMB_PIXELS]) -> f32 {
@@ -48,27 +64,63 @@ fn scene_transition_diff(a: &[f32; THUMB_PIXELS], b: &[f32; THUMB_PIXELS]) -> f3
     global.max((top[3] * 1.4).clamp(0.0, 1.0))
 }
 
-/// Mean luma over a grid of up to 128×128 cells, so a thin line that appears changes its cell.
+const GRID: usize = 128;
+
+/// Mean luma over a grid of up to `GRID`×`GRID` cells, so a thin line that appears changes its
+/// cell.
+struct LumaGrid {
+    columns: usize,
+    rows: usize,
+    cells: Vec<f32>,
+}
 
 fn luma_grid(frame: &RgbaFrame) -> LumaGrid {
-    luma_grid_up_to_128(&frame.rgba, frame.width, frame.height)
+    let (width, height) = (frame.width as usize, frame.height as usize);
+    let (columns, rows) = (width.min(GRID), height.min(GRID));
+    // Large frames are sampled at up to four pixels per cell side.
+    let step = (width.max(height) / (GRID * 4)).max(1);
+    let cell_x: Vec<usize> = (0..width)
+        .step_by(step)
+        .map(|x| x * columns / width)
+        .collect();
+    let mut sums = vec![0_u32; columns * rows];
+    let mut counts = vec![0_u32; columns * rows];
+    let lines = frame.rgba.chunks_exact(width.max(1) * 4).take(height);
+    for (y, line) in lines.enumerate().step_by(step) {
+        let row = y * rows / height * columns;
+        for (p, &x) in line.chunks_exact(4).step_by(step).zip(&cell_x) {
+            // Rec. 709 luma in 1/256ths.
+            sums[row + x] += (54 * p[0] as u32 + 183 * p[1] as u32 + 19 * p[2] as u32) >> 8;
+            counts[row + x] += 1;
+        }
+    }
+    let cells = sums
+        .iter()
+        .zip(&counts)
+        .map(|(&sum, &n)| sum as f32 / 255.0 / n.max(1) as f32)
+        .collect();
+    LumaGrid {
+        columns,
+        rows,
+        cells,
+    }
 }
 
 /// The share of cells inside `rect` (normalized `[x0, y0, x1, y1]`) whose luma changed.
 fn region_diff(a: &LumaGrid, b: &LumaGrid, rect: [f32; 4]) -> f32 {
-    if (a.columns(), a.rows()) != (b.columns(), b.rows()) || a.cells().is_empty() {
+    if (a.columns, a.rows) != (b.columns, b.rows) || a.cells.is_empty() {
         return 1.0;
     }
     let span = |lo: f32, hi: f32, n: usize| {
         let lo = ((lo * n as f32) as usize).min(n - 1);
         lo..((hi * n as f32).ceil() as usize).clamp(lo + 1, n)
     };
-    let rows = span(rect[1], rect[3], a.rows());
-    let columns = span(rect[0], rect[2], a.columns());
+    let rows = span(rect[1], rect[3], a.rows);
+    let columns = span(rect[0], rect[2], a.columns);
     let total = rows.len() * columns.len();
     let changed = rows
-        .flat_map(|y| columns.clone().map(move |x| y * a.columns() + x))
-        .filter(|&i| (a.cells()[i] - b.cells()[i]).abs() > CELL_CHANGE)
+        .flat_map(|y| columns.clone().map(move |x| y * a.columns + x))
+        .filter(|&i| (a.cells[i] - b.cells[i]).abs() > CELL_CHANGE)
         .count();
     changed as f32 / total as f32
 }

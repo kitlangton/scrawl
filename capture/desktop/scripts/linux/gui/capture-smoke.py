@@ -11,7 +11,6 @@ import json
 import os
 from pathlib import Path
 import signal
-import shutil
 import subprocess
 import sys
 import time
@@ -45,41 +44,6 @@ def receipt(value, owned, status):
     elif path is not None:
         raise Failure("driver", "non-saved receipt unexpectedly contains a bundle path")
     return path
-
-
-def pill_client_identity(processes, app_pid, clients):
-    """Match the live pill through its exact Rust-owned Electron child, never title alone."""
-    by_pid = {p["pid"]: p for p in processes}
-    descendants = set()
-    changed = True
-    while changed:
-        changed = False
-        for process in processes:
-            if process["ppid"] == app_pid or process["ppid"] in descendants:
-                if process["pid"] not in descendants:
-                    descendants.add(process["pid"])
-                    changed = True
-    matches = [by_pid[pid] for pid in descendants if pid in by_pid and
-               any(arg.endswith("/electron/pill/main.cjs") for arg in by_pid[pid]["args"])]
-    if len(matches) != 1:
-        raise Failure("product", f"expected one Electron pill child of Rust PID {app_pid}, found {len(matches)}")
-    child = matches[0]
-    owned = [client for client in clients if client.get("pid") == child["pid"]]
-    if len(owned) != 1:
-        raise Failure("product", f"expected one Hyprland client for Electron PID {child['pid']}, found {len(owned)}")
-    client = owned[0]
-    title = client.get("title")
-    prefix = "Apparent Recording Controls "
-    if client.get("xwayland") is not True:
-        raise Failure("product", f"Electron pill PID {child['pid']} is not an XWayland client")
-    if not isinstance(title, str) or not title.startswith(prefix):
-        raise Failure("product", f"Electron pill PID {child['pid']} has unexpected title {title!r}")
-    xid = title[len(prefix):]
-    if not xid or any(char not in "0123456789abcdefABCDEF" for char in xid):
-        raise Failure("product", f"Electron pill title has no native XID: {title!r}")
-    if client.get("pinned") is not True:
-        raise Failure("product", f"Electron pill PID {child['pid']} XID {xid} is not pinned")
-    return child, client, xid
 
 
 def scene(ready):
@@ -121,10 +85,8 @@ def scene(ready):
 
 
 class Recipe:
-    def __init__(self, output, binary, seconds, save_seconds=4, silent=False, pill_recovery=False):
+    def __init__(self, output, binary, seconds):
         self.out, self.binary, self.seconds = output, binary, seconds
-        self.save_seconds, self.silent = save_seconds, silent
-        self.pill_recovery = pill_recovery
         self.env = os.environ.copy()
         self.jobs, self.ids, self.serial = [], [], 0
         self.report = {"schema": 1, "proof": "native execution required; synthetic transport tests are not native proof",
@@ -134,11 +96,6 @@ class Recipe:
                            "selected_target_pixels", "movie_full_decode", "movie_nonblack_changing",
                            "visual_bundle_review", "shortcut_picker_acceptance", "audio", "cancel_disk_cleanup", "runner_cleanup")},
                        "commands": [], "cleanup_errors": [], "requests": []}
-        if pill_recovery:
-            self.report["gates"].update({key: "UNRUN" for key in (
-                "rapid_cancel_recording", "repeat_recording",
-                "pill_child_identity", "pill_xwayland_xid_pinned", "pill_native_screenshot",
-                "rapid_cancel_receipt", "rapid_cancel_idle", "repeat_saved_receipt")})
 
     def save(self):
         (self.out / "capture-smoke-report.json").write_text(json.dumps(self.report, indent=2) + "\n")
@@ -220,8 +177,7 @@ class Recipe:
             Path(self.env[key]).mkdir(parents=True, mode=0o700)
         config = Path(self.env["APPARENT_CONFIG"])
         config.parent.mkdir(parents=True, exist_ok=True)
-        config.write_text(json.dumps({"onboarding": {"seen": True}, "launchAtLogin": False, "autoPasteDraft": False,
-                                      **({"microphoneEnabled": False} if self.silent else {})}))
+        config.write_text(json.dumps({"onboarding": {"seen": True}, "launchAtLogin": False, "autoPasteDraft": False}))
         self.env["APPIMAGE_EXTRACT_AND_RUN"] = "1"
         self.report["candidate"] = {"path": str(self.binary), "sha256": hashlib.sha256(self.binary.read_bytes()).hexdigest()}
         self.report["desktop"] = {key: self.env.get(key) for key in ("DISPLAY", "WAYLAND_DISPLAY", "XDG_RUNTIME_DIR", "XDG_SESSION_TYPE", "XDG_CURRENT_DESKTOP")}
@@ -245,153 +201,9 @@ class Recipe:
         current = state(self.command("state"))
         if current != {"phase": "recording", "capture_id": owned}:
             raise Failure("product", f"recording receipt/state mismatch: {current}")
-        recording_gate = label.replace("-", "_") + "_recording"
-        if recording_gate in self.report["gates"]:
-            self.report["gates"][recording_gate] = "PASS"
+        self.report["gates"][label + "_recording"] = "PASS"
         self.save()
         return owned
-
-    def process_snapshot(self, root_pid):
-        records = []
-        for entry in Path("/proc").iterdir():
-            if not entry.name.isdigit():
-                continue
-            try:
-                stat = (entry / "stat").read_text()
-                tail = stat.rsplit(")", 1)[1].split()
-                args = [part.decode(errors="replace") for part in (entry / "cmdline").read_bytes().split(b"\0") if part]
-                records.append({"pid": int(entry.name), "ppid": int(tail[1]),
-                                "uid": entry.stat().st_uid, "args": args})
-            except (FileNotFoundError, PermissionError, ProcessLookupError, ValueError, IndexError):
-                continue
-        by_pid = {p["pid"]: p for p in records}
-        owned, pending = [], [root_pid]
-        seen = {root_pid}
-        while pending:
-            parent = pending.pop()
-            for process in records:
-                if process["ppid"] == parent and process["pid"] not in seen:
-                    seen.add(process["pid"])
-                    pending.append(process["pid"])
-                    owned.append(process)
-        return [by_pid[root_pid]] + owned if root_pid in by_pid else owned
-
-    def pill_clients(self, label):
-        """Retain diagnostics before asserting identity so expected baseline failures remain useful."""
-        self.report["stage"] = "pill_" + label
-        try:
-            result = subprocess.run(["hyprctl", "clients", "-j"], env=self.env,
-                                    capture_output=True, text=True, timeout=5)
-        except (OSError, subprocess.SubprocessError) as error:
-            raise Failure("environment", f"cannot query Hyprland clients: {error}") from error
-        if result.returncode:
-            (self.out / f"pill-clients-{label}.stderr").write_text(result.stderr)
-            raise Failure("environment", f"hyprctl clients failed; see pill-clients-{label}.stderr")
-        try:
-            clients = json.loads(result.stdout)
-        except ValueError as error:
-            (self.out / f"pill-clients-{label}.stdout").write_text(result.stdout)
-            raise Failure("driver", f"invalid hyprctl clients JSON; see pill-clients-{label}.stdout") from error
-        processes = self.process_snapshot(self.app.pid)
-        (self.out / f"pill-clients-{label}.json").write_text(json.dumps(
-            {"root_pid": self.app.pid, "processes": processes, "clients": clients}, indent=2) + "\n")
-        if shutil.which("grim"):
-            image = self.out / f"pill-{label}.png"
-            shot = subprocess.run(["grim", str(image)], env=self.env, capture_output=True,
-                                 timeout=8)
-            if shot.returncode:
-                (self.out / f"pill-grim-{label}.stderr").write_bytes(shot.stderr)
-                raise Failure("environment", f"grim failed; see pill-grim-{label}.stderr")
-            self.report["gates"]["pill_native_screenshot"] = "PASS"
-            self.report.setdefault("pill_screenshots", []).append(image.name)
-        else:
-            self.report["gates"]["pill_native_screenshot"] = "UNRUN"
-        self.save()
-        if not isinstance(clients, list):
-            raise Failure("driver", "Hyprland clients response is not an array")
-        child, client, xid = pill_client_identity(processes, self.app.pid, clients)
-        self.report.setdefault("pill_observations", []).append({
-            "label": label, "rust_pid": self.app.pid, "electron_pid": child["pid"],
-            "client_address": client.get("address"), "native_xid_hex": xid,
-            "title": client.get("title"), "xwayland": client.get("xwayland"),
-            "pinned": client.get("pinned"), "workspace": client.get("workspace"),
-        })
-        self.report["gates"]["pill_child_identity"] = "PASS"
-        self.report["gates"]["pill_xwayland_xid_pinned"] = "PASS"
-        print(f"pill-recovery-ready label={label} rust_pid={self.app.pid} electron_pid={child['pid']} "
-              f"xid={xid} pinned=true; parent may test workspace and actual controls", flush=True)
-        self.save()
-        return child, client
-
-    def cancel_owned(self, owned):
-        self.report["stage"] = "rapid_cancel_receipt"
-        receipt(self.command("cancel", owned), owned, "cancelled")
-        receipt(self.command("inspect", owned), owned, "cancelled")
-        self.report["gates"]["rapid_cancel_receipt"] = "PASS"
-        self.report["stage"] = "rapid_cancel_idle"
-        current = state(self.command("state"))
-        if current["capture_id"] is not None or current["phase"] not in {"idle", "completed"}:
-            raise Failure("product", f"rapid cancel did not return to idle/completed: {current}")
-        self.report["gates"]["rapid_cancel_idle"] = "PASS"
-        self.save()
-
-    def save_and_check(self, owned, label):
-        self.report["stage"] = label + "_saved_receipt"
-        value = self.command("inspect", owned)
-        if value.get("status") != "saved":
-            value = self.command("stop", owned, "--wait", "--timeout", "60", timeout=66)
-        saved = receipt(value, owned, "saved")
-        if receipt(self.command("inspect", owned), owned, "saved") != saved:
-            raise Failure("product", "inspect changed the saved path")
-        bundle = Path(saved).resolve()
-        captures = Path(self.env["APPARENT_CAPTURES_DIR"]).resolve()
-        if not bundle.is_relative_to(captures) or bundle == captures:
-            raise Failure("driver", "saved receipt escaped the private captures directory")
-        self.report.setdefault("saved_bundles", []).append({
-            "label": label, "guest_path": saved,
-            "output_relative_path": str(bundle.relative_to(self.out)),
-        })
-        for name in ("apparent.json", "summary.md", "contact-sheet.png"):
-            if not (bundle / name).is_file() or not (bundle / name).stat().st_size:
-                raise Failure("product", f"saved bundle missing nonempty {name}")
-        json.loads((bundle / "apparent.json").read_text())
-        files = {str(p.relative_to(bundle)) for p in bundle.rglob("*") if p.is_file()}
-        if not any(name.startswith("frames/") and name.endswith(".png") for name in files) or not any(name in files for name in ("recording.mp4", "recording.mov")):
-            raise Failure("product", "saved bundle missing frames or movie")
-        self.report["gates"]["saved_receipt" if label == "save" else "repeat_saved_receipt"] = "PASS"
-        self.save()
-        return saved
-
-    def wait_for_pill(self, label):
-        deadline = time.monotonic() + 4
-        attempt = 0
-        while True:
-            attempt += 1
-            try:
-                return self.pill_clients(f"{label}-{attempt}")
-            except Failure as error:
-                if error.kind != "product" or time.monotonic() >= deadline:
-                    raise
-                time.sleep(.25)
-
-    def run_pill_recovery(self):
-        # Cancel immediately after Start reports a real frame. Then re-record
-        # normally for the parent's QMP workspace/control observation window.
-        cancelled = self.start("rapid-cancel")
-        self.cancel_owned(cancelled)
-        saved = self.start("save")
-        self.wait_for_pill("save-start")
-        print(f"pill-recovery-hold seconds={self.save_seconds}; no scenario input will be sent", flush=True)
-        time.sleep(self.save_seconds)
-        self.save_and_check(saved, "save")
-        # Re-show the owned pill after a terminal saved state, then verify it
-        # remains live across another short ordinary capture.
-        repeated = self.start("repeat")
-        self.wait_for_pill("repeat-start")
-        time.sleep(2)
-        self.save_and_check(repeated, "repeat")
-        self.report["gates"]["repeat_saved_receipt"] = "PASS"
-        self.report["stage"] = "finished"
 
     def run(self):
         self.prepare()
@@ -405,7 +217,6 @@ class Recipe:
         self.report["gates"]["scene"] = "PASS"  # XSync completed, NOT observed screen pixels.
         self.report["stage"] = "gui_ready"
         app = self.launch([str(self.binary), "app"], "app.log")
-        self.app = app
         def gui_ready():
             if app.poll() is not None:
                 raise Failure("environment", "candidate launcher exited before readiness; see app.log")
@@ -418,11 +229,8 @@ class Recipe:
             return True
         self.wait(gui_ready, 20, "GUI control not ready; see command streams and app.log")
         self.report["gates"]["gui_ready"] = "PASS"
-        if self.pill_recovery:
-            self.run_pill_recovery()
-            return
         owned = self.start("save")
-        time.sleep(self.save_seconds)
+        time.sleep(4)
         if scene_job.poll() is not None:
             raise Failure("environment", "synthetic scene exited during recording")
         self.report["stage"] = "saved_receipt"
@@ -515,18 +323,6 @@ class Recipe:
         # SIGTERM leaves Unix socket directory entries behind. SCP cannot retain
         # sockets: remove only the two known private endpoints after writers stop.
         if not self.report["cleanup_errors"]:
-            # AppImage extract-and-run leaves its temporary runtime behind when
-            # the owned group exits. It contains package symlinks, which the
-            # fail-closed evidence copier correctly refuses. Remove only this
-            # scenario's scratch directory after verifying every writer stopped;
-            # captures and diagnostics are separate siblings retained below.
-            scratch = self.out / "tmp"
-            if scratch.exists():
-                if scratch.is_symlink() or self.env.get("TMPDIR") != str(scratch):
-                    self.report["cleanup_errors"].append("scratch identity changed; retain guest")
-                else:
-                    shutil.rmtree(scratch)
-                    self.report["removed_runtime_scratch"] = "tmp"
             self.report["removed_private_sockets"] = []
             for relative in (".config/apparent/agent-control/capture.sock", ".config/apparent/launch/open.sock"):
                 path = self.out / relative
@@ -544,37 +340,18 @@ def main():
     parser = argparse.ArgumentParser(description="Guest-only production capture/save/cancel scenario; invoked by gui-vm.py.")
     parser.add_argument("--scene", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--consent-timeout", type=int, default=40)
-    parser.add_argument("--save-seconds", type=int, default=4,
-                        help="recording hold for scoped native input checks (1..180; default: 4)")
-    parser.add_argument("--silent", action="store_true", help="disable microphone in this isolated fixture")
-    parser.add_argument("--pill-recovery", action="store_true",
-                        help="exercise rapid cancel/re-record and assert the owned Electron pill in Hyprland")
     args = parser.parse_args()
     if args.scene:
         scene(args.scene)
         return 0
     if not 1 <= args.consent_timeout <= 120:
         parser.error("consent-timeout must be 1..120 seconds")
-    if not 1 <= args.save_seconds <= 180:
-        parser.error("save-seconds must be 1..180 seconds")
     os.umask(0o077)
     output = Path(os.environ["SCRAWL_GUI_OUTPUT"]).resolve()
     output.mkdir(parents=True, exist_ok=True)
     if (output / "capture-smoke-report.json").exists() or (output / ".config").exists():
         parser.error("output already used; preserve it and choose a new run")
-    binary = Path(os.environ["SCRAWL_GUI_BINARY"]).resolve()
-    # gui-vm.py invokes one copied scenario with no extra argv. The documented
-    # --fixture-file mechanism stages a zero-byte `pill-recovery` marker beside
-    # the candidate, allowing the opt-in mode without changing the runner.
-    marker = binary.parent / "pill-recovery"
-    pill_recovery = args.pill_recovery or os.environ.get("SCRAWL_GUI_PILL_RECOVERY") == "1" or marker.is_file()
-    recipe = Recipe(output, binary, args.consent_timeout, args.save_seconds, args.silent,
-                    pill_recovery)
-    if pill_recovery:
-        recipe.report["pill_recovery_mode"] = (
-            "argument" if args.pill_recovery else
-            "environment" if os.environ.get("SCRAWL_GUI_PILL_RECOVERY") == "1" else
-            "fixture-file: pill-recovery")
+    recipe = Recipe(output, Path(os.environ["SCRAWL_GUI_BINARY"]).resolve(), args.consent_timeout)
     signal.signal(signal.SIGTERM, lambda *_: (_ for _ in ()).throw(Failure("driver", "scenario terminated")))
     try:
         recipe.run()

@@ -1,38 +1,5 @@
 # Disposable Mac prerequisites
 
-## Packaged Settings smoke
-
-`packaged-smoke.cjs` is a separate, read-only smoke check after installation. On
-an ephemeral GitHub-hosted Mac, set `APPARENT_PACKAGED_SMOKE=1`, `APPARENT_APP_DIR`
-to the candidate installed by `packaging/install-app.sh` and
-`APPARENT_SMOKE_OUTPUT` to a fresh evidence directory, then run
-`node capture/desktop/scripts/mac/packaged-smoke.cjs` from the candidate checkout.
-The frontend's locked Playwright dependency must already be installed. The check
-verifies the package signature, launches the installed Rust app in a synthetic
-private HOME, and opens/closes the packaged Storage Settings twice using its
-packaged Electron runtime. It checks rendered location, real Rust readback and
-executable/app/profile identity, retaining screenshots, logs and a JSON result.
-It has a 75-second operation budget plus bounded teardown; successful fixtures are removed, failed fixtures
-remain private for investigation. No personal/self-hosted Mac is admitted.
-
-This checks package assembly and the bounded Settings child lifecycle. It does
-not exercise menu routing, update installation, recording, permissions, overlays,
-focus or shortcuts; those retain their existing targeted native acceptance.
-It does not certify Apple Silicon behavior when run on Intel. CI keeps compilation,
-this smoke step and deeper native scenarios distinct, but still runs the full
-platform suites. No selection, proof reuse or release-admission rule changes.
-Its process supervisor and cleanup helpers are canonical in
-[enablement/native](../../../../enablement/native/README.md). This Desktop
-entrypoint retains package admission, Storage assertions and private evidence
-handling. Its exports are the Desktop admission and Storage readback contracts;
-shared lifecycle callers import enablement directly.
-Run shared lifecycle contracts with
-`node --test enablement/native/owned-processes.test.ts`.
-Desktop host regressions run with
-`python3 -m unittest discover -s capture/desktop/scripts/tests/mac -p test_packaged_smoke.py`.
-
-## Toolchain setup
-
 Use an already authorized disposable Mac image with Python 3, full Xcode selected,
 Homebrew installed from its official distribution. Missing rustup is installed
 through Homebrew’s verified package. This helper does

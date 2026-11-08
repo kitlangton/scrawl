@@ -5,16 +5,12 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "node ../../shared/ui/scripts/check-theme.ts --owner public && tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/site-build/prerender.ts",
+    "build": "python3 ../../shared/ui/scripts/check-theme.py && tsc -b && vite build && vite build --ssr src/entry-server.tsx --outDir dist-ssr && node scripts/site-build/prerender.ts",
     "preview": "vite preview",
-    "test:video": "node --test scripts/browser-proof/test-video-demo.ts",
-    "test:try-button": "node scripts/pages/test-try-button-browser.ts",
-    "generate:og-video": "node scripts/og-video/capture.ts",
-    "package:public": "npm run build && node scripts/site-build/package-apparent.ts",
-    "build:pages-worker": "esbuild lib/pages-worker.ts --bundle --platform=browser --format=esm --outfile=dist-apparent/_worker.js",
-    "verify": "node scripts/site-build/verify.ts",
-    "check:independence": "node scripts/site-build/independence.ts",
-    "verify:installed": "node scripts/site-build/verify.ts --installed --install-browser"
+    "test:video": "node --test scripts/browser-proof/test-video-demo.mjs",
+    "test:try-button": "node scripts/pages/test-try-button-browser.mjs",
+    "test:hosted": "node scripts/browser-proof/test-hosted-browser.mjs",
+    "generate:og-video": "node scripts/og-video/capture.mjs"
   },
   "dependencies": {
     "knobs": "npm:@kitlangton/knobs@0.3.0",
@@ -29,18 +25,10 @@
     "@types/react-dom": "^19.3.0",
     "@types/three": "^0.186.0",
     "@vitejs/plugin-react": "^6.1.2",
-    "esbuild": "0.28.2",
-    "fflate": "0.8.2",
     "matter-js": "0.20.0",
-    "miniflare": "4.20260730.0",
     "parse5": "8.0.1",
     "playwright-core": "1.63.0",
     "typescript": "^7.0.2",
-    "vite": "^8.3.4",
-    "wrangler": "4.156.0"
-  },
-  "overrides": {
-    "sharp": "0.35.5",
-    "undici": "7.30.1"
+    "vite": "^8.3.4"
   }
 }

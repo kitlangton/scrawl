@@ -3,7 +3,6 @@ export type Session = { authenticated: false } | {
   authenticated: true
   user: { email: string }
   csrfToken: string
-  analyticsId: string | null
   beta: { access: boolean; capacity: number; enrolled: number }
   waitlist: { joined: boolean; interestedAtFiveDollars: boolean }
 }
@@ -13,9 +12,8 @@ export function apiOrigin(config = import.meta.env.VITE_HOSTED_API_ORIGIN as str
   if (!config) return ""
   const url = new URL(config)
   const local = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname)
-  const base = url.pathname === "/" ? "" : url.pathname.replace(/\/$/, "")
-  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.username || url.password || !["", "/connect"].includes(base) || url.search || url.hash) throw new Error("Invalid Connect API base URL configuration.")
-  return url.origin + base
+  if ((url.protocol !== "https:" && !(local && url.protocol === "http:")) || url.username || url.password || url.pathname !== "/" || url.search || url.hash) throw new Error("Invalid Connect API origin configuration.")
+  return url.origin
 }
 export function signInUrl(device: boolean, userCode: string): string {
   // Only fixed local destinations; never forward a URL supplied by the visitor.
@@ -55,16 +53,8 @@ export async function session(): Promise<Session> {
   const user = record(data.account), beta = record(data.slots), waitlist = record(user.waitlist)
   if (data.authenticated !== true || typeof user.email !== "string" || typeof data.csrfToken !== "string" || !data.csrfToken || !["active", "waitlist"].includes(user.beta as string) || beta.limit !== 20 || !Number.isInteger(beta.used) || (beta.used as number) < 0 || (beta.used as number) > 20 || typeof waitlist.interestedAtFiveDollars !== "boolean") throw new Error("Connect returned an invalid account response.")
   // Pick only needed fields. Extra server fields (especially credentials) never reach UI state.
-  return { authenticated: true, user: { email: user.email }, csrfToken: data.csrfToken, analyticsId: typeof user.analyticsId === "string" && /^account:[a-f0-9]{64}$/.test(user.analyticsId) ? user.analyticsId : null, beta: { access: user.beta === "active", capacity: 20, enrolled: beta.used as number }, waitlist: { joined: user.beta === "waitlist", interestedAtFiveDollars: waitlist.interestedAtFiveDollars } }
+  return { authenticated: true, user: { email: user.email }, csrfToken: data.csrfToken, beta: { access: user.beta === "active", capacity: 20, enrolled: beta.used as number }, waitlist: { joined: user.beta === "waitlist", interestedAtFiveDollars: waitlist.interestedAtFiveDollars } }
 }
-export type AnalyticsChoice = { available: boolean; consented: boolean; revision: string | null; noticeVersion: string }
-function analyticsResponse(value: unknown): AnalyticsChoice {
-  const data = record(value)
-  if (typeof data.available !== "boolean" || typeof data.consented !== "boolean" || !(data.revision === null || typeof data.revision === "string" && /^[a-f0-9]{64}$/.test(data.revision)) || data.noticeVersion !== "product-analytics-v1") throw new Error("Invalid analytics choice response.")
-  return { available: data.available, consented: data.consented, revision: data.revision as string | null, noticeVersion: data.noticeVersion }
-}
-export const analyticsChoice = async () => analyticsResponse(await request("/v1/analytics/consent"))
-export const setAnalyticsChoice = async (csrf: string, consented: boolean, revision: string | null) => analyticsResponse(await request("/v1/analytics/consent", csrf, { consented, revision, noticeVersion: "product-analytics-v1" }))
 export async function device(userCode: string): Promise<Device> {
   const data = record(await request(`/v1/device?userCode=${encodeURIComponent(userCode)}`))
   if (!["upload", "read"].includes(data.scope as string) || !["pending", "approved", "rejected", "expired"].includes(data.status as string) || (data.expiresAt !== undefined && (typeof data.expiresAt !== "string" || !Number.isFinite(Date.parse(data.expiresAt))))) throw new Error("This device request has an unknown permission or invalid expiry. Nothing was approved.")

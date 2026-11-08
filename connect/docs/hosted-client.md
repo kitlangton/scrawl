@@ -1,17 +1,10 @@
-# Apparent Connect desktop client and remote CLI
+# Apparent Connect desktop client and remote CLI (candidate)
 
-## Private Connect availability and consent
+## Endpoint encryption candidate
 
-`hostedSync` and `hostedEncryption` are available by default. Set either key to `false` in the existing `experiments` object for an explicit opt-out; file changes apply at the next client check. Availability does not sign in, enable uploads or grant consent. `cloud.enabled` and `cloud.uploadConsent` remain separate explicit choices, both false without a saved choice. Opening Settings reads local state and does not scan or upload history.
+`experiments.hostedEncryption` is off by default. The candidate keeps local bundles ordinary and uses the existing any-browser link/sign-in/approve journey for grant-bound endpoint public keys. Account authorization is trusted; a compromised authorization service can substitute recipients. This is not Better Auth's token encryption and is not independent device pairing. No production enablement, plaintext migration or recovery guarantee is implied. See [the exact trust, wire, consent and remaining policy contract](hosted-encryption.md). Encrypted capture fetch requires the experiment and the original private endpoint identity; public/server-rendered sharing is rejected. Legacy plaintext remains explicitly identified and is not automatically migrated.
 
-Endpoint encryption keeps local bundles ordinary and uses the existing any-browser link/sign-in/approve journey for grant-bound endpoint public keys. Account authorization is trusted; a compromised authorization service can substitute recipients. This is not Better Auth's token encryption and is not independent device pairing. No production enablement, plaintext migration or recovery guarantee is implied. See [the exact trust, wire, consent and remaining policy contract](hosted-encryption.md). Desktop sender encryption follows its explicit feature opt-out. CLI read approval enrolls a receiving key without changing that flag; encrypted fetch requires the original approved private endpoint identity; public/server-rendered sharing is rejected. Legacy plaintext remains explicitly identified and is not automatically migrated.
-
-Shared macOS/Linux implementation. Source availability alone is not a deployed-service or native acceptance receipt. No Windows support. See [hosted-api.md](hosted-api.md) for the v1 protocol and hosting prerequisites.
-
-Readiness evidence, action-scoped holds and cutover preparation are authoritative
-in [Deployment prerequisites](hosted-api.md#deployment-prerequisites). A deployment
-hold does not stop local tests, read-only investigation or candidate preparation;
-those do not authorize activation or turn synthetic proof into live acceptance.
+Shared macOS/Linux implementation, default-off `hostedSync` experiment. This is an implementation candidate, not a deployed service or proof of native GUI behavior. No Windows support. See [hosted-api.md](hosted-api.md) for the v1 protocol and hosting prerequisites.
 
 ## Implementation ownership
 
@@ -19,42 +12,12 @@ Desktop account controls appear by default in **Settings → General**. The
 independent `connectSettings` flag supports an explicit false opt-out; close and
 reopen Settings after editing it. Visibility does not grant upload consent. They use the same client device flow, private credentials,
 renewal, queue cancellation and config writer as the CLI. There is no Connect
-onboarding step. Connect owns account Settings policy even in Desktop's shell.
-The Electron asynchronous controller now lives in Connect TypeScript. The retained
-Rust controller serves older/native fallback consumers as migration debt; the client's
+onboarding step. The Settings controller is owned by Desktop; the client's
 secret-free presentation API supplies fresh local state, a validated public
 verification URL/code and explicit bounded health checks, never raw responses.
-See [Settings](../../capture/desktop/docs/onboarding-and-settings.md#apparent-connect)
-for consent, cancellation, disable/disconnect and recovery behavior. Compilation
-alone does not prove account approval, deployment or native behavior; the readiness
-map records the separately executed bounded beta acceptance and its limits.
-
-`delivery/client/src/settings-controller.cts` and `settings-presentation.ts` own
-the Electron workflow and presentation. The generated Desktop entry uses the
-existing private socket's backend RPC for local snapshots, renewal and durable
-mutations. The TypeScript controller admits explicit consent, confirmation,
-receipt handling and activation intent; native guards retain durable cancellation
-until a matching successful login is activated against fresh committed gates.
-The current peer advertises `deviceFlow: 1`: `device-flow.cts` owns approval
-validation, polling/deadlines, rejection/expiry, grant validation and commit intent.
-Only the main process receives device replies. The temporary native executor has
-closed device-start/poll routes and a one-shot commit of its retained approved
-response under the existing queue/config locks; no Node filesystem writer exists.
-Failed flows retire before a same-lease retry, and failed commit settles durable off.
-`settings-state.cts` derives the local connection/upload/renewal/reauthorization
-state from versioned private grant metadata. Native code validates safe disk
-reads; TypeScript owns their Settings meaning and drops unsafe optional display
-metadata. A malformed facts response never falls back to the legacy projection.
-No generic mutation, private credential or arbitrary browser URL enters the renderer.
-
-An unsupported read-only opening may fall back to the retained legacy transport
-before any action; ambiguous mutations never retry against another controller.
-Older installed assets/native callers retain the previous Rust projection.
-Rollback may use the previous client assets and unchanged file formats against
-that retained route. Remove legacy policy/transport only after those consumers
-and native fallback surfaces migrate and their affected seams pass. Rust
-HTTP/renewal/private-record/credentials/queue and older-consumer auth remain explicit debt; no state writer has switched,
-and this controller adoption is not full account or Rust-free Connect acceptance.
+See [Settings](../../capture/desktop/docs/onboarding-and-settings.md#apparent-connect-experiment)
+for consent, cancellation, disable/disconnect and recovery behavior. This candidate
+does not claim live account approval, deployment or platform proof from compilation.
 
 `connect/client` is the production `apparent-connect-client` library, not a
 protocol-only staging package. It owns transfer, device auth, credentials, queue
@@ -65,34 +28,13 @@ plus the candidate's pinned age, ed25519-dalek and zeroize dependencies. It does
 GStreamer, Swift helper or root build script. Runtime curl and system SHA-256
 requirements still apply; supported platforms remain macOS and Linux.
 
-Local Settings distinguishes expired renewable access from reauthorization:
-`renewal_required` offers Check connection without another login, while
-`reauthorization_required` remains reserved for unusable refresh/legacy grants.
-The local snapshot still does not certify renewal or enable uploads on an expired
-access token. The explicit health action performs renewal through normal transport.
-Successful device approval and refresh responses include only `accountInitial`,
-derived from the verified email of that grant's user. The client stores this bounded
-display hint with its private credential and exposes it only in the secret-free
-Settings snapshot for a usable grant; it never exposes the email. Older credentials,
-older service responses and missing identity use a neutral person icon. This value
-is display metadata and grants no authority.
-
 ### Explicit public-copy admission
-
-`hostedSharing` is available by default. An explicit `experiments.hostedSharing=false` opt-out remains respected. Completed captures show Copy link beside Paste. Availability does not sign in, grant upload consent, publish recordings or change private encryption; each selected public copy still requires the confirmation below. The service must separately permit sharing grants.
 
 `Client::prepare_public_link` is the compatible client integration contract for
 #171. Call it only after the sender explicitly chooses public sharing with:
 “Anyone with this link can view this capture. Shared captures are not end-to-end
-encrypted.” The completed-capture Copy link action reaches this method through
-its capture-bound Rust controller after the Electron confirmation. Other
-`prepare_link` callers retain the encrypted-sharing refusal. The installed
-sender's native acceptance and existing activation holds remain separate gates.
-
-Copied links ask the receiving agent to carry out the sender's instructions and
-changes in the transcript, using the recording and images as context, rather than
-stopping at a summary. The recipient viewer's Copy for agent uses the same intent.
-Incidental screen text remains evidence; existing permission and approval gates apply.
+encrypted.” Existing Desktop callers still use `prepare_link`, which retains the
+encrypted-sharing refusal until their consent/UI integration is accepted.
 
 The explicit method persists a separate `publicCopy` job, plaintext manifest and
 fresh capture ID under the current upload grant. It never edits/cancels the
@@ -159,19 +101,6 @@ late-login helper. The feature is absent from normal application builds. Package
 experiment constants are included in feature-map discovery. Package checks do
 not substitute for root adoption compilation or native/platform proof.
 
-## Recipient CLI quick start
-
-Fresh Linux agents use the [latest published installer](../../capture/agent/docs/installation.md), then `apparent inspect <id>`. `apparent connect login` defaults to read scope, the configured API origin (or the official service), and printing the approval URL/code without opening a local browser. `--browser` opts into opening it. Existing `--server`, `--scope`, `--consent-upload` and `--no-browser` remain supported. CLI read approval enrolls an endpoint key even without the Desktop encryption experiment; encrypted fetch uses that approved key. It changes no upload consent or Desktop encryption flag. A receiver must be included when the sender encrypts; later approval cannot decrypt a previously sealed capture.
-
-Transport failures report a static request stage, curl exit code, numeric HTTP
-status (0 means no HTTP response), elapsed milliseconds and timeout budgets.
-Categories distinguish proxy/host DNS, connection, TLS, timeout and response size.
-Raw curl stderr, response text, URLs and proxy environment values remain hidden.
-Connection establishment gets up to 15 seconds within the existing total request
-deadline; shorter caller deadlines still win. Curl inherits the environment's
-proxy configuration. No automatic authorization-start retry is added. Successful
-unauthenticated GETs do not establish that authorization POSTs will succeed.
-
 ## Opt in on the recording computer
 
 Update Apparent to use `apparent connect`. Older apps with Connect support use
@@ -197,41 +126,6 @@ apparent connect logout
 
 `upload` explicitly queues that completed bundle **under a fresh ID on every invocation**, then makes one processing pass. It supersedes any unfinished local job for that bundle/server without changing an already reserved remote manifest. Use it to recover a changed bundle, an expired reservation or a tombstoned ID, or to deliberately share a previously cancelled capture. Automatic completion notifications deduplicate only retained queue records, including cancelled/expired records. Admission of another bundle prunes terminal or expired records; after pruning, a repeated completion notification for the original bundle can create a fresh ID. There is no permanent dedup history and no automatic historical scan. `retry` keeps existing IDs, resets eligible failed/pending jobs and makes one processing pass; it cannot enable disabled uploads or revive cancelled jobs. The running desktop worker resumes persisted pending jobs at startup, checks every two seconds, and retries with bounded exponential backoff (eight attempts, at most seven days, 100 queue records). CLI-only users run `retry` to resume after the command exits. `disable` acquires the queue lock before reading settings, clears consent/enabled state and cancels unfinished jobs durably under that same lock. `logout` additionally removes local read/upload transport credentials and renewal journals under the lock, then attempts whole-device-grant revocation with a shared two-second deadline outside all queue/config locks. An expired renewable access token uses the refresh credential without an expired bearer header. Offline or failed revocation does not undo local logout; a copied grant can remain usable remotely until revoked or expired. Neither operation removes independent decryption-key artifacts. Already sent server data is not deleted by local logout; it expires under the server's seven-day policy.
 
-### Installed worker readiness proof
-
-The manually invoked `native-proof-mac.yml` workflow builds/installs only the candidate
-and runs `service/test/native/desktop-worker.mjs` against
-the signed installed app and actual local Worker/D1/R2. Dispatch it with
-`gh workflow run verification-mac.yml --ref <candidate-branch> -f connect_worker_proof=true`;
-the existing registered dispatcher calls this focused route only on a manually
-selected non-main branch. The full verification job keeps its main-only guard.
-Inspect the exact
-run SHA and `mac-connect-worker-native` artifact, including candidate identity,
-scenario report and cleanup receipt. The dependency cache uses the main Mac Rust
-job's `rust` namespace and root/engine/client workspace inputs, retaining the
-automatic OS, architecture, compiler, environment and lock hashes. `cache-on-failure`
-retains reusable dependencies after downstream failure; it does not cache a proof
-verdict. Inspect the action's actual restored-key/size log, not just its configured
-key or an exact-match boolean. The observed cold build/install took 25m24s: the
-stage allows 30 minutes. Every step has an explicit cap, totaling 58 minutes
-including setup/restore, the four-minute scenario, cleanup and evidence. The
-hosted job allows 65 minutes, leaving seven for job overhead and post-action
-cache saving. Warm reuse is expected to reduce dependency compilation, but
-restoration and native success must be verified on the actual run. These Actions
-limits do not change NoMac spending/session limits. This focused route runs no full suites,
-produces no release receipt and does not replace main-only verification. It is
-restricted to standard GitHub-hosted `macos-15-intel`, with read-only repository
-permission and no secrets or production bindings. Later native consumers may
-extend this route through reviewed, bounded scenarios. A synthetic read approval
-does not enable uploads or discover history. Separate explicit upload approval
-allows a staged synthetic job; a failed PUT remains pending, then the restarted
-Desktop worker completes the same encrypted job without a CLI retry or account
-probe. Fetch compares all six files; disabled restart stays offline and logout
-preserves unrelated config. Only the allowlisted evidence directory is uploaded,
-excluding the disposable home and its credentials. This is not real Google,
-browser-cookie, deployed-service or real-capture proof. Existing activation and
-schema holds remain unchanged.
-
 ### Renewable native grants
 
 The Better Auth candidate configures **3,600-second access tokens** and **2,592,000-second (30-day) refresh tokens**. The client uses the returned positive `expiresIn` and `refreshExpiresIn` seconds, not hardcoded lifetimes; it stores conservative Unix-second deadlines measured from before the request. Approved device polling and `POST /v1/token/refresh` must return `accessToken`, `refreshToken`, `scope`, `expiresIn`, `refreshExpiresIn` and `grantId`. Refresh sends only `{"refreshToken":...}`: it cannot request a scope or escalate a read grant. The returned scope must match, and `grantId` must remain stable. Server grant IDs are opaque and stored separately from the local 32-hex generation.
@@ -242,7 +136,7 @@ Local `status` does not make network requests. `readAuth` and `uploadAuth` expos
 
 One private per-scope advisory renewal lock serializes processes. It is never acquired while holding queue/config locks; the existing order remains **worker → queue → config**. No queue/config lock spans refresh network waits. A response is synced privately before publication; the journal records its completed state. Restart recovers a completed response without another rotation. Publication checks caller/job authorization, then rereads the exact credential and disable-cancellation epoch under the queue lock, so a late response cannot replace a new login/logout or cross a completed disable. Disable can let an in-flight rotation finish into its private journal, but cannot publish it for a cancelled job; a later independently authorized account operation can recover it without restoring uploads. The private `hosted/cancellation` marker is runtime cancellation state, not a preference or encryption key. A crash before a completed response is durably marked requires the server's bounded refresh-replay protection; after that window, reapproval can be necessary. Authentication does not establish encryption trust (#189).
 
-Completion publishes a random 32-lowercase-hex ID to the disk queue before clipboard construction. Clipboard text starts with `apparent inspect <id>` (fetches to `./<id>.evidence.apparent`, waits up to 120 seconds, then prints the summary), even while upload is pending. A one-line README Agents link handles a missing CLI and leads to the maintained installation guide; image-inspection and the configured video-proof request precede the duration header and timestamped words/marks, which remain last for paste recognition. The prompt omits repeated login instructions, server lines and sender-local paths. The receiving CLI uses its configured server; configure a custom origin separately when required. Sign-in alone does not select this format: a retained, active private hosted job must exist. Without one, the prompt uses a shell-quoted local inspect path and local image/crop guidance. Archived summaries and bundle assets remain unchanged. It includes no bearer token. Hashing, media staging, network requests and retries run outside capture completion/paste. Network, auth, quota and upload errors leave the original capture and local clipboard handoff usable. Queue errors fall back to local-only handoff. `apparent connect status` is local JSON with queue path, status, attempts, next retry and sanitized error codes; `--account` explicitly queries account quota.
+Completion publishes a random 32-lowercase-hex ID to the disk queue before clipboard construction. Clipboard text starts with `apparent fetch <id> --out ./<id>.apparent --wait 120` and `apparent inspect ./<id>.apparent`, even while upload is pending. A one-line README Agents link handles a missing CLI and leads to the maintained installation guide; image-inspection and the configured video-proof request precede the duration header and timestamped words/marks, which remain last for paste recognition. The prompt omits repeated login instructions, server lines and sender-local paths. The receiving CLI uses its configured server; configure a custom origin separately when required. Sign-in alone does not select this format: a retained, active private hosted job must exist. Without one, the prompt uses a shell-quoted local inspect path and local image/crop guidance. Archived summaries and bundle assets remain unchanged. It includes no bearer token. Hashing, media staging, network requests and retries run outside capture completion/paste. Network, auth, quota and upload errors leave the original capture and local clipboard handoff usable. Queue errors fall back to local-only handoff. `apparent connect status` is local JSON with queue path, status, attempts, next retry and sanitized error codes; `--account` explicitly queries account quota.
 
 ## Fetch on an agent's computer
 
@@ -253,7 +147,7 @@ apparent fetch 0123456789abcdef0123456789abcdef --out ./capture.apparent --wait 
 
 A person approves a separate **read** device grant. Never paste an upload/read token into an agent prompt or silently expose one through the clipboard. Fetch does not require the upload experiment or consent. `--wait` bounds pending-manifest polling to 0–900 seconds; zero makes a single manifest request. Individual network operations are bounded separately (30 seconds for JSON, 60 for a file); the wait deadline does not cap transfer time once ready. The complete manifest and all files must arrive and pass size/SHA-256 checks before a sibling private staging directory is atomically renamed to `--out`. There is no lazy media retrieval. The parent directory must exist, and the destination must **not** exist: existing directories/files/symlinks are rejected, never merged or replaced. Traversal, absolute paths, invalid IDs, symlink paths, duplicate/unknown assets and invalid hashes are rejected. Failed fetches remove their staging directory and publish nothing.
 
-After fetching, inspect `contact-sheet.png` visually and read `summary.md`/`apparent.json`, then explicitly fetch the complete recording before using `apparent zoom` against it. A pending/offline/expired capture is not evidence that the agent has seen the images.
+After fetching, inspect `contact-sheet.png` visually and read `summary.md`/`apparent.json`, then use `apparent zoom` against the downloaded recording as usual. A pending/offline/expired capture is not evidence that the agent has seen the images.
 
 ### Local filesystem security boundary
 
@@ -288,20 +182,9 @@ The `hosted/` directory beside `config.json` is private mode `0700`; `upload.cre
 
 ## Full fidelity and v1 limits
 
-The allowlist exactly matches the API: summary, metadata, semantic `notes.json`, contact sheets including full-sheet originals, numbered `frames/` and `frames-full/` PNGs, recording MP4/MOV, WAV audio, `timeline.json` and `finish-trace.json`. Whiteboard content already becomes numbered frames plus manifest data; no separate whiteboard extension is needed. Unknown assets fail the entire upload with `unsupported_asset`, including failures wrapped by encryption staging; no paths or raw diagnostic text enter queue errors. They never silently disappear. The exact local `notes-ui.log` diagnostic is excluded only when it is a current-user-owned, private regular file with one link. Empty validated `microphone-off` and `.publication.lock` markers also stay local. Other unknown or unsafe entries still fail closed. Symlinks are not uploaded, even when named like an allowed file. Files are staged and hashed before reservation; retry requires the same manifest. Reordered server manifests are accepted only if their complete path/size/hash sets agree.
+The allowlist exactly matches the API: summary, metadata, contact sheets including full-sheet originals, numbered `frames/` and `frames-full/` PNGs, recording MP4/MOV, WAV audio, `timeline.json` and `finish-trace.json`. Whiteboard content already becomes numbered frames plus manifest data; no separate whiteboard extension is needed. Unknown assets fail the entire upload with `unsupported_asset`, never silently disappear. Symlinks are not uploaded, even when named like an allowed file. Files are staged and hashed before reservation; retry requires the same manifest. Reordered server manifests are accepted only if their complete path/size/hash sets agree.
 
 The server quota is **500,000,000 bytes per account**. Separately, v1 accepts at most 512 files and **90,000,000 bytes per file**, with a 128KiB manifest request. `file_too_large` is reported in queue status; the capture stays local. There is no multipart/chunk protocol and the client never drops a large recording/audio asset to fit. Real larger recordings therefore need a future coordinated protocol change. Server retention is seven days after reservation, with incomplete reservations reclaimed after 24 hours; a tombstoned ID requires a fresh explicit `apparent connect upload`, not a retry of that ID.
-
-When local staging rejects an oversized asset, the private durable job and local
-`apparent connect status` queue entry also carry
-`sizeFailure: {path, size, limit}`. Sizes are exact bytes; `path` is an allowlisted
-bundle-relative asset name, never the source directory or credential path. The
-same typed reason survives encryption staging context and process restart. Size
-failures stop automatic retries before reservation or media transfer. Explicit
-CLI retry clears the previous details and checks the files again; unchanged
-oversized files fail again. Older jobs without details remain readable and retain
-their original error code. Successful recovery clears the details. This is local
-diagnostic state, not a server response, telemetry payload or implemented pocket UI.
 
 ## Verification
 
@@ -317,65 +200,3 @@ it is not live Google, deployed Worker, Electron routing or native platform proo
 `cargo test -j 3 --offline hosted_ -- --test-threads=2` exercises the production curl subprocess against an isolated loopback HTTP server, synthetic device auth, complete bundle upload/fetch, restart queue recovery, pending pointers, quota/disable/logout, pending/transport deadlines, corruption, path and symlink rejection and v1 bounds. Tests use private synthetic config/bundle directories, not the user's credentials/captures. Native capture/paste and macOS tooling still require platform proof; a Linux build is not GUI proof.
 
 The independent package tests also exercise renewable account/upload/fetch/share/progress calls, proactive expiry and unexpected 401, separate-process single ownership, transient/permanent refresh failures, scope/grant mismatch, delayed refresh versus disable/logout/new generation, secret-free status, expired-grant revocation, offline logout and process exit after durable response before credential publication. These are synthetic protocol tests, not Better Auth/browser integration evidence; candidate backend-client integration and macOS/Linux native GUI checks remain separate gates.
-
-Saved `notes.json` is semantic capture data and transfers with the recording.
-The empty, owned, single-link, non-writable-by-others `microphone-off` marker stays
-local; its meaning already transfers as `microphoneCapture: off` in capture metadata.
-The legacy `notes-ui.log` is a local diagnostic and is never uploaded or served;
-staging skips only that exact name after checking a private, current-user-owned,
-regular file with one link. Unsafe diagnostics and unknown assets remain errors.
-
-The desktop presentation adapter may read
-`Client::upload_size_failure(bundle, UploadQueueKind::{Private,PublicCopy})`.
-It returns only the requested queue intent and numeric byte size/limit from the
-latest failed job for that exact canonical bundle. It grants no upload or public
-sharing permission, exposes no asset path, and makes no network request. Retry,
-ready and cancelled states return no size failure. Desktop caches it with the
-completed capture path/generation internally and rechecks that binding before
-rendering a bounded notification; those identifiers never cross the pill pipe.
-
-### Fetch before upload reservation
-
-A private copy-handoff pointer can be emitted from the local queue before the
-sender reserves the capture on the API. `apparent fetch <id> --wait 120` waits
-within that budget for both a privacy-preserving `not_found` and a known pending
-capture. A 404 does not establish whether a capture exists: absent, expired,
-deleted, wrong-account and wrong-origin requests remain indistinguishable.
-Both evidence-first `inspect` and complete-media `fetch` give recipient guidance
-to check `apparent connect status`, confirm the
-API origin and approved read account with the sender, and ask for upload status
-or a fresh handoff. Authorization failures need read approval rather than polling.
-The private destination guard, integrity validation and atomic complete-bundle
-publication still apply. Loopback tests exercise queue pointer → delayed upload
-→ fetch and unavailable/unauthorized failures; these are not live service or
-native clipboard proof.
-
-Upload failures emit local allowlisted stage/reason codes on stderr. The existing
-queue/progress categories are unchanged; diagnostics emit neither raw error text,
-paths, endpoint keys, credentials or capture contents.
-
-## Evidence-first private delivery (#165)
-
-New encrypted jobs pin `evidence-first-v1` delivery: summary, metadata, notes, timeline and original/annotated images are sealed separately from recording/audio. Both authenticated streams bind their group, capture, origin, account and sender. One immutable transport manifest reserves both groups under the same ID; retries reuse both ciphertext spools. Existing jobs and single-stream captures keep their original format. Older services reject the grouped paths; clients never downgrade encryption or silently omit media.
-
-The worker uploads evidence before media. Authenticated metadata distinguishes `evidenceReady` from full `status: ready`; pending captures, including usable evidence, still expire after the existing 24-hour incomplete-upload deadline. Full completion, quotas, account authorization, revocation and cleanup retain their existing rules. Public readable copies keep complete-bundle behavior.
-
-`apparent inspect <id>` downloads an immutable `./<id>.evidence.apparent` snapshot, validates every evidence file and prints its summary with a missing-media notice. `.evidence-only.json` explicitly identifies this local snapshot; the source metadata retains media references. It is not a complete bundle and must not be uploaded as one. Existing destinations are never overwritten. Inspect its absolute local path to reuse downloaded evidence. `apparent fetch <id> --media --out <new-directory> --wait 120` explicitly retrieves both groups, validates all references and atomically publishes an ordinary complete bundle. `--media` also documents the unchanged default full-fetch behavior. Use that complete directory for zoom/export or other media commands. No automatic fetch or in-place upgrade is performed. A pending/offline sender produces a bounded retry result; evidence readiness does not promise media availability.
-
-No Desktop renderer, bridge, native capture, consent or browser playback route changes. Rollback keeps existing single-stream jobs readable; old clients reject grouped transport paths rather than publishing partial bundles. New grouped uploads require the compatible service to be published first.
-
-After building the candidate CLI and service, run `npm --prefix connect/service run test:evidence-cli -- /absolute/path/to/apparent [fresh-synthetic-evidence-directory]`. This exercises the production CLI against a local Worker/D1/R2 fixture with separate sender/receiver states, real endpoint approval, synthetic images/video, interrupted media, source removal, immutable evidence inspection and complete byte equality. It starts no desktop and requires no deployed account or permission changes. Generated credentials and source data are removed afterward; the optional output retains only synthetic evidence for visual inspection. This is CLI/service integration evidence, not native capture or packaged Mac proof.
-
-### Independent recipient executable
-
-Build `apparent-connect-recipient` with `cargo build --manifest-path
-connect/client/Cargo.toml --bin apparent-connect-recipient`. It reads one bounded
-JSON request from stdin through EOF using `recipient_protocol::Request` v1.
-Stdout contains JSON lines: an optional `approval` event with `verificationUri`
-and `userCode`, followed by a `result` or `error` envelope, each with `protocol: 1`.
-Errors retain the client message and exit nonzero. SIGINT/SIGTERM cancel login
-and fetch transport and prevent fetch publication after cancellation is observed.
-Status account probes retain the existing bounded timeout. No sender operation
-is admitted. APPARENT_CONFIG selects the same config as root callers; both use
-the same sidecar lock, durable transaction and publication-uncertain error type.
-Packaging and root command routing have not switched to this executable.

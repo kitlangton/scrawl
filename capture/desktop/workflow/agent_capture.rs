@@ -1,18 +1,14 @@
 //! Local, same-user control of the running GUI. Never launches an app or sends a capture.
-use apparent_capture as client;
-#[cfg(test)]
-use client::command;
-pub use client::{Action, execute, new_id};
-use client::{clock_ms, same_user, socket_path, valid_id, connect_until, DeadlineStream};
 use std::collections::HashMap;
 use std::io::{BufRead, BufReader, Read, Write};
-use std::os::fd::AsRawFd;
+use std::os::fd::{AsRawFd, FromRawFd};
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::{FileTypeExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::Serialize;
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize)]
@@ -31,6 +27,20 @@ pub struct State {
     pub phase: Phase,
     /// Opaque, per-capture identity. Absent outside a pending or active capture.
     pub capture_id: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    Start,
+    Inspect,
+    Stop,
+    Cancel,
+    ReferenceRead,
+    ReferenceCopy,
+    PublicShareStart,
+    PublicShareRead,
+    PublicShareDeliver,
+    PublicShareCancel,
 }
 
 /// Small in-process receipts, not capture history on disk. Media stays in the bundle.
@@ -133,15 +143,84 @@ pub fn decide(state: &State, action: Action, id: &str) -> Outcome {
     }
 }
 
+pub fn new_id() -> Result<String> {
+    let mut bytes = [0u8; 16];
+    std::fs::File::open("/dev/urandom")?.read_exact(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn socket_path(create: bool) -> Result<PathBuf> {
+    let home = std::env::var_os("HOME").context("HOME is not set")?;
+    let dir = PathBuf::from(home).join(".config/apparent/agent-control");
+    if create {
+        std::fs::create_dir_all(&dir)?;
+    }
+    let meta = std::fs::symlink_metadata(&dir)?;
+    ensure!(
+        meta.is_dir() && meta.uid() == unsafe { libc::geteuid() },
+        "unsafe control directory"
+    );
+    if create {
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700))?;
+    }
+    ensure!(
+        std::fs::metadata(&dir)?.permissions().mode() & 0o077 == 0,
+        "control directory is not private"
+    );
+    Ok(dir.join("capture.sock"))
+}
+
+fn same_user(stream: &UnixStream) -> Result<()> {
+    #[cfg(target_os = "linux")]
+    {
+        let mut cred: libc::ucred = unsafe { std::mem::zeroed() };
+        let mut len = std::mem::size_of::<libc::ucred>() as libc::socklen_t;
+        let rc = unsafe {
+            libc::getsockopt(
+                stream.as_raw_fd(),
+                libc::SOL_SOCKET,
+                libc::SO_PEERCRED,
+                &mut cred as *mut _ as *mut _,
+                &mut len,
+            )
+        };
+        ensure!(
+            rc == 0
+                && len as usize == std::mem::size_of::<libc::ucred>()
+                && cred.uid == unsafe { libc::geteuid() },
+            "control peer is not this user"
+        );
+    }
+    #[cfg(target_os = "macos")]
+    {
+        let mut uid = 0;
+        let mut gid = 0;
+        let rc = unsafe { libc::getpeereid(stream.as_raw_fd(), &mut uid, &mut gid) };
+        ensure!(
+            rc == 0 && uid == unsafe { libc::geteuid() },
+            "control peer is not this user"
+        );
+    }
+    Ok(())
+}
+
 pub struct Request {
     pub action: Option<(Action, String)>,
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    pub native_host: Option<super::native_host::Admitted>,
     pub reply: std::sync::mpsc::SyncSender<String>,
     pub deadline_ms: u64,
 }
 
 /// Same-host monotonic deadline, including time spent in the socket accept queue.
+fn clock_ms() -> u64 {
+    let mut time: libc::timespec = unsafe { std::mem::zeroed() };
+    // CLOCK_MONOTONIC is available on both supported Unix targets.
+    assert_eq!(
+        unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut time) },
+        0
+    );
+    time.tv_sec as u64 * 1000 + time.tv_nsec as u64 / 1_000_000
+}
+
 impl Request {
     pub fn expired(&self) -> bool {
         clock_ms() >= self.deadline_ms
@@ -150,7 +229,7 @@ impl Request {
 
 /// libuv hrtime uses mach_continuous_time on macOS. Keep Storage separate from
 /// the legacy Rust-client CLOCK_MONOTONIC timeline.
-pub(crate) fn storage_clock_ms() -> u64 {
+pub(super) fn storage_clock_ms() -> u64 {
     #[cfg(target_os = "macos")]
     {
         let mut time: libc::timespec = unsafe { std::mem::zeroed() };
@@ -167,12 +246,8 @@ enum Storage {
     Read { deadline: u64 },
     Set { path: String, expected: String, deadline: u64 },
     Reset { expected: String, deadline: u64 },
-    LocationFacts { deadline: u64 },
-    ProbeLocation { path: String, expected: String, deadline: u64 },
-    SetLocation { path: String, expected: String, deadline: u64 },
-    ResetLocation { expected: String, deadline: u64 },
     Retention { deadline: u64 },
-    SaveRetention { policy: super::storage_preferences::SavePolicy, expected: String, deadline: u64 },
+    SaveRetention { preset: String, expected: String, deadline: u64 },
     ResetRetention { expected: String, deadline: u64 },
     Usage { deadline: u64 },
 }
@@ -181,8 +256,6 @@ impl Storage {
     fn deadline(&self) -> u64 {
         match self {
             Self::Read { deadline } | Self::Set { deadline, .. } | Self::Reset { deadline, .. }
-            | Self::LocationFacts { deadline } | Self::ProbeLocation { deadline, .. }
-            | Self::SetLocation { deadline, .. } | Self::ResetLocation { deadline, .. }
             | Self::Retention { deadline } | Self::SaveRetention { deadline, .. }
             | Self::ResetRetention { deadline, .. } | Self::Usage { deadline } => *deadline,
         }
@@ -199,7 +272,7 @@ impl Storage {
         }
         let preferences = match self {
             Self::Retention { .. } => Some(super::storage_preferences::read(config)),
-            Self::SaveRetention { policy, expected, .. } => Some(super::storage_preferences::save(config, Some(policy), expected, || storage_clock_ms() < deadline)),
+            Self::SaveRetention { preset, expected, .. } => Some(super::storage_preferences::save(config, Some(preset), expected, || storage_clock_ms() < deadline)),
             Self::ResetRetention { expected, .. } => Some(super::storage_preferences::save(config, None, expected, || storage_clock_ms() < deadline)),
             Self::Usage { .. } => Some(super::storage_preferences::usage(config, || storage_clock_ms() < deadline)),
             _ => None,
@@ -207,44 +280,16 @@ impl Storage {
         if let Some(result) = preferences {
             return result.unwrap_or_else(|code| serde_json::json!({"error":code}));
         }
-        match self {
-            Self::LocationFacts { .. } => return capture_location::facts_in(config)
-                .map(|facts| serde_json::json!({"location":facts}))
-                .unwrap_or_else(|_| serde_json::json!({"error":"config_read_failed"})),
-            Self::ProbeLocation { path, expected, .. } => {
-                let before = match capture_location::facts_in(config) {
-                    Ok(facts) => facts,
-                    Err(_) => return serde_json::json!({"error":"config_read_failed"}),
-                };
-                if before.revision != *expected { return serde_json::json!({"error":"conflict"}); }
-                let available = capture_location::probe(std::path::Path::new(path));
-                if storage_clock_ms() >= deadline { return serde_json::json!({"error":"admission_expired"}); }
-                let after = match capture_location::facts_in(config) {
-                    Ok(facts) => facts,
-                    Err(_) => return serde_json::json!({"error":"config_read_failed"}),
-                };
-                if after.revision != *expected { return serde_json::json!({"error":"conflict"}); }
-                return serde_json::json!({"probe":{"available":available}});
-            }
-            _ => {}
-        }
         let mutation = match self {
             Self::Read { .. } => Ok(()),
             Self::Set { path, expected, .. } => capture_location::set_in(config, Some(path), Some(expected), || storage_clock_ms() < deadline),
             Self::Reset { expected, .. } => capture_location::set_in(config, None, Some(expected), || storage_clock_ms() < deadline),
-            Self::SetLocation { path, expected, .. } => capture_location::set_in(config, Some(path), Some(expected), || storage_clock_ms() < deadline),
-            Self::ResetLocation { expected, .. } => capture_location::set_in(config, None, Some(expected), || storage_clock_ms() < deadline),
             _ => unreachable!(),
         };
         if let Err(code) = mutation { return serde_json::json!({"error":code}); }
-        match self {
-          Self::SetLocation { .. } | Self::ResetLocation { .. } => capture_location::facts_in(config)
-            .map(|facts| serde_json::json!({"location":facts}))
-            .unwrap_or_else(|_| serde_json::json!({"error":"config_read_failed"})),
-          _ => match capture_location::read_in(config) {
+        match capture_location::read_in(config) {
             Ok(snapshot) => serde_json::json!({"storage": snapshot}),
             Err(_) => serde_json::json!({"error":"config_read_failed"}),
-          },
         }
     }
 }
@@ -272,22 +317,6 @@ impl Reference {
     }
 }
 
-#[derive(serde::Deserialize, Debug)]
-#[serde(tag = "drawing", rename_all = "lowercase", deny_unknown_fields)]
-enum Drawing {
-    Read { deadline: u64 },
-    Undo { expected: String, deadline: u64 },
-}
-
-
-pub(crate) fn drawing_admission(current: Option<&str>, expected: Option<&str>, expired: bool) -> Result<(), &'static str> {
-    if expired { return Err("admission_expired"); }
-    if let Some(expected) = expected {
-        if current != Some(expected) { return Err("conflict"); }
-    }
-    Ok(())
-}
-
 enum Wire {
     Capture(Option<(Action, String)>, u64),
     PublicShare(Action, String, u64),
@@ -295,8 +324,6 @@ enum Wire {
     ErrorReporting(ErrorReportingRequest),
     Microphone(super::notes::audio::Request),
     Connect(u64),
-    ConnectBackend(u64),
-    NativeHost(super::native_host::Admitted),
 }
 
 // A single rendezvous worker handles the two bounded Settings contracts. A
@@ -322,46 +349,18 @@ impl SettingsRequest {
 enum ErrorReportingRequest {
     Read { deadline: u64 },
     Set { enabled: bool, deadline: u64 },
-    Exception { kind: ExceptionKind, deadline: u64 },
-}
-
-#[derive(serde::Deserialize, Debug)]
-#[serde(rename_all = "snake_case")]
-enum ExceptionKind { MainException, MainRejection, RendererException, RendererRejection }
-
-#[test]
-fn exception_request_rejects_arbitrary_payloads() {
-    for kind in ["main_exception", "main_rejection", "renderer_exception", "renderer_rejection"] {
-        let request = serde_json::json!({"errorReporting":"exception", "kind":kind, "deadline":1});
-        assert!(matches!(parse_request(&request.to_string()), Some(Wire::ErrorReporting(_))));
-        let mut with_text = request.clone();
-        with_text["message"] = serde_json::json!("private token and path");
-        assert!(parse_request(&with_text.to_string()).is_none());
-    }
-    assert!(parse_request(r#"{"errorReporting":"exception","kind":"raw error","deadline":1}"#).is_none());
 }
 
 impl ErrorReportingRequest {
     fn deadline(&self) -> u64 {
-        match self { Self::Read { deadline } | Self::Set { deadline, .. } | Self::Exception { deadline, .. } => *deadline }
+        match self { Self::Read { deadline } | Self::Set { deadline, .. } => *deadline }
     }
 
     fn execute(&self, config: &std::path::Path, deadline: u64) -> serde_json::Value {
         if storage_clock_ms() >= deadline { return serde_json::json!({"error":"admission_expired"}); }
-        if let Self::Exception { kind, .. } = self {
-            use super::error_reporting::{Failure, report_exception};
-            report_exception(match kind {
-                ExceptionKind::MainException => Failure::ElectronMainException,
-                ExceptionKind::MainRejection => Failure::ElectronMainRejection,
-                ExceptionKind::RendererException => Failure::ElectronRendererException,
-                ExceptionKind::RendererRejection => Failure::ElectronRendererRejection,
-            });
-            return serde_json::json!({"accepted":true});
-        }
         let (operation, enabled) = match self {
             Self::Read { .. } => ("read", None),
             Self::Set { enabled, .. } => ("set", Some(*enabled)),
-            Self::Exception { .. } => unreachable!(),
         };
         match crate::capture::desktop::workflow::error_reporting::error_reporting_bridge_in(config, operation, enabled, || storage_clock_ms() < deadline) {
             Ok(enabled) => serde_json::json!({"errorReporting":{"enabled":enabled}}),
@@ -371,27 +370,10 @@ impl ErrorReportingRequest {
 }
 
 fn parse_request(line: &str) -> Option<Wire> {
-    if line.starts_with('{')
-        && let Some(request) = super::native_host::parse(line, storage_clock_ms())
-    {
-        return Some(Wire::NativeHost(request));
-    }
-    if let Some(deadline) = super::connect_settings::backend_opening_deadline(line) {
-        return Some(Wire::ConnectBackend(deadline.min(storage_clock_ms() + 3000)));
-    }
     if let Some(deadline) = super::connect_settings::opening_deadline(line) {
         return Some(Wire::Connect(deadline.min(storage_clock_ms() + 3000)));
     }
     if line.starts_with('{') {
-        if let Ok(drawing) = serde_json::from_str::<Drawing>(line) {
-            let (action, expected, deadline) = match drawing {
-                Drawing::Read { deadline } => (Action::DrawingRead, String::new(), deadline),
-                Drawing::Undo { expected, deadline } if valid_revision(&expected) => (Action::DrawingUndo, expected, deadline),
-                _ => return None,
-            };
-            let remaining = deadline.saturating_sub(storage_clock_ms()).min(3000);
-            return Some(Wire::Capture(Some((action, expected)), clock_ms() + remaining));
-        }
         if let Ok(request) = serde_json::from_str::<PublicShareRequest>(line) {
             return request.admission();
         }
@@ -408,10 +390,7 @@ fn parse_request(line: &str) -> Option<Wire> {
         match &storage {
             Storage::Set { path, expected, .. } if path.is_empty() || path.len() > 4096 || path.contains('\0') || !std::path::Path::new(path).is_absolute() || !valid_revision(expected) => return None,
             Storage::Reset { expected, .. } if !valid_revision(expected) => return None,
-            Storage::ProbeLocation { path, expected, .. } if path.is_empty() || path.len() > 4096 || path.contains('\0') || !std::path::Path::new(path).is_absolute() || !valid_revision(expected) => return None,
-            Storage::SetLocation { path, expected, .. } if path.is_empty() || path.len() > 4096 || path.contains('\0') || !std::path::Path::new(path).is_absolute() || !valid_revision(expected) => return None,
-            Storage::ResetLocation { expected, .. } if !valid_revision(expected) => return None,
-            Storage::SaveRetention { policy, expected, .. } if !policy.valid() || !valid_revision(expected) => return None,
+            Storage::SaveRetention { preset, expected, .. } if !["week", "month", "forever"].contains(&preset.as_str()) || !valid_revision(expected) => return None,
             Storage::ResetRetention { expected, .. } if !valid_revision(expected) => return None,
             _ => {}
         }
@@ -525,17 +504,13 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
     // Rendezvous channel: one persistent worker, no queued/accumulating blocked writers.
     // The listener and GUI remain free while this worker waits on the existing flock.
     let (storage_tx, storage_rx) = std::sync::mpsc::sync_channel::<(SettingsRequest, u64, UnixStream)>(0);
-    let (connect_tx, connect_rx) = std::sync::mpsc::sync_channel::<(bool, u64, UnixStream)>(0);
+    let (connect_tx, connect_rx) = std::sync::mpsc::sync_channel::<(u64, UnixStream)>(0);
     let connect_config = config_path.clone();
     std::thread::Builder::new()
         .name("apparent-connect-settings".into())
         .spawn(move || {
-            while let Ok((backend, deadline, stream)) = connect_rx.recv() {
-                if backend {
-                    super::connect_settings::backend::serve(stream, deadline, &connect_config);
-                } else {
-                    super::connect_settings::serve(stream, deadline, &connect_config);
-                }
+            while let Ok((deadline, stream)) = connect_rx.recv() {
+                super::connect_settings::serve(stream, deadline, &connect_config);
             }
         })?;
     std::thread::Builder::new().name("apparent-storage-control".into()).spawn(move || {
@@ -571,35 +546,15 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                 let response = if valid_frame {
                     if let Some(wire) = parse_request(line.trim()) {
                         let (action, deadline_ms) = match wire {
-                            Wire::NativeHost(request) => {
-                                let id = request.id.clone();
-                                let deadline_ms = clock_ms() + request.deadline.saturating_sub(storage_clock_ms()).min(3000);
-                                let (reply, receive) = std::sync::mpsc::sync_channel(1);
-                                if tx.try_send(Request { action: None, native_host: Some(request), reply, deadline_ms }).is_ok() {
-                                    let result = receive.recv_timeout(Duration::from_millis(deadline_ms.saturating_sub(clock_ms())))
-                                        .unwrap_or_else(|_| r#"{"status":"outcome-unknown"}"#.into());
-                                    let result = serde_json::from_str::<serde_json::Value>(&result)
-                                        .unwrap_or_else(|_| serde_json::json!({"status":"outcome-unknown"}));
-                                    let _ = writeln!(stream, "{}", serde_json::json!({"protocol":1,"id":id,"result":result}));
-                                } else {
-                                    let _ = writeln!(stream, "{}", serde_json::json!({"protocol":1,"id":id,"result":{"status":"refused","reason":"busy"}}));
-                                }
-                                continue;
-                            }
-                            wire @ (Wire::Connect(_) | Wire::ConnectBackend(_)) => {
-                                let (backend, deadline) = match wire {
-                                    Wire::Connect(deadline) => (false, deadline),
-                                    Wire::ConnectBackend(deadline) => (true, deadline),
-                                    _ => unreachable!(),
-                                };
+                            Wire::Connect(deadline) => {
                                 if line.len() > 4096 {
                                     let _ = writeln!(stream, "{{\"error\":\"invalid_request\"}}");
                                     continue;
                                 }
-                                match connect_tx.try_send((backend, deadline, stream)) {
+                                match connect_tx.try_send((deadline, stream)) {
                                     Ok(()) => {}
-                                    Err(std::sync::mpsc::TrySendError::Full((_, _, mut stream))
-                                        | std::sync::mpsc::TrySendError::Disconnected((_, _, mut stream))) => {
+                                    Err(std::sync::mpsc::TrySendError::Full((_, mut stream))
+                                        | std::sync::mpsc::TrySendError::Disconnected((_, mut stream))) => {
                                         let _ = writeln!(stream, "{{\"error\":\"app_busy\"}}");
                                     }
                                 }
@@ -636,8 +591,6 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                         if tx
                             .try_send(Request {
                                 action,
-                                #[cfg(any(target_os = "macos", target_os = "linux"))]
-                                native_host: None,
                                 reply,
                                 deadline_ms,
                             })
@@ -665,7 +618,9 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
     Ok(rx)
 }
 
-
+fn valid_id(id: &str) -> bool {
+    id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit())
+}
 
 /// Check GUI ownership without asking its UI to respond or connecting to its socket.
 /// Missing/released locks mean no owner; unsafe paths and I/O errors fail closed.
@@ -713,41 +668,326 @@ fn try_lock_owner(owner: &std::fs::File) -> Result<bool> {
     }
 }
 
+pub fn command(action: Option<(Action, &str)>) -> Result<String> {
+    command_for(action, Duration::from_secs(4))
+}
+
+fn deadline_error() -> std::io::Error {
+    std::io::Error::new(
+        std::io::ErrorKind::TimedOut,
+        "GUI capture control deadline expired",
+    )
+}
+
+fn remaining_until(deadline: Instant) -> std::io::Result<Duration> {
+    let remaining = deadline.saturating_duration_since(Instant::now());
+    if remaining.is_zero() {
+        Err(deadline_error())
+    } else {
+        Ok(remaining)
+    }
+}
+
+fn wait_ready(fd: libc::c_int, events: libc::c_short, deadline: Instant) -> std::io::Result<()> {
+    loop {
+        let remaining = remaining_until(deadline)?;
+        let mut descriptor = libc::pollfd {
+            fd,
+            events,
+            revents: 0,
+        };
+        let millis = remaining
+            .as_millis()
+            .saturating_add(1)
+            .min(i32::MAX as u128) as i32;
+        let result = unsafe { libc::poll(&mut descriptor, 1, millis) };
+        if result > 0 {
+            remaining_until(deadline)?;
+            return Ok(());
+        }
+        if result < 0 && std::io::Error::last_os_error().kind() != std::io::ErrorKind::Interrupted {
+            return Err(std::io::Error::last_os_error());
+        }
+    }
+}
+
+/// Nonblocking from socket creation onward. Linux reports a full Unix accept queue as
+/// EAGAIN (not EINPROGRESS); retry with a fresh socket without leaving a worker behind.
+fn connect_until(path: &std::path::Path, deadline: Instant) -> std::io::Result<UnixStream> {
+    let bytes = path.as_os_str().as_bytes();
+    let mut address: libc::sockaddr_un = unsafe { std::mem::zeroed() };
+    if bytes.len() >= address.sun_path.len() || bytes.contains(&0) {
+        return Err(std::io::Error::new(
+            std::io::ErrorKind::InvalidInput,
+            "invalid control socket path",
+        ));
+    }
+    address.sun_family = libc::AF_UNIX as libc::sa_family_t;
+    for (dest, source) in address.sun_path.iter_mut().zip(bytes) {
+        *dest = *source as libc::c_char;
+    }
+    let length =
+        (std::mem::offset_of!(libc::sockaddr_un, sun_path) + bytes.len() + 1) as libc::socklen_t;
+    #[cfg(target_os = "macos")]
+    {
+        address.sun_len = length as u8;
+    }
+    loop {
+        remaining_until(deadline)?;
+        #[cfg(target_os = "linux")]
+        let flags = libc::SOCK_STREAM | libc::SOCK_CLOEXEC;
+        #[cfg(not(target_os = "linux"))]
+        let flags = libc::SOCK_STREAM;
+        let fd = unsafe { libc::socket(libc::AF_UNIX, flags, 0) };
+        if fd < 0 {
+            return Err(std::io::Error::last_os_error());
+        }
+        // Own the descriptor immediately, including every error path below.
+        let stream = unsafe { UnixStream::from_raw_fd(fd) };
+        #[cfg(target_os = "macos")]
+        {
+            if unsafe { libc::fcntl(fd, libc::F_SETFD, libc::FD_CLOEXEC) } < 0 {
+                return Err(std::io::Error::last_os_error());
+            }
+            let enabled: libc::c_int = 1;
+            if unsafe {
+                libc::setsockopt(
+                    fd,
+                    libc::SOL_SOCKET,
+                    libc::SO_NOSIGPIPE,
+                    (&enabled as *const libc::c_int).cast(),
+                    std::mem::size_of_val(&enabled) as libc::socklen_t,
+                )
+            } < 0
+            {
+                return Err(std::io::Error::last_os_error());
+            }
+        }
+        stream.set_nonblocking(true)?;
+        if unsafe { libc::connect(fd, (&address as *const libc::sockaddr_un).cast(), length) } == 0
+        {
+            return Ok(stream);
+        }
+        let error = std::io::Error::last_os_error();
+        if error.raw_os_error() == Some(libc::EINPROGRESS) {
+            wait_ready(fd, libc::POLLOUT, deadline)?;
+            if let Some(error) = stream.take_error()? {
+                return Err(error);
+            }
+            return Ok(stream);
+        }
+        if !matches!(
+            error.kind(),
+            std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+        ) {
+            return Err(error);
+        }
+        drop(stream);
+        std::thread::sleep(Duration::from_millis(2).min(remaining_until(deadline)?));
+    }
+}
+
+/// One absolute deadline covers all partial reads/writes, not one timeout per byte.
+struct DeadlineStream {
+    stream: UnixStream,
+    deadline: Instant,
+}
+
+impl Read for DeadlineStream {
+    fn read(&mut self, bytes: &mut [u8]) -> std::io::Result<usize> {
+        loop {
+            wait_ready(self.stream.as_raw_fd(), libc::POLLIN, self.deadline)?;
+            match self.stream.read(bytes) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                result => return result,
+            }
+        }
+    }
+}
+
+impl Write for DeadlineStream {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        loop {
+            wait_ready(self.stream.as_raw_fd(), libc::POLLOUT, self.deadline)?;
+            match self.stream.write(bytes) {
+                Err(error)
+                    if matches!(
+                        error.kind(),
+                        std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                    ) => {}
+                result => return result,
+            }
+        }
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+fn command_for(action: Option<(Action, &str)>, budget: Duration) -> Result<String> {
+    if let Some((_, id)) = action {
+        ensure!(valid_id(id), "capture ID must be 32 hex characters");
+    }
+    let timeout = budget
+        .min(Duration::from_secs(4))
+        .max(Duration::from_millis(1));
+    let deadline_ms = clock_ms() + timeout.as_millis() as u64;
+    let path = socket_path(false)?;
+    command_at(action, timeout, deadline_ms, &path)
+}
+
+fn command_at(
+    action: Option<(Action, &str)>,
+    timeout: Duration,
+    deadline_ms: u64,
+    path: &std::path::Path,
+) -> Result<String> {
+    let deadline = Instant::now()
+        + timeout.min(Duration::from_millis(
+            deadline_ms.saturating_sub(clock_ms()),
+        ));
+    let meta = std::fs::symlink_metadata(&path).context("no running GUI control socket")?;
+    ensure!(
+        meta.file_type().is_socket()
+            && meta.uid() == unsafe { libc::geteuid() }
+            && meta.mode() & 0o777 == 0o600,
+        "unsafe control socket"
+    );
+    let stream = connect_until(path, deadline).context("GUI capture control unavailable")?;
+    same_user(&stream)?;
+    let mut stream = DeadlineStream { stream, deadline };
+    let request = match action {
+        None => "state".to_owned(),
+        Some((action, id)) => format!(
+            "{} {id} {deadline_ms}",
+            match action {
+                Action::Start => "start",
+                Action::Inspect => "inspect",
+                Action::Stop => "stop",
+                Action::Cancel => "cancel",
+                Action::ReferenceRead | Action::ReferenceCopy | Action::PublicShareStart | Action::PublicShareRead | Action::PublicShareDeliver | Action::PublicShareCancel => bail!("Typed GUI actions require the GUI protocol"),
+            }
+        ),
+    };
+    writeln!(stream, "{request}")?;
+    let mut response = String::new();
+    BufReader::new(stream).take(4096).read_line(&mut response)?;
+    ensure!(
+        !response.is_empty(),
+        "GUI capture control closed without a reply"
+    );
+    Ok(response.trim().to_owned())
+}
+
+/// One mutation, then read-only polling by the original ID. Never infer ownership
+/// from global state and never resend Stop as a toggle after a timeout.
+pub fn execute(action: Option<(Action, &str)>, wait: bool, timeout: Duration) -> serde_json::Value {
+    execute_with(action, wait, timeout, command_for)
+}
+
+fn execute_with(
+    action: Option<(Action, &str)>,
+    wait: bool,
+    timeout: Duration,
+    mut send: impl FnMut(Option<(Action, &str)>, Duration) -> Result<String>,
+) -> serde_json::Value {
+    let deadline = Instant::now() + timeout;
+    let id = action.map(|(_, id)| id);
+    let mut next = action;
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return serde_json::json!({"capture_id": id, "error": "timeout", "message": "Inspect the same ID; an admitted capture is not cancelled on timeout."});
+        }
+        let response = send(next, remaining)
+            .and_then(|text| Ok(serde_json::from_str::<serde_json::Value>(&text)?));
+        if Instant::now() >= deadline
+            || response.as_ref().err().is_some_and(|error| {
+                error
+                    .downcast_ref::<std::io::Error>()
+                    .is_some_and(|error| error.kind() == std::io::ErrorKind::TimedOut)
+            })
+        {
+            return serde_json::json!({"capture_id": id, "error": "timeout", "message": "Inspect the same ID; an admitted capture is not cancelled on timeout."});
+        }
+        let mut value = match response {
+            Ok(value) => value,
+            Err(error) => {
+                return serde_json::json!({"capture_id": id, "error": "control_unavailable", "message": format!("{error:#}"), "recovery": "Inspect the same ID before retrying; admission may have succeeded."});
+            }
+        };
+        if !value.is_object() {
+            return serde_json::json!({"capture_id": id, "error": "invalid_response"});
+        }
+        if value["error"].is_string() {
+            // Listener/transport errors may not yet have reached the GUI thread.
+            value["capture_id"] = serde_json::json!(id);
+            return value;
+        }
+        if let Some((action, id)) = action {
+            // A response for a different resource is never a successful receipt.
+            let status = value["status"].as_str();
+            if value["capture_id"].as_str() != Some(id)
+                || !matches!(
+                    status,
+                    Some(
+                        "starting"
+                            | "recording"
+                            | "processing"
+                            | "saved"
+                            | "cancelled"
+                            | "failed"
+                            | "rejected"
+                            | "unknown"
+                    )
+                )
+                || (status == Some("saved")
+                    && !value["bundle_path"].as_str().is_some_and(|p| !p.is_empty()))
+            {
+                return serde_json::json!({"capture_id": id, "error": "invalid_response"});
+            }
+            if !wait
+                || matches!(
+                    value["outcome"].as_str(),
+                    Some("wrong_capture" | "not_ready")
+                )
+            {
+                return value;
+            }
+            if (action == Action::Start && status == Some("recording"))
+                || (action == Action::Stop
+                    && status == Some("saved")
+                    && value["bundle_path"].is_string())
+            {
+                return value;
+            }
+            if matches!(
+                status,
+                Some("cancelled" | "failed" | "rejected" | "unknown" | "saved")
+            ) {
+                value["error"] = serde_json::json!(match status {
+                    Some("cancelled") => "cancelled",
+                    Some("unknown") => "unknown_capture",
+                    _ => "ended_before_ready",
+                });
+                return value;
+            }
+            next = Some((Action::Inspect, id));
+        } else {
+            return value;
+        }
+        std::thread::sleep(
+            Duration::from_millis(50).min(deadline.saturating_duration_since(Instant::now())),
+        );
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    fn transport_fixture() -> (PathBuf, UnixListener) {
-        // Short enough for sun_path, private and unrelated to the live GUI socket.
-        let dir = std::env::temp_dir().join(format!("ac-{}", new_id().unwrap()));
-        std::fs::create_dir(&dir).unwrap();
-        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
-        let path = dir.join("s");
-        let listener = UnixListener::bind(&path).unwrap();
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
-        (path, listener)
-    }
-
-
-    #[test]
-    fn drawing_admission_blocks_stale_idle_and_expired_mutations() {
-        assert_eq!(super::drawing_admission(Some("new"), Some("old"), false), Err("conflict"));
-        assert_eq!(super::drawing_admission(None, Some("old"), false), Err("conflict"));
-        assert_eq!(super::drawing_admission(Some("new"), Some("new"), true), Err("admission_expired"));
-        assert_eq!(super::drawing_admission(Some("new"), Some("new"), false), Ok(()));
-        assert_eq!(super::drawing_admission(None, None, false), Ok(()));
-    }
-
-    #[test]
-    fn drawing_contract_rejects_unbound_undo_and_extra_fields() {
-        assert!(super::parse_request(r#"{"drawing":"read","deadline":1}"#).is_some());
-        assert!(super::parse_request(r#"{"drawing":"undo","expected":"0123456789abcdef","deadline":1}"#).is_some());
-        for invalid in [
-            r#"{"drawing":"undo","deadline":1}"#,
-            r#"{"drawing":"undo","expected":"invalid","deadline":1}"#,
-            r#"{"drawing":"read","deadline":1,"expected":"0123456789abcdef"}"#,
-            r#"{"drawing":"read","deadline":1,"path":"private"}"#,
-        ] { assert!(super::parse_request(invalid).is_none()); }
-    }
-
     #[test]
     fn capture_reference_policy_checks_selection_before_any_clipboard_write() {
         use super::super::super::capture_reference_response as reply;
@@ -834,64 +1074,33 @@ mod tests {
         std::fs::write(&config, serde_json::json!({"experiments":{"electronCaptureLocation":true}, "capturesDir":captures,
             "secret":"keep", "unknown":{"nested":true}, "retention":{"mediaDays":2,"bundleDays":null,"future":"keep"}}).to_string()).unwrap();
         let initial = read();
-        assert_eq!(initial["retention"]["mediaDays"], serde_json::json!({"present":true,"value":2}));
-        assert_eq!(initial["retention"]["bundleDays"], serde_json::json!({"present":true,"value":null}));
-        let month = serde_json::json!({"mediaDays":30,"bundleDays":90});
-        let save = |policy: serde_json::Value, expected: &serde_json::Value| call(serde_json::json!({"storage":"saveretention", "policy":policy,"expected":expected,"deadline":storage_clock_ms()+3000}));
-        crate::shared::handoff::set_config_value_in(&config, "concurrentSetting", "kept".into()).unwrap();
-        let saved = save(month.clone(), &initial["revision"]);
-        assert_eq!(saved["retention"]["mediaDays"]["value"], 30);
-        assert_eq!(saved["retention"]["bundleDays"]["value"], 90);
+        assert!(initial["retention"]["preset"].is_null());
+        assert_eq!(initial["retention"]["options"].as_array().unwrap().len(), 3);
+        let save = |preset: &str, expected: &serde_json::Value| call(serde_json::json!({"storage":"saveretention", "preset":preset,"expected":expected,"deadline":storage_clock_ms()+3000}));
+        let saved = save("month", &initial["revision"]);
+        assert_eq!(saved["retention"]["preset"], "month");
         assert_eq!(read(), saved);
-        assert_eq!(save(serde_json::json!({"mediaDays":null,"bundleDays":null}), &initial["revision"])["error"], "conflict");
+        assert_eq!(save("forever", &initial["revision"])["error"], "conflict");
         let reset = call(serde_json::json!({"storage":"resetretention","expected":saved["revision"],"deadline":storage_clock_ms()+3000}));
-        assert_eq!(reset["retention"]["mediaDays"], serde_json::json!({"present":false,"value":null}));
-        assert_eq!(reset["retention"]["bundleDays"], serde_json::json!({"present":false,"value":null}));
+        assert_eq!(reset["retention"]["preset"], "week");
         assert_eq!(reset["custom"], false);
         let raw = crate::shared::handoff::capture_location::read_raw(&config).unwrap();
         assert_eq!(raw["secret"], "keep");
         assert_eq!(raw["unknown"]["nested"], true);
-        assert_eq!(raw["concurrentSetting"], "kept");
         assert_eq!(raw["retention"]["future"], "keep");
         assert_eq!(raw["capturesDir"], captures.to_str().unwrap());
-        std::fs::write(&config, r#"{"experiments":{"electronCaptureLocation":true},"retention":{"bundleDays":null}}"#).unwrap();
-        let media_absent = read();
-        std::fs::write(&config, r#"{"experiments":{"electronCaptureLocation":true},"retention":{"mediaDays":null,"bundleDays":null}}"#).unwrap();
-        let media_explicit_null = read();
-        assert_ne!(media_absent["revision"], media_explicit_null["revision"],
-            "CAS fingerprints distinguish an absent owner value from explicit JSON null");
-        assert_eq!(save(serde_json::json!({"mediaDays":30,"bundleDays":90}), &media_absent["revision"])["error"], "conflict");
-        std::fs::write(&config, r#"{"experiments":{"electronCaptureLocation":true},"retention":{"mediaDays":"private-value","bundleDays":30}}"#).unwrap();
-        let malformed = read();
-        assert_eq!(malformed["retention"]["mediaDays"], serde_json::json!({"present":false,"value":null}));
-        assert_eq!(malformed["retention"]["bundleDays"], serde_json::json!({"present":false,"value":null}));
-        assert_eq!(malformed["custom"], true);
-        assert!(!malformed.to_string().contains("private-value"));
-        std::fs::write(&config, serde_json::json!({"experiments":{"electronCaptureLocation":true}, "capturesDir":captures,
-            "secret":"keep", "unknown":{"nested":true}, "retention":{"mediaDays":null,"bundleDays":null,"future":"keep"}}).to_string()).unwrap();
         assert_eq!(call(serde_json::json!({"storage":"usage","deadline":storage_clock_ms()+3000}))["usage"]["formatted"], "1 MB");
         assert_eq!(super::super::storage_preferences::usage(&config, || false), Err("usage_unavailable"));
-        let month_policy = super::super::storage_preferences::SavePolicy { media_days: 30.into(), bundle_days: 90.into() };
-        let before_unknown = read();
         let bytes = std::fs::read(&config).unwrap();
-        assert_eq!(super::super::storage_preferences::save(&config, Some(&month_policy), before_unknown["revision"].as_str().unwrap(), || false), Err("admission_expired"));
+        assert_eq!(super::super::storage_preferences::save(&config, Some("month"), reset["revision"].as_str().unwrap(), || false), Err("admission_expired"));
         assert_eq!(std::fs::read(&config).unwrap(), bytes);
-        crate::shared::handoff::set_config_directory_sync_failure(true);
-        assert_eq!(super::super::storage_preferences::save(&config, Some(&month_policy), before_unknown["revision"].as_str().unwrap(), || true), Err("outcome_unknown"));
-        let after_unknown = read();
-        crate::shared::handoff::set_config_directory_sync_failure(true);
-        assert_eq!(super::super::storage_preferences::save(&config, Some(&month_policy), after_unknown["revision"].as_str().unwrap(), || true), Err("outcome_unknown"), "publishing identical values can also have uncertain durability");
-        assert_eq!(after_unknown["retention"]["mediaDays"]["value"], 30);
-        assert_eq!(after_unknown["retention"]["bundleDays"]["value"], 90);
         // Fail an actual config commit (owned malformed file), not an optimistic UI mock.
         std::fs::write(&config, "malformed").unwrap();
-        assert_eq!(super::super::storage_preferences::save(&config, Some(&month_policy), after_unknown["revision"].as_str().unwrap(), || true), Err("config_write_failed"));
+        assert_eq!(super::super::storage_preferences::save(&config, Some("month"), reset["revision"].as_str().unwrap(), || true), Err("config_write_failed"));
         assert_eq!(std::fs::read_to_string(&config).unwrap(), "malformed");
         assert_eq!(std::fs::read(captures.join("keep")).unwrap(), vec![42; 1_000_000]);
         for value in [
-            serde_json::json!({"storage":"saveretention","policy":{"mediaDays":-1,"bundleDays":90},"expected":"aaaaaaaaaaaaaaaa","deadline":1}),
-            serde_json::json!({"storage":"saveretention","policy":{"mediaDays":7,"bundleDays":90,"unexpected":true},"expected":"aaaaaaaaaaaaaaaa","deadline":1}),
-            serde_json::json!({"storage":"saveretention","policy":{"mediaDays":7},"expected":"aaaaaaaaaaaaaaaa","deadline":1}),
+            serde_json::json!({"storage":"saveretention","preset":"arbitrary","expected":"aaaaaaaaaaaaaaaa","deadline":1}),
             serde_json::json!({"storage":"usage","path":"/forbidden","deadline":1}),
             serde_json::json!({"storage":"resetretention","expected":"invalid","deadline":1}),
         ] { assert!(parse_request(&value.to_string()).is_none()); }
@@ -909,41 +1118,6 @@ mod tests {
             r#"{"storage":"set","deadline":1,"expected":"bad","path":"/tmp"}"#,
             r#"{"storage":"read","deadline":-1}"#,
         ] { assert!(super::parse_request(invalid).is_none(), "{invalid}"); }
-        for valid in [
-            r#"{"storage":"locationfacts","deadline":999999999999}"#,
-            r#"{"storage":"probelocation","path":"/tmp/candidate","expected":"0123456789abcdef","deadline":999999999999}"#,
-            r#"{"storage":"setlocation","path":"/tmp/candidate","expected":"0123456789abcdef","deadline":999999999999}"#,
-            r#"{"storage":"resetlocation","expected":"0123456789abcdef","deadline":999999999999}"#,
-        ] { assert!(super::parse_request(valid).is_some(), "{valid}"); }
-        for invalid in [
-            r#"{"storage":"probelocation","path":"relative","expected":"0123456789abcdef","deadline":1}"#,
-            r#"{"storage":"probelocation","path":"/tmp/candidate","expected":"invalid","deadline":1}"#,
-            r#"{"storage":"setlocation","path":"/tmp/candidate","expected":"0123456789abcdef","deadline":1,"secret":"hidden"}"#,
-        ] { assert!(super::parse_request(invalid).is_none(), "{invalid}"); }
-    }
-
-    #[test]
-    fn storage_location_facts_are_bounded_and_probe_checks_owner_revision() {
-        let (path, listener) = transport_fixture();
-        drop(listener);
-        let directory = path.parent().unwrap();
-        let config = directory.join("config.json");
-        std::fs::write(&config, r#"{"privateToken":"keep","capturesDir":"/saved"}"#).unwrap();
-        let facts_request = Storage::LocationFacts { deadline: storage_clock_ms() + 3000 };
-        let facts = facts_request.execute(&config, storage_clock_ms() + 3000);
-        assert_eq!(facts["location"]["saved"]["kind"], "string");
-        assert_eq!(facts["location"]["saved"]["value"], "/saved");
-        assert_eq!(facts["location"]["revision"].as_str().unwrap().len(), 16);
-        assert!(facts.get("privateToken").is_none());
-        let revision = facts["location"]["revision"].as_str().unwrap().to_owned();
-        let candidate = directory.join("probe");
-        let probe = Storage::ProbeLocation { path: candidate.to_str().unwrap().into(), expected: revision.clone(), deadline: storage_clock_ms() + 3000 };
-        assert_eq!(probe.execute(&config, storage_clock_ms() + 3000)["probe"]["available"], true);
-        let mut raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
-        raw["capturesDir"] = "/changed".into();
-        std::fs::write(&config, serde_json::to_vec(&raw).unwrap()).unwrap();
-        assert_eq!(probe.execute(&config, storage_clock_ms() + 3000)["error"], "conflict");
-        std::fs::remove_dir_all(directory).unwrap();
     }
 
     #[test]
@@ -1029,95 +1203,6 @@ mod tests {
         assert!(!path.exists());
         std::fs::remove_dir_all(dir).unwrap();
     }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn native_host_socket_roundtrip_is_owner_bound_and_correlated() {
-        let (path, stale) = transport_fixture();
-        drop(stale);
-        let directory = path.parent().unwrap().to_owned();
-        let config = directory.join("config.json");
-        let receiver = listen_at_config(path.clone(), config).unwrap();
-        let id = "native-host-test-01";
-        let deadline = storage_clock_ms() + 2500;
-        let request = serde_json::json!({
-            "protocol":1,"id":id,"owner":"record","operation":"readSnapshot","deadline":deadline
-        });
-        let client_path = path.clone();
-        let client = std::thread::spawn(move || {
-            let mut stream = UnixStream::connect(client_path).unwrap();
-            stream.set_read_timeout(Some(Duration::from_secs(3))).unwrap();
-            writeln!(stream, "{request}").unwrap();
-            let mut response = String::new();
-            BufReader::new(stream).read_line(&mut response).unwrap();
-            serde_json::from_str::<serde_json::Value>(&response).unwrap()
-        });
-        let admitted = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
-        let native = admitted.native_host.as_ref().expect("native host request stays distinct from capture actions");
-        assert_eq!(native.id, id);
-        assert!(matches!(&native.operation, super::super::native_host::Operation::ReadSnapshot));
-        assert!(admitted.action.is_none());
-        admitted.reply.send(r#"{"api":1,"scope":"running-desktop-process"}"#.into()).unwrap();
-        let response = client.join().unwrap();
-        assert_eq!(response["protocol"], 1);
-        assert_eq!(response["id"], id);
-        assert_eq!(response["result"]["scope"], "running-desktop-process");
-        drop(receiver);
-        for _ in 0..50 { if !path.exists() { break; } std::thread::sleep(Duration::from_millis(20)); }
-        assert!(!path.exists(), "owned control listener did not clean up");
-        std::fs::remove_dir_all(directory).unwrap();
-    }
-
-    #[cfg(any(target_os = "macos", target_os = "linux"))]
-    #[test]
-    fn native_host_public_node_client_gets_unknown_for_admitted_lost_mutation_reply() {
-        let home = std::env::temp_dir().join(format!("nh-{}", &new_id().unwrap()[..8]));
-        let config_dir = home.join(".config");
-        let apparent_dir = config_dir.join("apparent");
-        let directory = apparent_dir.join("agent-control");
-        std::fs::create_dir_all(&directory).unwrap();
-        for path in [&home, &config_dir, &apparent_dir, &directory] {
-            std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o700)).unwrap();
-        }
-        let config = apparent_dir.join("config.json");
-        let path = directory.join("capture.sock");
-        let receiver = listen_at_config(path.clone(), config).unwrap();
-        let script = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("composition/native-host/test/rust-roundtrip.ts");
-        let client_home = home.clone();
-        let client = std::thread::spawn(move || {
-            std::process::Command::new("node")
-                .env("HOME", &client_home)
-                .arg("--experimental-strip-types")
-                .arg(script)
-                .output()
-                .unwrap()
-        });
-
-        let read = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert!(matches!(read.native_host.as_ref().unwrap().operation, super::super::native_host::Operation::ReadSnapshot));
-        let snapshot = serde_json::json!({
-            "api":1,"processEpoch":"rust-fixture","revision":0,
-            "scope":"running-desktop-process","freshness":"cached-gui-observation",
-            "permissions":[],"shortcuts":{
-                "record":{"configured":null,"effective":null,"registration":"unknown","canValidate":true,"canSave":false},
-                "paste":{"configured":null,"effective":null,"registration":"unknown","canValidate":true,"canSave":false}
-            }
-        });
-        read.reply.send(snapshot.to_string()).unwrap();
-
-        let save = receiver.recv_timeout(Duration::from_secs(3)).unwrap();
-        assert!(matches!(save.native_host.as_ref().unwrap().operation, super::super::native_host::Operation::SaveRecordShortcut(_)));
-        assert!(save.action.is_none(), "native host mutation must not become a capture action");
-        drop(save.reply); // Simulate a dispatched mutation whose reply was lost.
-        let output = client.join().unwrap();
-        drop(receiver);
-        for _ in 0..50 { if !path.exists() { break; } std::thread::sleep(Duration::from_millis(20)); }
-        assert!(!path.exists(), "owned control listener did not clean up");
-        assert!(output.status.success(), "Node client: {}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
-        assert!(String::from_utf8_lossy(&output.stdout).contains("preserve an admitted lost-reply outcome"));
-        std::fs::remove_dir_all(home).unwrap();
-    }
     #[test]
     fn reporting_socket_is_typed_private_and_rechecks_admission_after_config_lock() {
         let (path, stale) = transport_fixture();
@@ -1136,11 +1221,6 @@ mod tests {
         };
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000})), serde_json::json!({"errorReporting":{"enabled":true}}));
-        for kind in ["main_exception", "main_rejection", "renderer_exception", "renderer_rejection"] {
-            assert_eq!(call(serde_json::json!({"errorReporting":"exception","kind":kind,"deadline":storage_clock_ms()+3000})), serde_json::json!({"accepted":true}));
-            assert_eq!(call(serde_json::json!({"errorReporting":"exception","kind":kind,"deadline":1}))["error"], "admission_expired");
-            assert_eq!(call(serde_json::json!({"errorReporting":"exception","kind":kind,"message":"private text","deadline":storage_clock_ms()+3000}))["error"], "invalid_request");
-        }
         for invalid in [
             serde_json::json!({"errorReporting":"set","deadline":1}),
             serde_json::json!({"errorReporting":"set","enabled":"false","deadline":1}),
@@ -1191,10 +1271,6 @@ mod tests {
     #[test]
     #[ignore = "needs the frontend Electron binary; see frontend/README.md"]
     fn connect_settings_electron_rust_roundtrip() {
-        // Unit-test builds deliberately disable default experiments. Exercise
-        // the normal encrypted endpoint-enrollment path in this isolated lane.
-        crate::shared::handoff::enable_experiment(apparent_connect_client::HOSTED_ENCRYPTION);
-        crate::shared::handoff::enable_experiment(apparent_connect_client::HOSTED_SYNC);
         let electron = std::env::var_os("APPARENT_CONNECT_TEST_ELECTRON")
             .expect("Set APPARENT_CONNECT_TEST_ELECTRON to the frontend Electron executable");
         let home = std::env::temp_dir().join(format!("ce-{}", &new_id().unwrap()[..8]));
@@ -1244,6 +1320,110 @@ mod tests {
         std::fs::remove_dir_all(home).unwrap();
         assert!(output.status.success(), "Electron: {}{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
         println!("{}", String::from_utf8_lossy(&output.stdout));
+    }
+
+    fn transport_fixture() -> (PathBuf, UnixListener) {
+        // Short enough for sun_path, private and unrelated to the live GUI socket.
+        let dir = std::env::temp_dir().join(format!("ac-{}", new_id().unwrap()));
+        std::fs::create_dir(&dir).unwrap();
+        std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        let path = dir.join("s");
+        let listener = UnixListener::bind(&path).unwrap();
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600)).unwrap();
+        (path, listener)
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn transport_full_backlog_obeys_absolute_deadline() {
+        let (path, listener) = transport_fixture();
+        assert_eq!(unsafe { libc::listen(listener.as_raw_fd(), 1) }, 0);
+        let queued = [
+            UnixStream::connect(&path).unwrap(),
+            UnixStream::connect(&path).unwrap(),
+        ];
+        // Bound even the buggy test: unblock its blocking connect only after the assertion's
+        // budget has been exceeded. No timed-out worker is abandoned.
+        let server = std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(450));
+            drop(queued);
+            drop(listener);
+        });
+        let started = Instant::now();
+        let result = command_at(None, Duration::from_millis(80), clock_ms() + 80, &path);
+        let elapsed = started.elapsed();
+        server.join().unwrap();
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(result.is_err());
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "connect exceeded budget: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn transport_trickled_reply_obeys_absolute_deadline() {
+        let (path, listener) = transport_fixture();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = String::new();
+            BufReader::new(&stream).read_line(&mut request).unwrap();
+            for byte in b"{\"state\":\"idle\"}\n" {
+                if stream.write_all(&[*byte]).is_err() {
+                    break;
+                }
+                std::thread::sleep(Duration::from_millis(30));
+            }
+        });
+        let started = Instant::now();
+        let result = command_at(None, Duration::from_millis(80), clock_ms() + 80, &path);
+        let elapsed = started.elapsed();
+        server.join().unwrap();
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert!(
+            result.is_err(),
+            "trickle must not restart the timeout: {result:?}"
+        );
+        assert!(
+            elapsed < Duration::from_millis(300),
+            "read exceeded budget: {elapsed:?}"
+        );
+    }
+
+    #[test]
+    fn transport_normal_reply_preserves_request_and_peer_checks() {
+        let (path, listener) = transport_fixture();
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_secs(1)))
+                .unwrap();
+            let mut request = String::new();
+            BufReader::new(&stream).read_line(&mut request).unwrap();
+            assert_eq!(request, "state\n");
+            stream
+                .write_all(b"{\"state\":{\"phase\":\"idle\"}}\n")
+                .unwrap();
+        });
+        let response = command_at(None, Duration::from_secs(1), clock_ms() + 1000, &path);
+        server.join().unwrap();
+        std::fs::remove_dir_all(path.parent().unwrap()).unwrap();
+        assert_eq!(response.unwrap(), "{\"state\":{\"phase\":\"idle\"}}");
+    }
+
+    #[test]
+    fn transport_stalled_write_obeys_absolute_deadline() {
+        let (stream, _peer) = UnixStream::pair().unwrap();
+        stream.set_nonblocking(true).unwrap();
+        let started = Instant::now();
+        let mut stream = DeadlineStream {
+            stream,
+            deadline: started + Duration::from_millis(80),
+        };
+        // More than the socket send queue; peer deliberately never drains it.
+        let result = stream.write_all(&vec![0; 4 * 1024 * 1024]);
+        assert_eq!(result.unwrap_err().kind(), std::io::ErrorKind::TimedOut);
+        assert!(started.elapsed() < Duration::from_millis(300));
     }
 
     #[test]
@@ -1314,13 +1494,123 @@ mod tests {
         assert_eq!(registry.inspect("unknown")["error"], "unknown_capture");
     }
 
+    #[test]
+    fn stop_wait_sends_one_stop_then_inspects_only_that_id_until_saved() {
+        let mut calls = vec![];
+        let replies = [
+            serde_json::json!({"capture_id":"owned", "status":"processing", "outcome":"stopping"}),
+            serde_json::json!({"capture_id":"owned", "status":"processing"}),
+            serde_json::json!({"capture_id":"owned", "status":"saved", "bundle_path":"/captures/exact.apparent"}),
+        ];
+        let value = execute_with(
+            Some((Action::Stop, "owned")),
+            true,
+            Duration::from_secs(1),
+            |action, _| {
+                calls.push(action.map(|(a, id)| (a, id.to_owned())));
+                Ok(replies[calls.len() - 1].to_string())
+            },
+        );
+        assert_eq!(value["bundle_path"], "/captures/exact.apparent");
+        assert_eq!(
+            calls,
+            vec![
+                Some((Action::Stop, "owned".into())),
+                Some((Action::Inspect, "owned".into())),
+                Some((Action::Inspect, "owned".into()))
+            ]
+        );
+    }
 
+    #[test]
+    fn start_wait_requires_real_readiness_receipt_for_the_owned_id() {
+        let mut calls = 0;
+        let value = execute_with(
+            Some((Action::Start, "owned")),
+            true,
+            Duration::from_secs(1),
+            |action, _| {
+                calls += 1;
+                assert_eq!(
+                    action.unwrap().0,
+                    if calls == 1 {
+                        Action::Start
+                    } else {
+                        Action::Inspect
+                    }
+                );
+                Ok(serde_json::json!({"capture_id":"owned", "status":if calls == 1 {"starting"} else {"recording"}}).to_string())
+            },
+        );
+        assert_eq!(value["status"], "recording");
+        assert_eq!(calls, 2);
+    }
 
+    #[test]
+    fn wait_returns_failures_and_rejects_unknown_or_incomplete_receipts() {
+        for (reply, expected) in [
+            (
+                serde_json::json!({"capture_id":"owned", "status":"failed", "error":"start_failed"}),
+                "start_failed",
+            ),
+            (
+                serde_json::json!({"capture_id":"owned", "status":"failed", "error":"finalization_failed"}),
+                "finalization_failed",
+            ),
+            (
+                serde_json::json!({"capture_id":"owned", "status":"cancelled"}),
+                "cancelled",
+            ),
+            (
+                serde_json::json!({"capture_id":"owned", "status":"unknown", "outcome":"already_ended"}),
+                "unknown_capture",
+            ),
+            (
+                serde_json::json!({"capture_id":"foreign", "status":"saved", "bundle_path":"/foreign"}),
+                "invalid_response",
+            ),
+            (serde_json::json!({}), "invalid_response"),
+            (
+                serde_json::json!({"capture_id":"owned", "status":"saved"}),
+                "invalid_response",
+            ),
+        ] {
+            let value = execute_with(
+                Some((Action::Stop, "owned")),
+                true,
+                Duration::from_millis(10),
+                |_, _| Ok(reply.to_string()),
+            );
+            assert_eq!(value["error"], expected, "{reply}");
+        }
+    }
 
-
-
-
-
+    #[test]
+    fn wait_timeout_preserves_owned_id_and_retry_reads_terminal_result() {
+        let mut stops = 0;
+        let value = execute_with(
+            Some((Action::Stop, "owned")),
+            true,
+            Duration::from_millis(5),
+            |action, _| {
+                stops += usize::from(action.unwrap().0 == Action::Stop);
+                Ok(serde_json::json!({"capture_id":"owned", "status":"processing", "outcome":"stopping"}).to_string())
+            },
+        );
+        assert_eq!(value["error"], "timeout");
+        assert_eq!(value["capture_id"], "owned");
+        assert_eq!(stops, 1);
+        let saved = execute_with(
+            Some((Action::Stop, "owned")),
+            true,
+            Duration::from_secs(1),
+            |_, _| {
+                Ok(serde_json::json!({"capture_id":"owned", "status":"saved", "outcome":"already_ended", "bundle_path":"/exact"}).to_string())
+            },
+        );
+        assert_eq!(saved["bundle_path"], "/exact");
+        assert!(saved["error"].is_null());
+    }
 
     #[test]
     fn expired_wire_start_keeps_its_deadline_and_never_admits() {
@@ -1329,8 +1619,6 @@ mod tests {
         let (reply, _) = std::sync::mpsc::sync_channel(1);
         let request = Request {
             action,
-            #[cfg(any(target_os = "macos", target_os = "linux"))]
-            native_host: None,
             reply,
             deadline_ms,
         };
@@ -1348,7 +1636,20 @@ mod tests {
         }
     }
 
-
+    #[test]
+    fn late_reply_cannot_turn_an_expired_wait_into_success() {
+        let value = execute_with(
+            Some((Action::Start, "owned")),
+            true,
+            Duration::from_millis(1),
+            |_, _| {
+                std::thread::sleep(Duration::from_millis(5));
+                Ok(serde_json::json!({"capture_id":"owned", "status":"recording"}).to_string())
+            },
+        );
+        assert_eq!(value["error"], "timeout");
+        assert_eq!(value["capture_id"], "owned");
+    }
 
     #[test]
     fn running_owner_does_not_require_an_answering_ui() {

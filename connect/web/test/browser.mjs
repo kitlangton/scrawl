@@ -62,7 +62,6 @@ const server = createServer(async (req, res) => {
       if (url.pathname === '/v1/shares/share-1' && !scenario.unconfirmed) revoked = true
       return res.end('{"ok":true}')
     }
-    if (url.pathname === '/v1/analytics/consent') return res.end(JSON.stringify({available:false,consented:false,revision:null,noticeVersion:'product-analytics-v1'}))
     if (url.pathname === '/v1/shares') {
       shareReads.push(url.pathname + url.search)
       if (scenario.readbackUnavailable && writes.length && url.searchParams.has('before')) return res.writeHead(503).end('{}')
@@ -86,16 +85,11 @@ const server = createServer(async (req, res) => {
 await new Promise(r => server.listen(Number(process.env.HOSTED_FIXTURE_PORT || 0), '127.0.0.1', r))
 uiOrigin = `http://127.0.0.1:${server.address().port}`
 const apiOrigin = process.env.HOSTED_TEST_API_ORIGIN || ''
-const apiServer = apiOrigin ? createServer((req, res) => {
-  const mount = new URL(apiOrigin).pathname.replace(/\/$/, '')
-  if (mount && req.url.startsWith(mount + '/')) req.url = req.url.slice(mount.length)
-  else if (mount && req.url === mount) req.url = '/'
-  server.listeners('request')[0](req, res)
-}) : null
+const apiServer = apiOrigin ? createServer(server.listeners('request')[0]) : null
 if (apiServer) await new Promise(r => apiServer.listen(Number(new URL(apiOrigin).port), '127.0.0.1', r))
 console.log(`Synthetic hosted fixture at http://127.0.0.1:${server.address().port}/hosted/`)
 if (process.env.HOSTED_FIXTURE_ONLY) await new Promise(() => {})
-const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || chromium.executablePath(), headless: true, args: ['--no-sandbox'] })
+const browser = await chromium.launch({ executablePath: process.env.CHROME_PATH || '/home/simon/.cache/ms-playwright/chromium-1228/chrome-linux64/chrome', headless: true, args: ['--no-sandbox'] })
 const results = []
 const routeResults = []
 let viteServer
@@ -232,12 +226,11 @@ try {
       await lock.click(); await page.getByRole('dialog').waitFor()
       assert.match(await page.getByRole('dialog').innerText(), /all current and future uploads/)
       await page.keyboard.press('Escape'); assert.equal(await lock.evaluate(e => e === document.activeElement), true)
-      const details = page.getByText('Read details', { exact: true })
-      const readDetails = details.locator('..')
+      const details = page.locator('.hosted-details > summary')
       await details.focus(); await page.keyboard.press('Enter')
-      assert.equal(await readDetails.getAttribute('open'), '')
-      await readDetails.locator('.hosted-limits > summary').click()
-      const limits = await readDetails.innerText()
+      assert.equal(await page.locator('.hosted-details').getAttribute('open'), '')
+      await page.locator('.hosted-details .hosted-limits > summary').click()
+      const limits = await page.locator('.hosted-details').innerText()
       assert.match(limits, /500,000,000[\s\S]*90,000,000[\s\S]*20 accounts[\s\S]*renew each approved device connection automatically/)
       assert.match(limits, /Revoked or expired renewal requires CLI approval again/)
       assert.match(limits, /Older apps need an update and one new approval; website sign-in does not renew device access/)
@@ -252,7 +245,7 @@ try {
       assert.equal(await computer.getAttribute('aria-selected'), 'true')
       assert.match(await page.locator('.hosted-source').getAttribute('src'), /source-pond-v4/)
       assert.equal(await page.locator('.hosted-agent').count(), 1)
-      assert.equal(await page.getByText('Upload details', { exact: true }).locator('..').getAttribute('open'), null)
+      assert.equal(await page.locator('.hosted-details').getAttribute('open'), null)
       const connect = page.getByRole('button', { name: 'Connect', exact: true })
       await connect.click()
       if (!test.anonymous) {
@@ -380,11 +373,6 @@ try {
   }
   // StrictMode starts two loads. Hold the first session until the second has
   // published its list; a stale success or failure must not replace current UI.
-  // StrictMode effect replay exists only in React's development build. CI's
-  // production NODE_ENV must not turn this superseded-load regression into
-  // a single held request. Packaged production scenarios above stay unchanged.
-  const previousNodeEnv = process.env.NODE_ENV
-  process.env.NODE_ENV = 'development'
   viteServer=await (await import('vite')).createServer({server:{port:0}})
   await viteServer.listen()
   uiOrigin=`http://127.0.0.1:${viteServer.httpServer.address().port}`
@@ -412,8 +400,6 @@ try {
     await page.close();results.push(staleFailure?'shares-stale-load-failure':'shares-stale-load-success')
   }
   await viteServer.close();viteServer=null
-  if (previousNodeEnv === undefined) delete process.env.NODE_ENV
-  else process.env.NODE_ENV = previousNodeEnv
   uiOrigin=`http://127.0.0.1:${server.address().port}`
   scenario={unavailable:true}; writes=[]; signedOut=false; revoked=false
   const recovery=await browser.newPage()

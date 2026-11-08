@@ -1,12 +1,11 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@apparent/ui/button';
-import type { RetentionPreset, RetentionResult, UsageResult } from './bridge';
-import { readRetention, resetRetention, saveRetention } from './storage/transport';
+import type { RetentionResult, UsageResult } from './bridge';
 
 function problem(result: RetentionResult | UsageResult | undefined) {
   if (!result || result.status === 'connected' || result.status === 'cancelled') return '';
   if (result.status === 'error') {
-    if (result.code === 'outcome_unknown') return 'The save outcome is unknown. Refresh retention before trying again.';
+    if (result.code === 'outcome_unknown') return 'The save timed out; its outcome is unknown. Refresh retention before trying again.';
     if (result.code === 'config_write_failed') return 'Retention could not be saved. Refresh to read the unchanged preference.';
     if (result.code === 'conflict') return 'Storage changed during this request. Refresh before trying again.';
     if (result.code === 'usage_unavailable') return 'Folder usage is unavailable or the scan exceeded its limit. Refresh usage to try again.';
@@ -20,7 +19,7 @@ function problem(result: RetentionResult | UsageResult | undefined) {
 export function Retention({ effectivePath, settings = false }: { effectivePath: string; settings?: boolean }) {
   const [result, setResult] = useState<RetentionResult>();
   const [usage, setUsage] = useState<UsageResult>();
-  const [preset, setPreset] = useState<RetentionPreset | ''>('');
+  const [preset, setPreset] = useState('');
   const [busy, setBusy] = useState(true);
   const [scanning, setScanning] = useState(false);
   const order = useRef(0);
@@ -45,8 +44,9 @@ export function Retention({ effectivePath, settings = false }: { effectivePath: 
     setBusy(true);
     setResult(undefined);
     try {
-      const next = operation === 'read' ? await readRetention() : operation === 'reset' ? await resetRetention() :
-        preset ? await saveRetention(preset) : { status: 'error' as const, code: 'invalid_request' };
+      const bridge = window.apparent;
+      const next = await (operation === 'read' ? bridge?.readRetention() :
+        operation === 'save' ? bridge?.saveRetention(preset) : bridge?.resetRetention());
       if (token !== order.current) return;
       setResult(next);
       setPreset(next?.status === 'connected' ? next.retention.preset ?? '' : '');
@@ -73,7 +73,7 @@ export function Retention({ effectivePath, settings = false }: { effectivePath: 
     {snapshot && <div className="flex flex-wrap items-end gap-3">
       <label className="grid gap-2 text-sm" htmlFor="retention-preset">Keep recordings
         <select id="retention-preset" className="h-9 rounded-md border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-primary"
-          disabled={busy || scanning} value={preset} onChange={event => setPreset(event.target.value as RetentionPreset | '')}>
+          disabled={busy || scanning} value={preset} onChange={event => setPreset(event.target.value)}>
           <option value="" disabled>Custom policy (config file)</option>
           {snapshot.retention.options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
         </select>

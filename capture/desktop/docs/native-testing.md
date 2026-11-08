@@ -1,120 +1,7 @@
-# Desktop verification
-
-Reusable VM lifecycle, expiry, evidence retention and owned native-test process
-cleanup live in
-[enablement/native](../../../enablement/native/README.md). Desktop keeps the
-behavior-specific scenarios and acceptance recipes below. The Mac Storage
-driver imports its owned-process lifecycle from enablement; its chooser, Settings,
-reporting and recovery assertions remain Desktop-owned. Generic lifecycle changes
-must preserve each caller's cleanup receipts and refusal semantics.
-
-Shared Electron UI is verified primarily on Linux. Mac execution covers affected
-OS boundaries and a short packaged integration smoke, rather than a second full
-workflow matrix. This policy supersedes blanket two-platform walkthrough gates
-in older workflow documentation; it does not certify unrun behavior or remove a
-specific human-imposed hold, consent requirement, safety rule or spending limit.
-
-## Coverage and merge gates
-
-| Layer | Required verification |
-|---|---|
-| Shared React/Electron behavior | Linux tests for rendering, controls, consent/cancel/retry states, errors and accessibility semantics. Use the shipped renderer/main/preload. |
-| Shared Rust↔Electron contract | Linux integration through the real Rust handlers, including failure and authorization behavior. Synthetic services are suitable; a fake Rust bridge proves only the fake. |
-| Native OS boundaries | Focused execution on the affected OS for permissions/dialogs, shortcuts/input, actual clipboard/paste, ownership/focus/stacking, capture inclusion/exclusion, startup/fallback and packaging. First adoption of a route counts as a boundary change. |
-| Mac release package | Short smoke of the current package: launch, a representative interaction and owned cleanup, plus applicable native evidence and existing exact-commit CI/signing checks. |
-
-Before merge, run focused shared checks, independent review and current-base
-integration assessment. Require native proof for affected boundaries only.
-Changing a bridge contract, Electron/runtime version or package layout requires
-assessing native consumers; moving logic into Electron does not make OS effects
-platform independent. Native capture, audio, permissions and multi-display changes
-retain their relevant real-platform checks.
-
-A shared-renderer-only change does not require a new Mac walkthrough when the
-owner establishes that native boundaries are unchanged. Reuse successful seam
-evidence after checking the relevant source, dependencies, runtime, packaging and
-environment inputs. Record the original evidence identity and why it applies;
-do not relabel an older execution as the current binary. An unrelated main
-advance or a new commit ID alone is not a reason to repeat native proof. Missing
-or incompatible evidence for an affected boundary requires that focused check.
-Known product failures must be investigated; a driver/environment failure is
-neither a product pass nor a reason to replay all unaffected cases.
-
-Use the existing `desktop-ui-integration` lane in `enablement/owner_lanes.py` for
-shared Electron and real Rust bridge checks. Use existing installed Mac scenarios
-and isolated Linux recipes for native boundaries. Keep each native checklist
-small and tied to the changed effect; do not build a new runner or evidence-cache
-service merely to apply this policy.
-
-For Copy link, Linux owns the shared consent/cancel/timeout/retry/repeat/offline
-matrix and synthetic recipient/revocation/privacy checks. Mac checks the installed
-entry opening the popup, ownership/focus, startup/fallback, actual clipboard and
-cleanup. Local Paste needs a real receiver when its OS handoff changes. Reuse
-existing valid results; do not edit another owner's active candidate to split its
-tests. Preserve actual output inspection when output changes are exercised.
-
-## Owner proof commands
-
-Install each package's locked dependencies as its owner documentation requires.
-These are maintained entrypoints, not a single all-stream qualification command.
-CI executes the selected package checks; their scope does not expand to native
-effects merely because a job is green.
-
-| Owner | Maintained command from repository root | Claim and relevant invalidation |
-|---|---|---|
-| Enablement | `node --experimental-strip-types enablement/native/linux/contracts.ts` | Launch-free runner, staging, retention and scenario contracts. Recheck changed driver/fixture inputs; no real guest or product claim. |
-| Engine | `npm --prefix engine/sdk run typecheck` and `npm --prefix engine/sdk test`; native producer commands in [capture delivery](../../../engine/delivery/capture/README.md) | SDK/provider/package contracts. Changed capture/audio/input mechanisms need their focused native effect proof; a producer build alone is insufficient. |
-| Record | `npm --prefix record run typecheck`, `npm --prefix record test`, `npm --prefix record run test:package` | Headless workflow, output and package compatibility. Assess changed policy/schema/formatter inputs and separately inspect applicable real original bundles. |
-| Onboarding | `npm --prefix onboarding run typecheck` and `npm --prefix onboarding test` | Journey/progress/persistence contracts. Setup changes need affected installed/window seams; they do not invalidate unchanged Engine audio proof. |
-| Platform | `npm --prefix composition/app run check` and `npm --prefix composition/app run test:electron` | Composition and Electron fixtures. Native permission, focus, clipboard, input and startup effects require the affected real seam. |
-| Agent | `npm --prefix agent test` | Headless consumer/inspection contracts. Assess changed readers/CLI and inspect genuine output separately; no capture effect claim. |
-
-Keep each remaining native claim beside its owner with its executable command,
-candidate/runtime inputs, explicit observations and failed/UNRUN gates. Reuse
-proof when those relevant inputs and coverage remain compatible; a new SHA alone
-does not invalidate it. Private evidence stays private, but the maintained
-scenario and required input contract belong in the repository. A new scenario
-must exercise the actual supported app/provider route; the legacy GUI recipe
-below does not qualify the new assembled Electron app.
-
-For an assembled recording smoke, retain the necessary same-recording chain:
-normal entry (genuinely defer setup if needed), screen/microphone, one visible
-stroke, Stop, original facts/Saved, explicit Copy and a real isolated receiver,
-then owned normal cleanup. Keep Resume/Replay/remembered setup, Board variants
-and startup refusal as focused cases unless a demonstrated state dependency
-requires a join. Recovery from the original recording still needs that original
-state; splitting cases is not permission to fabricate it or omit acceptance.
-Existing reviewed/frozen cases may finish their accepted contract; reorganizing
-verification does not require restarting them or clearing consumed attempts.
-
-Use actual phase timings to diagnose slowness, keeping enclosing/nested durations
-and timeout ceilings distinct. Reconcile engineering timeouts with the original
-job deadline, expiry and cleanup reserve; ask only for a genuinely uncovered
-human/resource/access/spend decision. Routine cases do not require a private
-execution binder, an ACK protocol or a new supervisor. Review any added mechanism
-against its required observation and the existing runner before extending it.
-
-## Transition and publication
-
-This is the governing proof-selection policy now, including for in-flight work.
-Owners should replace generic inherited Mac/full-workflow waits with the concrete
-affected seam and evidence still needed. Explicit human holds and requested proof
-remain; historical generic checklists alone do not recreate a blanket gate.
-Before removing a fallback, establish coverage of shared behavior plus each
-affected platform boundary and verify remaining consumers/build/package inputs.
-
-This documentation change does not implement automatic test selection, receipt
-reuse or alter executable CI/release admission. Existing configured checks still
-run and must pass. Owners may assess evidence manually under this policy; that
-assessment cannot bypass a required automated check. The current Mac package
-smoke and applicable native evidence remain publication requirements even when a
-shared-only PR needs no fresh Mac run before merge. Mac delays do not block
-Linux/web publication under their own existing gates.
-
-## Linux native capture smoke recipe
+# Linux native capture smoke recipe
 
 This is one supported **guest scenario**, not another VM controller:
-`capture/desktop/scripts/linux/gui/capture-smoke.py`, run by `enablement/native/linux/gui-vm.py`. It starts the
+`capture/desktop/scripts/linux/gui/capture-smoke.py`, run by `capture/desktop/scripts/linux/gui/gui-vm.py`. It starts the
 candidate GUI, creates a changing synthetic X11 window, saves one normal GUI
 screen capture, then starts and cancels a second. Both requests use persisted,
 32-hex-character request IDs; all stop/cancel/inspect calls use those IDs only.
@@ -130,8 +17,8 @@ to this command or substitute the separate timed `record --window` recorder:
 that would test a different path. On Omarchy/Hyprland the normal screen path
 uses ScreenCast/PipeWire and can require native portal consent. X11 window
 capture support elsewhere in the backend does not change this CLI contract.
-See [capture control](../../engine/docs/capture.md#agent-control-of-the-running-gui) and
-[Linux capture limits](linux/linux.md#picker-and-portal-limits).
+See [capture control](../../capture/engine/docs/capture.md#agent-control-of-the-running-gui) and
+[Linux capture limits](linux.md#picker-and-portal-limits).
 
 The scene uses Python's stdlib ctypes and `libX11.so.6`, not Tk, a browser,
 xterm or a package install. It changes background, text and a white block twice
@@ -159,9 +46,9 @@ The baseline runner has no `doctor` subcommand. These are the exact launch-free
 preflight commands; do not treat an unknown `doctor` argument as a health pass:
 
 ```sh
-python3 enablement/native/linux/test-gui-vm.py
+python3 capture/desktop/scripts/linux/gui/test-gui-vm.py
 python3 capture/desktop/scripts/linux/gui/test-capture-smoke.py
-python3 enablement/native/linux/gui-vm.py --help
+python3 capture/desktop/scripts/linux/gui/gui-vm.py --help
 for tool in qemu-system-x86_64 qemu-img ssh scp systemd-run python3; do
   command -v "$tool" || exit 1
 done
@@ -197,7 +84,7 @@ speaker stimulus is used. This recipe makes no microphone-quality claim.
 ## Run and native consent
 
 ```sh
-python3 enablement/native/linux/gui-vm.py \
+python3 capture/desktop/scripts/linux/gui/gui-vm.py \
   --template "$GUI_TEMPLATE/system.qcow2" \
   --ovmf-vars "$GUI_TEMPLATE/OVMF_VARS.fd" \
   --ssh-user "$GUI_TEST_USER" --ssh-key "$GUI_TEST_KEY" \
@@ -227,12 +114,6 @@ guessed target or claim pixel acceptance. A timeout inspects the same request
 and cleanup cancels that owned pending/recording ID. It does not retry Start or
 spend a third take. Consent-versus-backend causation remains unresolved until
 native observation/logs distinguish them.
-
-For a scoped native input check, the existing recipe accepts `--save-seconds N`
-(1..180, default 4) and `--silent` to disable microphone capture in its isolated
-config. Keep the hold within the runner's scenario/job deadlines. The longer hold
-alone is not input proof: retain the observed interaction, saved notes and bundle
-inspection separately. The ordinary recipe defaults remain unchanged.
 
 The recipe waits for the owned `recording` receipt **and** matching recording
 state, records four seconds, sends Stop once and waits up to 60 seconds for that

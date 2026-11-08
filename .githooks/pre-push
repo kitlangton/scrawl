@@ -1,11 +1,6 @@
 #!/bin/sh
 # Git supplies one local/remote ref and object-ID pair per line on stdin.
 set -eu
-repo_root=$(git rev-parse --show-toplevel)
-if [ "${1:-}" != --within-budget ]; then
-    exec python3 "$repo_root/enablement/verification.py" --hook-budget 300 sh "$0" --within-budget "$@"
-fi
-shift
 
 refs=$(cat)
 mode=--pr

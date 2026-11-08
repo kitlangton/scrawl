@@ -7,13 +7,5 @@
 /artifacts
 /*.apparent
 __pycache__/
-/connect/service/wrangler.cd.json
+/hosted/wrangler.cd.json
 /capture/agent/narrator/target/
-
-# Generated from the share surface TypeScript during frontend build.
-/capture/desktop/ui/frontend/electron/share/main.cjs
-/capture/desktop/ui/frontend/electron/share/preload.cjs
-/capture/desktop/ui/frontend/electron/connect.cjs
-/capture/desktop/ui/frontend/electron/connect-client/
-/capture/desktop/ui/frontend/electron/storage-policy.cjs
-/capture/desktop/ui/frontend/.storage-policy-build/

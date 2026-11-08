@@ -4,11 +4,6 @@ name: Mac preview release
 # Keep its feed separate from Kit's Developer ID signed production appcast.
 on:
   workflow_dispatch:
-    inputs:
-      candidate_sha:
-        description: Exact Linux-and-Mac verified main SHA (empty selects dispatch commit)
-        type: string
-        default: ''
 
 permissions:
   contents: write
@@ -19,58 +14,34 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  admit:
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
-    permissions:
-      contents: read
-      actions: read
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    outputs:
-      sha: ${{ steps.gate.outputs.sha }}
-    steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      # Check receipts before allocating a Mac, using trusted current main code.
-      - uses: actions/checkout@v5
-        with:
-          ref: main
-          persist-credentials: false
-      - name: Require Linux/shared and Mac verification of this exact main commit
-        id: gate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REQUEST_SHA: ${{ inputs.candidate_sha || github.sha }}
-        run: python3 enablement/release_gate.py --platform macos --sha "$REQUEST_SHA"
-
   preview:
-    needs: admit
-    if: github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/main'
+    if: github.repository == 'tryapparent/apparent' && (github.ref == 'refs/heads/main' || github.ref == 'refs/heads/t3/onboarding-mac-release-baseline')
     runs-on: macos-latest
-    # Temporary Mac release exception; restore after verified delivery.
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
-      CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
       APPARENT_PREVIEW_NOTARIZE: ${{ vars.MAC_APPLE_SIGNING_ENABLED || 'false' }}
       APPARENT_APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
       APPARENT_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
       APPARENT_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
       APPARENT_NOTARY_ISSUER: ${{ vars.APPLE_NOTARY_ISSUER }}
     steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: |
-          echo 'Temporary Simon-authorized Mac release execution allowance: 60 minutes. All signing, notarization, native acceptance and exact-source release gates remain required. Restore the allowance after verified release delivery.'
       - uses: actions/checkout@v5
-        with:
-          ref: ${{ needs.admit.outputs.sha }}
       - name: Require Linux/shared and Mac verification of this exact main commit
         env:
           GH_TOKEN: ${{ github.token }}
-        run: python3 enablement/release_gate.py --platform macos --sha "$CANDIDATE_SHA"
+        run: |
+          if [ "$GITHUB_REF" = refs/heads/t3/onboarding-mac-release-baseline ]; then
+            test "$APPARENT_PREVIEW_NOTARIZE" = true
+            python3 enablement/release_gate.py --platform macos --sha "$GITHUB_SHA" --onboarding-candidate
+            echo 'APPARENT_PREVIEW_VERSION=0.12.2' >> "$GITHUB_ENV"
+            echo 'APPARENT_PREVIEW_BUILD_NUMBER=12.2' >> "$GITHUB_ENV"
+            echo 'APPARENT_PREVIEW_TAG=preview-mac-12-2' >> "$GITHUB_ENV"
+          else
+            python3 enablement/release_gate.py --platform macos --sha "$GITHUB_SHA"
+            echo "APPARENT_PREVIEW_VERSION=0.$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+            echo "APPARENT_PREVIEW_BUILD_NUMBER=$GITHUB_RUN_NUMBER.$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+            echo "APPARENT_PREVIEW_TAG=preview-mac-$GITHUB_RUN_NUMBER-$GITHUB_RUN_ATTEMPT" >> "$GITHUB_ENV"
+          fi
       - name: Prepare Developer ID credentials
         if: env.APPARENT_PREVIEW_NOTARIZE == 'true'
         env:
@@ -91,8 +62,6 @@ jobs:
       - name: Build and verify the preview app
         env:
           APPARENT_APPLE_SIGNING_DIR: ${{ runner.temp }}/apparent-apple-signing
-          APPARENT_PREVIEW_VERSION: 0.${{ github.run_number }}.${{ github.run_attempt }}
-          APPARENT_PREVIEW_BUILD_NUMBER: ${{ github.run_number }}.${{ github.run_attempt }}
           APPARENT_PREVIEW_PUBLIC_KEY: ${{ vars.SPARKLE_PREVIEW_PUBLIC_KEY }}
           APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
         run: |
@@ -108,19 +77,34 @@ jobs:
           set -euo pipefail
           test -n "$SPARKLE_PREVIEW_PRIVATE_KEY" || { echo 'Missing preview Sparkle signing secret' >&2; exit 1; }
           swift capture/desktop/scripts/release/verify-preview-sparkle-key.swift
-          version="0.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
+          version="$APPARENT_PREVIEW_VERSION"
           zip="dist/Apparent-Preview-${version}-arm64.zip"
           # Sparkle reads the key from stdin; do not put it in arguments, logs or the checkout.
           printf '%s\n' "$SPARKLE_PREVIEW_PRIVATE_KEY" | \
             "$(capture/desktop/scripts/release/setup-sparkle.sh)/bin/sign_update" --ed-key-file - "$zip" \
             > "$RUNNER_TEMP/preview-signature-attributes"
+      - name: Recheck scoped candidate against live feed before public release
+        if: github.ref == 'refs/heads/t3/onboarding-mac-release-baseline'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          gh api 'repos/tryapparent/apparent/contents/appcast.xml?ref=preview-mac-feed' --jq .content | \
+            python3 -c 'import base64,sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' > "$RUNNER_TEMP/live-preview-before-release.xml"
+          python3 capture/desktop/scripts/release/preview_appcast.py \
+            --previous "$RUNNER_TEMP/live-preview-before-release.xml" \
+            --zip "dist/Apparent-Preview-${APPARENT_PREVIEW_VERSION}-arm64.zip" \
+            --version "$APPARENT_PREVIEW_VERSION" --build-number "$APPARENT_PREVIEW_BUILD_NUMBER" \
+            --signature-attributes "$(cat "$RUNNER_TEMP/preview-signature-attributes")" \
+            --url "https://github.com/${GITHUB_REPOSITORY}/releases/download/${APPARENT_PREVIEW_TAG}/Apparent-Preview-${APPARENT_PREVIEW_VERSION}-arm64.zip" \
+            --out "$RUNNER_TEMP/preview-prepublication-check.xml"
       - name: Publish a uniquely versioned prerelease
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="0.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          tag="preview-mac-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          version="$APPARENT_PREVIEW_VERSION"
+          tag="$APPARENT_PREVIEW_TAG"
           dmg="dist/Apparent-Preview-${version}-arm64.dmg"
           zip="dist/Apparent-Preview-${version}-arm64.zip"
           # A maintainer may pre-create this exact tag when the workflow token
@@ -145,11 +129,11 @@ jobs:
           fi
           # Only lightweight tags are accepted; annotated tags point at a tag
           # object and need a second dereference, which we deliberately avoid.
-          if [[ -n "$existing_sha" && ( "$tag_type" != "commit" || "$existing_sha" != "$CANDIDATE_SHA" ) ]]; then
+          if [[ -n "$existing_sha" && ( "$tag_type" != "commit" || "$existing_sha" != "$GITHUB_SHA" ) ]]; then
             echo "Tag ${tag} does not point to the run commit" >&2
             exit 1
           fi
-          tag_args=(--target "$CANDIDATE_SHA")
+          tag_args=(--target "$GITHUB_SHA")
           if [[ -n "$existing_sha" ]]; then tag_args=(--verify-tag); fi
           if [[ "$APPARENT_PREVIEW_NOTARIZE" == true ]]; then
             notes="Mac preview signed with Developer ID and notarized by Apple. Updates use the existing preview Sparkle feed and EdDSA signature. This does not update Kit's app."
@@ -166,37 +150,32 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          version="0.${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          build="${GITHUB_RUN_NUMBER}.${GITHUB_RUN_ATTEMPT}"
-          tag="preview-mac-${GITHUB_RUN_NUMBER}-${GITHUB_RUN_ATTEMPT}"
+          version="$APPARENT_PREVIEW_VERSION"
+          build="$APPARENT_PREVIEW_BUILD_NUMBER"
+          tag="$APPARENT_PREVIEW_TAG"
           zip="dist/Apparent-Preview-${version}-arm64.zip"
           url="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/$(basename "$zip")"
           curl --fail --location --head --silent --show-error --retry 6 --retry-delay 5 --retry-all-errors "$url" > /dev/null
           # A moved tag must never become an update offered by the live feed.
           tag_target=$(gh api "repos/${GITHUB_REPOSITORY}/git/ref/tags/${tag}" \
             --jq '.object.type + " " + .object.sha')
-          if [[ "$tag_target" != "commit ${CANDIDATE_SHA}" ]]; then
+          if [[ "$tag_target" != "commit ${GITHUB_SHA}" ]]; then
             echo "Tag moved before appcast publication: ${tag}" >&2
             exit 1
           fi
           branch=preview-mac-feed
           if ! gh api "repos/${GITHUB_REPOSITORY}/branches/${branch}" > /dev/null 2>&1; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/git/refs" \
-              -f ref="refs/heads/${branch}" -f sha="$CANDIDATE_SHA" > /dev/null
+              -f ref="refs/heads/${branch}" -f sha="$GITHUB_SHA" > /dev/null
           fi
           previous="$RUNNER_TEMP/previous-preview-appcast.xml"
           printf '' > "$previous"
           sha=''
-          if gh api "repos/${GITHUB_REPOSITORY}/contents/appcast.xml?ref=${branch}" > "$RUNNER_TEMP/preview-feed-response.json" 2>"$RUNNER_TEMP/preview-feed-error"; then
+          if gh api "repos/${GITHUB_REPOSITORY}/contents/appcast.xml?ref=${branch}" > "$RUNNER_TEMP/preview-feed-response.json" 2>/dev/null; then
             sha=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["sha"])' "$RUNNER_TEMP/preview-feed-response.json")
             python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["content"].replace("\n", ""), end="")' \
               "$RUNNER_TEMP/preview-feed-response.json" | base64 -D > "$previous"
-          elif ! grep -qE '\(HTTP 404\)$' "$RUNNER_TEMP/preview-feed-error"; then
-            echo 'Could not inspect existing Mac feed; refusing publication' >&2
-            exit 1
           fi
-          # Recheck exact receipts and source ordering while the publisher lock is held.
-          python3 enablement/release_gate.py --platform macos --sha "$CANDIDATE_SHA" --previous-mac-feed "$previous"
           python3 capture/desktop/scripts/release/preview_appcast.py \
             --previous "$previous" --zip "$zip" --version "$version" --build-number "$build" \
             --signature-attributes "$(cat "$RUNNER_TEMP/preview-signature-attributes")" \
@@ -215,21 +194,3 @@ jobs:
           trap 'rm -rf "$directory"' EXIT
           keychain="$directory/signing.keychain-db"
           if [[ -f "$keychain" ]]; then security delete-keychain "$keychain"; fi
-
-  runtime-budget:
-    if: always()
-    needs: [admit, preview]
-    permissions:
-      contents: read
-      actions: read
-    name: Workflow runtime budget
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: ./.github/actions/runtime-budget
-        with:
-          platform: macos

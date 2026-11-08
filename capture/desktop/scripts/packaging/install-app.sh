@@ -18,15 +18,7 @@ SPARKLE_PUBLIC_KEY="mIek27lttJe8cIBqVZFhh6reRKjpTx1h9ZY9OKWPtuM="
 cd "${REPO_DIR}"
 chmod +x "${REPO_DIR}/capture/desktop/scripts/release/setup-sparkle.sh" "${REPO_DIR}/capture/desktop/scripts/release/release-app.sh" 2>/dev/null || true
 SPARKLE_DIR="$("${REPO_DIR}/capture/desktop/scripts/release/setup-sparkle.sh" 2>/dev/null || true)"
-BINARY_DIR="${REPO_DIR}/target/debug"
-if [[ -n "${APPARENT_PREBUILT_DIR:-}" ]]; then
-  # An explicit immutable, successful main producer is required. Never rebuild
-  # automatically after failed admission or silently consume a cached binary.
-  node "${REPO_DIR}/enablement/verification/mac-artifact-consumer.ts" prepare "${APPARENT_PREBUILT_DIR}"
-  BINARY_DIR="${APPARENT_PREBUILT_DIR}"
-else
-  taskpolicy -c utility cargo build -j 3
-fi
+taskpolicy -c utility cargo build -j 3
 
 # Inspect executable paths, not argv: other installations and CLI commands that
 # merely mention this app are not ours. Helpers inside this bundle count too.
@@ -44,8 +36,8 @@ done <<< "${PROCESSES}"
 mkdir -p "${MACOS_DIR}" "${RESOURCES_DIR}" "${FRAMEWORKS_DIR}" "${HOME}/bin"
 
 rm -f "${MACOS_DIR}/apparent" "${MACOS_DIR}/apparent-helper"
-cp -f "${BINARY_DIR}/apparent" "${MACOS_DIR}/apparent"
-cp -f "${BINARY_DIR}/apparent-helper" "${MACOS_DIR}/apparent-helper"
+cp -f "${REPO_DIR}/target/debug/apparent" "${MACOS_DIR}/apparent"
+cp -f "${REPO_DIR}/target/debug/apparent-helper" "${MACOS_DIR}/apparent-helper"
 chmod +x "${MACOS_DIR}/apparent" "${MACOS_DIR}/apparent-helper"
 
 cp -f "${REPO_DIR}/capture/desktop/assets/Apparent.icns" "${RESOURCES_DIR}/Apparent.icns"
@@ -53,6 +45,8 @@ cp -f "${REPO_DIR}/shared/assets/fonts/HostGrotesk-Variable.ttf" "${RESOURCES_DI
 cp -f "${REPO_DIR}/shared/assets/brand/apparent-wordmark.png" "${RESOURCES_DIR}/apparent-wordmark.png"
 cp -f "${REPO_DIR}/shared/assets/brand/apparent-a.png" "${RESOURCES_DIR}/apparent-a.png"
 cp -f "${REPO_DIR}/shared/assets/brand/connect-frogs.png" "${RESOURCES_DIR}/connect-frogs.png"
+
+node "${REPO_DIR}/capture/desktop/ui/frontend/scripts/package-notes.mjs" "${RESOURCES_DIR}/note-ui"
 
 if [[ -n "${SPARKLE_DIR}" && -d "${SPARKLE_DIR}/Sparkle.framework" ]]; then
   rm -rf "${FRAMEWORKS_DIR}/Sparkle.framework"
@@ -125,8 +119,7 @@ if security find-identity -v -p codesigning 2>/dev/null | grep -q "${SIGN_ID}"; 
 else
   IDENTITY="-"
 fi
-python3 "${REPO_DIR}/capture/desktop/scripts/packaging/stage-settings.py" "${RESOURCES_DIR}/settings" --sign "${IDENTITY}" \
-  --popups-destination "${RESOURCES_DIR}/note-ui"
+python3 "${REPO_DIR}/capture/desktop/scripts/packaging/stage-settings.py" "${RESOURCES_DIR}/settings" --sign "${IDENTITY}"
 
 if [[ -d "${FRAMEWORKS_DIR}/Sparkle.framework/Versions/B" ]]; then
   SPARKLE_VER="${FRAMEWORKS_DIR}/Sparkle.framework/Versions/B"

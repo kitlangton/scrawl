@@ -1,28 +1,12 @@
-import './runtime/exceptions';
-import { useLayoutEffect, useState } from 'react';
+import { useState } from 'react';
 import { createRoot } from 'react-dom/client';
-import { Settings2, CircleDot, HardDrive, ShieldCheck, Terminal, Info } from 'lucide-react';
 import { Storage } from './storage';
-import { ConnectSettingsCard } from './connect-settings';
-import { BuildIdentityFrame } from '@apparent/ui/build-identity';
 import './style.css';
 import wordmark from '../../../../../shared/assets/brand/apparent-wordmark.svg';
 
 const panes = ['General', 'Recording', 'Storage', 'Permissions', 'Agents', 'About'] as const;
-const icons = [Settings2, CircleDot, HardDrive, ShieldCheck, Terminal, Info];
-
-declare global {
-  interface Window { apparentSettingsMounted?: () => Promise<void>; }
-}
 
 function Settings() {
-  const connect = new URLSearchParams(location.search).get('surface') === 'connect';
-  useLayoutEffect(() => {
-    document.title = `Apparent Settings — ${connect ? 'Connect' : 'Storage'}`;
-    // React has committed the real DOM. The host separately requires first
-    // paint; hidden-page animation callbacks must not gate this acknowledgement.
-    void window.apparentSettingsMounted?.().catch(() => {});
-  }, [connect]);
   const [error, setError] = useState('');
   const [navigating, setNavigating] = useState(false);
   async function navigate(pane: string) {
@@ -34,17 +18,17 @@ function Settings() {
   }
   return <div className="settings-shell">
     <aside className="settings-sidebar" aria-label="Settings pages">
-      <div className="settings-brand"><img src={wordmark} alt="Apparent" /><p>CAPTURE SETTINGS</p></div>
-      <nav>{panes.map((pane, index) => { const Icon = icons[index]; return <button key={pane} type="button" disabled={navigating}
-        aria-current={!connect && pane === 'Storage' ? 'page' : undefined}
-        onClick={() => { if (connect || pane !== 'Storage') void navigate(pane); }}><Icon aria-hidden="true" size={20} />{pane}</button>; })}</nav>
+      <div className="settings-brand"><img src={wordmark} alt="Apparent" /></div>
+      <nav>{panes.map(pane => <button key={pane} type="button" disabled={navigating}
+        aria-current={pane === 'Storage' ? 'page' : undefined}
+        onClick={() => { if (pane !== 'Storage') void navigate(pane); }}>{pane}</button>)}</nav>
     </aside>
     <main className="settings-content">
-      <header><h1>{connect ? 'Connect' : 'Storage'}</h1>{!connect && <p>Choose where captures live and how long to keep them.</p>}</header>
+      <header><h1>Storage</h1><p>Choose where captures live and how long to keep them.</p></header>
       {error && <p role="alert">{error}</p>}
-      <>{connect ? <ConnectSettingsCard /> : <Storage settings />}</>
+      <Storage settings />
     </main>
   </div>;
 }
 
-createRoot(document.getElementById('root')!).render(<BuildIdentityFrame><Settings /></BuildIdentityFrame>);
+createRoot(document.getElementById('root')!).render(<Settings />);

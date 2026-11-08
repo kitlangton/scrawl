@@ -5,7 +5,7 @@ apparent-footer { display: block; }
 .frog-footer .footer-scene::after { content: ""; position: absolute; inset: 0; pointer-events: none; z-index: -1; background: linear-gradient(to bottom, var(--color-background) 0%, var(--color-background) 20%, color-mix(in srgb, var(--color-background) calc(.98 * 100%), transparent) 37%, color-mix(in srgb, var(--color-background) calc(.72 * 100%), transparent) 53%, color-mix(in srgb, var(--color-background) calc(.12 * 100%), transparent) 66%, transparent 75%); }
 .frog-footer .footer-invite { position: absolute; top: 40px; left: 24px; right: 24px; text-align: center; }
 .frog-footer .footer-greeting { font-size: 17px; line-height: 1.5; margin: 0 0 20px; }
-.frog-footer #footer-heading { font-size: clamp(36px, 4.5vw, 62px); font-weight:500; line-height: 1.02; letter-spacing: -.045em; margin: 0 0 22px; }
+.frog-footer #footer-heading { font-size: clamp(36px, 4.5vw, 62px); font-weight: 550; line-height: 1.02; letter-spacing: -.045em; margin: 0 0 22px; }
 .frog-footer .footer-body { font-size: 20px; line-height: 1.5; max-width: 760px; margin: 0 auto 24px; }
 .frog-footer .footer-body img, .frog-footer .footer-dialog p img { display: inline; width: 104px; height: auto; vertical-align: -.2em; }
 .frog-footer .footer-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 20px; }
@@ -21,7 +21,7 @@ apparent-footer { display: block; }
 .frog-footer .footer-wheel > span { display: block; flex-shrink: 0; white-space: nowrap; transition: transform .22s ease, opacity .22s ease; }
 .frog-footer .footer-wheel[data-step="out"] > span { transform: translateY(-100%) rotateX(65deg); opacity: 0; }
 .frog-footer .footer-wheel[data-step="in"] > span { transform: translateY(100%) rotateX(-65deg); opacity: 0; transition: none; }
-.frog-footer .footer-github { margin-left: auto; font-size: 16px; text-underline-offset: 4px; }
+.frog-footer .footer-github { margin-left: auto; font-size: 14px; text-underline-offset: 4px; }
 .frog-footer a:focus-visible, .frog-footer button:focus-visible { outline: 3px solid var(--color-ring); outline-offset: 5px; }
 .frog-footer .footer-dialog { position: fixed; inset: 0; width: min(520px, calc(100% - 40px)); max-height: calc(100% - 40px); margin: auto; border: 1px solid var(--color-brand); background: var(--color-background); color: var(--color-foreground); padding: 36px; font: inherit; }
 .frog-footer .footer-dialog::backdrop { background: var(--color-overlay); }

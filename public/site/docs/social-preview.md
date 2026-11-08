@@ -11,10 +11,10 @@ No JavaScript, video or font request is needed to display the image.
 Rebuild the checked-in image from `public/site/`:
 
 ```sh
-CHROME_PATH=/path/to/chrome node scripts/brand/generate-social-preview.ts
+CHROME_PATH=/path/to/chrome node scripts/brand/generate-social-preview.mjs
 APPARENT_PUBLIC_SITE=1 npm run build
-node scripts/site-build/package-apparent.ts
-node --test scripts/brand/test-social-preview.ts
+node scripts/site-build/package-apparent.mjs
+node --test scripts/brand/test-social-preview.mjs
 ```
 
 The generator uses the existing `playwright-core` dependency and an installed

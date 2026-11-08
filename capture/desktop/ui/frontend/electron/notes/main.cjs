@@ -1,5 +1,3 @@
-require('../runtime.cjs').installBuildIdentity(require('electron'));
-require('../runtime.cjs').installExceptionReporting(require('electron'));
 // Only Rust's private inherited stdin supplies capture state. Never opens a socket or backend.
 const { app, BrowserWindow, ipcMain, screen, session, nativeTheme } = require('electron');
 const path = require('node:path');
@@ -8,11 +6,7 @@ const suppliedProfile = process.argv.find(v => v.startsWith('--notes-profile='))
 const profile = suppliedProfile || fs.mkdtempSync(path.join(require('node:os').tmpdir(), 'apparent-note-ui-'));
 const { pathToFileURL } = require('node:url');
 const readline = require('node:readline');
-// Fixed lifecycle labels only: never log note text, page contents or error messages.
-const fixtureDiagnostics = process.argv.includes('--notes-fixture-diagnostics');
-const trace = label => { if (fixtureDiagnostics) process.stderr.write(`Notes fixture: ${label}\n`); };
-trace('entry');
-const { validCommand, validSnapshot, popupBounds, badgeBounds, embeddedBadgeBounds, BADGE_WIDTH, BADGE_HEIGHT, flightBounds } = require('./protocol.cjs');
+const { validCommand, validSnapshot, popupBounds, badgeBounds } = require('./protocol.cjs');
 app.setName('Apparent Notes');
 nativeTheme.themeSource = 'system';
 app.setPath('userData', profile);
@@ -30,38 +24,29 @@ let latest, popup, badge;
 let finishing = false, finished = false;
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
 app.whenReady().then(() => {
-  trace('app-ready');
-  trace('activation-policy-start');
   if (process.platform === 'darwin') app.setActivationPolicy('accessory');
-  trace('activation-policy-complete');
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, reply) => reply(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   const page = pathToFileURL(path.join(__dirname, '../../dist/index.html')).href;
   function window(surface, width, height) {
-    trace(`${surface}:construct-start`);
     const win = new BrowserWindow({ title: 'Apparent notes', width, height, show: false, frame: false, transparent: true,
       resizable: false, skipTaskbar: true, alwaysOnTop: true, hasShadow: false,
       webPreferences: { preload: path.join(__dirname, 'preload.cjs'), contextIsolation: true,
         nodeIntegration: false, sandbox: true, spellcheck: false, webSecurity: true } });
-    trace(`${surface}:construct-complete`);
     win.webContents.on('page-title-updated', event => event.preventDefault());
     win.removeMenu(); win.setAlwaysOnTop(true, 'floating');
     win.setVisibleOnAllWorkspaces(true, { visibleOnFullScreen: true });
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
     win.webContents.on('will-navigate', e => e.preventDefault());
     win.webContents.on('will-attach-webview', e => e.preventDefault());
-    win.webContents.on('render-process-gone', () => { trace(`${surface}:renderer-gone`); app.quit(); });
-    if (fixtureDiagnostics) {
-      win.webContents.on('did-finish-load', () => trace(`${surface}:loaded`));
-      win.webContents.on('did-fail-load', () => trace(`${surface}:load-failed`));
-      win.webContents.on('preload-error', () => trace(`${surface}:preload-failed`));
-    }
+    win.webContents.on('render-process-gone', () => app.quit());
     win.loadURL(page + '#notes-' + surface);
-    trace(`${surface}:created`);
     return win;
   }
-  popup = window('popup', 332, 200); badge = window('badge', BADGE_WIDTH, BADGE_HEIGHT);
-  let flight = null, flightTimer, pendingSave = null, flightSerial = 0;
+  popup = window('popup', 332, 200); badge = window('badge', 150, 44);
+  const display = screen.getDisplayNearestPoint({ x: Math.round(frame[0] + frame[2] / 2), y: Math.round(frame[1] + frame[3] / 2) });
+  const area = display.workArea;
+  badge.setPosition(Math.min(area.x + area.width - 156, Math.round(frame[0] + frame[2] / 2 + 150)), area.y + 12);
   const placed = new Map();
   const requested = new Map();
   function setRequestedBounds(win, bounds, opening) {
@@ -89,35 +74,13 @@ app.whenReady().then(() => {
   }
   function publish() {
     if (!latest) return;
-    for (const win of [popup, badge]) win.webContents.send('notes:snapshot', { ...latest, flight });
-  }
-  function cancelFlight() {
-    if (!flight) return;
-    clearTimeout(flightTimer); flight = null;
-    popup.hide(); popup.setIgnoreMouseEvents(false);
-    if (process.platform === 'darwin') popup.setFocusable(true);
-    send({ action: 'flight', active: false });
-  }
-  function flyToCounter(target) {
-    const motion = flightBounds(JSON.parse(requested.get(popup) || JSON.stringify(popup.getBounds())), target);
-    if (!motion) return false;
-    flight = { id: ++flightSerial, start: motion.start, delta: motion.delta };
-    // The native input filter must ignore the enlarged visual-only surface too.
-    send({ action: 'flight', active: true });
-    popup.hide(); popup.setIgnoreMouseEvents(true);
-    if (process.platform === 'darwin') popup.setFocusable(false);
-    send({ action: 'hidden' });
-    setRequestedBounds(popup, motion.bounds, true);
-    popup.showInactive(); placeSurface(popup, false, true, motion.bounds);
-    flightTimer = setTimeout(() => { cancelFlight(); publish(); }, 260);
-    return true;
+    for (const win of [popup, badge]) win.webContents.send('notes:snapshot', latest);
   }
   ipcMain.handle('notes:ready', (event) => { validate(event); publish(); });
   ipcMain.handle('notes:finish-ready', event => { validate(event); if (event.sender !== popup.webContents || !finishing || finished) return; finished = true; send({ action: 'finished' }); });
   ipcMain.handle('notes:command', (event, value) => {
     validate(event);
     if (finished || !validCommand(value)) throw new Error('Invalid notes command');
-    if (value.action === 'save') pendingSave = { pin: value.pin, text: value.text.replace(/^\p{White_Space}+|\p{White_Space}+$/gu, '') };
     send(value);
   });
   const lines = readline.createInterface({ input: process.stdin, crlfDelay: Infinity });
@@ -126,7 +89,7 @@ app.whenReady().then(() => {
     try {
       const state = JSON.parse(line);
       if (state.finishing === true && Object.keys(state).length === 1) {
-        finishing = true; pendingSave = null; cancelFlight(); popup.hide(); badge.hide();
+        finishing = true; popup.hide(); badge.hide();
         const notify = () => popup.webContents.send('notes:finish');
         if (popup.webContents.isLoadingMainFrame()) popup.webContents.once('did-finish-load', notify); else notify();
         return;
@@ -138,57 +101,30 @@ app.whenReady().then(() => {
       const openingBadge = !badge.isVisible();
       if (state.badgeRect) {
         const rect = state.badgeRect;
-        const centre = { x: Math.round(rect[0] + rect[2] / 2), y: Math.round(rect[1] + rect[3] / 2) };
-        const display = screen.getDisplayNearestPoint(process.platform === 'linux' && state.embedded ? screen.screenToDipPoint(centre) : centre);
-        const work = display.workArea;
-        const bounds = state.embedded
-          ? embeddedBadgeBounds(rect, process.platform === 'linux' ? display.scaleFactor : 1)
-          : badgeBounds(rect, work);
-        requestedBadge = state.embedded ? bounds : { ...bounds, width: BADGE_WIDTH, height: BADGE_HEIGHT };
+        const work = screen.getDisplayNearestPoint({ x: Math.round(rect[0] + rect[2] / 2), y: Math.round(rect[1] + rect[3] / 2) }).workArea;
+        const bounds = badgeBounds(rect, work);
+        requestedBadge = { ...bounds, width: 150, height: 44 };
         setRequestedBounds(badge, requestedBadge, openingBadge);
       }
       const point = { x: Math.round(state.position[0]), y: Math.round(state.position[1]) };
-      const attached = pendingSave && state.mode === 'badge' && !state.error && pendingSave.text.length > 0 &&
-        state.notes.some(n => n.pin === pendingSave.pin && n.text === pendingSave.text);
-      if (state.mode === 'badge' || state.error || (pendingSave && state.current !== pendingSave.pin)) pendingSave = null;
       if (state.mode !== 'badge') {
-        cancelFlight();
         const work = screen.getDisplayNearestPoint(point).workArea;
         const bounds = popupBounds(point, work, state.mode === 'list' ? 350 : 220);
         const opening = !popup.isVisible();
         setRequestedBounds(popup, bounds, opening);
         if (opening) popup.show();
         const focus = !previous || previous.mode !== state.mode || previous.current !== state.current;
-        if (focus) {
-          // A key window in an accessory app need not be the keyboard's active
-          // application. Activate only for this explicit editor/list opening.
-          if (process.platform === 'darwin') app.focus({ steal: true });
-          popup.focus(); popup.webContents.focus();
-        }
+        if (focus) popup.focus();
         placeSurface(popup, focus, opening, bounds);
-      } else if (attached && requestedBadge) {
-        cancelFlight();
-        if (!flyToCounter(requestedBadge)) { popup.hide(); send({ action: 'hidden' }); }
-      } else if (!flight) { popup.hide(); if (previous && previous.mode !== 'badge') send({ action: 'hidden' }); }
-      if (requestedBadge && !state.embedded) {
-        if (openingBadge) badge.showInactive();
-        placeSurface(badge, false, openingBadge, requestedBadge);
-      } else { badge.hide(); }
-      publish();
+      } else { popup.hide(); if (previous && previous.mode !== 'badge') send({ action: 'hidden' }); }
+      if (openingBadge) badge.showInactive();
+      placeSurface(badge, false, openingBadge, requestedBadge); publish();
     } catch { app.quit(); }
   });
   lines.on('close', () => app.quit());
-  trace('ready-probe-start');
-  const probe = (win, surface) => {
-    const result = win.webContents.executeJavaScript('document.readyState');
-    if (!fixtureDiagnostics) return result;
-    return result.then(value => { trace(`${surface}:probe-complete`); return value; });
-  };
-  Promise.all([probe(popup, 'popup'), probe(badge, 'badge')]).then(() => {
-    trace('ready-probe-complete');
+  Promise.all([popup.webContents.executeJavaScript('document.readyState'), badge.webContents.executeJavaScript('document.readyState')]).then(() => {
     const ids = [popup, badge].map(w => Number(w.getMediaSourceId().split(':')[1])).filter(n => Number.isInteger(n) && n > 0);
     send({ action: 'windows', ids }); send({ action: 'ready' });
-    trace('ready-sent');
-  }).catch(() => { trace('ready-probe-failed'); app.quit(); });
+  }).catch(() => app.quit());
 });
 app.on('window-all-closed', () => app.quit());

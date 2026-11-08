@@ -6,7 +6,7 @@ const path = require('node:path');
 const phases = new Set(['idle', 'selecting', 'starting', 'recording', 'processing', 'completed']);
 const reportingCodes = new Set(['invalid_request', 'config_read_failed', 'config_write_failed', 'app_busy', 'admission_expired']);
 const failure = { status: 'error', message: 'The Rust app did not return a valid state. Retry when it is responsive.' };
-const codes = new Set(['invalid_request', 'invalid_path', 'conflict', 'admission_expired', 'outcome_unknown', 'config_write_failed',
+const codes = new Set(['invalid_request', 'invalid_path', 'conflict', 'admission_expired', 'config_write_failed',
   'config_read_failed', 'app_busy', 'app_unresponsive', 'feature_disabled', 'usage_unavailable']);
 const text = (value) => typeof value === 'string' && Buffer.byteLength(value) <= 4096 && !value.includes('\0');
 
@@ -78,53 +78,6 @@ function decodeStorage(value) {
     displayPath: s.displayPath, custom: s.custom, source: s.source, revision: s.revision } };
 }
 
-function decodeLocationFacts(value) {
-  if (codes.has(value?.error)) {
-    if (value.error === 'feature_disabled') return { status: 'disabled' };
-    if (value.error === 'invalid_request') return { status: 'incompatible' };
-    return { status: 'error', code: value.error };
-  }
-  const l = value?.location;
-  const saved = l?.saved;
-  const environment = l?.environment;
-  const validSaved = saved?.kind === 'absent' || saved?.kind === 'null' || saved?.kind === 'other' ||
-    (saved?.kind === 'string' && text(saved.value));
-  if (!validSaved || !environment || typeof environment.present !== 'boolean' ||
-      !(environment.value === null || text(environment.value)) || environment.present !== (environment.value !== null) ||
-      !text(l.homePath) || !text(l.builtinPath) || !/^[a-f0-9]{16}$/.test(l.revision)) {
-    return { status: 'error', code: 'invalid_response' };
-  }
-  const projectedSaved = saved.kind === 'string' ? { kind: 'string', value: saved.value } : { kind: saved.kind };
-  return { status: 'connected', location: { saved: projectedSaved, environment: { present: environment.present, value: environment.value }, homePath: l.homePath,
-    builtinPath: l.builtinPath, revision: l.revision } };
-}
-
-function storageLocation(home, operation = 'facts', fields = {}, timeoutMs = 3500) {
-  if (!['facts', 'probe', 'set', 'reset'].includes(operation)) throw new Error('Invalid storage operation');
-  const wireOperation = { facts: 'locationfacts', probe: 'probelocation', set: 'setlocation', reset: 'resetlocation' }[operation];
-  const request = { storage: wireOperation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
-  if (operation !== 'facts') {
-    if (!/^[a-f0-9]{16}$/.test(fields.expected)) throw new Error('Invalid revision');
-    request.expected = fields.expected;
-  }
-  if (operation === 'set' || operation === 'probe') {
-    if (!text(fields.path) || !path.isAbsolute(fields.path)) throw new Error('Invalid selected folder');
-    request.path = fields.path;
-  }
-  const decode = operation === 'facts' || operation === 'set' || operation === 'reset' ? decodeLocationFacts : (value) => {
-    if (codes.has(value?.error)) {
-      if (value.error === 'feature_disabled') return { status: 'disabled' };
-      if (value.error === 'invalid_request') return { status: 'incompatible' };
-      return { status: 'error', code: value.error };
-    }
-    return typeof value?.probe?.available === 'boolean' ? { status: 'connected', available: value.probe.available }
-      : { status: 'error', code: 'invalid_response' };
-  };
-  return exchange(home, JSON.stringify(request) + '\n', decode, 131072, timeoutMs,
-    { status: 'error', code: operation === 'set' || operation === 'reset' ? 'outcome_unknown' : 'timeout' });
-}
-
-// Retained for already-installed Settings assets and the capture bridge contract.
 function captureLocation(home, operation = 'read', fields = {}, timeoutMs = 3500) {
   if (!['read', 'set', 'reset'].includes(operation)) throw new Error('Invalid storage operation');
   const request = { storage: operation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
@@ -180,11 +133,8 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
     request.expected = fields.expected;
   }
   if (operation === 'saveretention') {
-    const policy = fields.policy;
-    const validDays = value => value === null || (Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
-    if (!policy || Object.keys(policy).length !== 2 || !validDays(policy.mediaDays) || !validDays(policy.bundleDays))
-      throw new Error('Invalid retention policy');
-    request.policy = { mediaDays: policy.mediaDays, bundleDays: policy.bundleDays };
+    if (!['week', 'month', 'forever'].includes(fields.preset)) throw new Error('Invalid preset');
+    request.preset = fields.preset;
   }
   return exchange(home, JSON.stringify(request) + '\n', (value) => {
     if (value?.error) return decodeStorage(value);
@@ -195,29 +145,16 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
         : { status: 'error', code: 'invalid_response' };
     }
     const r = value?.retention;
-    const field = v => v && typeof v.present === 'boolean' &&
-      (v.value === null || (Number.isInteger(v.value) && v.value >= 0 && v.value <= 0xffffffff));
-    if (!r || !field(r.mediaDays) || !field(r.bundleDays) || typeof value.custom !== 'boolean' ||
-        !/^[a-f0-9]{16}$/.test(value.revision)) return { status: 'error', code: 'invalid_response' };
-    return { status: 'connected', policy: { mediaDays: { present: r.mediaDays.present, value: r.mediaDays.value },
-      bundleDays: { present: r.bundleDays.present, value: r.bundleDays.value } }, custom: value.custom, revision: value.revision };
+    if (!r || !(r.preset === null || ['week', 'month', 'forever'].includes(r.preset)) || !text(r.note) ||
+        typeof value.custom !== 'boolean' || !/^[a-f0-9]{16}$/.test(value.revision) ||
+        !Array.isArray(r.options) || r.options.length !== 3 ||
+        !r.options.every((o, i) => o.id === ['week', 'month', 'forever'][i] && text(o.label))) return { status: 'error', code: 'invalid_response' };
+    return { status: 'connected', retention: { preset: r.preset, note: r.note,
+      options: r.options.map(o => ({ id: o.id, label: o.label })) }, custom: value.custom, revision: value.revision };
   }, 16384, timeoutMs, { status: 'error', code: mutation ? 'outcome_unknown' : 'timeout' });
 }
 
-module.exports = { readRuntimeState, captureLocation, storageLocation, errorReporting, captureReference, storagePreference };
-
-function drawing(home, operation = 'read', expected, timeoutMs = 3500) {
-  if (!['read', 'undo'].includes(operation) || (operation === 'undo' && !/^[a-f0-9]{16}$/.test(expected))) throw new Error('Invalid drawing request');
-  const request = { drawing: operation, deadline: Number(process.hrtime.bigint() / 1000000n) + Math.min(timeoutMs, 3000) };
-  if (operation === 'undo') request.expected = expected;
-  return exchange(home, JSON.stringify(request) + '\n', value => {
-    if (['conflict', 'admission_expired', 'app_unresponsive', 'invalid_request'].includes(value?.error)) return { status: 'error', code: value.error };
-    const d = value?.drawing;
-    if (!d || !(d.revision === null || (typeof d.revision === 'string' && /^[a-f0-9]{16}$/.test(d.revision))) || !Number.isSafeInteger(d.strokes) || d.strokes < 0) return { status: 'error', code: 'invalid_response' };
-    return { status: 'connected', revision: d.revision, strokes: d.strokes };
-  }, 4096, timeoutMs, { status: 'error', code: operation === 'undo' ? 'outcome_unknown' : 'timeout' });
-}
-module.exports.drawing = drawing;
+module.exports = { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference };
 
 async function publicShare(home, operation, value) {
   const request = { publicShare: operation, deadline: Number(process.hrtime.bigint()/1000000n)+3000 };
@@ -243,69 +180,3 @@ function microphoneEnabled(home, enabled, timeoutMs = 3500) {
   }, 4096, timeoutMs, { status: 'error', code: enabled === undefined ? 'timeout' : 'outcome_unknown' });
 }
 module.exports.microphoneEnabled = microphoneEnabled;
-
-// Only fixed codes cross this boundary. Never inspect Error/rejection payloads.
-function reportException(home, kind) {
-  if (!['main_exception', 'main_rejection', 'renderer_exception', 'renderer_rejection'].includes(kind)) return Promise.resolve();
-  const request = { errorReporting: 'exception', kind,
-    deadline: Number(process.hrtime.bigint() / 1000000n) + 500 };
-  return exchange(home, JSON.stringify(request) + '\n', () => undefined, 1024, 500, undefined);
-}
-
-function installExceptionReporting({ app }, home = require('node:os').homedir()) {
-  if (process.env.APPARENT_DESKTOP_REPORTING !== '1') return;
-  let dying = false;
-  const fatal = (kind) => {
-    if (dying) return;
-    dying = true;
-    // Never continue normal execution after an uncaught main-process failure.
-    const timer = setTimeout(() => app.exit(1), 600);
-    void reportException(home, kind).catch(() => {}).finally(() => {
-      clearTimeout(timer);
-      app.exit(1);
-    });
-  };
-  process.on('uncaughtException', () => fatal('main_exception'));
-  process.on('unhandledRejection', () => fatal('main_rejection'));
-  app.on('web-contents-created', (_event, contents) => {
-    let count = 0;
-    let windowStart = Date.now();
-    contents.on('ipc-message', (event, channel, ...args) => {
-      if (channel !== 'apparent:unhandled' || args.length !== 1 ||
-          !['renderer_exception', 'renderer_rejection'].includes(args[0]) ||
-          event.senderFrame !== contents.mainFrame) return;
-      // Fixed local packaged pages only; no remote page can submit reports.
-      try {
-        const file = require('node:url').fileURLToPath(event.senderFrame.url);
-        const relative = path.relative(path.join(__dirname, '../dist'), file);
-        if (relative.startsWith('..') || path.isAbsolute(relative)) return;
-      } catch { return; }
-      if (Date.now() - windowStart >= 60000) { count = 0; windowStart = Date.now(); }
-      if (count++ >= 20) return;
-      void reportException(home, args[0]).catch(() => {});
-    });
-  });
-}
-module.exports.reportException = reportException;
-module.exports.installExceptionReporting = installExceptionReporting;
-
-// Identity comes only from the backend that launched this UI process. A
-// standalone renderer has no backend identity, so it must say build unknown.
-function installBuildIdentity({ ipcMain, BrowserWindow }) {
-  const supplied = process.env.APPARENT_RUNNING_BUILD_LABEL;
-  const label = typeof supplied === 'string' && supplied.length <= 128 &&
-    /^[0-9][0-9A-Za-z.+-]* · (?:[a-fA-F0-9]{7}(?: \+modified)?|build unknown)$/.test(supplied)
-    ? supplied : 'build unknown';
-  const pages = new Set(['index.html', 'settings.html', 'onboarding.html']);
-  ipcMain.handle('apparent:build-identity', (event, ...args) => {
-    if (args.length || event.senderFrame !== event.sender.mainFrame ||
-        !BrowserWindow.fromWebContents(event.sender)) throw Error('Forbidden build identity request');
-    let file;
-    try { file = require('node:url').fileURLToPath(event.senderFrame.url); }
-    catch { throw Error('Forbidden build identity page'); }
-    const relative = path.relative(path.join(__dirname, '../dist'), file).split(path.sep).join('/');
-    if (!pages.has(relative)) throw Error('Forbidden build identity page');
-    return label;
-  });
-}
-module.exports.installBuildIdentity = installBuildIdentity;

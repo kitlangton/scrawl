@@ -1,7 +1,6 @@
 node_modules
 dist
 dist-apparent
-dist-analytics-test
 *.tsbuildinfo
 dist-ssr
 .wrangler/state

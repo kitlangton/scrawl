@@ -6,5 +6,3 @@ pub(crate) mod keyframes;
 pub(crate) mod render;
 pub(crate) mod runtime;
 pub(crate) mod sketch;
-mod sketch_geometry;
-mod sketch_semantics;

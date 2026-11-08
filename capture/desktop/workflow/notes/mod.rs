@@ -14,7 +14,6 @@ use std::sync::{Arc, atomic::Ordering};
 pub enum CommandMessage {
     Ready,
     Hidden,
-    Flight { active: bool },
     Outside,
     Finished,
     Draft {
@@ -56,12 +55,9 @@ pub struct Anchor {
 #[derive(Debug)]
 enum Message {
     Open(Anchor),
-    Undo(u32, flume::Sender<bool>),
     Action(CommandMessage),
     Stop,
     BadgePosition([i32; 4]),
-    Embedded(bool),
-    List { focus: u64, owner: u32 },
     Finish(flume::Sender<std::result::Result<(), String>>),
 }
 pub struct Session {
@@ -69,10 +65,6 @@ pub struct Session {
     stopping: Arc<std::sync::atomic::AtomicBool>,
     finishing: bool,
     badge_position: Option<[i32; 4]>,
-    embedded: bool,
-    saved_count: Arc<std::sync::atomic::AtomicUsize>,
-    #[cfg(test)]
-    renderer_ready: Arc<std::sync::atomic::AtomicBool>,
 }
 
 // Chromium can still write its profile during Electron's `quit` event. Rust owns
@@ -106,16 +98,6 @@ impl Drop for Profile {
     }
 }
 
-// Hosted Mac bridge tests have no guaranteed EGL display. Keep this preparation
-// confined to test binaries; it does not certify production GPU/window behavior.
-fn renderer_fixture_args(test_binary: bool, macos: bool) -> &'static [&'static str] {
-    match (test_binary, macos) {
-        (true, true) => &["--disable-gpu", "--notes-fixture-diagnostics"],
-        (true, false) => &["--notes-fixture-diagnostics"],
-        _ => &[],
-    }
-}
-
 impl Session {
     pub fn start(
         directory: &Path,
@@ -132,9 +114,6 @@ impl Session {
             .mode(0o600)
             .open(directory.join("notes-ui.log"))?;
         let mut command = Command::new(binary);
-        command.args(renderer_fixture_args(cfg!(test), cfg!(target_os = "macos")));
-        crate::capture::ui_process::configure_build_identity(&mut command);
-        crate::capture::desktop::workflow::error_reporting::configure_child(&mut command);
         // The existing Linux overlay mechanics use XWayland global coordinates and XIDs.
         // GPUI intentionally hides WAYLAND_DISPLAY; Electron must use that same X11 route.
         #[cfg(target_os = "linux")]
@@ -179,8 +158,6 @@ impl Session {
                                 break;
                             }
                         } else {
-                            #[cfg(test)]
-                            eprintln!("Notes fixture: protocol-rejected");
                             break;
                         }
                     }
@@ -191,14 +168,7 @@ impl Session {
         let mut store = Store::new(directory);
         let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopped = Arc::clone(&stopping);
-        let saved_count = Arc::new(std::sync::atomic::AtomicUsize::new(0));
-        let count = Arc::clone(&saved_count);
-        #[cfg(test)]
-        let renderer_ready = Arc::new(std::sync::atomic::AtomicBool::new(false));
-        #[cfg(test)]
-        let ready_receipt = Arc::clone(&renderer_ready);
         std::thread::spawn(move || {
-            let mut flying = false;
             let mut current = None;
             let mut focus = 0;
             let mut owner = 0;
@@ -210,7 +180,6 @@ impl Session {
             let mut finish_deadline = None;
             let mut drained = false;
             let mut badge_position = None;
-            let mut embedded = false;
             let mut failed_writes = std::collections::BTreeSet::new();
             #[cfg(target_os = "linux")]
             let mut stack_checked_at = std::time::Instant::now();
@@ -242,7 +211,6 @@ impl Session {
                     break;
                 }
                 let write_pin = match &message {
-                    Message::Undo(pin, _) => Some(*pin),
                     Message::Action(
                         CommandMessage::Save { pin, .. } | CommandMessage::Delete { pin },
                     ) => Some(*pin),
@@ -252,15 +220,6 @@ impl Session {
                     match message {
                         Message::Stop => return Ok(()),
                         Message::BadgePosition(point) => badge_position = Some(point),
-                        Message::Embedded(value) => embedded = value,
-                        Message::List { focus: token, owner: pid } => {
-                            focus = token;
-                            owner = pid;
-                            mode = "list";
-                            if let Some([x, y, width, height]) = badge_position.filter(|_| embedded) {
-                                position = [f64::from(x + width), f64::from(y + height)];
-                            }
-                        }
                         Message::Finish(reply) => {
                             completion = Some(reply);
                             finish_deadline =
@@ -272,13 +231,6 @@ impl Session {
                                 std::time::Duration::from_secs(2),
                             )?;
                         }
-                        Message::Undo(pin, reply) => {
-                            let removed = store.undo(pin);
-                            let _ = reply.send(removed.is_ok());
-                            removed?;
-                            if current == Some(pin) { current = None; mode = "badge"; }
-                            let _ = telemetry.ui_sender.try_send(LiveOverlayEvent::RequestSnapshot);
-                        }
                         Message::Open(a) => {
                             store.open(a.pin, a.t, a.x, a.y)?;
                             owner = a.owner;
@@ -288,14 +240,7 @@ impl Session {
                             mode = "editor";
                         }
                         Message::Action(action) => match action {
-                            CommandMessage::Ready => {
-                                ready = true;
-                                #[cfg(test)]
-                                {
-                                    eprintln!("Notes fixture: ready-received");
-                                    ready_receipt.store(true, Ordering::Release);
-                                }
-                            },
+                            CommandMessage::Ready => ready = true,
                             CommandMessage::Finished => {
                                 ensure!(completion.is_some(), "Unexpected finish receipt");
                                 drained = true;
@@ -305,16 +250,6 @@ impl Session {
                                 focus = 0;
                                 owner = 0;
                                 mode = "badge";
-                            }
-                            CommandMessage::Flight { active } => {
-                                flying = active && mode == "badge" && completion.is_none();
-                                if let Some(id) = own_windows.first() {
-                                    let mut passthrough = telemetry.passthrough_window_ids.lock()
-                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
-                                    if flying {
-                                        if !passthrough.contains(id) { passthrough.push(*id); }
-                                    } else { passthrough.retain(|existing| existing != id); }
-                                }
                             }
                             CommandMessage::Hidden => {
                                 if mode == "badge" {
@@ -348,12 +283,7 @@ impl Session {
                                 store.dismiss();
                                 mode = "badge";
                             }
-                            CommandMessage::List => {
-                                mode = "list";
-                                if let Some([x, y, width, height]) = badge_position.filter(|_| embedded) {
-                                    position = [f64::from(x + width), f64::from(y + height)];
-                                }
-                            }
+                            CommandMessage::List => mode = "list",
                             CommandMessage::Surface {
                                 id,
                                 rect,
@@ -368,7 +298,7 @@ impl Session {
                                     "Invalid notes surface"
                                 );
                                 if completion.is_none()
-                                    && (mode != "badge" || flying || own_windows.first() != Some(&id))
+                                    && (mode != "badge" || own_windows.first() != Some(&id))
                                 {
                                     #[cfg(target_os = "linux")]
                                     crate::capture::desktop::platform::place_note_surface(
@@ -377,7 +307,6 @@ impl Session {
                                         rect,
                                         wants_focus,
                                         own_windows.first() == Some(&id),
-                                        flying && own_windows.first() == Some(&id),
                                     );
                                 }
                             }
@@ -413,10 +342,8 @@ impl Session {
                 telemetry
                     .notes_editing
                     .store(mode != "badge", Ordering::Release);
-                // Store::notes contains only durable saves, never unsent drafts.
-                count.store(store.notes().len(), Ordering::Release);
                 if ready {
-                    let snapshot = serde_json::json!({ "mode": mode, "current": current, "position": position, "badgeRect": badge_position, "embedded": embedded,
+                    let snapshot = serde_json::json!({ "mode": mode, "current": current, "position": position, "badgeRect": badge_position,
                         "notes": store.notes(), "drafts": store.drafts(), "error": result.err().map(|_| "Could not save this note. Your text is kept; try again.") });
                     if write_message(
                         &mut input,
@@ -430,14 +357,10 @@ impl Session {
                     }
                 }
             }
-            count.store(0, Ordering::Release);
             if !stopped.load(Ordering::Acquire) && !drained {
                 let _ = telemetry
                     .ui_sender
                     .try_send(LiveOverlayEvent::NotesUnavailable);
-            }
-            if let Some(id) = own_windows.first() {
-                telemetry.passthrough_window_ids.lock().unwrap_or_else(std::sync::PoisonError::into_inner).retain(|existing| existing != id);
             }
             telemetry.notes_editing.store(false, Ordering::Release);
             drop(input); // EOF asks Electron to close its windows.
@@ -477,34 +400,10 @@ impl Session {
             stopping,
             finishing: false,
             badge_position: None,
-            embedded: false,
-            saved_count,
-            #[cfg(test)]
-            renderer_ready,
         })
     }
-    pub fn undo(&self, pin: u32) -> bool {
-        let (reply, result) = flume::bounded(1);
-        self.sender.try_send(Message::Undo(pin, reply)).is_ok()
-            && result.recv_timeout(std::time::Duration::from_secs(2)).unwrap_or(false)
-    }
-
     pub fn outside(&self) {
         let _ = self.sender.try_send(Message::Action(CommandMessage::Outside));
-    }
-
-    pub fn saved_count(&self) -> usize {
-        self.saved_count.load(Ordering::Acquire)
-    }
-
-    pub fn show_list(&self, focus: u64, owner: u32) {
-        let _ = self.sender.try_send(Message::List { focus, owner });
-    }
-
-    pub fn set_embedded(&mut self, embedded: bool) {
-        if self.embedded != embedded && self.sender.try_send(Message::Embedded(embedded)).is_ok() {
-            self.embedded = embedded;
-        }
     }
 
     pub fn position_badge(&mut self, point: [f64; 4]) {
@@ -526,11 +425,6 @@ impl Session {
             let _ = sender.send(Message::Finish(reply));
         });
         result
-    }
-    /// A Shift gesture leaves typing without selecting another app, so retain
-    /// the original focus token (unlike an actual outside click).
-    pub fn resume_drawing(&self) {
-        let _ = self.sender.try_send(Message::Action(CommandMessage::Dismiss));
     }
     pub fn open(&self, anchor: Anchor) {
         let _ = self.sender.try_send(Message::Open(anchor));
@@ -587,106 +481,6 @@ fn write_message(
 #[cfg(test)]
 mod transport_tests {
     use super::*;
-    #[test]
-    fn software_rendering_is_confined_to_mac_test_binaries_and_preserves_sandbox() {
-        for (test_binary, macos) in [(false, false), (false, true), (true, false), (true, true)] {
-            let mut command = Command::new("electron");
-            command.args(renderer_fixture_args(test_binary, macos));
-            let args: Vec<_> = command.get_args().map(|arg| arg.to_str().unwrap()).collect();
-            assert_eq!(args, match (test_binary, macos) {
-                (true, true) => vec!["--disable-gpu", "--notes-fixture-diagnostics"],
-                (true, false) => vec!["--notes-fixture-diagnostics"],
-                _ => vec![],
-            });
-            assert!(!args.iter().any(|arg| arg.contains("sandbox")));
-            assert!(command.get_envs().next().is_none());
-        }
-    }
-    #[test]
-    fn list_entry_carries_parent_focus_without_accepting_renderer_focus_tokens() {
-        let (sender, receiver) = flume::bounded(1);
-        let session = Session { sender, stopping: Arc::new(std::sync::atomic::AtomicBool::new(false)),
-            finishing: true, badge_position: None, embedded: true,
-            saved_count: Arc::new(std::sync::atomic::AtomicUsize::new(1)),
-            renderer_ready: Arc::new(std::sync::atomic::AtomicBool::new(false)) };
-        session.show_list(123, 456);
-        assert!(matches!(receiver.try_recv(), Ok(Message::List { focus: 123, owner: 456 })));
-        // Serde ignores extra fields on a unit variant; none can become the
-        // parent's native focus target through the renderer command.
-        assert!(matches!(serde_json::from_str::<CommandMessage>(r#"{"action":"list","focus":123,"owner":456}"#), Ok(CommandMessage::List)));
-    }
-    #[test]
-    #[ignore = "requires built Electron assets and an isolated sandbox-capable desktop"]
-    fn notes_electron_rust_roundtrip() {
-        let directory = std::env::temp_dir().join(format!("notes-bridge-{}", crate::shared::ids::make_bundle_id()));
-        std::fs::create_dir(&directory).unwrap();
-        let (events, _receiver) = flume::unbounded();
-        let telemetry = SharedCaptureTelemetry::new(events);
-        let session = Session::start(&directory, Arc::clone(&telemetry),
-            crate::shared::model::TargetFrame { x: 0.0, y: 0.0, width: 1000.0, height: 700.0, scale: 1.0 }).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-        while !session.renderer_ready.load(Ordering::Acquire) && std::time::Instant::now() < deadline {
-            if std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default().contains("FATAL") { break; }
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        // Freeze the original eight-second outcome before collecting evidence.
-        // A renderer becoming ready during sampling must still fail this run.
-        let ready = session.renderer_ready.load(Ordering::Acquire);
-        #[cfg(target_os = "macos")]
-        if !ready {
-            use std::io::Read;
-            let pid = telemetry.note_ui_pid.load(Ordering::Acquire);
-            if pid > 0 {
-                let output = directory.join("notes-ui-sample.txt");
-                if let Ok(mut sampler) = Command::new("/usr/bin/sample")
-                    .args([pid.to_string(), "1".into(), "1".into(), "-file".into()])
-                    .arg(&output).stdout(Stdio::null()).stderr(Stdio::null()).spawn()
-                {
-                    let cutoff = std::time::Instant::now() + std::time::Duration::from_secs(3);
-                    while matches!(sampler.try_wait(), Ok(None)) && std::time::Instant::now() < cutoff {
-                        std::thread::sleep(std::time::Duration::from_millis(20));
-                    }
-                    let _ = sampler.kill();
-                    let _ = sampler.wait();
-                    // Only this synthetic fixture's owned Electron PID is sampled.
-                    // Keep bounded stack text separately from the live child's log,
-                    // whose file offset it still owns. Never retain notes.json.
-                    if let Ok(file) = std::fs::File::open(&output) {
-                        let mut bytes = Vec::new();
-                        if file.take(65_536).read_to_end(&mut bytes).is_ok() {
-                            let _ = std::fs::write(&output, bytes);
-                        } else {
-                            let _ = std::fs::remove_file(&output);
-                        }
-                    }
-                }
-            }
-        }
-        assert!(ready,
-            "Notes renderer never acknowledged Ready; retained fixture: {}\n{}",
-            directory.display(), std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default());
-        session.open(Anchor { pin: 1, t: 100, x: 0.5, y: 0.5, screen_x: 500.0, screen_y: 350.0, focus: 0, owner: 0 });
-        session.sender.send(Message::Action(CommandMessage::Draft { pin: 1, text: "Only a draft".into() })).unwrap();
-        assert_eq!(session.saved_count(), 0);
-        session.sender.send(Message::Action(CommandMessage::Save { pin: 1, text: "Attached note".into() })).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(8);
-        while session.saved_count() != 1 && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert_eq!(session.saved_count(), 1);
-        assert!(std::fs::read_to_string(directory.join("notes.json")).unwrap().contains("Attached note"));
-        session.show_list(0, 0);
-        session.sender.send(Message::Action(CommandMessage::Delete { pin: 1 })).unwrap();
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(4);
-        while session.saved_count() != 0 && std::time::Instant::now() < deadline {
-            std::thread::sleep(std::time::Duration::from_millis(20));
-        }
-        assert_eq!(session.saved_count(), 0);
-        let finish = session.finish().recv_timeout(std::time::Duration::from_secs(10));
-        assert!(matches!(finish, Ok(Ok(()))), "Notes finish failed: {finish:?}; retained fixture: {}\n{}",
-            directory.display(), std::fs::read_to_string(directory.join("notes-ui.log")).unwrap_or_default());
-        std::fs::remove_dir_all(directory).unwrap();
-    }
     #[test]
     fn profile_is_private_and_cleaned_after_the_child_finishes_writing() {
         use std::os::unix::fs::PermissionsExt;

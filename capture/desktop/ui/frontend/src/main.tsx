@@ -1,18 +1,15 @@
-import './runtime/exceptions';
 import { StrictMode, useEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { Button } from '@apparent/ui/button';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@apparent/ui/tabs';
-import type { Drawing, RuntimeState } from './bridge';
+import type { RuntimeState } from './bridge';
 import { Storage } from './storage';
 import { ErrorReporting } from './error-reporting';
 import { ConnectSettingsCard } from './connect-settings';
 import { CaptureReference } from './reference';
 import './style.css';
-import {ShareCapture} from './share';
 import { CaptureNotes } from './notes';
 import { RecordingMicrophone } from './notes/microphone';
-import { BuildIdentityFrame } from '@apparent/ui/build-identity';
 
 // Visual fixtures only. These do not model or control real recording state.
 const examples = [
@@ -24,28 +21,6 @@ const examples = [
   { id: 'permission', title: 'Screen access unavailable', detail: 'Permission handling stays in the current app. This window cannot request access.' },
   { id: 'error', title: 'The handoff needs attention', detail: 'A synthetic error for reviewing layout and copy. No real capture has failed.' },
 ] as const;
-
-function DrawingControls() {
-  const [state, setState] = useState<Drawing>({ status: 'disconnected' });
-  const [busy, setBusy] = useState(false);
-  async function request(undo = false) {
-    setBusy(true);
-    try { setState(await (undo ? window.apparent?.undoDrawing() : window.apparent?.readDrawing()) ?? { status: 'disconnected' }); }
-    catch { setState({ status: 'error', code: 'bridge_failed' }); }
-    finally { setBusy(false); }
-  }
-  return <section aria-labelledby="drawing-title" className="rounded-xl border border-border bg-surface p-6 space-y-3">
-    <h2 id="drawing-title" className="text-lg font-semibold">Draw across displays</h2>
-    <p>During a screen recording, hold Shift and move to draw on any display. Only marks inside the selected capture are saved.</p>
-    <div role="status" aria-live="polite">{state.status === 'connected'
-      ? state.active ? `${state.strokes} marks · screen recording active` : 'No active screen recording'
-      : state.status === 'error' ? 'Drawing state unavailable. Refresh before trying again; an undo may already have completed.' : 'Refresh to read drawing state from the current app.'}</div>
-    <div className="flex gap-3">
-      <Button variant="outline" disabled={busy} onClick={() => void request()}>Refresh drawing</Button>
-      <Button disabled={busy || state.status !== 'connected' || !state.active || state.strokes === 0} onClick={() => void request(true)}>Undo last mark</Button>
-    </div>
-  </section>;
-}
 
 function App() {
   const [runtime, setRuntime] = useState<RuntimeState>({ status: 'disconnected' });
@@ -60,7 +35,7 @@ function App() {
   }
   useEffect(() => { void refresh(); }, []);
   return (
-    <main className="mx-auto max-w-4xl space-y-8 px-8 py-10 pb-20">
+    <main className="mx-auto max-w-4xl space-y-8 px-8 py-10">
       <header className="space-y-3">
         <p className="text-sm font-medium text-primary">Apparent / UI foundation</p>
         <h1 className="text-3xl font-semibold tracking-tight">A small window into what’s next.</h1>
@@ -84,7 +59,6 @@ function App() {
           </> : <><strong>Unable to read state</strong><p className="mt-1 text-muted-foreground">{runtime.message}</p></>}
         </div>
       </section>
-      <DrawingControls />
       <RecordingMicrophone />
       <CaptureReference />
       <Storage />
@@ -109,10 +83,10 @@ function App() {
         </Tabs>
       </section>
       <footer className="border-t border-border pt-4 text-xs leading-relaxed text-muted-foreground">
-        React + shadcn/ui + Tailwind, hosted by Electron. Native capture and permission controls stay in the current app. Copy ID changes only the clipboard; opt-in Settings controls use the running Rust app’s policy.
+        React + shadcn/ui + Tailwind, hosted by Electron. No recording commands or permission prompts. Copy ID changes only the clipboard; opt-in Settings controls use the running Rust app’s policy.
       </footer>
     </main>
   );
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode>{location.hash.startsWith('#notes-') ? <CaptureNotes /> : <BuildIdentityFrame>{location.hash === '#share' ? <ShareCapture /> : <App />}</BuildIdentityFrame>}</StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode>{location.hash.startsWith('#notes-') ? <CaptureNotes /> : <App />}</StrictMode>);

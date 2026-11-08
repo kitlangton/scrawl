@@ -5,7 +5,6 @@ const fs = require('node:fs/promises');
 const net = require('node:net');
 const os = require('node:os');
 const path = require('node:path');
-const { waitForStorageReads, captureLocationStatus } = require('./storage/native-readiness.ts');
 
 test('Retention save/reset/readback, failure, usage loading/error and stale response isolation', { timeout: 45000 }, async t => {
   // Shipped Electron main/preload/production renderer; synthetic backend, not native proof.
@@ -15,17 +14,16 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   let initialRetentionBusy = true;
   let preset = 'week';
   let custom = false;
-  let storedPolicy = { mediaDays: { present: false, value: null }, bundleDays: { present: false, value: null } };
   let revision = 'a'.repeat(16);
   let failure;
-  let unknownOutcome = false;
   let usageError = false;
   let releaseUsage;
   let holdUsage = true;
   let releaseLocation;
   const requests = [];
   const clients = new Set();
-  const policy = () => ({ revision, custom, retention: storedPolicy, secret: 'hidden' });
+  const policy = () => ({ revision, custom, retention: { preset, note: 'Rust policy note',
+    options: ['week', 'month', 'forever'].map(id => ({ id, label: id, secret: 'hidden' })) }, secret: 'hidden' });
   const server = net.createServer(socket => {
     clients.add(socket); socket.on('close', () => clients.delete(socket)); socket.on('error', () => {});
     socket.once('data', data => {
@@ -34,13 +32,11 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
       const send = value => socket.end(JSON.stringify(value) + '\n');
       if (r.reference || r.connect) return send({ error: 'feature_disabled' });
       if (r.storage === 'retention' && initialRetentionBusy) return send({ error: 'app_busy' });
-      if (r.storage === 'locationfacts') {
-        const reply = () => send({ location: { saved: { kind: 'string', value: '/captures' },
-          environment: { present: false, value: null }, homePath: home, builtinPath: '/builtin', revision } });
+      if (r.storage === 'read') {
+        const reply = () => send({ storage: { savedPath: '/captures', effectivePath: '/captures', displayPath: '/captures', source: 'configured', custom: true, revision } });
         if (!releaseLocation) { releaseLocation = reply; return; }
         return reply();
       }
-      if (r.storage === 'probelocation') return send({ probe: { available: true } });
       if (r.storage === 'usage') {
         if (usageError) return send({ error: 'usage_unavailable', message: 'private failure' });
         const reply = { usage: { effectivePath: '/captures', displayPath: '/captures', formatted: '12 MB', secret: 'hidden' } };
@@ -50,17 +46,8 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
       if (r.storage === 'saveretention' || r.storage === 'resetretention') {
         if (failure) return send({ error: failure, message: 'private failure' });
         assert.equal(r.expected, revision);
-        if (r.storage === 'saveretention') {
-          assert.ok(JSON.stringify(r.policy) === JSON.stringify({ mediaDays: 30, bundleDays: 90 }) ||
-            JSON.stringify(r.policy) === JSON.stringify({ mediaDays: null, bundleDays: null }));
-          storedPolicy = { mediaDays: { present: true, value: r.policy.mediaDays }, bundleDays: { present: true, value: r.policy.bundleDays } };
-          preset = r.policy.mediaDays === 30 ? 'month' : r.policy.mediaDays === null ? 'forever' : 'week';
-        } else {
-          preset = 'week'; custom = false;
-          storedPolicy = { mediaDays: { present: false, value: null }, bundleDays: { present: false, value: null } };
-        }
+        preset = r.storage === 'saveretention' ? r.preset : 'week';
         custom = r.storage === 'saveretention'; revision = (custom ? 'b' : 'c').repeat(16);
-        if (unknownOutcome) { unknownOutcome = false; return send({ error: 'outcome_unknown', message: 'private failure' }); }
       }
       send(policy());
     });
@@ -92,20 +79,13 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   releaseLocation();
   await expect(page.getByText('Calculating folder usage…')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Refresh usage', exact: true })).toBeDisabled();
-  const card = page.getByRole('region', { name: 'Capture location', exact: true });
-  let nativeReady = false;
-  const readiness = waitForStorageReads(card, expect, 5000).then(() => { nativeReady = true; });
-  // The held real renderer request keeps native action admission closed.
-  await page.evaluate(() => new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve))));
-  assert.equal(nativeReady, false, 'Native action raced the initial usage read');
   releaseUsage(); releaseUsage = undefined;
-  await readiness;
-  assert.equal(nativeReady, true);
   await expect(page.getByText('12 MB in captures')).toBeVisible();
+  const card = page.getByRole('region', { name: 'Capture location', exact: true });
   // Regression for native Mac's old ambiguous locator: usage legitimately
   // repeats the folder, so the location readback must be independently scoped.
   await expect(card.getByText('/captures', { exact: true })).toHaveCount(2);
-  await expect(captureLocationStatus(card).getByText('/captures', { exact: true })).toBeVisible();
+  await expect(card.locator(':scope > [role="status"]').getByText('/captures', { exact: true })).toBeVisible();
   const select = page.getByLabel('Keep recordings');
   // A genuine single-worker busy response hides an unverified policy. The
   // native helper must use the visible Refresh recovery before asserting it.
@@ -134,14 +114,6 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   failure = undefined;
   await page.getByRole('button', { name: 'Refresh retention', exact: true }).click();
   await expect(select).toHaveValue('week');
-  unknownOutcome = true;
-  const previousSaves = requests.filter(request => request.storage === 'saveretention').length;
-  await select.selectOption('month');
-  await page.getByRole('button', { name: 'Save retention', exact: true }).click();
-  await expect(page.getByText('The save outcome is unknown.', { exact: false })).toBeVisible();
-  assert.equal(requests.filter(request => request.storage === 'saveretention').length, previousSaves + 1);
-  await page.getByRole('button', { name: 'Refresh retention', exact: true }).click();
-  await expect(select).toHaveValue('month');
   usageError = true;
   await page.getByRole('button', { name: 'Refresh usage', exact: true }).click();
   await expect(page.getByText('Folder usage is unavailable', { exact: false })).toBeVisible();
@@ -150,27 +122,26 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   holdUsage = true;
   await page.evaluate(() => { window.oldUsage = window.apparent.readCaptureUsage(); });
   await expect.poll(() => typeof releaseUsage).toBe('function');
-  await select.selectOption('forever');
+  await select.selectOption('month');
   await page.getByRole('button', { name: 'Save retention', exact: true }).click();
-  await expect(select).toHaveValue('forever');
+  await expect(select).toHaveValue('month');
   releaseUsage(); releaseUsage = undefined;
   assert.deepEqual(await page.evaluate(() => window.oldUsage), { status: 'cancelled' });
   t.diagnostic('Stale usage cancelled');
   const safe = await page.evaluate(() => window.apparent.readRetention());
-  assert.equal(safe.revision, undefined); assert.equal(safe.secret, undefined);
+  assert.equal(safe.revision, undefined); assert.equal(safe.secret, undefined); assert.equal(safe.retention.options[0].secret, undefined);
   assert.equal(await page.evaluate(() => window.apparent.saveRetention('arbitrary').then(() => false, () => true)), true);
   assert.deepEqual(await page.evaluate(() => Object.keys(window.apparent).sort()), [
     'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation', 'readRetention',
     'saveRetention', 'resetRetention', 'readCaptureUsage', 'navigateSettings', 'showCaptureFolder',
   ].sort());
   // Even a direct main-process call from this legitimate frame must not reach
-  // unrelated handlers. Build identity and the mounted acknowledgement are
-  // passive window lifecycle capabilities;
-  // other non-Storage capabilities must remain refused, including direct calls.
+  // unrelated handlers. Check all registered non-Storage capabilities, not only
+  // methods omitted by the preload.
   const denied = await app.evaluate(async ({ ipcMain, BrowserWindow }) => {
     const sender = BrowserWindow.getAllWindows()[0].webContents;
     const event = { sender, senderFrame: sender.mainFrame };
-    const allowed = new Set(['build-identity', 'settings-mounted', 'settings-frame-ready', 'read-capture-location', 'change-capture-location', 'reset-capture-location',
+    const allowed = new Set(['read-capture-location', 'change-capture-location', 'reset-capture-location',
       'read-retention', 'save-retention', 'reset-retention', 'read-capture-usage', 'navigate-settings', 'show-capture-folder']);
     const rejected = [];
     for (const [channel, handler] of ipcMain._invokeHandlers) {

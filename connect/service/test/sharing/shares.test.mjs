@@ -131,20 +131,3 @@ test('owner management paginates all links deterministically without borrowing a
   assert.equal((await f.call('/v1/shares?before=garbage',a)).status,400);
  }finally{await f.close();}
 });
-
-
-test('saved notes are anonymous capture assets after explicit sharing; local UI logs are refused',async()=>{
- const f=await setup();try{
-  const a=await f.identity('synthetic-notes'),p='/v1/captures/'+id(7171);
-  const notes=JSON.stringify({version:1,notes:[{pin:1,t:25,x:0.5,y:0.5,text:'synthetic saved note'}]});
-  assert.equal((await f.call(p,{token:a.token,method:'POST',body:{files:[file('notes-ui.log','local diagnostic')]}})).status,400);
-  assert.equal((await f.call(p,{token:a.token,method:'POST',body:{files:[file('notes.json',notes)]}})).status,200);
-  const shared=await f.call(p+'/share',{token:a.token,method:'POST'});assert.equal(shared.status,200);
-  const path=new URL((await shared.json()).url).pathname;
-  assert.equal((await f.call(p+'/files/notes.json',{token:a.token,method:'PUT',raw:notes})).status,200);
-  assert.equal((await f.call(p+'/complete',{token:a.token,method:'POST'})).status,200);
-  const result=await f.call(path+'/files/notes.json');assert.equal(result.status,200);
-  assert.equal(await result.text(),notes);
-  assert.equal((await f.call(path+'/files/notes-ui.log')).status,404);
- }finally{await f.close();}
-});

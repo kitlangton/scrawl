@@ -5,28 +5,22 @@
   "type": "module",
   "exports": {
     "./button": "./src/button.tsx",
-    "./icons": "./src/icons.ts",
     "./tabs": "./src/tabs.tsx",
     "./theme.css": "./src/theme.css",
     "./status-card": "./src/status-card.tsx",
     "./disclosure-menu": "./src/disclosure-menu.tsx",
     "./status.css": "./src/status.css",
     "./tokens.css": "./src/tokens.css",
-    "./window-theme": "./src/window-theme.cjs",
-    "./collapsible": "./src/feedback/collapsible.tsx",
-    "./alert": "./src/feedback/alert.tsx",
-    "./build-identity": "./src/build-identity/index.tsx"
+    "./window-theme": "./src/window-theme.cjs"
   },
   "peerDependencies": {
     "react": "^19.2.0"
   },
   "dependencies": {
-    "lucide-react": "1.67.0",
     "@radix-ui/react-slot": "^1.2.4",
     "@radix-ui/react-tabs": "^1.1.13",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
-    "tailwind-merge": "^3.3.1",
-    "@radix-ui/react-collapsible": "^1.1.12"
+    "tailwind-merge": "^3.3.1"
   }
 }

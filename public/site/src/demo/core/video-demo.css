@@ -5,39 +5,8 @@
   touch-action: pan-y;
 }
 
-.video-demo video { position: absolute; inset: 0; display: block; width: 100%; height: 100%; object-fit: contain; }
+.video-demo video { display: block; width: 100%; height: 100%; object-fit: contain; }
 .video-demo .track { touch-action: none; }
 .video-demo .stage-wrap:focus-visible,
 .video-demo .track:focus-visible { outline: 2px solid var(--lilac); outline-offset: 4px; }
 .video-demo [role="alert"] { margin: 12px 0; font-size: 14px; }
-
-/* Source media stays unchanged; only the phone viewport follows its cursor. */
-.video-caption { position: absolute; inset: auto 0 0; min-height: 14%; margin: 0; padding: 8px 12px; background: var(--color-surface); color: var(--color-foreground); font-size: 16px; line-height: 1.5; text-align: center; pointer-events: none; }
-:root .video-demo .fullscreen-btn { min-height: 44px; padding: 8px 10px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-foreground); font-size: 14px; }
-:root .video-demo video:fullscreen { width: 100%; height: 100%; transform: none; }
-:root .video-demo .controls { align-items: center; gap: 20px; }
-:root .video-demo .controls-left { flex-shrink: 0; }
-:root .video-demo .icon-btn,
-:root .video-demo .sound-btn { min-height: 44px; min-width: 44px; border: 1px solid var(--color-border); background: var(--color-surface); color: var(--color-foreground); }
-:root .video-demo .track { height: 32px; }
-:root .video-demo .track .seg { height: 8px; border-radius: 0; background: var(--color-surface); border: 1px solid var(--color-border); }
-:root .video-demo .track .seg i { background: var(--color-primary); }
-:root .video-demo .beats { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 4px; }
-:root .video-demo .beats button { min-height: 44px; padding: 6px; white-space: normal; font-size: 14px; color: var(--color-foreground); }
-:root .video-demo .beats button span { color: inherit; }
-:root .video-demo .beats button.on { background: var(--color-primary); color: var(--color-primary-foreground); }
-:root .video-demo .beats button em { display: inline; }
-:root .video-demo .playback-time { margin:0; font-size:14px; line-height:1.5; font-variant-numeric:tabular-nums; color:var(--color-foreground); }
-
-@media (max-width: 700px) {
-  .video-demo[data-camera="following"] .stage-wrap { aspect-ratio: 4 / 5; }
-  .video-demo[data-camera="following"] video { width: 205.756%; max-width: none; transform: translateX(calc(-100% * var(--cursor-offset, 0))); }
-  .video-demo[data-camera="following"] .stage-sound-hint { display: none; }
-  :root .video-demo .controls { gap: 8px; }
-  :root .video-demo .sound-btn { width: 44px; min-width: 44px; padding: 8px; }
-  .video-demo .sound-label { display: none; }
-  :root .video-demo .beats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
-  :root .video-demo .beats button { justify-content: center; }
-  :root .video-demo .beats button { font-size:16px; }
-  :root .video-demo .playback-time { font-size:16px; }
-}

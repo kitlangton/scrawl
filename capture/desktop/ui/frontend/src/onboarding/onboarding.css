@@ -1,0 +1,114 @@
+@import '../../../../../../shared/ui/src/tokens.css';
+
+/* Scope brand roles to onboarding; other Settings consumers keep their routing/style.
+   Frog/puddle artwork, popup silhouettes and their motion are user-approved exceptions. */
+html.native-onboarding-shell {
+  --apparent-shadow: color-mix(in srgb, var(--apparent-carbon) 20%, transparent);
+  --font-sans: 'Host Grotesk', system-ui, sans-serif;
+  --apparent-background: var(--apparent-paper);
+  --apparent-foreground: var(--apparent-carbon);
+  --apparent-surface: var(--apparent-paper);
+  --apparent-primary: var(--apparent-signal);
+  --apparent-primary-foreground: var(--apparent-paper);
+  --apparent-secondary: var(--apparent-lilac);
+  --apparent-secondary-foreground: var(--apparent-carbon);
+  --apparent-muted: var(--apparent-stock);
+  --apparent-muted-foreground: var(--apparent-carbon);
+  --apparent-accent: var(--apparent-lilac);
+  --apparent-accent-foreground: var(--apparent-carbon);
+  --apparent-border: var(--apparent-carbon);
+  --apparent-input: var(--apparent-carbon);
+  --apparent-ring: var(--apparent-signal);
+  --apparent-success: var(--apparent-confirmed);
+  --apparent-destructive: var(--apparent-failed);
+  font-family: var(--font-sans);
+}
+@media (prefers-color-scheme: dark) {
+  html.native-onboarding-shell {
+    --apparent-background: var(--apparent-carbon);
+    --apparent-foreground: var(--apparent-paper);
+    --apparent-surface: var(--apparent-carbon);
+    --apparent-muted-foreground: var(--apparent-paper);
+    --apparent-border: var(--apparent-paper);
+    --apparent-input: var(--apparent-paper);
+  }
+}
+html.native-onboarding-shell,
+html.native-onboarding-shell body { background: transparent !important; margin: 0; color: var(--apparent-foreground); font-family: var(--font-sans); }
+.native-setup, .native-coach { font-family: var(--font-sans); font-size: 1.125rem; line-height: 1.5; }
+.native-setup { margin: 0; height: 100vh; border: 1px solid var(--apparent-border); border-radius: 15px; background: var(--apparent-background); overflow: hidden; display: flex; flex-direction: column; }
+.native-setup header { min-height: 56px; flex-shrink: 0; display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 8px 16px; border-bottom: 1px solid var(--apparent-border); font-size: 1rem; -webkit-app-region: drag; }
+.native-setup header > span { min-width: 0; overflow-wrap: anywhere; }
+.native-setup header button { -webkit-app-region: no-drag; border: 0; background: none; padding: 0; font-size: 2.25rem; line-height: 1; width: 44px; flex-shrink: 0; color: var(--apparent-foreground); }
+.native-setup section { padding: 32px; flex: 1; min-height: 0; overflow: auto; }
+.native-setup h1 { font-size: 2.25rem; font-weight: 700; line-height: 1.1; margin: 0 0 24px; text-wrap: balance; overflow-wrap: anywhere; }
+.native-setup p { font-size: 1.125rem; line-height: 1.5; max-width: 65ch; margin: 0 0 16px; }
+.native-setup footer { min-height: 80px; flex-shrink: 0; border-top: 1px solid var(--apparent-border); display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px; }
+.native-setup footer > span { font-size: 1rem; font-variant-numeric: tabular-nums; }
+.native-setup button, .native-coach button { font-family: inherit; font-size: 1.125rem; font-weight: 500; line-height: 1.5; min-height: 44px; min-width: 44px; height: auto; padding: 8px 16px; border-radius: 0; white-space: normal; box-shadow: none; transition-duration: 160ms; transition-timing-function: ease-out; }
+.native-setup button:disabled, .native-coach button:disabled { opacity: .45; }
+.native-setup button:focus-visible, .native-coach button:focus-visible, .native-shortcut [role=group]:focus-visible { outline: 2px solid var(--apparent-ring); outline-offset: 3px; }
+.native-setup button[class~="bg-primary"]:hover:not(:disabled), .native-coach button[class~="bg-primary"]:hover:not(:disabled) { background: var(--apparent-primary); text-decoration: underline; text-underline-offset: .15em; }
+.native-welcome { display: flex; align-items: center; flex-direction: column; gap: 24px; }
+.native-welcome h1 { margin: 0; }
+.native-welcome > img { width: 96px; height: 96px; margin-bottom: 24px; }
+.native-welcome button { width: min(100%, 336px); }
+.native-welcome p { text-align: center; max-width: 36ch; }
+.native-explain { min-height: 240px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 24px; }
+.native-explain img { width: 176px; }
+.native-permissions { margin-top: 32px; border: 1px solid var(--apparent-border); background: var(--apparent-surface); }
+.native-permissions > div { padding: 16px; display: flex; align-items: center; justify-content: space-between; gap: 24px; border-bottom: 1px solid var(--apparent-border); }
+.native-permissions > div:last-child { border: 0; }
+.native-permissions strong { font-size: 1.125rem; font-weight: 500; }
+.native-permissions small { display: block; font-size: 1rem; margin-top: 8px; }
+.native-granted { font-size: 1.125rem; color: var(--apparent-success); background: var(--apparent-paper); padding: 8px; }
+.native-shortcut { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 24px; margin: 48px 0; }
+.native-shortcut kbd { font-family: inherit; padding: 16px 24px; background: var(--apparent-secondary); font-size: 1.125rem; font-weight: 500; color: var(--apparent-secondary-foreground); }
+.native-shortcut [role=group] { max-width: 100%; }
+.native-coach { position: absolute; top: 56px; left: 24px; right: 24px; background: var(--apparent-surface); border: 1px solid var(--apparent-border); border-radius: 24px 24px 24px 6px; padding: 24px; box-shadow: 0 1px 3px var(--apparent-shadow), 0 12px 30px var(--apparent-shadow); }
+/* Keep the frog outside the scroll area, including at 200% text size. */
+.native-coach-content { max-height: calc(100vh - 136px); overflow: auto; overflow-wrap: anywhere; }
+.native-coach > img { position: absolute; top: -43px; left: -5px; width: 80px; height: 55px; object-fit: contain; pointer-events: none; animation: native-guide-hop .42s cubic-bezier(.2,.7,.3,1); }
+.native-coach-label { font-size: 1rem; font-weight: 500; -webkit-app-region: drag; cursor: move; }
+.native-coach h1 { font-size: 1.125rem; font-weight: 700; line-height: 1.5; margin: 16px 0 8px; text-wrap: balance; }
+.native-coach p { font-size: 1.125rem; line-height: 1.5; margin: 0 0 16px; text-wrap: pretty; }
+.native-coach button { max-width: 100%; }
+.native-later { display: block; color: var(--apparent-foreground); background: none; border: 0; margin-top: 8px; text-align: left; }
+.native-coach [role=alert], .native-setup [role=alert] { color: var(--apparent-destructive); background: var(--apparent-paper); padding: 8px; }
+.native-coach[data-arrow=true]:before { content: ''; position: absolute; top: -10px; left: calc(var(--coach-arrow,50%) - 9px); width: 18px; height: 18px; background: var(--apparent-surface); border-top: 1px solid var(--apparent-border); border-left: 1px solid var(--apparent-border); transform: rotate(45deg); }
+.native-pencils { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; max-width: 100%; margin: 32px 0 16px; }
+.native-pencils button { background: none; border: 2px solid transparent; display: flex; align-items: center; flex-direction: column; padding: 16px 16px 24px; }
+.native-pencils button span { width: 25px; height: 95px; background: var(--pencil); border-radius: 4px 4px 1px 1px; position: relative; box-shadow: inset -7px 0 var(--apparent-shadow); }
+.native-pencils button span:after { content: ''; position: absolute; bottom: -17px; left: 0; border-left: 12.5px solid transparent; border-right: 12.5px solid transparent; border-top: 18px solid var(--apparent-foreground); }
+.native-pencils button[aria-pressed=true] { border-color: var(--apparent-ring); transform: translateY(-5px); }
+.native-pen-picker { height: 100%; min-height: min-content; display: flex; flex-direction: column; align-items: center; justify-content: center; text-align: center; }
+.native-pen-picker h1 { margin-bottom: 16px; }
+.native-pond { width: 100%; max-width: 360px; height: 210px; position: relative; flex-shrink: 0; }
+.native-puddle { position: absolute; left: 35%; bottom: 20px; width: 61%; height: 80px; overflow: visible; }
+.native-puddle path { fill: var(--pond-colour); transition: fill .16s ease-out; }
+.native-puddle-ring { fill: none; stroke: var(--apparent-paper); stroke-width: 3; opacity: 0; transform-origin: 150px 49px; }
+.native-pond-frog { position: absolute; left: 5%; top: 24px; width: 29%; height: 80px; object-fit: contain; transform-origin: center bottom; }
+.native-pond[data-landing=true] .native-pond-frog { animation: native-pen-hop .9s linear forwards; }
+.native-pond[data-landing=true] .native-puddle-ring { animation: native-pen-splash .3s .6s ease-out both; }
+.native-setup footer.native-pen-footer { display: grid; grid-template-columns: 1fr auto 1fr; }
+.native-pen-footer button:first-child { justify-self: start; }
+.native-pen-footer button:last-child { grid-column: 2; justify-self: center; }
+@media (max-width: 560px) {
+  .native-setup section { padding: 16px; }
+  .native-setup footer { flex-wrap: wrap; }
+  .native-setup footer.native-pen-footer { grid-template-columns: auto 1fr; }
+  .native-pen-footer button:last-child { justify-self: end; }
+  .native-permissions > div { align-items: flex-start; flex-direction: column; gap: 16px; }
+}
+@keyframes native-guide-hop { 0% { transform: translate(-32px,12px) rotate(-10deg); opacity: .3; } 55% { transform: translate(-10px,-18px) rotate(6deg); opacity: 1; } 100% { transform: none; } }
+@keyframes native-pen-hop { 0% { transform: translate(0,0) scale(1); } 15% { transform: translate(0,5px) scale(1.08,.85); } 45% { transform: translate(85px,-72px) rotate(9deg); } 70% { transform: translate(165px,50px) scale(1.14,.75); } 84% { transform: translate(165px,28px) scale(.95,1.05); } 100% { transform: translate(165px,50px) scale(1); } }
+@keyframes native-pen-splash { 0% { opacity: .8; transform: scale(.4); } 100% { opacity: 0; transform: scale(1.6); } }
+@media (prefers-reduced-motion: reduce) {
+  .native-setup button, .native-coach button, .native-puddle path { transition: none; }
+  .native-coach > img { animation: none; }
+  .native-pond[data-landing=true] .native-pond-frog { animation: none; transform: translate(165px,50px); }
+  .native-pond[data-landing=true] .native-puddle-ring { animation: none; }
+}
+
+/* Keep the passive build label clear of setup footer actions; coach gutters stay transparent. */
+html.native-onboarding-shell:has(.native-setup) .apparent-build-identity { top: 19px; bottom: auto; right: 64px; }

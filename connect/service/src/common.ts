@@ -7,8 +7,6 @@ export const hash = async (value: string) => hex(new Uint8Array(await crypto.sub
 export const json = (value: unknown) => Response.json(value);
 export class ApiError extends Error { declare code: string; declare status: number; constructor(code: string,status=400,message=code.replaceAll('_',' ')) {super(message);this.code=code;this.status=status;} }
 export function fail(code: string,status=400): never {throw new ApiError(code,status);}
-export function apiBase(env:Env) {const u=new URL(env.API_ORIGIN),path=u.pathname.replace(/\/$/,'');const local=['localhost','127.0.0.1','[::1]'].includes(u.hostname);if((u.protocol!=='https:'&&!(local&&u.protocol==='http:'))||u.username||u.password||!['','/connect'].includes(path)||u.search||u.hash)fail('auth_unavailable',503);return u.origin+path;}
-export function apiBasePath(env:Env) {const path=new URL(apiBase(env)).pathname;return path==='/'?'':path;}
 export const stmt = (env: Env,sql: string,...args: unknown[]) => env.DB.prepare(sql).bind(...args);
 export function isRecord(value: unknown): value is Record<string, unknown> {return !!value && typeof value==='object' && !Array.isArray(value);}
 export async function body(request: Request | Response,limit=131072): Promise<Record<string, unknown>> {

@@ -1,25 +1,19 @@
 #!/usr/bin/env python3
 """Conservative changed-tree verification shared by pre-push and Actions.
 
-PR pushes run contract checks; main CI runs full platform verification before CD.
+Feature pushes and repository CI run contract checks. Full platform verification
+and publication remain manual-only.
 Explicit local --run retains conservative changed-tree checks.
 Both sides of renames/deletions are included. Missing history broadens checks.
 """
 import argparse
-import base64
-import hashlib
 import json
 import os
 import re
-import shutil
 import stat
-import signal
 import sys
-import tempfile
 from pathlib import Path
 import subprocess
-from contextlib import contextmanager
-import selectors
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -97,334 +91,6 @@ BROWSER_FILES = {"connect/web/" + path for path in (
 )}
 
 
-DIRECTORY_WIDTH_CONTRACT_INPUTS = {
-    ".githooks/pre-commit",
-    "enablement/directory-width/check.py",
-    "enablement/directory-width/README.md",
-    "enablement/file-length/check.ts",
-    "enablement/verification.py",
-}
-
-
-def directory_width_contract_selected(paths):
-    """Select its existing integration suite only when its inputs changed."""
-    if not paths:
-        return True  # Unknown history stays conservative.
-    return any(path in DIRECTORY_WIDTH_CONTRACT_INPUTS
-               or path.startswith("enablement/directory-width/tests/")
-               for path in paths)
-
-
-# These are selector/hook regression suites, not the checks that enforce the
-# current push contract.  Keep their production input closures explicit so an
-# ordinary owner or documentation change does not rerun unrelated machinery.
-# Unknown verification/tooling inputs and unknown history remain conservative.
-MACHINERY_TEST_INPUTS = {
-    "test_pre_push_guard.py": {
-        ".githooks/pre-push", "enablement/verification.py",
-        "enablement/verification/dependencies/preflight.test.ts",
-    },
-    "test_commit_push_checkpoint.py": {".githooks/post-commit"},
-    "test_signing_push.py": {".githooks/reference-transaction"},
-    "test_mac_prepare_push.py": {"capture/desktop/scripts/mac/prepare.py"},
-    "test_mac_cache_push.py": {"capture/desktop/scripts/mac/cache.py"},
-    "test_verification.py": {
-        "enablement/verification.py", "enablement/verification/dependencies/preflight.test.ts",
-        "enablement/file-length/check.ts", "enablement/file-length/check.test.ts",
-        "enablement/directory-width/check.py", "enablement/directory-width/README.md",
-        ".githooks/pre-commit",
-    },
-    "test_release_gate.py": {"enablement/release_gate.py"},
-    "test_temp_preflight.py": {
-        "enablement/verification.py", "enablement/verification/dependencies/preflight.test.ts",
-    },
-    "test_owner_lanes.py": {
-        "enablement/owner_lanes.py", ".github/workflows/verification-platform.yml",
-    },
-}
-# The hook fixture copies these live inputs rather than replacing them with
-# constants. They belong to its regression closure even for owner-local edits.
-MACHINERY_TEST_INPUTS["test_pre_push_guard.py"].update({
-    f"{package}/{name}"
-    for package in ("composition/app", "composition/architecture", "record",
-                    "capture/desktop/ui/frontend", "connect/delivery/client")
-    for name in ("package.json", "package-lock.json")
-})
-MACHINERY_TEST_INPUTS["test_pre_push_guard.py"].update({
-    "composition/app/tsconfig.json", "composition/app/.gitignore",
-    "connect/delivery/client/tsconfig.json",
-    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts",
-    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.test.ts",
-    "composition/delivery/core.ts", "composition/delivery/cli.ts",
-    "composition/delivery/core.test.ts", "composition/delivery/runtime/pr-candidate.ts",
-    "composition/delivery/runtime/pr-candidate.test.ts",
-    "composition/delivery/consumer/handoff.ts", "composition/delivery/consumer/handoff.test.ts",
-    ".githooks/pre-commit", "enablement/directory-width/check.py",
-    "enablement/directory-width/tests/test_hook.py",
-    "enablement/file-length/check.ts", "enablement/file-length/check.test.ts",
-    "shared/ui/scripts/check-theme.py", "shared/ui/scripts/check-theme.ts",
-    "shared/ui/scripts/legacy-colors.json",
-    *{f"public/site/{name}" for name in
-      ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html")},
-})
-MACHINERY_TEST_INPUTS["test_verification.py"].update({
-    "public/site/package.json", "composition/app/package.json",
-    "composition/app/package-lock.json", "composition/app/tsconfig.json",
-})
-MACHINERY_TEST_FILES = {"enablement/tests/" + name for name in MACHINERY_TEST_INPUTS}
-MACHINERY_WORKFLOW_INPUTS = {
-    ".github/workflows/" + name for name in (
-        "verification.yml", "verification-mac.yml", "verification-platform.yml",
-        "release-linux.yml", "release-mac-preview.yml",
-    )
-}
-MACHINERY_OWNER_WORKFLOW_INPUTS = {".github/workflows/verification-platform.yml"}
-MACHINERY_SHARED_INPUTS = {
-    "enablement/verification.py",
-}
-MACHINERY_KNOWN_ENABLEMENT_INPUTS = MACHINERY_TEST_FILES | set().union(
-    *MACHINERY_TEST_INPUTS.values()) | {"enablement/refactor.md"}
-
-
-def machinery_tests_selected(paths, history_known=True):
-    """Return only regression suites whose test or production inputs changed."""
-    if not history_known or not paths:
-        return list(MACHINERY_TEST_INPUTS)
-    paths = set(paths)
-    # The shared selector supplies execution paths and contracts for every
-    # machinery suite, so changing it selects the complete affected matrix.
-    # Individual hooks select only their own integration suite below.
-    if paths & MACHINERY_SHARED_INPUTS:
-        return list(MACHINERY_TEST_INPUTS)
-    if any(path.startswith("enablement/") and path not in MACHINERY_KNOWN_ENABLEMENT_INPUTS
-           and not path.startswith(("enablement/docs/", "enablement/directory-width/tests/"))
-           for path in paths):
-        return list(MACHINERY_TEST_INPUTS)
-    selected = set()
-    for name, inputs in MACHINERY_TEST_INPUTS.items():
-        if "enablement/tests/" + name in paths or paths & inputs:
-            selected.add(name)
-    # The hook copies every tracked Onboarding input; the selector's real
-    # prerequisite fixture also consumes the owner's committed input inventory.
-    if any(path.startswith("onboarding/") for path in paths):
-        selected.update(("test_pre_push_guard.py", "test_verification.py"))
-    if paths & MACHINERY_WORKFLOW_INPUTS:
-        selected.add("test_release_gate.py")
-    if paths & MACHINERY_OWNER_WORKFLOW_INPUTS:
-        selected.add("test_owner_lanes.py")
-    if any(path.startswith(".github/workflows/") for path in paths):
-        selected.add("test_verification.py")  # Reads every workflow's job budgets.
-    if any(path.startswith("composition/architecture/") for path in paths):
-        selected.add("test_verification.py")
-    # Unknown hook/workflow files may alter verification behavior.
-    if any(path.startswith(".githooks/") and path not in {
-            ".githooks/pre-commit", ".githooks/pre-push", ".githooks/post-commit",
-            ".githooks/reference-transaction"}
-           for path in paths):
-        selected.update(MACHINERY_TEST_INPUTS)
-    if any(path.startswith(".github/workflows/") and path not in MACHINERY_WORKFLOW_INPUTS
-           for path in paths):
-        selected.update(MACHINERY_TEST_INPUTS)
-    if any(path.startswith(".github/actions/") for path in paths):
-        selected.update(MACHINERY_TEST_INPUTS)
-    return [name for name in MACHINERY_TEST_INPUTS if name in selected]
-
-
-CONNECT_CLIENT_TYPESCRIPT = "connect/delivery/client/"
-CONNECT_CLIENT_TYPESCRIPT_CONFIG = {
-    CONNECT_CLIENT_TYPESCRIPT + name
-    for name in ("package.json", "package-lock.json", "tsconfig.json")
-}
-
-# Exact standalone resource package inventory reviewed from the held producer
-# source commit. Unknown additions stay in the broad root lane until assessed.
-PLATFORM_RESOURCES_FILES = {
-    "shared/resources/" + path for path in (
-        ".gitignore", "README.md", "delivery/README.md", "delivery/delivery.json",
-        "delivery/package-lock.json", "delivery/package.json", "delivery/src/build.ts",
-        "delivery/test/contract.test.ts", "delivery/tsconfig.json", "native/Cargo.lock",
-        "native/Cargo.toml", "native/src/main.rs", "package-lock.json", "package.json",
-        "src/artifact.ts", "src/index.ts", "src/process.ts", "test/artifact.test.ts",
-        "test/client.test.ts", "test/helpers.ts", "test/native.test.ts", "test/peer.ts",
-        "tsconfig.json",
-    )
-}
-
-# App Shell foundation is an independent TypeScript package. Its complete
-# verifier closure includes the shared contracts it consumes and canonical
-# shared UI components; these paths do not feed the Rust application build.
-APP_SHELL_ROOT = "composition/app/"
-APP_SHELL_DELIVERY_ROOT = "composition/delivery/"
-APP_SHELL_INPUTS = (APP_SHELL_ROOT, APP_SHELL_DELIVERY_ROOT, "shared/contracts/", "shared/ui/",
-                    ".github/actions/delivery-contracts/", ".github/actions/delivery-component/")
-APP_SHELL_WORKFLOW = ".github/workflows/stream-platform.yml"
-
-RECORD_PACKAGE_ROOT = "record/"
-RECORD_FRONTEND_ROOT = "capture/desktop/ui/frontend/"
-# The standalone fixture consumer has no native/legacy source dependency.
-# Unknown additions remain broad until their dependency closure is reviewed.
-ONBOARDING_PACKAGE_ROOT = "onboarding/"
-ONBOARDING_PACKAGE_INPUTS = {
-    ONBOARDING_PACKAGE_ROOT + name for name in (
-        ".gitignore", "README.md", "delivery.json", "package.json", "package-lock.json",
-        "tsconfig.json", "tsconfig.test.json", "src/index.ts", "src/controller.ts",
-        "src/model.ts", "src/react.tsx", "src/styles.css", "src/assets.d.ts",
-        "src/assets/frog.png", "src/permissions/controller.ts", "src/permissions/react.tsx",
-        "test/onboarding.test.ts", "test/permissions.test.ts", "test/consumer.test.ts",
-        "vendor/record-0.1.0-a2e7628.tgz",
-        "vendor/apparent-app-contracts-0.1.0.tgz", "src/factory.ts", "src/adoption.ts", "test/adoption.test.ts",
-    )
-}
-# These can change the toolchain, assembly or transitive source closure. Keep
-# broad integration checks when they change, while still running owner checks.
-ONBOARDING_PACKAGE_BUILD_INPUTS = {
-    ONBOARDING_PACKAGE_ROOT + name for name in (
-        "package.json", "package-lock.json", "delivery.json", "tsconfig.json",
-        "tsconfig.test.json", "vendor/record-0.1.0-a2e7628.tgz",
-        "vendor/apparent-app-contracts-0.1.0.tgz",
-    )
-}
-
-
-def onboarding_package_selected(paths):
-    return not paths or any(path.startswith(ONBOARDING_PACKAGE_ROOT) for path in paths)
-
-
-FRONTEND_ROOT = "capture/desktop/ui/frontend/"
-
-
-def onboarding_renderer_selected(paths):
-    onboarding_inputs = (
-        FRONTEND_ROOT + "src/onboarding/", FRONTEND_ROOT + "src/shared/",
-        FRONTEND_ROOT + "src/components/", FRONTEND_ROOT + "src/styles/",
-    )
-    onboarding_exact = {FRONTEND_ROOT + path for path in (
-        "onboarding.html", "package.json", "package-lock.json", "vite.config.ts",
-        "scripts/tsconfig.onboarding.json", "tsconfig.json", "src/style.css",
-        "src/main.tsx", "src/base.css", "src/onboarding/main.tsx",
-    )}
-    return any(path.startswith(onboarding_inputs) or path in onboarding_exact
-               or path.startswith("shared/ui/")
-               or path == "shared/assets/fonts/HostGrotesk-Variable.ttf" for path in paths)
-
-
-RECORD_UI_INPUTS = {
-    RECORD_FRONTEND_ROOT + "pill/index.html",
-}
-RECORD_TYPESCRIPT_INPUTS = {
-    RECORD_PACKAGE_ROOT + name for name in (
-        "package.json", "package-lock.json", "tsconfig.json",
-        "scripts/copy-ui-assets.ts", "scripts/build-ui.ts",
-        "src/index.ts", "src/backend/engine/client.ts", "src/backend/workflow/controller.ts",
-        "src/capabilities/index.ts", "src/capabilities/fixtures.ts",
-        "src/ui/index.ts", "src/ui/recording-pill.tsx", "src/ui/UploadPocket.tsx",
-        "src/ui/types.ts", "src/ui/style.css", "src/ui/styles.d.ts",
-        "test/workflow.test.ts", "test/capabilities.test.ts", "test/package-smoke.ts",
-    )
-}
-RECORD_PILL_INPUTS = RECORD_UI_INPUTS | {
-    RECORD_FRONTEND_ROOT + "src/pill/" + name for name in (
-        "main.tsx", "legacy-mount.tsx", "legacy.css", "bridge.d.ts",
-    )
-}
-RECORD_PILL_INPUTS |= {
-    RECORD_FRONTEND_ROOT + "tests/pill/" + name for name in (
-        "host.cjs", "smoke.cjs", "protocol.test.cjs", "pinning.test.ts",
-        "exceptions.smoke.ts", "shape.test.ts", "framing.cjs", "visibility.test.ts",
-        "host-swap.smoke.ts",
-    )
-}
-
-
-def record_typescript_selected(paths):
-    """Select Record checks for its package and the retained pill consumer seam."""
-    if not paths:
-        return True  # Unknown history must include the independently built renderer.
-    return any(
-        (path.startswith(RECORD_PACKAGE_ROOT) and not path.endswith(".md"))
-        or path.startswith(("shared/ui/", "shared/assets/fonts/"))
-        or path in RECORD_UI_INPUTS
-        or path.startswith(RECORD_FRONTEND_ROOT + "src/pill/")
-        or path.startswith(RECORD_FRONTEND_ROOT + "tests/pill/")
-        for path in paths
-    )
-
-
-# This new owner has no legacy Rust/build consumer. SDK changes remain broad,
-# while also exercising its Agent consumer. Unknown/native Agent files stay broad.
-def agent_tests_selected(paths):
-    return any(path.startswith(("agent/", "engine/sdk/")) for path in paths)
-
-
-def isolated_agent_input(path):
-    return path.startswith("agent/") and (
-        path in {"agent/.gitignore", "agent/LICENSE"}
-        or Path(path).suffix in {".ts", ".json", ".md"}
-    )
-
-
-def app_shell_selected(paths):
-    """Select the App Shell check for package, contract, UI or workflow inputs."""
-    if not paths:
-        return True  # Unknown history stays conservative.
-    return any(path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW for path in paths)
-
-
-def connect_client_typescript_selected(paths):
-    """Select the existing client package test for its full local input set."""
-    if not paths:
-        return True  # Unknown history stays conservative.
-    return any(
-        path in CONNECT_CLIENT_TYPESCRIPT_CONFIG
-        or path.startswith(CONNECT_CLIENT_TYPESCRIPT + "src/")
-        or (path.startswith(CONNECT_CLIENT_TYPESCRIPT + "test/")
-            and "/" not in path[len(CONNECT_CLIENT_TYPESCRIPT + "test/"):]
-            and path.endswith(".test.ts"))
-        for path in paths
-    )
-
-
-PUBLIC_SITE_ROOT = "public/site/"
-PUBLIC_SITE_BUILD_INPUTS = {
-    PUBLIC_SITE_ROOT + name for name in (
-        "index.html", "package.json", "bun.lock", "tsconfig.json", "vite.config.ts",
-    )
-}
-PUBLIC_SITE_TOOLING_INPUTS = {
-    PUBLIC_SITE_ROOT + "lib/public-assets.ts",
-    PUBLIC_SITE_ROOT + "scripts/site-build/agent-files.ts",
-    PUBLIC_SITE_ROOT + "scripts/site-build/feature-audit.ts",
-    PUBLIC_SITE_ROOT + "scripts/site-build/prerender.ts",
-    "shared/analytics/config.ts",
-    "shared/analytics/browser.ts",
-    "shared/ui/src/tokens.css",
-    "shared/ui/scripts/check-theme.py",
-    "shared/ui/scripts/check-theme.ts",
-    "shared/ui/scripts/legacy-colors.json",
-}
-PUBLIC_CONNECT_SHARED_ASSETS = {
-    "public/site/public/assets/" + path for path in (
-        "hosted/source-pond-v4.png", "hosted/agent-pond-v4.png",
-        "hosted/agent-reading-v4.png", "fonts/HostGrotesk-Variable.ttf",
-        "brand/apparent-wordmark.svg",
-    )
-}
-PUBLIC_CONNECT_SHARED_INPUTS = PUBLIC_CONNECT_SHARED_ASSETS | {
-    "shared/analytics/config.ts", "shared/analytics/browser.ts", "shared/ui/src/tokens.css",
-}
-
-
-def public_site_build_selected(paths):
-    """Select Public's existing non-browser package build for its real inputs."""
-    if not paths:
-        return True  # Feature-push contracts do not run the selected root suite.
-    return any(
-        path in PUBLIC_SITE_BUILD_INPUTS | PUBLIC_SITE_TOOLING_INPUTS
-        or path.startswith((PUBLIC_SITE_ROOT + "src/", PUBLIC_SITE_ROOT + "public/"))
-        for path in paths
-    )
-
-
 def select(paths, history_known=True):
     paths = sorted(set(paths))
     # Unknown/shared/build/security/lifecycle input is broad by default. Do not
@@ -432,84 +98,21 @@ def select(paths, history_known=True):
     broad = not history_known or not paths
     engine = False
     browser = False
-    public_site = False
-    app_shell = False
-    record = not history_known or record_typescript_selected(paths)
-    delivery = False
-    platform_resources = False
-    agent = agent_tests_selected(paths)
-    onboarding_package = not history_known or onboarding_package_selected(paths)
     reasons = []
     for path in paths:
-        if path in PLATFORM_RESOURCES_FILES:
-            platform_resources = True
-            continue
-        if path.startswith("shared/resources/"):
-            broad = True
-            reasons.append(path)
-            continue
-        if path in ONBOARDING_PACKAGE_INPUTS - ONBOARDING_PACKAGE_BUILD_INPUTS:
-            continue
-        if isolated_agent_input(path):
-            continue
         if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
             continue
-        if path in RECORD_TYPESCRIPT_INPUTS or path in RECORD_PILL_INPUTS:
-            continue
-        if path.startswith(APP_SHELL_INPUTS) or path == APP_SHELL_WORKFLOW:
-            app_shell = True
-            if path == APP_SHELL_WORKFLOW or path.startswith((".github/actions/delivery-contracts/", ".github/actions/delivery-component/")):
-                continue
-            # Shared UI also feeds existing consumers, so continue through
-            # the ordinary selector for those paths.
-            if path.startswith(APP_SHELL_ROOT) or path.startswith(APP_SHELL_DELIVERY_ROOT) or path.startswith("shared/contracts/"):
-                if path.startswith(APP_SHELL_DELIVERY_ROOT):
-                    delivery = True
-                continue
-        if path in PUBLIC_CONNECT_SHARED_INPUTS:
-            # Shared browser sources and Public-owned assets have Connect
-            # consumers; preserve broad root and browser checks as well.
-            public_site = True
-            browser = True
-            broad = True
-            reasons.append(path)
-            continue
-        if public_site_build_selected([path]):
-            public_site = True
-            continue
-        # The standalone Engine package and reusable core are checked outside
-        # the root app. Legacy capture runtime/bundle/native modules remain
-        # root application inputs and retain the broad root checks.
-        if path.startswith(("engine/core/", "engine/src/", "engine/tests/", "engine/delivery/")):
-            engine = True
-        elif path.startswith("engine/native/"):
-            # These sources still compile into the legacy root helper, so keep
-            # the broad root lane (including the affected Mac helper checks).
-            broad = True
-            reasons.append(path)
-        elif path.startswith("capture/engine/"):
-            if not path.startswith("capture/engine/docs/"):
-                broad = True
-                reasons.append(path)
-        elif path in {"engine/Cargo.toml", "engine/Cargo.lock", "engine/core/Cargo.toml", "engine/core/Cargo.lock"}:
-            engine = True
-        elif path in {"engine/README.md", "engine/README-media.md", "engine/core/README.md"}:
+        if path.startswith("capture/engine/tests/") or path == "capture/engine/README.md":
             engine = True
         elif path in BROWSER_FILES:
             browser = True
         else:
             broad = True
             reasons.append(path)
-    return {"root": broad, "engine": broad or engine, "browser": browser, "agent": agent,
-            "app_shell": app_shell or not history_known or not paths,
-            "record": record,
-            "platform_resources": platform_resources,
-            "onboarding_package": onboarding_package,
-            "delivery": delivery or not history_known or not paths,
-            "public_site": public_site or not history_known or not paths,
+    return {"root": broad, "engine": broad or engine, "browser": browser,
             "focused": [], "paths": paths,
             "reason": "unknown history or empty delta" if not history_known or not paths
-            else "broad inputs: " + ", ".join(reasons) if broad else "owner-local Agent delta" if agent else "document/package-test-only delta"}
+            else "broad inputs: " + ", ".join(reasons) if broad else "document/package-test-only delta"}
 
 
 def changed_paths(base, head):
@@ -591,618 +194,47 @@ def check_temp_environment():
         reject(f"socket fixture needs {size} pathname bytes; platform permits {limit}")
 
 
-def run_pr_checks(selection=None):
-    paths = selection["paths"] if selection else []
-    preflight_dependencies(selection or select(paths), include_architecture=True)
-    run_dependency_contracts()
-    subprocess.run(["node", "--experimental-strip-types", "--test", "enablement/file-length/check.test.ts"], cwd=ROOT, check=True)
+def run_pr_checks():
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    run_architecture_check(paths)
-    if (selection or {}).get("agent", agent_tests_selected(paths)):
-        run_agent_tests()
-    if (selection or {}).get("app_shell", app_shell_selected(paths)):
-        run_app_shell_check()
-    if (selection or {}).get("record", record_typescript_selected(paths)):
-        run_record_typescript_check()
-    if (selection or {}).get("onboarding_package", onboarding_package_selected(paths)):
-        run_onboarding_package_check()
-    if (selection or {}).get("delivery", delivery_tests_selected(paths)):
-        run_delivery_tests()
-    if (selection or {}).get("platform_resources"):
-        run_platform_resources_tests()
-    if connect_client_typescript_selected(paths):
-        run_connect_client_typescript_tests()
-    if directory_width_contract_selected(paths):
-        subprocess.run(["python3", "-m", "unittest", "discover", "-s",
-                        "enablement/directory-width/tests", "-p", "test_*.py"],
-                       cwd=ROOT, check=True)
-    for pattern in machinery_tests_selected(paths, history_known=selection is not None):
+    for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
+                    "test_temp_preflight.py", "test_owner_lanes.py"):
         subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                         "-p", pattern], cwd=ROOT, check=True)
-    if onboarding_renderer_selected(paths):
-        frontend = ROOT / FRONTEND_ROOT
-        if not (frontend / "src/onboarding/main.tsx").is_file():
-            raise RuntimeError("Onboarding entry was deleted or renamed; update its focused check contract before pushing")
-        if not all((frontend / item).is_file() for item in (
-                "node_modules/typescript/bin/tsc", "node_modules/vite/bin/vite.js",
-                "node_modules/@apparent/ui/package.json")):
-            raise RuntimeError("Onboarding feedback needs installed dependencies: run npm ci in capture/desktop/ui/frontend, then retry the push; the hook never installs dependencies")
-        subprocess.run(["npm", "run", "check:onboarding"], cwd=frontend, check=True)
-    if (selection or {}).get("public_site", public_site_build_selected(paths)):
-        run_public_site_build()
 
 
-def run_app_shell_check():
-    """Run the installed App Shell package check; hooks never install deps."""
-    package = ROOT / "composition/app"
-    controls = ("package.json", "package-lock.json", "tsconfig.json")
-    missing = [name for name in controls if not (package / name).is_file()]
-    if missing:
-        raise RuntimeError("App Shell check inputs are missing or deleted: " + ", ".join(missing))
-    manifest = json.loads((package / "package.json").read_text())
-    dependencies = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
-    absent = [name for name in dependencies if not (package / "node_modules" / name / "package.json").is_file()]
-    if absent:
-        raise RuntimeError("App Shell check needs installed dependencies: run npm ci in composition/app; the hook never installs dependencies")
-    subprocess.run(["npm", "run", "check"], cwd=package, check=True)
-
-
-def run_onboarding_package_check():
-    """Verify the standalone owner; never build the legacy frontend or install."""
-    package = ROOT / ONBOARDING_PACKAGE_ROOT
-    required = ONBOARDING_PACKAGE_INPUTS - {"onboarding/.gitignore", "onboarding/README.md"}
-    missing = sorted(path for path in required if not (ROOT / path).is_file())
-    if missing:
-        raise RuntimeError("Onboarding package inputs missing or deleted: " + ", ".join(missing))
-    try:
-        manifest = json.loads((package / "package.json").read_text())
-        lock = json.loads((package / "package-lock.json").read_text())
-        locked = lock["packages"][""]
-        for section in ("dependencies", "devDependencies"):
-            if manifest.get(section, {}) != locked.get(section, {}):
-                raise ValueError("manifest/lock mismatch")
-        dependencies = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
-        if not dependencies or not all(manifest.get("scripts", {}).get(key) for key in ("typecheck", "test", "build")):
-            raise ValueError("missing owner checks/dependencies")
-    except (OSError, KeyError, TypeError, ValueError, AttributeError) as error:
-        raise RuntimeError("Onboarding manifest/lock/checks are invalid; repair onboarding/package.json and package-lock.json") from error
-    missing_dependencies = [name for name in dependencies if not (package / "node_modules" / name / "package.json").is_file()]
-    if missing_dependencies:
-        raise RuntimeError("Onboarding package checks need installed locked dependencies: run npm ci in onboarding; the hook never installs dependencies. Missing: " + ", ".join(sorted(missing_dependencies)))
-    try:
-        check_npm_install(package, manifest, lock, dependencies)
-    except (OSError, KeyError, TypeError, ValueError) as error:
-        raise RuntimeError("Onboarding installed lock/dependencies are stale or missing; run npm ci in onboarding before pushing (the hook never installs)") from error
-    subprocess.run(["npm", "run", "typecheck"], cwd=package, check=True)
-    # test builds the distributable before exercising controller and mounted UI.
-    subprocess.run(["npm", "test"], cwd=package, check=True)
-
-
-def delivery_tests_selected(paths):
-    """Select pure Node delivery contracts for changes to their TypeScript owner."""
-    if not paths:
-        return True  # Unknown history stays conservative.
-    return any(path.startswith(APP_SHELL_DELIVERY_ROOT) for path in paths)
-
-
-def run_agent_tests():
-    """Run the installed TypeScript owner suite; never install or invoke Cargo."""
-    package = ROOT / "agent"
-    controls = ("package.json", "package-lock.json", "tsconfig.json")
-    if any(not (package / name).is_file() for name in controls):
-        raise RuntimeError("Agent check inputs are missing or deleted; restore the owner package")
-    dependencies = ("typescript/bin/tsc", "@types/node/package.json", "@apparent/engine-sdk/package.json")
-    if any(not (package / "node_modules" / name).is_file() for name in dependencies):
-        raise RuntimeError("Agent checks need installed locked dependencies: run npm ci in agent; the hook never installs dependencies")
-    subprocess.run(["npm", "test"], cwd=package, check=True)
-
-
-def run_delivery_tests():
-    """Run delivery's dependency-free Node tests without installing packages."""
-    package = ROOT / APP_SHELL_DELIVERY_ROOT
-    tests = sorted([*package.glob("*.test.ts"), *package.glob("platform/*.test.ts")])
-    if not tests:
-        raise RuntimeError("Delivery checks need composition/delivery/*.test.ts; the hook never installs dependencies")
-    subprocess.run(["node", "--experimental-strip-types", "--test",
-                    *[str(test.relative_to(ROOT)) for test in tests]], cwd=ROOT, check=True)
-
-
-def run_platform_resources_tests():
-    """Run reviewed TS entrypoints without npm hooks; native checks belong to the producer."""
-    package = ROOT / "shared/resources"
-    controls = ("package.json", "package-lock.json", "tsconfig.json")
-    if any(not (package / name).is_file() for name in controls):
-        raise RuntimeError("Platform resources check inputs are missing; restore the registered package")
-    if not (package / "node_modules/typescript/bin/tsc").is_file():
-        raise RuntimeError("Platform resources checks need installed locked dependencies: run npm ci in shared/resources; the hook never installs dependencies")
-    tests = ("test/client.test.ts", "test/artifact.test.ts")
-    if any(not (package / name).is_file() for name in tests):
-        raise RuntimeError("Platform resources TypeScript test entrypoints are missing")
-    with tempfile.TemporaryDirectory(prefix="apparent-resources-no-native-") as directory:
-        for tool in ("cargo", "rustc"):
-            shim = Path(directory) / tool
-            shim.write_text("#!/bin/sh\necho 'Native compilation belongs to the resource producer' >&2\nexit 97\n")
-            shim.chmod(0o755)
-        environment = {**os.environ, "PATH": directory + os.pathsep + os.environ.get("PATH", "")}
-        environment.pop("APPARENT_RESOURCE_HOST_BIN", None)
-        subprocess.run(["node", str(package / "node_modules/typescript/bin/tsc")],
-                       cwd=package, env=environment, check=True)
-        subprocess.run(["node", "--experimental-strip-types", "--test", *tests],
-                       cwd=package, env=environment, check=True)
-
-
-def run_connect_client_typescript_tests():
-    package = ROOT / "connect/delivery/client"
-    controls = ("package.json", "package-lock.json", "tsconfig.json")
-    missing_controls = [name for name in controls if not (package / name).is_file()]
-    if missing_controls:
-        raise RuntimeError(
-            "Connect client TypeScript package controls are missing or deleted: "
-            + ", ".join(missing_controls)
-            + "; restore them or update the pre-push contract before pushing"
-        )
-    dependencies = (
-        "node_modules/typescript/bin/tsc",
-        "node_modules/@types/node/package.json",
-        "node_modules/age-encryption/package.json",
-        "node_modules/@noble/ed25519/package.json",
-    )
-    missing_dependencies = [name for name in dependencies if not (package / name).is_file()]
-    if missing_dependencies:
-        raise RuntimeError(
-            "Connect client TypeScript feedback needs installed locked dependencies; "
-            "run `npm ci --no-audit --no-fund` in connect/delivery/client, then retry. "
-            "The pre-push hook never installs dependencies. Missing: "
-            + ", ".join(missing_dependencies)
-        )
-    subprocess.run(["npm", "test"], cwd=package, check=True)
-
-
-def run_record_typescript_check():
-    """Verify the owner package and its existing Desktop pill consumer without Cargo."""
-    package = ROOT / "record"
-    package_dependencies = (
-        "node_modules/typescript/bin/tsc",
-        "node_modules/@types/node/package.json",
-        "node_modules/@types/react/package.json",
-        "node_modules/@apparent/ui/package.json",
-        "node_modules/lucide-react/package.json",
-        "node_modules/esbuild/package.json",
-        "node_modules/@tailwindcss/cli/package.json",
-    )
-    missing = [name for name in package_dependencies if not (package / name).is_file()]
-    if missing:
-        raise RuntimeError(
-            "Record TypeScript feedback needs installed locked dependencies; run `npm ci --no-audit --no-fund` in record. The pre-push hook never installs dependencies. Missing: "
-            + ", ".join(missing)
-        )
-    frontend = ROOT / "capture/desktop/ui/frontend"
-    frontend_dependencies = (
-        "node_modules/typescript/bin/tsc",
-        "node_modules/vite/bin/vite.js",
-        "node_modules/@apparent/record/package.json",
-        "node_modules/@apparent/ui/package.json",
-    )
-    missing = [name for name in frontend_dependencies if not (frontend / name).is_file()]
-    if missing:
-        raise RuntimeError(
-            "Record pill consumer feedback needs installed locked dependencies; run `npm ci --no-audit --no-fund` in capture/desktop/ui/frontend. The pre-push hook never installs dependencies. Missing: "
-            + ", ".join(missing)
-        )
-    for command in (
-        ["npm", "run", "typecheck"], ["npm", "test"], ["npm", "run", "build"],
-        ["npm", "pack", "--dry-run"],
-    ):
-        subprocess.run(command, cwd=package, check=True)
-    for command in (["npm", "run", "build"], ["npm", "test"]):
-        subprocess.run(command, cwd=frontend, check=True)
-
-
-def run_public_site_build():
-    package = ROOT / "public/site"
-    check_public_site_prerequisites(package)
-    subprocess.run(["npm", "run", "build"], cwd=package, check=True)
-
-
-def check_public_site_prerequisites(package):
-    controls = ("package.json", "bun.lock", "tsconfig.json", "vite.config.ts", "index.html")
-    missing_controls = [name for name in controls if not (package / name).is_file()]
-    if missing_controls:
-        raise RuntimeError(
-            "Public site build inputs are missing or deleted: "
-            + ", ".join(missing_controls)
-            + "; restore them or update the pre-push contract before pushing"
-        )
-    try:
-        manifest = json.loads((package / "package.json").read_text())
-    except (OSError, json.JSONDecodeError) as error:
-        raise RuntimeError("Public site package.json must remain valid for pre-push build feedback") from error
-    dependencies = {**manifest.get("dependencies", {}), **manifest.get("devDependencies", {})}
-    missing_dependencies = [
-        name for name in dependencies
-        if not (package / "node_modules" / name / "package.json").is_file()
-    ]
-    if missing_dependencies:
-        raise RuntimeError(
-            "Public site feedback needs installed locked dependencies; run "
-            "`bun install --frozen-lockfile` in public/site, then retry. "
-            "The pre-push hook never installs dependencies. Missing: "
-            + ", ".join(sorted(missing_dependencies))
-        )
-
-
-def run_dependency_contracts():
-    subprocess.run(["node", "--experimental-strip-types", "--test",
-                    "enablement/verification/dependencies/preflight.test.ts",
-                    "capture/desktop/ui/frontend/scripts/check-dependency-freshness.test.ts"],
-                   cwd=ROOT, check=True)
-
-
-def run_contract_checks():
-    run_dependency_contracts()
+def run_checks(selection, offline=True):
+    if selection["root"] or selection["engine"]:
+        check_temp_environment()
+    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_*push*.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_verification.py"], cwd=ROOT, check=True)
     subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
-
-
-def cleanup_owned_processes(processes):
-    """Reap every owned child without hiding the verification's primary failure."""
-    primary = sys.exc_info()[1]
-    errors = []
-    for process in processes:
-        if process is None:
-            continue
-        try:
-            try:
-                os.killpg(process.pid, signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except PermissionError:
-                # XNU can return EPERM for a group containing only zombies.
-                # A reaped leader alone does not exclude live descendants.
-                if sys.platform != "darwin" or process.poll() is None:
-                    raise
-                snapshot = subprocess.run(
-                    ["/bin/ps", "-axo", "pgid=,stat="], check=True,
-                    capture_output=True, text=True, timeout=5)
-                for line in snapshot.stdout.splitlines():
-                    fields = line.split()
-                    if len(fields) != 2 or not fields[0].isdigit() or not fields[1][0].isalpha():
-                        raise RuntimeError("invalid process-group cleanup snapshot")
-                    if int(fields[0]) == process.pid and not fields[1].startswith("Z"):
-                        raise
-                # No live members: do not retry a signal using an old group ID.
-        except Exception as error:
-            errors.append(error)
-        finally:
-            try:
-                if process.poll() is None:
-                    # Even when group cleanup fails, still reap our direct child.
-                    process.kill()
-                process.wait(timeout=5)
-            except Exception as error:
-                errors.append(error)
-    if errors:
-        detail = "; ".join(f"{type(error).__name__}: {error}" for error in errors)
-        if primary is not None:
-            if hasattr(primary, "add_note"):
-                primary.add_note("Owned process cleanup failed: " + detail)
-            print("Owned process cleanup failed: " + detail, file=sys.stderr, flush=True)
-        else:
-            raise RuntimeError("Owned process cleanup failed: " + detail) from errors[0]
-
-
-def overlap_cargo_test_and_build(test_command, build_command):
-    """Run the ordinary app build as soon as Cargo reports test compilation done."""
-    test_process = build_process = None
-    cancelled = None
-    def _signal(signum, _frame):
-        nonlocal cancelled
-        cancelled = 128 + signum
-    previous = {sig: signal.signal(sig, _signal)
-                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
-    test_status = build_status = None
-    saw_success = False
-    selector = None
-    buffer = b""
-    stream_open = False
-    try:
-        test_process = subprocess.Popen(test_command, cwd=ROOT, stdout=subprocess.PIPE,
-                                        stderr=None, bufsize=0, start_new_session=True)
-        if cancelled is not None:
-            raise SystemExit(cancelled)
-        os.set_blocking(test_process.stdout.fileno(), False)
-        selector = selectors.DefaultSelector()
-        selector.register(test_process.stdout, selectors.EVENT_READ)
-        stream_open = True
-        while stream_open or test_process.poll() is None or (build_process is not None and build_process.poll() is None):
-            if cancelled is not None:
-                raise SystemExit(cancelled)
-            # Poll both processes while waiting for output: test stdout may be
-            # quiet during a long compile and must not hide an early build error.
-            for process, name in ((test_process, "test"), (build_process, "build")):
-                if process is not None and process.poll() is not None:
-                    status = process.returncode
-                    if name == "test": test_status = status
-                    else: build_status = status
-                    if status:
-                        # Preserve diagnostics already available without waiting
-                        # for a potentially quiet test pipe.
-                        if buffer:
-                            print(buffer.decode(errors="replace"), end="", flush=True)
-                            buffer = b""
-                        try:
-                            while True:
-                                tail = os.read(test_process.stdout.fileno(), 65536)
-                                if not tail: break
-                                print(tail.decode(errors="replace"), end="", flush=True)
-                        except BlockingIOError:
-                            pass
-                        raise subprocess.CalledProcessError(status, process.args)
-            for key, _ in selector.select(timeout=0.05):
-                chunk = os.read(key.fileobj.fileno(), 65536)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    stream_open = False
-                    if buffer:
-                        print(buffer.decode(errors="replace"), end="", flush=True)
-                        buffer = b""
-                    continue
-                buffer += chunk
-                lines = buffer.split(b"\n")
-                buffer = lines.pop()
-                for raw_line in lines:
-                    line = raw_line.decode(errors="replace") + "\n"
-                    if not line.strip():
-                        print(line, end="", flush=True)
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        print(line, end="", flush=True)
-                        continue
-                    if not isinstance(event, dict) or "reason" not in event:
-                        print(line, end="", flush=True)
-                        continue
-                    if event.get("reason") == "compiler-message":
-                        rendered = event.get("message", {}).get("rendered")
-                        if rendered:
-                            print(rendered, end="", flush=True)
-                    elif event.get("reason") == "build-finished":
-                        if event.get("success") is not True:
-                            raise RuntimeError("Cargo test build-finished event reported failure")
-                        if not saw_success:
-                            saw_success = True
-                            print("Root test compilation complete; starting required app build alongside test execution",
-                                  flush=True)
-                            build_process = subprocess.Popen(build_command, cwd=ROOT,
-                                                             stdout=None, stderr=None,
-                                                             start_new_session=True)
-                            if cancelled is not None:
-                                raise SystemExit(cancelled)
-                    elif event.get("reason") not in ("compiler-artifact", "build-script-executed"):
-                        print(line, end="", flush=True)
-        if test_status is None:
-            test_status = test_process.wait()
-        if not saw_success:
-            raise RuntimeError("Cargo test did not report build-finished success")
-        if build_process is None:
-            raise RuntimeError("Cargo app build was not started")
-        build_status = build_process.wait()
-        if build_status:
-            raise subprocess.CalledProcessError(build_status, build_process.args)
-        if test_status:
-            raise subprocess.CalledProcessError(test_status, test_process.args)
-        print("Root test harness and required app build both succeeded", flush=True)
-    finally:
-        try:
-            cleanup_owned_processes((test_process, build_process))
-        finally:
-            try:
-                if selector is not None:
-                    selector.close()
-                if test_process is not None and test_process.stdout is not None:
-                    test_process.stdout.close()
-            finally:
-                for sig, handler in previous.items():
-                    signal.signal(sig, handler)
-
-
-@contextmanager
-def overlapping_contracts():
-    """Own one isolated contract process group until both verification paths finish."""
-    process = None
-    cancelled = None
-    def interrupted(signum, _frame):
-        nonlocal cancelled
-        cancelled = 128 + signum
-        if process is not None:
-            raise SystemExit(cancelled)
-    previous = {sig: signal.signal(sig, interrupted)
-                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
-    try:
-        process = subprocess.Popen([sys.executable, str(Path(__file__).resolve()), '--contract-checks'],
-                                   cwd=ROOT, start_new_session=True)
-        if cancelled is not None:
-            raise SystemExit(cancelled)
-        yield
-        status = process.wait()
-        if status:
-            raise subprocess.CalledProcessError(status, process.args)
-    finally:
-        try:
-            cleanup_owned_processes((process,))
-        finally:
-            for sig, handler in previous.items():
-                signal.signal(sig, handler)
-
-
-def run_checks(selection, offline=True, parallel_contracts=False, cargo_timings=False,
-               overlap_root_build=False):
-    preflight_dependencies(selection, include_browser=True)
-    if selection["root"] or selection["engine"]:
-        check_temp_environment()
-    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    if parallel_contracts:
-        with overlapping_contracts():
-            run_selected_checks(selection, offline, cargo_timings, overlap_root_build)
-    else:
-        run_contract_checks()
-        run_selected_checks(selection, offline, cargo_timings, overlap_root_build)
-
-
-def preflight_dependencies(selection, include_architecture=False, include_browser=False):
-    """Fail before contracts/builds when selected owners lack locked installs."""
-    paths = selection.get("paths", [])
-    packages = []
-    if include_architecture and architecture_owners(paths) != []:
-        packages.append(("composition/architecture", "typescript"))
-    if selection.get("agent"):
-        packages.append(("agent", "@apparent/engine-sdk"))
-    if selection.get("app_shell"):
-        packages.append(("composition/app", "@apparent/app-contracts"))
-    if selection.get("record"):
-        packages.extend((("record", "typescript"),
-                         ("capture/desktop/ui/frontend", "@apparent/record")))
-    if include_architecture and onboarding_renderer_selected(paths):
-        packages.append((FRONTEND_ROOT.rstrip("/"), "typescript"))
-    if selection.get("onboarding_package"):
-        packages.append(("onboarding", "typescript"))
-    if selection.get("platform_resources"):
-        packages.append(("shared/resources", "typescript"))
-    if include_architecture and connect_client_typescript_selected(paths):
-        packages.append(("connect/delivery/client", "typescript"))
-    if include_architecture and selection.get("public_site", public_site_build_selected(paths)):
-        packages.append(("public/site", None))
-    for relative, sentinel in packages:
-        package = ROOT / relative
-        if relative == "public/site":
-            check_public_site_prerequisites(package)
-            continue
-        manifest_path, lock_path = package / "package.json", package / "package-lock.json"
-        try:
-            manifest = json.loads(manifest_path.read_text())
-            lock = json.loads(lock_path.read_text())
-            dependencies = manifest.get("dependencies", {}) | manifest.get("devDependencies", {})
-            if (manifest.get("dependencies", {}) != lock["packages"][""].get("dependencies", {})
-                    or manifest.get("devDependencies", {}) != lock["packages"][""].get("devDependencies", {})):
-                raise ValueError("manifest and lock differ")
-            if sentinel and sentinel not in dependencies:
-                raise ValueError("expected direct dependency absent from manifest")
-            check_npm_install(package, manifest, lock, dependencies)
-        except (OSError, KeyError, TypeError, ValueError, json.JSONDecodeError) as error:
-            remedy = ("bun install --frozen-lockfile in public/site" if relative == "public/site"
-                      else f"npm ci --no-audit --no-fund in {relative}")
-            raise RuntimeError(f"Selected verification package {relative} has a missing or stale locked install ({error}); run {remedy}; the hook never installs dependencies") from error
-    if selection.get("app_shell"):
-        # Reuse the package's source-of-truth copied-file freshness check before
-        # its contract/build suite runs; this command only reads files.
-        subprocess.run(["node", "--experimental-strip-types", "composition/app/scripts/check-installed.ts"],
-                       cwd=ROOT, check=True)
-    if selection.get("record") or (include_architecture and onboarding_renderer_selected(paths)):
-        subprocess.run(["node", "--experimental-strip-types", "capture/desktop/ui/frontend/scripts/check-dependency-freshness.ts"],
-                       cwd=ROOT, check=True)
-    if include_browser and selection.get("browser"):
-        check_browser_prerequisites()
-
-
-def check_browser_prerequisites():
-    """Check read-only inputs for the existing browser lane; its selected runner installs frozen deps."""
-    package = ROOT / "connect/web"
-    missing = [name for name in ("package.json", "bun.lock") if not (package / name).is_file()]
-    if missing:
-        raise RuntimeError("Browser verification inputs are missing: " + ", ".join(missing))
-    if not shutil.which("bun"):
-        raise RuntimeError("Browser verification needs Bun on PATH; its selected lane runs bun install --frozen-lockfile")
-
-
-def check_npm_install(package, manifest, lock, dependencies):
-    """Validate npm's installed lock and package contents without mutating them."""
-    missing = [name for name in dependencies
-               if not (package / "node_modules" / name / "package.json").is_file()]
-    if missing:
-        raise ValueError("installed packages are missing: " + ", ".join(sorted(missing)))
-    installed = json.loads((package / "node_modules/.package-lock.json").read_text())["packages"]
-    for name in dependencies:
-        key = "node_modules/" + name
-        expected, actual = lock["packages"][key], installed[key]
-        if expected.get("resolved", "").startswith("file:"):
-            artifact = (package / expected["resolved"][5:]).resolve()
-            if package == ROOT / ONBOARDING_PACKAGE_ROOT and (
-                    not artifact.is_relative_to((package / "vendor").resolve()) or not artifact.is_file()):
-                raise ValueError("local dependency is not a contained vendor artifact")
-            if artifact.is_file():
-                integrity = "sha512-" + base64.b64encode(hashlib.sha512(artifact.read_bytes()).digest()).decode("ascii")
-                if integrity != expected.get("integrity"):
-                    raise ValueError("local dependency artifact integrity mismatch: " + name)
-            elif not (artifact / "package.json").is_file():
-                raise ValueError("local dependency artifact missing: " + name)
-        if any(expected.get(field) != actual.get(field) for field in ("version", "resolved", "integrity", "link")):
-            raise ValueError("installed package differs from lock: " + name)
-        installed_version = json.loads((package / key / "package.json").read_text()).get("version")
-        version = (lock["packages"][expected["resolved"]]["version"]
-                   if expected.get("link") else expected["version"])
-        if installed_version != version:
-            raise ValueError("installed package version differs from lock: " + name)
-
-
-def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_root_build=False):
-    if selection.get("onboarding_package"):
-        run_onboarding_package_check()
-    if selection.get("record"):
-        run_record_typescript_check()
-    if selection.get("agent"):
-        run_agent_tests()
-    if selection.get("app_shell"):
-        run_app_shell_check()
-    if selection.get("delivery"):
-        run_delivery_tests()
-    if selection.get("platform_resources"):
-        run_platform_resources_tests()
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
     jobs = os.environ.get("T3_BUILD_JOBS", "3")
     dependency_mode = "--offline" if offline else "--locked"
-    diagnostics = ["--timings"] if cargo_timings else []
-    # The standalone core and provider are smaller consumers than the root app.
-    # Run both first when selected so package-local compiler or test failures
-    # stop before the broader application compile. Legacy capture code remains
-    # in the root app and still selects those checks independently.
-    if selection["engine"]:
-        for manifest in ("engine/core/Cargo.toml", "engine/Cargo.toml"):
-            for command in ("build", "test"):
-                args = cargo + [command, "--manifest-path", manifest, "-j", jobs, dependency_mode] + diagnostics
-                if command == "test":
-                    args += ["--", "--test-threads=2"]
-                subprocess.run(args, cwd=ROOT, check=True)
     if selection["root"]:
+        subprocess.run(cargo + ["build", "-j", jobs, dependency_mode], cwd=ROOT, check=True)
         if selection.get("focused"):
             for test_filter in selection["focused"]:
-                result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode] + diagnostics + [test_filter,
+                result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, test_filter,
                                                 "--", "--test-threads=2"], cwd=ROOT,
                                         stdout=subprocess.PIPE, text=True, check=True)
                 print(result.stdout, flush=True)
                 if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
                     raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
         else:
-            test_command = cargo + ["test", "-j", jobs, dependency_mode] + diagnostics
-            test_command += (["--message-format=json-render-diagnostics"] if overlap_root_build else [])
-            test_command += ["--", "--test-threads=2"]
-            build_command = cargo + ["build", "-j", jobs, dependency_mode] + diagnostics
-            if overlap_root_build:
-                overlap_cargo_test_and_build(test_command, build_command)
-            else:
-                subprocess.run(test_command, cwd=ROOT, check=True)
-        # Keep the preflight test harness warm before building the distinct app
-        # binary required by subsequent bridge, packaging and native checks.
-        if not (overlap_root_build and not selection.get("focused")):
-            subprocess.run(build_command if not selection.get("focused") else
-                           cargo + ["build", "-j", jobs, dependency_mode] + diagnostics,
-                           cwd=ROOT, check=True)
+            subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, "--", "--test-threads=2"], cwd=ROOT, check=True)
+    if selection["engine"]:
+        for command in ("build", "test"):
+            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode]
+            if command == "test":
+                args += ["--", "--test-threads=2"]
+            subprocess.run(args, cwd=ROOT, check=True)
     if selection.get("browser"):
         # Use the existing package fixtures, including the separate loopback
         # build. Do not substitute a production artifact with synthetic config.
@@ -1213,142 +245,31 @@ def run_selected_checks(selection, offline=True, cargo_timings=False, overlap_ro
             subprocess.run(command, cwd=browser, check=True)
 
 
-ARCHITECTURE_OWNER_ROOTS = {
-    "engine/": "engine", "record/": "record", "agent/": "agent",
-    "onboarding/": "onboarding", "shared/": "shared", "composition/": "composition",
-    "connect/service/": "connect", "connect/delivery/client/": "connect",
-    "connect/tooling/hosting/": "connect",
-}
-
-
-def architecture_owners(paths):
-    """Return affected owners, empty for unrelated docs, or None when uncertain."""
-    owners = set()
-    for path in paths:
-        if path in DOCS or (path.startswith("docs/") and path.endswith(".md")):
-            continue
-        if path.startswith("composition/architecture/") or path.startswith(("shared/contracts/", "shared/ui/")):
-            return None
-        matched = next((owner for prefix, owner in ARCHITECTURE_OWNER_ROOTS.items()
-                        if path.startswith(prefix)), None)
-        if matched is None:
-            # Legacy/native and Public surfaces have separate owner checks;
-            # shared/architecture changes must check every TS owner.
-            if path.startswith(("capture/", "public/", "connect/web/")):
-                continue
-            return None
-        owners.add(matched)
-    return sorted(owners) if owners else ([] if paths else None)
-
-
-def run_architecture_check(paths):
-    owners = architecture_owners(paths)
-    if owners == []:
-        return
-    if not (ROOT / "composition/architecture").is_dir():
-        raise RuntimeError("Architecture check package is missing: restore composition/architecture before pushing")
-    if not (ROOT / "composition/architecture/node_modules/typescript").exists():
-        raise RuntimeError("Architecture check needs installed TypeScript dependencies: run npm ci in composition/architecture; the hook never installs dependencies")
-    command = ["node", "--experimental-strip-types", "composition/architecture/src/cli.ts", "--root", "."]
-    if owners:
-        for owner in owners:
-            command.extend(["--owner", owner])
-    subprocess.run(command, cwd=ROOT, check=True)
-
-
-def hook_budget(seconds, command):
-    """Bound the whole hook, including descendants, on macOS and Linux."""
-    process = None
-    cancelled = None
-    def interrupted(signum, _frame):
-        nonlocal cancelled
-        cancelled = 128 + signum
-        # Popen may already have created the child before returning its handle.
-        # Record cancellation until we can kill/reap that owned process group.
-        if process is not None:
-            raise SystemExit(cancelled)
-
-    previous = {sig: signal.signal(sig, interrupted)
-                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
-    try:
-        process = subprocess.Popen(command, start_new_session=True)
-        if cancelled is not None:
-            return cancelled
-        return process.wait(timeout=seconds)
-    except subprocess.TimeoutExpired:
-        print(f"Verification exceeded {seconds:g}s. Optimize the tests: the agent "
-              "whose run hit this limit owns the optimization and successful rerun. "
-              "Do not raise or bypass the limit.", file=sys.stderr, flush=True)
-        return 124
-    finally:
-        # A successful parent must not leave background verification running.
-        try:
-            cleanup_owned_processes((process,))
-        finally:
-            for sig, handler in previous.items():
-                signal.signal(sig, handler)
-
-
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
     parser.add_argument("--preflight", action="store_true", help="Check temporary environment only; no builds or mutations")
     parser.add_argument("--head", default="HEAD")
-    parser.add_argument("--receipt-dir", type=Path, help="Write observation-only receipts outside the checkout (Node 22 required)")
     parser.add_argument("--run", action="store_true")
-    parser.add_argument("--suite", choices=("all", "rust", "browser"), default="all",
-                        help="Execute a full platform suite; default runs all changed-tree selections")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
-    parser.add_argument("--parallel-contracts", action="store_true",
-                        help="Overlap isolated Python contracts with selected checks; require both to succeed")
-    parser.add_argument("--overlap-root-build", action="store_true",
-                        help="Overlap the broad root Cargo test harness with the app build after Cargo signals build completion")
-    parser.add_argument("--cargo-timings", action="store_true", help="Record Cargo unit timings for existing builds/tests")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if args.preflight:
         check_temp_environment()
         print("Temporary environment prerequisites passed; not native proof.")
         return
-    if args.receipt_dir and (args.pr or args.run):
-        command = ['python3', str(Path(__file__).resolve()), '--base', args.base, '--head', args.head]
-        if args.github_output:
-            command += ['--github-output', str(args.github_output.resolve())]
-        command += ['--suite', args.suite]
-        if args.parallel_contracts:
-            command += ['--parallel-contracts']
-        if args.overlap_root_build:
-            command += ['--overlap-root-build']
-        if args.cargo_timings:
-            command += ['--cargo-timings']
-        command += [flag for flag, enabled in [('--pr', args.pr), ('--run', args.run), ('--online', args.online)] if enabled]
-        label = ('changed-tree' if args.suite == 'all' else 'platform-' + args.suite) if args.run else 'pr-contracts'
-        subprocess.run(['node', str(ROOT / 'enablement/verification/receipt.ts'),
-                        '--suite', label,
-                        '--output', str(args.receipt_dir.resolve()), '--', *command], cwd=ROOT, check=True)
-        return
     selection = plan(args.base, args.head)
-    if args.suite == 'rust':
-        selection.update(root=True, engine=True, browser=False, app_shell=False, agent=False, record=False, onboarding_package=False, focused=[])
-    elif args.suite == 'browser':
-        selection.update(root=False, engine=False, browser=True, app_shell=False, agent=False, record=False, onboarding_package=False, focused=[])
     print(json.dumps(selection, sort_keys=True), flush=True)
     if args.github_output:
         with args.github_output.open("a") as output:
-            for key in ("root", "engine", "browser", "app_shell"):
+            for key in ("root", "engine", "browser"):
                 output.write(f"{key}={str(selection[key]).lower()}\n")
     if args.pr:
-        run_pr_checks(selection)
+        run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online, parallel_contracts=args.parallel_contracts,
-                   cargo_timings=args.cargo_timings, overlap_root_build=args.overlap_root_build)
+        run_checks(selection, offline=not args.online)
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ['--contract-checks']:
-        run_contract_checks()
-        sys.exit(0)
-    if len(sys.argv) > 1 and sys.argv[1] == "--hook-budget":
-        sys.exit(hook_budget(float(sys.argv[2]), sys.argv[3:]))
     main()

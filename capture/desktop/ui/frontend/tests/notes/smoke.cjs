@@ -1,6 +1,6 @@
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { _electron: electron, expect } = require('@playwright/test');
+const { chromium, expect } = require('@playwright/test');
 const path = require('node:path');
 const fs = require('node:fs/promises');
 const os = require('node:os');
@@ -9,13 +9,18 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'apparent-notes-ui-'));
   const profile = path.join(home, 'owned-profile');
   await fs.mkdir(profile, { mode: 0o700 });
-  const application = await electron.launch({ args:
-    ['--no-sandbox', path.resolve(__dirname, '../pill/host.cjs'), '--notes-fixture', '--capture-frame=0,0,1280,800', '--notes-profile=' + profile],
-    env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
-  const child = application.process();
+  const child = require('node:child_process').spawn(require('electron'),
+    ['--no-sandbox', '--remote-debugging-port=0', path.resolve(__dirname, '../../electron/notes/main.cjs'), '--capture-frame=0,0,1280,800', '--notes-profile=' + profile],
+    { stdio: ['pipe', 'pipe', 'pipe'], env: { ...process.env, HOME: home, XDG_CONFIG_HOME: path.join(home, 'config') } });
+  let browser;
   let errors = '';
   child.stderr.on('data', chunk => { errors += chunk.toString(); });
-  t.after(async () => { await application.close().catch(()=>{}); child.kill(); await new Promise(resolve => child.exitCode !== null ? resolve() : child.once('exit', resolve)); await fs.rm(home, { recursive: true, force: true }); });
+  t.after(async () => { await browser?.close(); child.kill(); await new Promise(resolve => child.exitCode !== null ? resolve() : child.once('exit', resolve)); await fs.rm(home, { recursive: true, force: true }); });
+  const endpoint = new Promise((resolve, reject) => {
+    const timer = setTimeout(() => reject(new Error('Notes runtime did not become ready')), 10000);
+    child.stderr.on('data', chunk => { const m = chunk.toString().match(/DevTools listening on (ws:\/\/\S+)/); if (m) { clearTimeout(timer); resolve(m[1]); } });
+    child.once('exit', code => { clearTimeout(timer); reject(new Error('Notes runtime exited: '+code)); });
+  });
   const messages = [];
   let pending = '';
   child.stdout.on('data', chunk => {
@@ -28,14 +33,15 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
       }
     } catch {} }
   });
-  const context = application.context();
+  browser = await chromium.connectOverCDP(await endpoint);
+  const context = browser.contexts()[0];
   await expect.poll(() => context.pages().length).toBe(2);
   const pages = context.pages();
   const popup = pages.find(p => p.url().endsWith('#notes-popup')) || pages[0];
   const badge = pages.find(p => p !== popup);
   await popup.waitForFunction(() => !!window.captureNotes);
-  let state = { mode: 'editor', current: 1, position: [600, 280], badgeRect: [450, 36, 380, 40], notes: [], drafts: [{ pin: 1, t: 123, x: .5, y: .35, text: '' }], error: null };
-  const send = () => { void application.evaluate((_electron,line)=>process.stdin.emit('data',line+'\n'),JSON.stringify(state)); };
+  let state = { mode: 'editor', current: 1, position: [600, 280], notes: [], drafts: [{ pin: 1, t: 123, x: .5, y: .35, text: '' }], error: null };
+  const send = () => child.stdin.write(JSON.stringify(state) + '\n');
   send();
   const field = popup.getByRole('textbox', { name: 'Note text' });
   await expect(field).toBeFocused();
@@ -49,35 +55,18 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   }
   assert.deepEqual(await popup.evaluate(() => ({ require: typeof window.require, process: typeof window.process, keys: Object.keys(window.captureNotes).sort() })),
     { require: 'undefined', process: 'undefined', keys: ['command', 'onSnapshot'] });
-  await popup.evaluate(() => {
-    document.activeElement.blur();
-    window.dispatchEvent(new Event('focus'));
-  });
-  await expect(field).toBeFocused();
   await field.pressSequentially('Smaller button', { delay: 20 }); await expect(field).toBeFocused(); await field.press('Shift+Enter'); await field.press('x');
   await expect(field).toHaveValue('Smaller button\nx');
   await field.press('Enter');
   await expect.poll(() => messages.find(m => m.action === 'save')?.text).toBe('Smaller button\nx');
-  await popup.emulateMedia({ reducedMotion: 'reduce' });
-  await popup.evaluate(() => {
-    window.flightSeen = false;
-    new MutationObserver(() => { const sprite = document.querySelector('.note-flight'); if (sprite) { window.flightSeen = true; window.flightDisplay = getComputedStyle(sprite).display; window.flightBody = getComputedStyle(document.body).backgroundColor; } })
-      .observe(document.body, { subtree: true, childList: true });
-  });
   // Real Rust owns this ack in production. This fixture tests renderer behavior only.
   state = { ...state, mode: 'badge', notes: [{ ...state.drafts[0], text: 'Smaller button\nx' }], drafts: [{ ...state.drafts[0], text: 'Smaller button\nx' }] }; send();
   await expect(badge.getByRole('button', { name: '1 saved notes. Open notes' })).toBeVisible();
-  await expect.poll(() => popup.evaluate(() => window.flightSeen)).toBe(true);
-  assert.equal(await popup.evaluate(() => window.flightDisplay), 'none', 'reduced motion hides the decorative flight');
-  assert.equal(await popup.evaluate(() => window.flightBody), 'rgba(0, 0, 0, 0)');
-  await expect.poll(() => messages.some(m => m.action === 'flight' && m.active)).toBe(true);
-  await expect.poll(() => messages.some(m => m.action === 'flight' && !m.active)).toBe(true);
-
   await badge.getByRole('button').click();
   await expect.poll(() => messages.some(m => m.action === 'list')).toBe(true);
   state.mode = 'list'; state.badgeRect = [450, 36, 380, 40]; send();
   if (process.platform === 'linux') {
-    await expect.poll(() => messages.some(m => m.action === 'surface' && JSON.stringify(m.rect) === '[846,34,116,44]')).toBe(true);
+    await expect.poll(() => messages.some(m => m.action === 'surface' && JSON.stringify(m.rect) === '[836,36,150,44]')).toBe(true);
     await expect.poll(() => messages.some(m => m.action === 'surface' && m.rect[3] === 350)).toBe(true);
   }
   await popup.getByRole('button', { name: /Smaller button/ }).click();
@@ -94,33 +83,18 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   state.error = 'Could not save this note. Your text is kept; try again.'; send();
   await expect(popup.getByRole('alert')).toBeVisible(); await expect(field).toHaveValue('Draft correction');
   await assert.rejects(popup.evaluate(() => window.captureNotes.command({ action: 'save', pin: 1, text: 'x', path: '/tmp/no' })));
-  // Only the pill counter is replaced; the existing editor/list remains available.
-  state = { ...state, embedded: true }; send();
-  const badgeVisible = () => application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows().find(w=>w.webContents.getURL().endsWith('#notes-badge')).isVisible());
-  await expect.poll(badgeVisible).toBe(false);
-  await expect(field).toHaveValue('Draft correction');
-  state = { ...state, embedded: false }; send();
-  await expect.poll(badgeVisible).toBe(true);
   // Finish must acknowledge every save already sent by this renderer, in pipe order.
-  await popup.evaluate(() => { void window.captureNotes.command({ action: 'save', pin: 1, text: 'Final correction\n' }); });
-  await popup.emulateMedia({ reducedMotion: 'no-preference' });
-  const flightsBefore = messages.filter(m => m.action === 'flight' && m.active).length;
-  state = { ...state, mode: 'badge', error: null,
-    notes: [{ ...state.drafts[0], text: 'Final correction' }], drafts: [{ ...state.drafts[0], text: 'Final correction' }] }; send();
-  await expect.poll(() => messages.filter(m => m.action === 'flight' && m.active).length).toBe(flightsBefore + 1);
-  await application.evaluate(()=>process.stdin.emit('data',JSON.stringify({ finishing: true })+'\n'));
+  await popup.evaluate(() => { void window.captureNotes.command({ action: 'save', pin: 1, text: 'Final correction' }); });
+  child.stdin.write(JSON.stringify({ finishing: true }) + '\n');
   await expect.poll(() => messages.some(m => m.action === 'finished')).toBe(true);
   const finish = messages.findIndex(m => m.action === 'finished');
-  const lastFlight = messages.findLastIndex(m => m.action === 'flight' && m.active);
-  assert.ok(messages.slice(lastFlight + 1, finish).some(m => m.action === 'flight' && !m.active),
-    'Finish cancels an active decorative animation before its save barrier');
-  assert.ok(messages.findIndex(m => m.action === 'save' && m.text === 'Final correction\n') < finish);
+  assert.ok(messages.findIndex(m => m.action === 'save' && m.text === 'Final correction') < finish);
   await assert.rejects(popup.evaluate(() => window.captureNotes.command({ action: 'save', pin: 1, text: 'Too late' })));
   const exited = new Promise((resolve, reject) => {
     const timer = setTimeout(() => reject(new Error('Notes did not exit after EOF')), 5000);
     child.once('exit', code => { clearTimeout(timer); resolve(code); });
   });
-  await application.evaluate(()=>process.stdin.push(null));
+  child.stdin.end();
   assert.equal(await exited, 0);
   assert.equal((await fs.stat(profile)).isDirectory(), true, 'the parent owns profile cleanup after reaping');
   assert.doesNotMatch(errors, /Uncaught Exception|ENOTEMPTY/);

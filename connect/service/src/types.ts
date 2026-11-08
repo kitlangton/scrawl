@@ -12,11 +12,6 @@ export interface Env {
  BETTER_AUTH_SECRET: string;
  OAUTH_DISCOVERY_URL?: string;
  SHARING_ENABLED?: string;
- POSTHOG_ENABLED?: string;
- POSTHOG_PROJECT_TOKEN?: string;
- POSTHOG_HOST?: string;
- POSTHOG_ENVIRONMENT?: string;
- POSTHOG_EXCLUDED_ACCOUNT_IDS?: string;
 }
 export type Scope = 'read' | 'upload';
 export type Beta = 'active' | 'waitlist';
@@ -44,7 +39,7 @@ export interface ShareRow {
  created_at: number; revoked_at: number | null; upload_state: 'uploading' | 'paused' | 'failed';
  status: CaptureRow['status']; expires_at: number; pending_until: number; bytes: number;
 }
-export interface SharedFile extends ManifestFile { url: string; timestampMs?: number }
+export interface SharedFile extends ManifestFile { url: string }
 export interface ShareModel {
  url: string; status: ShareState; title: string; createdAt: string; expiresAt: string;
  uploadedBytes: number; totalBytes: number; files: SharedFile[]; thumbnailUrl: string | null;

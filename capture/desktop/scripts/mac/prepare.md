@@ -1,7 +1,7 @@
 # Prepare the device-free Darwin regression packet on Linux
 
 From a clean checkout, freeze the complete candidate and validate the real
-`engine/native/tests/live-transcribe.py` input closure before requesting
+`capture/engine/native/tests/live-transcribe.py` input closure before requesting
 Mac execution. This command launches nothing, allocates nothing and needs only
 Python 3 and Git. It does not replace the separately owned Linux frontend/Rust
 bridge verification command.
@@ -17,9 +17,8 @@ The receipt is private (0600), exclusively created in an existing private
 outside-checkout directory. Preserve it privately; paths and hashes describe
 source inputs, not native evidence. The command refuses a stale SHA, tracked or
 untracked changes, hidden index flags, missing/symlink inputs, altered committed
-bytes, invalid Python or malformed Info.plist. It hashes `build.rs`, the Cargo
-manifest, every complete helper Swift input in basename compiler order, the
-linker plist, and both moved Swift fixtures plus the maintained Python entry.
+bytes, invalid Python or malformed Info.plist. It hashes the actual entrypoint,
+sibling executable Swift fixture, production Swift sources and linker plist.
 There are no generated capture request IDs or external media fixtures in this
 scenario: PCM is generated in memory by the existing Swift tests. Do not use
 this packet to claim capture-control, GUI or hardware acceptance.
@@ -39,30 +38,7 @@ hash, and check the guest prerequisites listed in the receipt. In particular,
 installed. Then run from the repository root:
 
 ```sh
-python3 engine/native/tests/live-transcribe.py
-```
-
-Compile the complete helper with the source order and flags from `build.rs`,
-then run the existing RGB proof:
-
-```sh
-target="$(uname -m)-apple-macos15.0"
-xcrun swiftc -O -swift-version 5 -target "$target" \
-  engine/native/Export.swift engine/native/LiveTranscribe.swift engine/native/Media.swift \
-  capture/engine/native/Mirror.swift capture/desktop/native/Onboarding.swift \
-  capture/desktop/native/OnboardingDemo.swift capture/desktop/native/PermissionPanel.swift \
-  engine/native/PlaybackVolume.swift engine/native/ScreenProbe.swift \
-  capture/desktop/native/Settings.swift capture/desktop/native/ShortcutKeys.swift shared/native/main.swift \
-  -o "$TMPDIR/apparent-helper" \
-  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker shared/native/Info.plist
-xcrun swiftc -O -swift-version 5 -target "$target" -parse-as-library \
-  engine/native/Export.swift engine/native/Media.swift engine/native/tests/ink-rgb.swift \
-  -Xlinker -sectcreate -Xlinker __TEXT -Xlinker __info_plist -Xlinker shared/native/Info.plist \
-  -o "$TMPDIR/ink-rgb-proof"
-rgb_output=$(mktemp -d "$TMPDIR/apparent-ink-rgb.XXXXXXXX")
-rmdir "$rgb_output"
-"$TMPDIR/ink-rgb-proof" "$rgb_output"
-rm -rf "$rgb_output" "$TMPDIR/apparent-helper" "$TMPDIR/ink-rgb-proof"
+python3 capture/engine/native/tests/live-transcribe.py
 ```
 
 Retain the actual command, exit, compiler output and candidate identity. The

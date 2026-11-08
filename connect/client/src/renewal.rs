@@ -3,10 +3,6 @@
 use super::*;
 
 const AUTH_REQUIRED: &str = "auth_required: approve this device again with apparent connect login";
-pub(super) fn valid_account_initial(value: &str) -> bool {
-    let count = value.chars().take(4).count();
-    (1..=3).contains(&count) && value.chars().all(char::is_alphanumeric)
-}
 fn opaque(value: &str) -> bool {
     !value.is_empty() && value.len() <= 8192 && value.bytes().all(|b| b.is_ascii_graphic())
 }
@@ -80,8 +76,6 @@ impl Credential {
         self.token = access.into();
         self.refresh_token = Some(refresh.into());
         self.grant_id = Some(grant.into());
-        self.account_initial = reply["accountInitial"].as_str()
-            .filter(|value| valid_account_initial(value)).map(str::to_owned);
         self.auth_required = false;
         self.validate()
     }
@@ -94,64 +88,7 @@ struct Renewal {
     #[serde(default)]
     completed: bool,
 }
-enum RecipientAccessAction { Renew { force: bool }, Reject }
 impl Client {
-    /// Temporary read-only consumer bridge to the sole durable credential writer.
-    /// No token leaves this boundary; the caller must reload and fence disk state.
-    /// This cannot select upload authority, change consent or restore config gates.
-    pub fn renew_recipient_access(
-        &self,
-        server: &str,
-        generation: &str,
-        token: &str,
-        cancellation: Option<&str>,
-        force: bool,
-        allowed: &dyn Fn() -> bool,
-    ) -> std::result::Result<(), settings::SafeError> {
-        self.recipient_access(server, generation, token, cancellation, RecipientAccessAction::Renew { force }, allowed)
-    }
-    /// Mark only the still-current rejected read token; never refresh or affect upload authority.
-    pub fn reject_recipient_access(&self, server: &str, generation: &str, token: &str,
-        cancellation: Option<&str>, allowed: &dyn Fn() -> bool) -> std::result::Result<(), settings::SafeError> {
-        self.recipient_access(server, generation, token, cancellation, RecipientAccessAction::Reject, allowed)
-    }
-    fn recipient_access(&self, server: &str, generation: &str, token: &str,
-        cancellation: Option<&str>, action: RecipientAccessAction, allowed: &dyn Fn() -> bool,
-    ) -> std::result::Result<(), settings::SafeError> {
-        use settings::SafeError;
-        if server_url(server).ok().as_deref() != Some(server) {
-            return Err(SafeError::InvalidServer);
-        }
-        if generation.len() != 32
-            || !generation.bytes().all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
-            || !opaque(token)
-            || cancellation.is_some_and(|epoch| serde_json::to_vec(epoch).map_or(true, |b| b.len() > 128))
-        {
-            return Err(SafeError::LocalState);
-        }
-        let current = || allowed() && !self.revocation_pending()
-            && self.cancellation().is_ok_and(|epoch| epoch.as_deref() == cancellation);
-        let result = (|| -> Result<()> {
-            ensure!(current(), "cancelled");
-            let expected = self.credential("read", server)?;
-            ensure!(expected.generation == generation, "cancelled: device login changed");
-            ensure!(!expected.auth_required, "{AUTH_REQUIRED}");
-            // Another writer already rotated this access incarnation. Never force
-            // an extra refresh on behalf of a request using the older token.
-            if expected.token != token { return Ok(()); }
-            let deadline = Instant::now() + Duration::from_secs(30);
-            match action {
-                RecipientAccessAction::Renew { force } => { self.renew(&expected,
-                    force || expected.refresh_expires_at.is_some_and(|expiry| expiry <= now()),
-                    &current, deadline, Some(deadline))?; }
-                RecipientAccessAction::Reject => self.mark_auth_required(&expected, &current, Some(deadline))?,
-            }
-            ensure!(current(), "cancelled");
-            Ok(())
-        })();
-        result.map_err(|error| settings::safe_error(&error, &current))
-    }
-
     pub(super) fn auth_status(&self, scope: &str, server: &str) -> Value {
         let Ok(c) = self.credential(scope, server) else {
             return json!({"status":"signed_out"});

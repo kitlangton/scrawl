@@ -745,14 +745,15 @@ struct StatusBarController {
     _item: Retained<NSStatusItem>,
     _menu: Retained<NSMenu>,
     _target: Retained<ApparentMenuTarget>,
-    _appearance_app: Retained<NSApplication>,
 }
 
 impl Drop for StatusBarController {
     fn drop(&mut self) {
-        unsafe {
-            let _: () = msg_send![&*self._appearance_app, removeObserver: &*self._target,
-                forKeyPath: &*NSString::from_str("effectiveAppearance")];
+        if let Some(button) = self._item.button(self._target.mtm()) {
+            unsafe {
+                let _: () = msg_send![&*button, removeObserver: &*self._target,
+                    forKeyPath: &*NSString::from_str("effectiveAppearance")];
+            }
         }
     }
 }
@@ -761,15 +762,14 @@ fn refresh_status_bar_icon(item: &NSStatusItem, mtm: MainThreadMarker) {
     let Some(button) = item.button(mtm) else {
         return;
     };
-    // Full-screen menu bars can stay dark even while the system is light.
-    // Follow the application's inherited system appearance so the two brand
-    // variants switch with Light/Dark mode in either window context.
+    // The status button's appearance can differ from the app's (for example
+    // with a wallpaper-tinted menu bar). Observe the actual surface, not a
+    // stored user preference or a one-time launch check.
     let names = NSArray::from_retained_slice(&[
         NSString::from_str("NSAppearanceNameAqua"),
         NSString::from_str("NSAppearanceNameDarkAqua"),
     ]);
-    let appearance_app = NSApplication::sharedApplication(mtm);
-    let appearance = appearance_app.effectiveAppearance();
+    let appearance = button.effectiveAppearance();
     let best: Option<Retained<NSString>> = unsafe {
         msg_send![&*appearance, bestMatchFromAppearancesWithNames: &*names]
     };
@@ -791,6 +791,17 @@ fn refresh_status_bar_icon(item: &NSStatusItem, mtm: MainThreadMarker) {
 
 thread_local! {
     static STATUS_BAR: RefCell<Option<StatusBarController>> = const { RefCell::new(None) };
+}
+
+/// The owned status-item window, in the same global top-left coordinates as capture.
+pub(in crate::capture::desktop) fn status_bar_anchor()->Option<[f32;4]> {
+    let mtm=MainThreadMarker::new()?;
+    STATUS_BAR.with(|bar| {
+        let bar=bar.borrow();let button=bar.as_ref()?._item.button(mtm)?;
+        let frame=button.window()?.frame();
+        let primary_h=objc2_app_kit::NSScreen::screens(mtm).firstObject()?.frame().size.height;
+        Some([frame.origin.x as f32,(primary_h-frame.origin.y-frame.size.height) as f32,frame.size.width as f32,frame.size.height as f32])
+    })
 }
 
 pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receiver<MenuAction>> {
@@ -841,11 +852,12 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
 
     let item = NSStatusBar::systemStatusBar().statusItemWithLength(-1.0);
     refresh_status_bar_icon(&item, mtm);
-    let appearance_app = NSApplication::sharedApplication(mtm);
-    unsafe {
-        let _: () = msg_send![&*appearance_app, addObserver: &*target,
-            forKeyPath: &*NSString::from_str("effectiveAppearance"),
-            options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+    if let Some(button) = item.button(mtm) {
+        unsafe {
+            let _: () = msg_send![&*button, addObserver: &*target,
+                forKeyPath: &*NSString::from_str("effectiveAppearance"),
+                options: 0usize, context: std::ptr::null_mut::<std::ffi::c_void>()];
+        }
     }
     let app_bytes = include_bytes!("../../../capture/desktop/assets/app-icon.png");
     let app_data = NSData::with_bytes(app_bytes);
@@ -861,7 +873,6 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
             _item: item,
             _menu: menu,
             _target: target,
-            _appearance_app: appearance_app,
         });
     });
     Some(receiver)
@@ -905,7 +916,7 @@ fn find_picker_ns_window() -> Option<Retained<NSWindow>> {
         if win.ignoresMouseEvents() {
             continue;
         }
-        if win.title().to_string() == "Apparent Whiteboard" {
+        if win.title().to_string() == super::whiteboard::title() {
             continue;
         }
         let size = win.frame().size;
@@ -1453,10 +1464,4 @@ pub(in crate::capture::desktop) fn restore_note_focus(token: u64, owner: u32) {
             let _ = app.activateWithOptions(NSApplicationActivationOptions::empty());
         }
     }
-}
-
-/// Current OS foreground application, including owned Electron children.
-pub(in crate::capture::desktop) fn share_foreground_pid() -> u32 {
-    objc2_app_kit::NSWorkspace::sharedWorkspace().frontmostApplication()
-        .map_or(0, |app| app.processIdentifier().max(0) as u32)
 }

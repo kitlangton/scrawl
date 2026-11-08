@@ -1,7 +1,5 @@
 pub(crate) mod agent_capture;
 #[cfg(any(target_os = "macos", target_os = "linux"))]
-pub(crate) mod native_host;
-#[cfg(any(target_os = "macos", target_os = "linux"))]
 pub(crate) mod error_reporting;
 pub(crate) mod connect_settings;
 #[cfg(any(target_os = "macos", target_os = "linux"))]

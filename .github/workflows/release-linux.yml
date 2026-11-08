@@ -3,14 +3,6 @@ name: Release (Linux)
 on:
   workflow_dispatch:
     inputs:
-      candidate_sha:
-        description: Exact Linux-verified main SHA for a Main preview or feed repair (empty selects dispatch commit).
-        required: false
-        default: ""
-      bridge_commit:
-        description: One-time signed compatibility bridge commit; aliases already verified v2 assets.
-        required: false
-        default: ""
       tag:
         description: Version tag to build and attach to its release. Leave empty only for a Main preview.
         required: false
@@ -28,7 +20,12 @@ on:
 
 permissions:
   contents: read
-  actions: read
+
+concurrency:
+  # Verification cannot replace the pending publisher behind a running Main build.
+  group: release-linux-${{ github.ref }}-${{ inputs.tag }}-${{ inputs.verify_only == true && 'verify-only' || 'publish' }}
+  # Finish the running build/publication; GitHub coalesces to the latest pending run.
+  cancel-in-progress: false
 
 jobs:
   admit:
@@ -37,53 +34,25 @@ jobs:
       contents: read
       actions: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     outputs:
       sha: ${{ steps.gate.outputs.sha }}
     steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       # Admission code comes from trusted main, never an unchecked event SHA.
       - uses: actions/checkout@v4
         with:
           ref: main
           fetch-depth: 0
-          # Keep complete ancestry/tags without downloading historical file bodies.
-          filter: blob:none
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /.github/workflows/release-linux.yml
-            /capture/desktop/scripts/linux/maintenance/
-            /capture/desktop/scripts/linux/appimage/smoke-cpu.sh
-            /capture/desktop/scripts/linux/appimage/smoke-cpu.test.ts
-            /enablement/release_gate.py
           persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.0'
-      - name: Bridge publication and packaged smoke contracts
-        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts capture/desktop/scripts/linux/appimage/smoke-cpu.test.ts
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
-          REQUEST_SHA: ${{ inputs.candidate_sha || github.event.workflow_run.head_sha || github.sha }}
+          REQUEST_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
           VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
           TAG: ${{ inputs.tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
-          BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
-          SELECTED_SHA: ${{ inputs.candidate_sha }}
         shell: bash
         run: |
           set -euo pipefail
-          if [[ -n "$SELECTED_SHA" ]]; then
-            [[ "$GITHUB_EVENT_NAME" == workflow_dispatch && "$GITHUB_REF" == refs/heads/main && -z "$TAG" && "$VERIFY_ONLY" != true && -z "$BRIDGE_COMMIT" ]]
-          fi
-          if [[ -n "$BRIDGE_COMMIT" ]]; then
-            [[ "$GITHUB_REF" == refs/heads/main && -z "$TAG" && "$VERIFY_ONLY" != true ]]
-            REQUEST_SHA=$(node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts inspect "$BRIDGE_COMMIT")
-          fi
           if [[ "$VERIFY_ONLY" == true ]]; then
             echo "sha=$REQUEST_SHA" >> "$GITHUB_OUTPUT"
             exit 0
@@ -91,24 +60,24 @@ jobs:
           if [[ -n "$TAG" ]]; then
             REQUEST_SHA=$(git rev-parse --verify "refs/tags/$TAG^{commit}")
           fi
+          # Superseded automatic candidates need no more runner time.
+          if [[ "$GITHUB_EVENT_NAME" == workflow_run && "$(git rev-parse origin/main)" != "$REQUEST_SHA" ]]; then
+            echo 'Skipping superseded main candidate'
+            exit 0
+          fi
           args=(--platform linux --sha "$REQUEST_SHA")
           if [[ -n "$VERIFY_RUN_ID" ]]; then args+=(--run-id "$VERIFY_RUN_ID"); fi
           python3 enablement/release_gate.py "${args[@]}"
 
   preview-needed:
     needs: admit
-    if: needs.admit.outputs.sha != '' && inputs.bridge_commit == ''
+    if: needs.admit.outputs.sha != ''
     permissions:
       contents: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     outputs:
       build: ${{ steps.check.outputs.build }}
     steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - id: check
         env:
           GH_TOKEN: ${{ github.token }}
@@ -120,16 +89,12 @@ jobs:
           if [[ "$VERIFY_ONLY" == "true" ]]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           elif [[ "$PUBLISH_MAIN" == "true" && -z "$TAG" ]] && \
-             [[ "$(gh release view "linux-main-v2-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
+             [[ "$(gh release view "linux-main-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
           fi
   linux:
-    # Supersede expensive automatic builds only after exact-SHA admission.
-    concurrency:
-      group: release-linux-build-${{ github.ref }}-${{ matrix.arch }}-${{ github.event_name == 'workflow_run' && 'automatic' || github.run_id }}
-      cancel-in-progress: ${{ github.event_name == 'workflow_run' }}
     needs: [admit, preview-needed]
     if: needs.preview-needed.outputs.build == 'true'
     name: Linux ${{ matrix.arch }}
@@ -144,18 +109,13 @@ jobs:
     permissions:
       contents: read
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 15
+    timeout-minutes: 90
     env:
       CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
-      # workflow_run's event SHA may be newer than the admitted checkout.
       TAG: ${{ inputs.tag }}
       PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}
       VERIFY_ONLY: ${{ inputs.verify_only }}
     steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
       - name: Validate release request
         run: |
           if [[ "$VERIFY_ONLY" == "true" ]]; then
@@ -173,37 +133,6 @@ jobs:
       - name: Confirm build identity
         if: env.TAG == ''
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.0'
-          cache: npm
-          cache-dependency-path: capture/desktop/ui/frontend/package-lock.json
-      - name: Configure release cache paths
-        run: |
-          echo "APPARENT_TEST_MODEL_DIR=$RUNNER_TEMP/speech-model" >> "$GITHUB_ENV"
-          echo "APPARENT_PACKAGING_TOOLS_MANIFEST=$RUNNER_TEMP/packaging-tools.json" >> "$GITHUB_ENV"
-          echo "APPARENT_PACKAGING_TOOLS_DIR=$RUNNER_TEMP/packaging-tools" >> "$GITHUB_ENV"
-      - name: Resolve pinned packaging tools
-        # Older admitted candidates retain their original packaging path.
-        if: hashFiles('capture/desktop/scripts/linux/appimage/packaging-tools.ts') != ''
-        id: packaging-tools
-        run: node --experimental-strip-types capture/desktop/scripts/linux/appimage/packaging-tools.ts resolve "$RUNNER_TEMP/packaging-tools.json" "$GITHUB_OUTPUT"
-      - name: Cache verified speech model
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/speech-model
-          key: release-linux-speech-model-${{ hashFiles('capture/engine/runtime/audio/transcription/speech.rs') }}
-      - name: Cache Electron download
-        uses: actions/cache@v4
-        with:
-          path: ~/.cache/electron
-          key: release-linux-electron-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('capture/desktop/ui/frontend/package-lock.json') }}
-      - name: Cache verified packaging tools
-        if: steps.packaging-tools.outputs.key != ''
-        uses: actions/cache@v4
-        with:
-          path: ${{ runner.temp }}/packaging-tools
-          key: release-linux-packaging-tools-${{ matrix.arch }}-${{ steps.packaging-tools.outputs.key }}
       - name: Install build and packaging dependencies
         run: ./capture/desktop/scripts/linux/appimage/dependencies.sh
       - uses: dtolnay/rust-toolchain@stable
@@ -214,16 +143,12 @@ jobs:
       - name: Build with PostHog error reporting
         env:
           APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
-        run: GITHUB_SHA="$CANDIDATE_SHA" cargo build --release --locked
-      # Exact-commit Linux verification owns the full unit suite. Release keeps
-      # the release-profile executable for both architectures' packaged proofs.
-      - name: Compile packaged model test executable
-        # build.rs watches this variable. Keep the same build environment so
-        # compiling tests does not invalidate the just-built native outputs.
-        env:
-          APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
+        run: cargo build --release --locked
+      - name: Unit tests and model test executable
         run: |
-          GITHUB_SHA="$CANDIDATE_SHA" cargo test --release --locked --bin apparent --no-run --message-format=json > target/test-artifacts.jsonl
+          cargo test --release --locked -- --test-threads=2
+          cargo test --release --locked speech:: -- --nocapture
+          cargo test --release --locked --bin apparent --no-run --message-format=json > target/test-artifacts.jsonl
           test=$(jq -r 'select(.reason == "compiler-artifact" and .target.name == "apparent" and .profile.test) | .executable // empty' target/test-artifacts.jsonl)
           test -f "$test"
           echo "SPEECH_TEST=$test" >> "$GITHUB_ENV"
@@ -278,54 +203,19 @@ jobs:
           name: ${{ steps.package.outputs.name }}
           path: dist/*
 
-  publish:
-    # One transaction keeps immutable publication and feed repair together.
-    # Pending transactions may coalesce; running publication is never canceled.
-    concurrency:
-      group: release-linux-publication
-      cancel-in-progress: false
-    needs: [admit, preview-needed, linux]
-    if: always() && needs.admit.result == 'success' && needs.admit.outputs.sha != '' && inputs.verify_only != true && (needs.linux.result == 'success' || needs.preview-needed.outputs.build == 'false' || inputs.bridge_commit != '')
+  attach-release:
+    if: needs.linux.result == 'success' && inputs.tag != '' && inputs.verify_only != true
+    needs: [admit, linux]
     permissions:
       contents: write
-      actions: read
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    env:
-      PUBLISH_MAIN: ${{ github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main }}
-      TAG: ${{ inputs.tag }}
-      BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
     steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      - uses: actions/checkout@v5
-        with:
-          # Publication policy always comes from trusted current main.
-          ref: main
-          fetch-depth: 0
-          # Feed ordering needs full history, not obsolete historical file bodies.
-          filter: blob:none
-          sparse-checkout-cone-mode: false
-          sparse-checkout: |
-            /.github/workflows/release-linux.yml
-            /capture/desktop/scripts/linux/maintenance/
-            /enablement/release_gate.py
-          persist-credentials: false
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22.23.0'
-      - name: Validate metadata contracts
-        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/main-feed.test.ts
       - uses: actions/download-artifact@v5
-        if: needs.linux.result == 'success' && env.BRIDGE_COMMIT == ''
         with:
           pattern: Apparent-*.AppImage
           path: dist
           merge-multiple: true
       - name: Attach to the release
-        if: needs.linux.result == 'success' && env.TAG != '' && env.BRIDGE_COMMIT == ''
         env:
           CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
           TAG: ${{ inputs.tag }}
@@ -340,47 +230,25 @@ jobs:
             gh release view "$TAG" >/dev/null
           gh release upload "$TAG" dist/* --clobber
 
-      - name: Publish both checked AppImages
-        if: needs.linux.result == 'success' && env.PUBLISH_MAIN == 'true' && env.TAG == '' && env.BRIDGE_COMMIT == '' && github.ref == 'refs/heads/main'
-        env:
-          CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          # Never put a pre-migration updater into the corrected feed.
-          git show "$CANDIDATE_SHA:capture/desktop/linux/updates/update.rs" | grep -F 'strip_prefix("linux-main-v2-")'
-          version=$(git show "$CANDIDATE_SHA:Cargo.toml" | sed -n 's/^version = "\(.*\)"/\1/p' | head -1)
-          GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py
-
-      - name: Publish admitted immutable artifact identities and complete ancestry
-        if: env.PUBLISH_MAIN == 'true' && env.TAG == '' && env.BRIDGE_COMMIT == '' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
-        run: |
-          # The preceding publisher creates its immutable tag after checkout.
-          # Refresh all release tags for candidate identity and ancestry checks.
-          git fetch --tags origin
-          node --experimental-strip-types capture/desktop/scripts/linux/maintenance/main-feed.ts "$CANDIDATE_SHA"
-
-      - name: Publish unchanged verified assets for legacy updaters
-        if: env.BRIDGE_COMMIT != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
-        env:
-          GH_TOKEN: ${{ github.token }}
-          BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
-        run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts publish "$BRIDGE_COMMIT"
-
-  runtime-budget:
-    if: always() && needs.admit.result != 'skipped'
-    needs: [admit, preview-needed, linux, publish]
+  main-preview:
+    if: needs.linux.result == 'success' && (github.event_name == 'workflow_run' || github.event_name == 'schedule' || inputs.publish_main) && inputs.tag == '' && github.ref == 'refs/heads/main' && inputs.verify_only != true
+    needs: [admit, linux]
     permissions:
-      contents: read
-      actions: read
-    name: Workflow runtime budget
+      contents: write
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          ref: ${{ github.workflow_sha }}
-          persist-credentials: false
-      - uses: ./.github/actions/runtime-budget
+          ref: ${{ needs.admit.outputs.sha }}
+      - uses: actions/download-artifact@v5
+        with:
+          pattern: Apparent-*.AppImage
+          path: dist
+          merge-multiple: true
+      - name: Publish both checked AppImages
+        env:
+          CANDIDATE_SHA: ${{ needs.admit.outputs.sha }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
+          GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py

@@ -146,25 +146,3 @@ and Mac before release.
 ## Capture history
 
 In **Open Latest Capture**, the review window shows Newer and Older buttons and a position in the capture history. It reads completed `.apparent` bundles from the configured captures directory in reverse creation order, skips cancelled or invalid manifests, and loads images for the selected capture only. The first and last entries have no button past the end. The review window's Copy and Show in Files act on the capture currently open, not the newest one.
-
-### Desktop ink across displays
-
-During a screen/area recording, Shift ink uses desktop coordinates without
-changing the selected source or portal consent. Linux uses one desktop-spanning
-input/ink window so Shift pointer ownership continues at display boundaries;
-macOS keeps a click-through Metal panel at each connected display's own scale.
-The picker still uses its original single-display overlay. Phone capture keeps
-its mirror overlay. Displays connected after recording starts are not yet
-reconciled on macOS.
-
-Live and committed desktop ink stay in runtime telemetry. Bundle strokes contain
-only segments clipped to the recording rectangle, split at off-target detours;
-wholly off-target strokes are omitted. Releasing Shift commits both views, and
-finish/reset clears desktop-only state. Undo removes the corresponding recorded
-segments together. This preserves the existing bundle coordinate contract.
-
-Routing remains through the installed Rust/native input and overlay adapters.
-The Electron foundation currently has no recording or live-ink bridge; this
-change does not switch its routing. An Electron replacement still requires the
-same Rust clipping policy and accepted Linux/macOS overlay/input proof before
-removing native surfaces. No Electron workflow acceptance is claimed here.

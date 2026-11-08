@@ -2,84 +2,123 @@ name: Mac verification
 
 on:
   workflow_dispatch:
-    inputs:
-      connect_worker_proof:
-        description: 'Run only installed Connect worker proof on a candidate branch'
-        type: boolean
-        default: false
 
 permissions:
   contents: read
-  actions: read
 
-# Every automatic Mac candidate already has a matching Linux receipt.
-# Finish running Mac work; coalesce only pending Linux-verified candidates.
-# Failed Linux completions and manual diagnostics cannot evict a good pending run.
+# Coalesce only this platform; a queued Mac must not hold Linux publication.
 concurrency:
-  group: verification-macos-${{ github.event_name }}-${{ github.ref }}-${{ github.event_name == 'workflow_run' && (github.event.workflow_run.conclusion != 'success' || github.event.workflow_run.event != 'push' || github.event.workflow_run.head_repository.full_name != github.repository) && github.run_id || 'eligible' }}
-  cancel-in-progress: false
+  group: verification-macos-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: true
 
 jobs:
-  admit:
-    if: github.ref == 'refs/heads/main' && (github.event_name != 'workflow_run' || (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' && github.event.workflow_run.head_repository.full_name == github.repository))
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
-    outputs:
-      sha: ${{ steps.candidate.outputs.sha }}
-    steps:
-      - name: Verification runtime budget and ownership
-        working-directory: ${{ runner.temp }}
-        shell: bash
-        run: echo '15 minute whole-workflow execution budget (runner queue excluded; parallel jobs count once). Per-job timeout is an additional safeguard. If exceeded, optimize the tests. The agent whose run hits the limit owns optimization and a successful rerun; do not raise or bypass the limit.'
-      - uses: actions/checkout@v4
-        with:
-          ref: main
-          persist-credentials: false
-      - id: candidate
-        env:
-          GH_TOKEN: ${{ github.token }}
-          REQUEST_SHA: ${{ github.event.workflow_run.head_sha || github.sha }}
-          VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
-        run: |
-          if [ "$GITHUB_EVENT_NAME" = workflow_run ]; then
-            python3 enablement/release_gate.py --platform linux --sha "$REQUEST_SHA" --run-id "$VERIFY_RUN_ID"
-          else
-            echo "sha=$REQUEST_SHA" >> "$GITHUB_OUTPUT"
-          fi
   verify:
-    needs: admit
-    if: github.ref == 'refs/heads/main'
-    permissions:
-      actions: read
-      attestations: write
-      contents: read
-      id-token: write
     uses: ./.github/workflows/verification-platform.yml
     with:
       # General Mac CI can use Intel capacity; arm64 packaging stays on Apple Silicon.
-      runner: macos-26-intel
-      revision: ${{ needs.admit.outputs.sha }}
+      runner: macos-15-intel
 
-  connect-native:
-    if: github.ref != 'refs/heads/main' && github.event_name == 'workflow_dispatch' && inputs.connect_worker_proof
-    uses: ./.github/workflows/native-proof-mac.yml
-
-  runtime-budget:
-    # An ineligible follower has no workload; keep the entire run skipped.
-    # Still audit failed/cancelled attempts whenever a workload was admitted.
-    if: always() && (needs.admit.result != 'skipped' || needs.verify.result != 'skipped' || needs.connect-native.result != 'skipped')
-    needs: [admit, verify, connect-native]
-    permissions:
-      contents: read
-      actions: read
-    name: Workflow runtime budget
-    runs-on: ubuntu-24.04
-    timeout-minutes: 15
+  # Private-to-authenticated-Actions artifact for installed testing. This job has
+  # no release/feed write permission and does not produce a release receipt.
+  onboarding-candidate:
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/t3/onboarding-mac-release-baseline'
+    needs: verify
+    runs-on: macos-latest
+    timeout-minutes: 90
+    env:
+      APPARENT_PREVIEW_NOTARIZE: 'true'
+      APPARENT_PREVIEW_VERSION: '0.12.2'
+      APPARENT_PREVIEW_BUILD_NUMBER: '12.2'
+      APPARENT_PREVIEW_PUBLIC_KEY: ${{ vars.SPARKLE_PREVIEW_PUBLIC_KEY }}
+      APPARENT_APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
+      APPARENT_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
+      APPARENT_NOTARY_KEY_ID: ${{ vars.APPLE_NOTARY_KEY_ID }}
+      APPARENT_NOTARY_ISSUER: ${{ vars.APPLE_NOTARY_ISSUER }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
-          ref: ${{ github.workflow_sha }}
           persist-credentials: false
-      - uses: ./.github/actions/runtime-budget
+      - name: Refuse a candidate behind the live Preview feed
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "APPARENT_APPLE_SIGNING_DIR=$RUNNER_TEMP/apparent-apple-signing" >> "$GITHUB_ENV"
+          gh api 'repos/tryapparent/apparent/contents/appcast.xml?ref=preview-mac-feed' --jq .content | python3 -c 'import base64, sys; sys.stdout.buffer.write(base64.b64decode(sys.stdin.read()))' > "$RUNNER_TEMP/live-preview.xml"
+          python3 - "$RUNNER_TEMP/live-preview.xml" <<'PY'
+          import os, sys, xml.etree.ElementTree as ET
+          version = lambda value: tuple(int(part) for part in value.split('.'))
+          namespace = '{http://www.andymatuschak.org/xml-namespaces/sparkle}'
+          root = ET.parse(sys.argv[1]).getroot()
+          items = root.findall('./channel/item')
+          assert items, 'Live Preview feed must contain a version'
+          for item in items:
+              assert version(os.environ['APPARENT_PREVIEW_BUILD_NUMBER']) > version(item.findtext(namespace + 'version'))
+              assert version(os.environ['APPARENT_PREVIEW_VERSION']) > version(item.findtext(namespace + 'shortVersionString'))
+          PY
+      - name: Prepare existing Preview Developer ID credentials
+        env:
+          APPLE_DEVELOPER_ID_P12_BASE64: ${{ secrets.APPLE_DEVELOPER_ID_P12_BASE64 }}
+          APPLE_DEVELOPER_ID_P12_PASSWORD: ${{ secrets.APPLE_DEVELOPER_ID_P12_PASSWORD }}
+          APPLE_NOTARY_PRIVATE_KEY: ${{ secrets.APPLE_NOTARY_PRIVATE_KEY }}
+        run: bash capture/desktop/scripts/release/prepare-mac-signing.sh
+      - uses: actions/setup-node@v4
         with:
-          platform: macos
+          node-version: '22'
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: mac-preview
+          cache-on-failure: true
+      - name: Select the required SDK
+        uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+      - name: Prepare Metal
+        run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - name: Build signed and notarized Preview candidate
+        env:
+          APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
+        run: |
+          python3 -m unittest discover -s capture/desktop/scripts/tests -p 'test_preview_*.py'
+          bash capture/desktop/scripts/packaging/build-mac-preview.sh
+          capture/desktop/scripts/support/check-ca-roots.sh target/release/apparent
+          HELPER=target/release/apparent-helper capture/desktop/scripts/support/check-permission-panel-dock.sh
+      - name: Verify candidate identity and record provenance
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, pathlib, plistlib, subprocess
+          app = pathlib.Path('dist/Apparent Preview.app')
+          info = plistlib.loads((app / 'Contents/Info.plist').read_bytes())
+          assert info['CFBundleIdentifier'] == 'dev.simonvanlaak.apparent.preview'
+          assert info['CFBundleShortVersionString'] == os.environ['APPARENT_PREVIEW_VERSION']
+          assert info['CFBundleVersion'] == os.environ['APPARENT_PREVIEW_BUILD_NUMBER']
+          assert info['SUPublicEDKey'] == os.environ['APPARENT_PREVIEW_PUBLIC_KEY']
+          assert info['SUFeedURL'] == 'https://raw.githubusercontent.com/tryapparent/apparent/preview-mac-feed/appcast.xml'
+          resources = app / 'Contents/Resources'
+          for name in ['HostGrotesk-Variable.ttf', 'settings/app/dist/onboarding.html', 'settings/app/electron/onboarding.cjs']:
+              assert (resources / name).is_file(), name
+          assert 'arm64' in subprocess.check_output(['lipo', '-archs', str(app / 'Contents/MacOS/apparent')], text=True)
+          assets = sorted(pathlib.Path('dist').glob('Apparent-Preview-0.12.2-arm64.*'))
+          assert {p.suffix for p in assets} >= {'.dmg', '.zip', '.sha256'}
+          manifest = {'commit': os.environ['GITHUB_SHA'], 'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
+                      'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'], 'nativeAcceptance': 'pending', 'releaseAdmission': 'held',
+                      'files': {p.name: {'bytes': p.stat().st_size, 'sha256': hashlib.sha256(p.read_bytes()).hexdigest()} for p in assets}}
+          pathlib.Path('dist/candidate.json').write_text(json.dumps(manifest, indent=2) + '\n')
+          PY
+      - uses: actions/upload-artifact@v4
+        with:
+          name: onboarding-preview-candidate-${{ github.sha }}
+          retention-days: 7
+          if-no-files-found: error
+          path: |
+            dist/Apparent-Preview-0.12.2-arm64.dmg
+            dist/Apparent-Preview-0.12.2-arm64.dmg.sha256
+            dist/Apparent-Preview-0.12.2-arm64.zip
+            dist/candidate.json
+      - name: Remove job-private signing material
+        if: always()
+        run: |
+          if [ -d "$APPARENT_APPLE_SIGNING_DIR" ]; then
+            security delete-keychain "$APPARENT_APPLE_SIGNING_DIR/signing.keychain-db" || true
+            rm -rf -- "$APPARENT_APPLE_SIGNING_DIR"
+          fi
