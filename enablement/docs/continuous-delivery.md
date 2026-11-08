@@ -211,8 +211,13 @@ must check their own longer HOME-derived socket paths. Keep hostile/sticky and
 symlink production tests enabled; a friendly preflight environment does not
 replace those assertions.
 
-The CI workflow has separate setup and focused Cargo steps before this verifier;
-those steps are not covered by this verifier entry-point guard. Feature pushes
+The platform workflow checks a private temporary root before its first Cargo
+command. Its Rust/native job also performs the locked frontend install, explicit
+Electron download/resolution and executable/input readiness check before compiling,
+with a five-minute setup deadline. Download archives are cached by OS, architecture
+and frontend lockfile; installed modules and test results are never restored.
+Cold downloads remain required on a cache miss. These prerequisites do not replace
+any Electron/Rust or native GUI assertion. Feature pushes
 and PR CI run its regression tests as part of the cheap contracts; they do not
 require a Rust test environment when no Rust suite is selected. Before any native
 allocation, inspect the exact candidate and real scenario entry point offline:
