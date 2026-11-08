@@ -25,5 +25,5 @@ Mac/Linux CPU variants, unknown/unsupported platforms, API failure, keyboard
 activation and reconnect coverage. It proves web routing, not native launch or
 native protocol-consent behavior. Evidence stays outside served content.
 
-Publication remains subject to the current review hold. Normal main-branch Pages
-CD and rollback are described in `pages-deploy.md`.
+Simon approved publishing the matching live design on 2026-11-08. Normal
+main-branch Pages verification, CD and rollback are described in `pages-deploy.md`.
