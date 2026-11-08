@@ -365,6 +365,15 @@ during such an outage. Public command steps, including verification and sealing,
 must succeed in the owning verify job; tolerated failures are rejected.
 
 
+The disposable Mac Storage fixture waits for real Storage/Retention read receipts
+before its single Change click. Its TypeScript CI driver separates the owned
+Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
+operation. The initial picker and nested Go sheet are distinct readiness phases;
+no mutation, keyboard shortcut or preference write is retried. Existing exact
+PID/window/sheet/control checks, Choose/Cancel/Reset assertions, native consent,
+process cleanup and test deadlines remain required. This is test orchestration,
+not a change to installed Desktop routing or application persistence policy.
+
 ## Reporter API budgets and recovery
 
 The trusted reporter uses the workflow's Actions credential throughout; another
