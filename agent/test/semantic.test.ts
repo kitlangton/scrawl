@@ -43,13 +43,28 @@ test('video-only telemetry reports unavailable interactions without inventing ca
     const cli=new URL('../dist/cli.js',import.meta.url).pathname;
     const run=()=>spawnSync(process.execPath,[cli,'inspect',bundle],{encoding:'utf8',env:{...process.env,HOME:root,PATH:''}});
     const result=run();assert.equal(result.status,0,result.stderr);
-    assert.match(result.stdout,/Interaction context: video only; clicks and Shift ink were not collected\./);
+    assert.match(result.stdout,/Interaction context: click telemetry was not collected\./);
     assert.match(result.stdout,/will not appear in events, marks or click keyframes/);
     assert.doesNotMatch(result.stdout,/timed CLI|recording shortcut/);
     assert.equal(await (await import('node:fs/promises')).readFile(join(bundle,'apparent.json'),'utf8'),manifest);
     await writeFile(join(bundle,'apparent.json'),JSON.stringify({...fixture,interactionTelemetry:undefined}));
-    assert.doesNotMatch(run().stdout,/Interaction context: video only/);
+    assert.doesNotMatch(run().stdout,/Interaction context: click telemetry/);
   } finally {await rm(root,{recursive:true,force:true});}
+});
+
+test('unavailable click telemetry does not establish absent ink or accepted-history state',()=>{
+  const strokes=[
+    {t0:40,t1:80,fw:16,fh:16,pts:[1000,2000,0,3000,4000,40],rgb:[15,127,240]},
+    {t0:100,t1:130,fw:16,fh:16,pts:[5000,5000,0,7000,6000,30]},
+  ];
+  for(const annotations of [strokes,[]]) {
+    const bundle={...fixture,strokes:annotations,interactionTelemetry:'videoOnly'};
+    const before=JSON.stringify(bundle);
+    const text=semanticSummary(bundle,'/synthetic');
+    assert.match(text,/click telemetry was not collected/);
+    assert.doesNotMatch(text,/Shift ink were not collected|ink was not collected|Accepted strokes:/);
+    assert.equal(JSON.stringify(bundle),before);
+  }
 });
 
 test('config agentContext is read-only, defaults off, and explicit experiment enables it',async()=>{
