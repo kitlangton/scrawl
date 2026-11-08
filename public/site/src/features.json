@@ -944,12 +944,12 @@
       "id": "smart-routing",
       "group": "delivery",
       "name": "Legacy smart routing (disabled)",
-      "says": "The old routing settings remain readable; the smartRouting experiment no longer sends captures.",
+      "says": "Legacy routing configuration is preserved; the retired smart-routing implementation has been removed.",
       "status": "main",
       "platforms": ["mac"],
       "added": "2026-10-19",
       "config": [{ "key": "routing", "value": "{\"apps\": {…}, \"servers\": {…}}", "does": "Ignored by capture delivery" }],
-      "docs": ["shared/docs/routing.md"]
+      "docs": ["capture/engine/docs/iphone-and-routing.md"]
     },
     {
       "id": "delivery-retries",

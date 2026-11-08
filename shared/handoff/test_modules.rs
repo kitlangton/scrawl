@@ -562,6 +562,29 @@ mod tests {
     }
 
     #[test]
+    fn legacy_capture_destination_remains_readable_in_metadata_and_summary() {
+        let fixture = Fixture::new();
+        let directory = fixture.0.join("legacy.apparent");
+        fs::create_dir_all(&directory).unwrap();
+        let dir = &directory;
+        let bundle = serde_json::json!({
+            "version": 1, "id": "legacy", "createdAtMs": 0, "durationMs": 1_000,
+            "target": {"mode": "display", "displayId": 1,
+                "frame": {"x": 0.0, "y": 0.0, "width": 10.0, "height": 10.0, "scale": 1.0}},
+            "transcript": {"source": "none", "text": "", "segments": []},
+            "strokes": [], "marks": [], "events": [], "keyframes": [], "contactSheet": "c.png",
+            "destination": {"session": "ses_app", "title": "APP", "via": "localhost",
+                "url": "http://localhost:4321/"}
+        });
+        fs::write(dir.join("apparent.json"), serde_json::to_vec(&bundle).unwrap()).unwrap();
+        assert_eq!(recorded_destination(dir).as_deref(), Some("ses_app"));
+        let (_, loaded) = load_bundle(dir).unwrap();
+        let summary = crate::capture::engine::sketch::summary_markdown(&loaded, dir);
+        assert!(summary.contains("For session: APP (ses_app) · page http://localhost:4321/"), "{summary}");
+        assert_eq!(loaded.destination.unwrap().via, "localhost");
+    }
+
+    #[test]
     fn recordings_go_to_their_addressed_session_not_the_viewed_one() {
         let dir = std::env::temp_dir().join(format!("apparent-dest-{}", crate::shared::ids::make_bundle_id()));
         fs::create_dir_all(&dir).unwrap();
