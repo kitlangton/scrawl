@@ -119,6 +119,21 @@ inspection. The runner supplies `SCRAWL_GUI_BINARY`, `SCRAWL_GUI_OUTPUT`, option
 stimulus and the candidate library path to a single Bash-invoked scenario.
 Successful transport is not product acceptance.
 
+`--retain-cold-state` explicitly opts one job into preserving its cold
+`disk.qcow2` and matching final `OVMF_VARS.fd`. Default verified-success deletion
+is unchanged. Normal cleanup and the copied expiry sibling share the same
+private job-bound request and metadata-only FD ownership check; unknown access,
+open owners or unsafe resources produce no positive cold receipt. QEMU still
+stops, sockets are removed and normal cleanup stops the expiry timer. Failure or
+expiry remains failure; retained state does not convert it into success.
+`cold-state-{runner,expiry}.json` records owned cold file identities and artifact
+retention status, not native acceptance, image hashes or standalone equivalence.
+An A→B handoff must separately seal the actual cold pair under its bounded
+offline admission, convert a backed overlay through the supported standalone
+route with fsync/sector comparison, preserve its originals and freshly qualify
+B's persisted device/inode/publication bindings. Never use a partial profile
+snapshot, a live copy or a deliberately failed scenario as the preservation path.
+
 Retention remains fail closed: only a successful trusted scenario plus matching
 copied-file manifests permits disk deletion. Failed/interrupted runs retain cold
 disk/firmware; a matching live copy is only a partial snapshot. Keep private

@@ -24,8 +24,8 @@ runner = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(runner)
 REAPER = MODULE.with_name("gui-vm-reaper.py")
 
-def load_reaper():
-    spec = importlib.util.spec_from_file_location("gui_vm_reaper", REAPER)
+def load_reaper(path=REAPER):
+    spec = importlib.util.spec_from_file_location("gui_vm_reaper", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -208,10 +208,286 @@ class GuestIsolationTests(unittest.TestCase):
                 runner.make_overlay(nested, directory / "job.qcow2")
 
 
+class ColdRetentionTests(unittest.TestCase):
+    def prepare(self, directory, verified=True):
+        module = load_reaper()
+        directory.chmod(0o700)
+        for name in ('disk.qcow2', 'OVMF_VARS.fd'):
+            (directory / name).write_bytes(b'owned synthetic resource')
+            (directory / name).chmod(0o600)
+        module.request_cold_retention(directory)
+        if verified:
+            (directory / 'artifacts-retained').write_text(module.ARTIFACTS_RETAINED)
+            (directory / 'artifacts-retained').chmod(0o600)
+        return module
+
+    def test_actual_fd_guard_detects_own_open_firmware_and_renamed_resource_without_argv_matching(self):
+        module = load_reaper()
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            proc = root / 'proc'
+            proc.mkdir()
+            (proc / str(os.getpid())).symlink_to(Path('/proc') / str(os.getpid()), target_is_directory=True)
+            firmware = root / 'OVMF_VARS.fd'
+            firmware.write_bytes(b'tiny synthetic firmware')
+            firmware.chmod(0o600)
+            resources = {'OVMF_VARS.fd': module.resource_metadata(firmware)}
+            self.assertEqual(module.open_resource_owners(resources, proc), [])
+            with firmware.open('rb'):
+                self.assertEqual(module.open_resource_owners(resources, proc), [os.getpid()])
+                firmware.rename(root / 'renamed-OVMF.fd')
+                self.assertEqual(module.open_resource_owners(resources, proc), [os.getpid()])
+            self.assertEqual(module.open_resource_owners(resources, proc), [])
+
+    def test_fd_guard_unknown_access_or_uid_or_deadline_never_means_no_owner(self):
+        module = load_reaper()
+        with tempfile.TemporaryDirectory() as root:
+            proc = Path(root)
+            process = proc / '123'
+            process.mkdir()
+            (process / 'fd').mkdir()
+            (process / 'status').write_text('Uid:\t' + '\t'.join([str(os.getuid())] * 4) + '\n')
+            real_iterdir = Path.iterdir
+
+            def denied(path):
+                if path == process / 'fd':
+                    raise PermissionError('synthetic non-dumpable owner')
+                return real_iterdir(path)
+
+            with patch.object(Path, 'iterdir', denied):
+                with self.assertRaisesRegex(RuntimeError, 'access is unknown'):
+                    module.open_resource_owners({}, proc)
+            (process / 'status').write_text('unqualified status')
+            with self.assertRaisesRegex(RuntimeError, 'incomplete'):
+                module.open_resource_owners({}, proc)
+            with self.assertRaises(TimeoutError):
+                module.open_resource_owners({}, proc, seconds=0)
+
+    def test_fd_guard_rejects_late_final_read_instead_of_reporting_absence(self):
+        module = load_reaper()
+        with tempfile.TemporaryDirectory() as root:
+            process = Path(root) / '123'
+            (process / 'fd').mkdir(parents=True)
+            (process / 'status').write_text('Uid:\t' + '\t'.join([str(os.getuid())] * 4) + '\n')
+            with patch.object(module.time, 'monotonic', side_effect=[0, 0, 3]):
+                with self.assertRaises(TimeoutError):
+                    module.open_resource_owners({}, Path(root), seconds=2)
+
+    def test_opt_in_expiry_keeps_owned_pair_but_always_records_expiry_failure(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            module = self.prepare(directory)
+            with patch.object(module, 'open_resource_owners', return_value=[]):
+                module.expire(directory)
+            self.assertTrue((directory / 'disk.qcow2').exists())
+            self.assertTrue((directory / 'OVMF_VARS.fd').exists())
+            self.assertEqual(json.loads((directory / 'cold-state-expiry.json').read_text())['artifact_retention'], 'verified')
+            status = json.loads((directory / 'result.json').read_text())
+            self.assertEqual(status['exit_code'], 1)
+            self.assertEqual(status['driver'], 'failed')
+            self.assertEqual(status['cleanup']['status'], 'complete')
+            self.assertEqual(status['cleanup']['disk'], 'retained_cold')
+
+    def test_actual_expire_drains_owned_qemu_before_refusing_retention_including_copied_sibling(self):
+        for copied in (False, True):
+            for mode in ('malformed', 'wrong-job', 'unsafe-firmware'):
+                with self.subTest(copied=copied, mode=mode), tempfile.TemporaryDirectory() as root:
+                    directory = Path(root)
+                    module = self.prepare(directory)
+                    if copied:
+                        with patch.object(runner, 'execute'):
+                            runner.arm_expiry(directory, 45)
+                        self.assertEqual((directory / 'reaper.py').read_bytes(), REAPER.read_bytes())
+                        module = load_reaper(directory / 'reaper.py')
+                    if mode == 'malformed':
+                        (directory / module.COLD_REQUEST).write_text('{')
+                    elif mode == 'wrong-job':
+                        value = json.loads((directory / module.COLD_REQUEST).read_text())
+                        value['inode'] += 1
+                        (directory / module.COLD_REQUEST).write_text(json.dumps(value))
+                    else:
+                        (directory / 'OVMF_VARS.fd').chmod(0o666)
+                    primary = {'stage': 'scenario', 'message': 'original retained failure'}
+                    (directory / 'result.json').write_text(json.dumps({'primary_failure': primary}))
+                    live = [321]
+                    def owned_users(disk):
+                        self.assertEqual(disk, directory / 'disk.qcow2')
+                        return list(live)
+                    def stop_owned(pid, disk, signum):
+                        self.assertEqual((pid, disk, signum), (321, directory / 'disk.qcow2', signal.SIGTERM))
+                        live.clear()
+                    with patch.object(module, 'qemu_users', side_effect=owned_users) as users, \
+                         patch.object(module, 'signal_owner', side_effect=stop_owned) as stop, \
+                         patch.object(module, 'open_resource_owners', return_value=[]):
+                        with self.assertRaises((RuntimeError, OSError)):
+                            module.expire(directory)
+                    self.assertGreaterEqual(users.call_count, 3)
+                    stop.assert_called_once()
+                    self.assertEqual(live, [])
+                    self.assertTrue((directory / 'disk.qcow2').exists())
+                    self.assertTrue((directory / 'OVMF_VARS.fd').exists())
+                    self.assertFalse((directory / 'cold-state-expiry.json').exists())
+                    status = json.loads((directory / 'result.json').read_text())
+                    self.assertEqual(status['primary_failure'], primary)
+                    self.assertEqual(status['driver'], 'failed')
+                    self.assertEqual(status['exit_code'], 1)
+                    self.assertEqual(status['cleanup']['status'], 'failed')
+                    self.assertEqual(status['cleanup']['disk'], 'retained_unverified')
+
+    def test_pidfd_authority_still_refuses_foreign_uid_and_reused_drive_identity(self):
+        module = load_reaper()
+        read_fd, write_fd = os.pipe()
+        try:
+            for foreign in (False, True):
+                with self.subTest(foreign=foreign), \
+                     patch.object(module.os, 'pidfd_open', side_effect=lambda pid: os.dup(read_fd)), \
+                     patch.object(Path, 'stat', return_value=SimpleNamespace(st_uid=os.getuid() + int(foreign))), \
+                     patch.object(module, 'qemu_users', return_value=[]) as users, \
+                     patch.object(module.signal, 'pidfd_send_signal') as send:
+                    if foreign:
+                        with self.assertRaisesRegex(RuntimeError, 'foreign QEMU'):
+                            module.signal_owner(321, Path('/owned/disk.qcow2'), signal.SIGTERM)
+                        users.assert_not_called()
+                    else:
+                        module.signal_owner(321, Path('/owned/disk.qcow2'), signal.SIGTERM)
+                        users.assert_called_once()
+                    send.assert_not_called()
+        finally:
+            os.close(read_fd)
+            os.close(write_fd)
+
+    def test_initially_missing_drive_never_grants_signal_authority_in_canonical_or_copied_expire(self):
+        for copied in (False, True):
+            for malformed in (False, True):
+                with self.subTest(copied=copied, malformed=malformed), tempfile.TemporaryDirectory() as root:
+                    directory = Path(root)
+                    module = self.prepare(directory)
+                    if copied:
+                        with patch.object(runner, 'execute'):
+                            runner.arm_expiry(directory, 45)
+                        module = load_reaper(directory / 'reaper.py')
+                    (directory / 'disk.qcow2').unlink()
+                    request = directory / module.COLD_REQUEST
+                    if malformed:
+                        request.write_text('{')
+                    original = request.read_bytes()
+                    with patch.object(module, 'qemu_users', return_value=[321]) as users, \
+                         patch.object(module, 'signal_owner') as send:
+                        with self.assertRaises((RuntimeError, OSError)):
+                            module.expire(directory)
+                    users.assert_not_called()
+                    send.assert_not_called()
+                    self.assertEqual(request.read_bytes(), original)
+                    self.assertEqual((directory / 'OVMF_VARS.fd').read_bytes(), b'owned synthetic resource')
+                    self.assertFalse((directory / 'cold-state-expiry.json').exists())
+                    status = json.loads((directory / 'result.json').read_text())
+                    self.assertEqual(status['driver'], 'failed')
+                    self.assertEqual(status['exit_code'], 1)
+                    self.assertEqual(status['cleanup']['status'], 'failed')
+
+    def test_uncertain_drive_authority_is_not_permission_to_signal(self):
+        for mode in ('symlink', 'hardlink', 'foreign'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as root:
+                directory = Path(root)
+                module = self.prepare(directory)
+                disk = directory / 'disk.qcow2'
+                outside = directory / 'outside'
+                outside.write_bytes(b'untouched synthetic outside')
+                if mode in ('symlink', 'hardlink'):
+                    disk.unlink()
+                    if mode == 'symlink':
+                        disk.symlink_to(outside)
+                    else:
+                        os.link(outside, disk)
+                real_lstat = Path.lstat
+                def foreign(path, *args, **kwargs):
+                    meta = real_lstat(path, *args, **kwargs)
+                    return SimpleNamespace(st_mode=meta.st_mode, st_uid=os.getuid()+1, st_nlink=1) if path == disk else meta
+                with (patch.object(Path, 'lstat', foreign) if mode == 'foreign' else contextlib.nullcontext()), \
+                     patch.object(module, 'qemu_users') as users, patch.object(module, 'signal_owner') as send:
+                    with self.assertRaisesRegex(RuntimeError, 'ownership is unknown'):
+                        module.expire(directory)
+                users.assert_not_called()
+                send.assert_not_called()
+                self.assertEqual(outside.read_bytes(), b'untouched synthetic outside')
+                self.assertFalse((directory / 'cold-state-expiry.json').exists())
+
+    def test_expiry_stops_exact_owned_qemu_before_cold_retention_and_keeps_unverified_state_unqualified(self):
+        with tempfile.TemporaryDirectory() as root:
+            directory = Path(root)
+            module = self.prepare(directory, verified=False)
+            with patch.object(module, 'qemu_users', side_effect=[[321], [], [], []]), \
+                 patch.object(module, 'signal_owner') as signal_owned, \
+                 patch.object(module, 'open_resource_owners', return_value=[]):
+                module.reap(directory)
+            signal_owned.assert_called_once_with(321, directory / 'disk.qcow2', signal.SIGTERM)
+            self.assertEqual(json.loads((directory / 'cold-state-expiry.json').read_text())['artifact_retention'], 'unverified')
+            self.assertFalse((directory / 'artifacts-retained').exists())
+
+    def test_unsafe_policy_resource_and_artifact_records_preserve_files_without_positive_receipt(self):
+        for mode in ('request-symlink', 'request-wrong-job', 'resource-symlink', 'resource-hardlink', 'resource-writable', 'marker-symlink', 'marker-corrupt'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as root:
+                directory = Path(root)
+                module = self.prepare(directory)
+                outside = directory / 'untouched'
+                outside.write_bytes(b'foreign synthetic evidence')
+                request = directory / module.COLD_REQUEST
+                disk = directory / 'disk.qcow2'
+                marker = directory / 'artifacts-retained'
+                if mode == 'request-symlink':
+                    request.unlink()
+                    request.symlink_to(outside)
+                elif mode == 'request-wrong-job':
+                    request.write_text('{}')
+                elif mode == 'resource-symlink':
+                    disk.unlink()
+                    disk.symlink_to(outside)
+                elif mode == 'resource-hardlink':
+                    disk.unlink()
+                    os.link(outside, disk)
+                elif mode == 'resource-writable':
+                    disk.chmod(0o666)
+                elif mode == 'marker-symlink':
+                    marker.unlink()
+                    marker.symlink_to(outside)
+                elif mode == 'marker-corrupt':
+                    marker.write_text('not verified artifact retention')
+                with patch.object(module, 'open_resource_owners', return_value=[]):
+                    with self.assertRaises((RuntimeError, OSError)):
+                        module.reap(directory)
+                self.assertEqual(outside.read_bytes(), b'foreign synthetic evidence')
+                self.assertTrue(os.path.lexists(disk))
+                self.assertTrue((directory / 'OVMF_VARS.fd').exists())
+                self.assertFalse((directory / 'cold-state-expiry.json').exists())
+
+    def test_open_fd_owner_and_incomplete_pair_and_foreign_owner_refuse_positive_receipt(self):
+        for mode in ('open', 'missing-firmware', 'foreign'):
+            with self.subTest(mode=mode), tempfile.TemporaryDirectory() as root:
+                directory = Path(root)
+                module = self.prepare(directory)
+                if mode == 'missing-firmware':
+                    (directory / 'OVMF_VARS.fd').unlink()
+                real_lstat = Path.lstat
+
+                def foreign(path, *args, **kwargs):
+                    meta = real_lstat(path, *args, **kwargs)
+                    if path == directory / 'disk.qcow2':
+                        return SimpleNamespace(st_mode=meta.st_mode, st_uid=os.getuid() + 1, st_nlink=1)
+                    return meta
+
+                with patch.object(module, 'open_resource_owners', return_value=[123] if mode == 'open' else []), \
+                     (patch.object(Path, 'lstat', foreign) if mode == 'foreign' else contextlib.nullcontext()):
+                    with self.assertRaises((RuntimeError, OSError)):
+                        module.retain_cold_resources(directory, 'runner')
+                self.assertTrue((directory / 'disk.qcow2').exists())
+                self.assertFalse((directory / 'cold-state-runner.json').exists())
+
+
 class RunnerFailureTests(unittest.TestCase):
     """Real owned child/streams and disk cleanup; VM/SSH/systemd are inert adapters."""
 
-    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False):
+    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False,
+                 retain_cold=False, resource_owners=()):
         root = Path(root)
         binary = root / 'candidate'
         binary.write_bytes(b'synthetic candidate')
@@ -276,6 +552,8 @@ elif operation == 'cleanup':
         options = ['gui-vm.py', '--template', str(root / 'template'), '--ovmf-vars', str(root / 'vars'),
                    '--ssh-key', str(root / 'key'), '--ssh-user', 'fixture', '--scenario', str(root / 'scenario'),
                    '--binary', str(binary), '--results', str(results), '--scenario-timeout', '1']
+        if retain_cold:
+            options.append('--retain-cold-state')
         owned_processes = []
         real_popen = runner.subprocess.Popen
 
@@ -301,6 +579,7 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
                  patch.object(runner, 'wait_for_desktop'), \
                  patch.object(runner, 'ssh_prefix', return_value=[sys.executable, str(transport), str(root), 'ssh', str(scenario_exit)]), \
                  patch.object(runner, 'execute', side_effect=transport_execute), \
+                 patch.object(runner.cold_retention, 'open_resource_owners', return_value=list(resource_owners)), \
                  patch.object(runner.subprocess, 'Popen', side_effect=track_process), contextlib.redirect_stdout(io.StringIO()):
                 code = runner.main()
         finally:
@@ -372,6 +651,47 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
             self.assertNotEqual(code, 0)
             self.assertIn('manifest mismatch', status['primary_failure']['message'])
             self.assertTrue((results / 'disk.qcow2').exists())
+
+    def test_opt_in_success_preserves_whole_cold_disk_and_final_firmware_without_live_resources(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, status, results = self.exercise(root, scenario_exit=0, retain_cold=True)
+            self.assertEqual(code, 0)
+            self.assertEqual(status['artifact_retention'], 'verified')
+            self.assertEqual(status['cleanup']['status'], 'complete')
+            self.assertEqual(status['cleanup']['expiry'], 'stopped')
+            self.assertEqual(status['cleanup']['disk'], 'retained_cold')
+            self.assertEqual((results / 'disk.qcow2').read_bytes(), b'owned synthetic disk')
+            self.assertEqual((results / 'OVMF_VARS.fd').read_text(), 'synthetic input')
+            receipt = json.loads((results / 'cold-state-runner.json').read_text())
+            self.assertEqual(receipt['artifact_retention'], 'verified')
+            self.assertEqual(receipt['owners'], [])
+            self.assertEqual(receipt['resources']['OVMF_VARS.fd']['ino'], (results / 'OVMF_VARS.fd').stat().st_ino)
+            reaper = load_reaper()
+            with patch.object(reaper, 'open_resource_owners', return_value=[]):
+                reaper.reap(results)
+            self.assertTrue((results / 'disk.qcow2').exists())
+            self.assertTrue((results / 'OVMF_VARS.fd').exists())
+            self.assertEqual(json.loads((results / 'cold-state-expiry.json').read_text())['artifact_retention'], 'verified')
+
+    def test_opt_in_failure_keeps_unqualified_cold_state_not_fake_success(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, status, results = self.exercise(root, retain_cold=True)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(status['scenario_exit'], 7)
+            receipt = json.loads((results / 'cold-state-runner.json').read_text())
+            self.assertEqual(receipt['artifact_retention'], 'unverified')
+            self.assertFalse((results / 'artifacts-retained').exists())
+            self.assertTrue((results / 'OVMF_VARS.fd').exists())
+
+    def test_opt_in_open_resource_owner_refuses_positive_cold_receipt(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, status, results = self.exercise(root, scenario_exit=0, retain_cold=True, resource_owners=[123])
+            self.assertNotEqual(code, 0)
+            self.assertEqual(status['cleanup']['status'], 'failed')
+            self.assertEqual(status['cleanup']['disk'], 'retained_unverified')
+            self.assertFalse((results / 'cold-state-runner.json').exists())
+            self.assertTrue((results / 'disk.qcow2').exists())
+            self.assertTrue((results / 'OVMF_VARS.fd').exists())
 
     def test_failed_or_unknown_remote_exit_keeps_disk_despite_matching_partial_snapshot(self):
         for remote_exit in ('timeout', 255, 7):

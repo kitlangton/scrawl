@@ -10,6 +10,7 @@ import contextlib
 import fcntl
 import json
 import hashlib
+import importlib.util
 import os
 from pathlib import Path
 import re
@@ -21,6 +22,11 @@ import subprocess
 import sys
 import time
 import uuid
+
+# One shared policy/ownership implementation for normal cleanup and expiry.
+_cold_spec = importlib.util.spec_from_file_location('gui_vm_cold_retention', Path(__file__).with_name('gui-vm-reaper.py'))
+cold_retention = importlib.util.module_from_spec(_cold_spec)
+_cold_spec.loader.exec_module(cold_retention)
 
 
 def execute(command, timeout: float = 30, check=True, **kwargs):
@@ -265,6 +271,8 @@ def main():
     parser.add_argument("--results", type=Path, required=True, help="new directory; retained after the run")
     parser.add_argument("--memory", type=int, default=3072, help="guest MiB (default: 3072)")
     parser.add_argument("--isolated-network", action="store_true", help="deny guest outbound networking; preserve loopback SSH forwarding")
+    parser.add_argument("--retain-cold-state", action="store_true",
+                        help="opt in per job to retaining owned cold disk + final OVMF; never retain a live guest")
     parser.add_argument("--boot-timeout", type=int, default=180)
     parser.add_argument("--scenario-timeout", type=int, default=300)
     parser.add_argument("--job-timeout", type=int, default=900,
@@ -306,6 +314,8 @@ def main():
 
     try:
         write_result(directory, status)
+        if args.retain_cold_state:
+            cold_retention.request_cold_retention(directory)
         validate_socket_paths(directory)
         for path in (args.template, args.ovmf_vars, args.ssh_key, args.scenario, args.binary, args.audio_file, *args.fixture_file):
             if path is not None and not path.is_file():
@@ -320,6 +330,10 @@ def main():
         stage('overlay')
         overlay = directory / "disk.qcow2"
         make_overlay(args.template, overlay)
+        if args.retain_cold_state:
+            # qemu-img inherits the caller's umask; retained resources must
+            # remain private even when that umask permits group writes.
+            overlay.chmod(0o600)
         vars_copy = directory / "OVMF_VARS.fd"
         copy_firmware(args.ovmf_vars, vars_copy)
         port = available_port()
@@ -422,7 +436,9 @@ def main():
                     raise RuntimeError('artifact transfer hash manifest mismatch; keeping cold job disk')
                 if scenario_completed:
                     status['artifact_retention'] = 'verified'
-                    (directory / 'artifacts-retained').write_text('remote exit observed; sha256 manifest verified\n')
+                    (directory / 'artifacts-retained').write_text(cold_retention.ARTIFACTS_RETAINED)
+                    if args.retain_cold_state:
+                        (directory / 'artifacts-retained').chmod(0o600)
                 else:
                     # Matching hashes prove only this snapshot, not that a
                     # remote writer cannot produce more evidence after it.
@@ -454,7 +470,16 @@ def main():
                 status['cleanup']['disk'] = 'retained_live'
                 raise RuntimeError('QEMU still owns job disk; expiry remains armed')
             status['cleanup']['disk'] = 'retained_cold'
-            if status['artifact_retention'] == 'verified' or process is None:
+            if cold_retention.cold_retention_requested(directory):
+                status['cleanup']['disk'] = 'retained_unverified'
+                receipt = cold_retention.retain_cold_resources(directory, 'runner')
+                if receipt:
+                    status['cleanup']['disk'] = 'retained_cold'
+                    status['cleanup']['cold_retention'] = receipt['artifact_retention']
+                    status['cleanup']['cold_receipt'] = 'cold-state-runner.json'
+                else:
+                    status['cleanup']['disk'] = 'removed'
+            elif status['artifact_retention'] == 'verified' or process is None:
                 for filename in ('disk.qcow2', 'OVMF_VARS.fd'):
                     (directory / filename).unlink(missing_ok=True)
                 status['cleanup']['disk'] = 'removed'
