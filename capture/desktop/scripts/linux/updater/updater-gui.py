@@ -197,12 +197,18 @@ class Evidence:
     def perform(self, request):
         start = time.monotonic() - self.clock
         op = request['op']
-        if op in ('click', 'assert'):
+        if op in ('click', 'assert', 'click-point'):
             path, (x, y) = self.locate(request['text'], request.get('timeout', 20))
-            if op == 'click':
+            if op in ('click', 'click-point'):
                 from PIL import Image
                 with Image.open(path) as image:
                     width, height = image.size
+                if op == 'click-point':
+                    if request['viewport'] != [width, height]:
+                        raise ValueError('portal consent fixture requires its observed viewport')
+                    x, y = request['point']
+                    if not (0 <= x < width and 0 <= y < height):
+                        raise ValueError('portal consent point is outside the observed frame')
                 qmp(self.socket, 'input-send-event', {'events': [
                     {'type': 'abs', 'data': {'axis': 'x', 'value': round(x * 32767 / (width - 1))}},
                     {'type': 'abs', 'data': {'axis': 'y', 'value': round(y * 32767 / (height - 1))}}]})

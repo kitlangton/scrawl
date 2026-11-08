@@ -3,7 +3,6 @@
 import importlib.util
 from pathlib import Path
 import hashlib
-from io import StringIO
 import unittest
 import json
 import re
@@ -26,6 +25,33 @@ def load(name):
 class LocatorTests(unittest.TestCase):
     def setUp(self):
         self.gui = load('updater-gui')
+
+    def test_portal_points_require_the_observed_viewport_and_stay_inside_it(self):
+        from PIL import Image
+        for viewport, point, accepted in [([1280, 800], [640, 420], True),
+                                          ([1920, 1080], [640, 420], False),
+                                          ([1280, 800], [-1, 420], False),
+                                          ([1280, 800], [1280, 420], False)]:
+            with self.subTest(viewport=viewport, point=point), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                frame = root / 'portal.png'
+                Image.new('RGB', (1280, 800)).save(frame)
+                evidence = self.gui.Evidence(root)
+                request = {'op': 'click-point', 'text': 'Outputs Region', 'label': 'consent',
+                           'viewport': viewport, 'point': point}
+                with patch.object(evidence, 'locate', return_value=(frame, (335, 193))) as locate, \
+                     patch.object(evidence, 'frame', return_value=frame), \
+                     patch.object(self.gui, 'qmp') as pointer, patch.object(self.gui.time, 'sleep'):
+                    if accepted:
+                        evidence.perform(request)
+                        events = pointer.call_args_list[0].args[2]['events']
+                        self.assertEqual(events[0]['data']['value'], round(640 * 32767 / 1279))
+                        self.assertEqual(events[1]['data']['value'], round(420 * 32767 / 799))
+                        locate.assert_called_once_with('Outputs Region', 20)
+                    else:
+                        with self.assertRaises(ValueError):
+                            evidence.perform(request)
+                        pointer.assert_not_called()
 
     def test_phrase_uses_visible_word_bounds(self):
         words = [{'text': t, 'left': x, 'top': 10, 'width': w, 'height': 12,
@@ -89,32 +115,12 @@ class LocatorTests(unittest.TestCase):
 
 
 class CandidateTests(unittest.TestCase):
-    def test_busy_capture_focus_selects_only_the_acknowledged_settings_window(self):
-        scenario = Path(__file__).with_name('updater-gui-scenario.sh').read_text()
-        source = scenario.split('cat > "$out/select-settings.py" <<\'PY\'\n', 1)[1].split('\nPY', 1)[0]
-        selector = compile(source, 'scenario-settings-selector', 'exec')
-        owned = {'pid': 123, 'title': 'apparent Settings', 'address': '0xabc'}
-        for windows, accepted in [([owned], True), ([], False), ([dict(owned, pid=456)], False),
-                                  ([dict(owned, title='Screen share')], False), ([owned, owned], False),
-                                  ([dict(owned, address='unsafe; command')], False)]:
-            with self.subTest(windows=windows), patch.object(sys, 'argv', ['selector', '123']), \
-                 patch.object(sys, 'stdin', StringIO(json.dumps(windows))), \
-                 patch.object(sys, 'stdout', new_callable=StringIO) as output:
-                if accepted:
-                    exec(selector, {})
-                    self.assertEqual(output.getvalue(), '0xabc\n')
-                else:
-                    with self.assertRaises(AssertionError):
-                        exec(selector, {})
-
     def test_capture_restart_click_requires_ack_and_bounds_focus_retries(self):
         scenario = Path(__file__).with_name('updater-gui-scenario.sh').read_text()
         function = scenario.split('  click_update_guard() {\n', 1)[1].split('\n  }\n', 1)[0]
         for acknowledged_at, expected_clicks, success in [(1, 1, True), (2, 2, True), (99, 3, False)]:
             with self.subTest(acknowledged_at=acknowledged_at), tempfile.TemporaryDirectory() as temporary:
-                script = '''out=$1; acknowledged_at=$2; clicks=0; baseline_pid=123
-hyprctl() { :; }
-python3() { echo 0xabc; }
+                script = '''out=$1; acknowledged_at=$2; clicks=0
 ui() {
     clicks=$((clicks+1))
     if [ "$clicks" -eq "$acknowledged_at" ]; then

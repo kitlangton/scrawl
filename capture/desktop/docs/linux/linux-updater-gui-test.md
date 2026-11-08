@@ -125,7 +125,9 @@ two total image downloads: the rejected checksum and successful stage. Restart
 must report the synthetic Main ID with pending restart cleared.
 
 Immediately before restart, Main also starts an owned capture through
-`capture start --request-id <32hex>` without waiting for portal consent. It
+`capture start --request-id <32hex>`. It selects the sole 1280×800 disposable
+output through the stock portal UI, using the visible Outputs/Region tabs as an
+OCR anchor and viewport-checked pointer coordinates. It
 retains the request ID, start receipt, exact-ID inspection and global state in
 `capture-guard-*`/`capture-start.*` artifacts. Starting or recording is accepted
 only with an error-free receipt for that request and the same active capture ID.
