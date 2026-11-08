@@ -145,7 +145,7 @@ In a further disposable mixed-scale Omarchy VM run, a Region selected on the 1.2
 
 ## Apparent's own windows are in the recording
 
-Neither X11 nor GNOME's or KDE's screencasts let an app leave its windows out, so the pill and the ink are in `recording.mp4` and the keyframes. The ink is drawn again at the same place on the keyframes, so it doesn't double. The candidate frames used to pick keyframes paint over the pill (`linux::media::own_window_masks`), so its ticking clock never counts as activity.
+Neither X11 nor GNOME's or KDE's screencasts let an app leave its windows out, so the pill and the ink are in `recording.mp4` and the keyframes. Fresh verified Hyprland screen/area movies identify their captured ink with `videoInk: "captured"`; output preserves those pixels without duplicate replay. Other backends and historical bundles retain legacy replay, which can redraw and prolong captured ink. The candidate frames used to pick keyframes paint over the pill (`linux::media::own_window_masks`), so its ticking clock never counts as activity.
 
 This is a capture-source limitation, not a missing mask in the keyframe selector. On
 X11, `ximagesrc` records the already-composited root image; GNOME's `RecordArea`

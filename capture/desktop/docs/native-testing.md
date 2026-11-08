@@ -145,6 +145,34 @@ capture smoke recipe below remains an Omarchy-tested recipe until separately
 verified on those desktops. Keep compositor/version, multi-output and native
 product evidence separate from driver contracts.
 
+### Released GNOME environment (Clanker, 2026-11-08)
+
+The read-only standalone template is
+`/home/simon/VMs/apparent-gnome-noble-20261108/`: `system.qcow2`, matching
+`OVMF_VARS.fd`, test-only `test_access` key and SSH user `scrawl`. Inspect its
+`preparation.json`, `versions.tsv` and `template.sha256` before use. Disk SHA256:
+`822c0c89fd0d84aac4a6eb53b30f46d3452dfcbe6252825d84513a88853d1da7`;
+firmware SHA256:
+`eb0a2e4955aa6549433e8f8371913916559660e9fd2571a248a9527bd653f232`.
+The source is Canonical's Ubuntu 24.04 noble 20261017 image, verified against
+its signed SHA manifest; full source hash and signing provenance are in the
+preparation receipt.
+
+Fresh environment qualification established same-user GNOME Wayland
+(`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`), gnome-shell 46.0/libmutter 46.2,
+two logical 1280×800 outputs at 1× and USB mouse EV_REL X/Y. Optional
+`--outputs 2 --relative-mouse` requires runner commit `aaf681411` (PR #1082);
+the default launcher is unchanged. StatusNotifierWatcher is absent, the account
+has no broad passwordless sudo, and the image has no Apparent state/autostart or
+personal data. This is environment qualification only: capture, scale/coordinates,
+focus/ink, package and receiver acceptance remain unrun by this qualification.
+
+Use `--desktop gnome --isolated-network` with an owned private per-job `--results`
+directory; the runner creates disposable disk/firmware copies. Never open the
+template writable or replace it. Admin changes require a separately owned
+derivative. KDE is a separate template and is not supplied by selecting
+`--desktop kde` on this image.
+
 ```sh
 python3 capture/desktop/scripts/linux/gui/gui-vm.py \
   --template "$GUI_TEMPLATE/system.qcow2" \
