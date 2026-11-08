@@ -1176,6 +1176,17 @@
       ]
     },
     {
+      "id": "hermes-recording-inspection",
+      "group": "cli",
+      "name": "Apparent for Hermes",
+      "says": "The separately installed Hermes plugin reads an explicitly supplied recording and returns transcript, timestamped context and contact-sheet or numbered-keyframe pixels in one tool result.",
+      "status": "main",
+      "added": "2026-11-08",
+      "platforms": ["mac", "linux"],
+      "note": "Source candidate; catalog publication, real Hermes Desktop model vision and fresh native setup remain release gates. Uses the installed full CLI, with explicit fetch before inspect for Connect IDs. Downloaded snapshots are removed after each call; local originals remain unchanged. Manual paste and Send; no picker or automatic recorder installation.",
+      "docs": ["hermes/README.md"]
+    },
+    {
       "id": "cli-install",
       "group": "cli",
       "name": "Command-line tool",

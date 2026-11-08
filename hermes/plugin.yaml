@@ -1,0 +1,16 @@
+name: apparent
+version: "0.2.0"
+description: Read Apparent recordings as spoken instructions and visual evidence.
+author: Apparent
+requires_hermes: ">=0.22.1"
+python_dependencies:
+  - "Pillow>=10.2,<13"
+provides_tools: [apparent_inspect]
+provides_hooks: [pre_llm_call]
+provides_middleware: []
+requires_env: []
+config_schema:
+  executable:
+    type: string
+    default: ""
+    description: Absolute path to the installed full Apparent app CLI; empty discovers it.
