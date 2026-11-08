@@ -4,11 +4,11 @@ import icon from '../../../../../../shared/assets/brand/apparent-app-icon.svg';
 import './control-guide.css';
 
 /** Illustrated controls, never capture/menu actions. Rust owns real progress. */
-export function ControlGuide({ kind, screenOnly = false }: { kind: 'whiteboard' | 'finish' | 'locate'; screenOnly?: boolean }) {
+export function ControlGuide({ kind, screenOnly = false, directWhiteboard = false }: { kind: 'whiteboard' | 'finish' | 'locate'; screenOnly?: boolean; directWhiteboard?: boolean }) {
   const [replay, setReplay] = useState(0);
-  const label = kind === 'whiteboard' ? screenOnly ? 'Example: click Screen' : 'Example: click Screen, then choose Whiteboard' :
+  const label = kind === 'whiteboard' ? screenOnly ? 'Example: click Screen' : directWhiteboard ? 'Example: click Whiteboard' : 'Example: click Screen, then choose Whiteboard' :
     kind === 'finish' ? 'Example: Finish stops recording, then the handoff is copied' : 'Example: open the apparent menu, then Open Latest Capture';
-  return <figure className="native-control" data-kind={kind} data-screen-only={screenOnly} aria-label={label}>
+  return <figure className="native-control" data-kind={kind} data-screen-only={screenOnly} data-direct-whiteboard={directWhiteboard} aria-label={label}>
     <div key={replay} className="native-control-motion" aria-hidden="true">
       {kind === 'whiteboard' && <svg viewBox="0 0 330 82">
         <rect className="control-pill" x="8" y="15" width="314" height="47" rx="24" />

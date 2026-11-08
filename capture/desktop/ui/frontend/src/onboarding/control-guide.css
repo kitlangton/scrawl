@@ -27,6 +27,10 @@
 .native-control[data-screen-only=true] .control-board, .native-control[data-screen-only=true] .control-click-two { display: none; }
 .native-control[data-screen-only=true] .control-screen { animation: none; }
 .native-control[data-screen-only=true] .control-pointer { animation-name: control-screen-pointer; }
+.native-control[data-direct-whiteboard=true] .control-screen, .native-control[data-direct-whiteboard=true] .control-click-one { display: none; }
+.native-control[data-direct-whiteboard=true] .control-board { animation: none; opacity: 1; }
+.native-control[data-direct-whiteboard=true] .control-pointer { animation-name: control-direct-board-pointer; }
+@keyframes control-direct-board-pointer { 0%,8% { transform: translate(130px,62px); } 32%,100% { transform: translate(179px,37px); } }
 @keyframes control-appear { 0% { opacity: 0; } 43%,100% { opacity: 1; } }
 @keyframes control-disappear { 0% { opacity: 1; } 43%,100% { opacity: 0; } }
 @keyframes control-menu-open { 0% { opacity: 0; } 40%,100% { opacity: 1; } }

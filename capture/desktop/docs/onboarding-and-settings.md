@@ -276,6 +276,8 @@ identifiers/actions, closes granted guides, and cleans up guides on pipe closure
 The Electron pipe carries presentation only. Linux onboarding explicitly uses
 X11, matching GPUI and the notes/ink surfaces after the app clears
 `WAYLAND_DISPLAY`; Electron must not auto-select an unavailable Wayland socket.
+Native X11 anchor/board pixels are converted to Electron DIP, and setup/coach
+windows fit the logical work area, including a scaled small display.
 Native fallback remains available;
 its presentation can be removed only after Mac permission/media and isolated
 Linux acceptance. Packaged assets route this workflow to Electron; missing assets, spawn failure
@@ -357,8 +359,12 @@ shows **Add a note.** before the separate screen-drawing lesson:
 “Hold Shift and click a spot.”
 Its compact Shift-click illustration is presentation only, with Replay and a
 reduced-motion still. The trackpad helper appears only in the following screen-drawing lesson.
-The existing notes editor remains the only place to enter real text; the coach
-never takes keyboard focus or submits a note. Rust advances to screen drawing only after
+Linux opens Whiteboard directly from its recording controls; its guide and
+illustration reflect that button rather than the Mac Screen menu. The existing
+notes editor remains the only place to enter real text; the coach
+never takes keyboard focus or submits a note. On Hyprland, the native adapter
+reconciles X11 keyboard focus after compositor placement for the same current
+owned editor request. Rust advances to screen drawing only after
 the current capture's notes session reports a nonempty durable save. Opening the
 editor, keeping a draft, dismissing, empty Enter or a failed write cannot satisfy
 this lesson. Screen marks made before the saved-note transition cannot satisfy

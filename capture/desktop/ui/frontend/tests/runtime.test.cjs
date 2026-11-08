@@ -284,6 +284,20 @@ test('onboarding coach avoids its board and pill on offset displays, preserves i
   assert.equal(project({...state,practiceBoard:[0,0,-1,600]}).practiceBoard,undefined);
 });
 
+test('onboarding fits a small logical work area and converts native X11 geometry', () => {
+  const {coachDimensions, setupDimensions, nativeRectangle, coachPosition} = require('../electron/onboarding.cjs');
+  const area={x:-640,y:20,width:640,height:380};
+  for(const shortcut of [true,false]) assert.deepEqual(setupDimensions(area,shortcut),{width:640,height:380});
+  assert.deepEqual(coachDimensions(area,'screen-ink'),{width:380,height:380});
+  const anchor=nativeRectangle([-800,40,320,50],p=>({x:p.x/2,y:p.y/2}));
+  assert.deepEqual(anchor,[-400,20,160,25]);
+  const board=nativeRectangle([-1280,120,400,320],p=>({x:p.x/2,y:p.y/2}));
+  const position=coachPosition(area,anchor,board,'board-ink');
+  assert.ok(position.x>=area.x && position.x+380<=area.x+area.width);
+  assert.ok(position.y>=area.y && position.y+380<=area.y+area.height);
+  assert.equal(nativeRectangle(undefined,p=>p),undefined);
+});
+
 test('onboarding output failure retires the channel once and preserves its error', async () => {
   const { Writable }=require('node:stream');
   const { parentChannel }=require('../electron/onboarding.cjs');

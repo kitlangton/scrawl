@@ -349,6 +349,11 @@ for(const mode of ['--onboarding'])test(`onboarding fixed window shrinks to coac
   assert.equal(await page.locator('.native-control').evaluate(el=>el.getAnimations({subtree:true}).length),0);
   await expect(page.locator('.native-control button')).toBeHidden();
   await page.emulateMedia({reducedMotion:'no-preference'});
+  send({step:'try-it',practice:'whiteboard',platform:'linux',firstCaptureRequired:true});
+  await expect(page.getByText('Click Whiteboard in the recording controls.',{exact:true})).toBeVisible();
+  await expect(page.getByRole('figure',{name:'Example: click Whiteboard',exact:true})).toBeVisible();
+  await expect(page.locator('.control-screen')).toBeHidden();
+  await expect(page.locator('.control-board')).toHaveCSS('opacity','1');
   // Guides use the saved keys, finish once, and replay without invoking app actions.
   send({step:'try-it',practice:'retry',shortcut:'⌃⌘9',firstCaptureRequired:true});
   await expect(page.locator('.native-gesture')).toHaveAttribute('data-kind','record');
