@@ -95,12 +95,16 @@ test('Connect shipped Electron IPC, consent presentation, browser action and lif
   await page.emulateMedia({colorScheme:null});
   for (const mode of ['light','dark']) {
     await application.evaluate(({nativeTheme},mode)=>{nativeTheme.themeSource=mode;},mode);
+    await expect.poll(() => page.evaluate(() => matchMedia('(prefers-color-scheme: dark)').matches),
+      {message:`${mode} theme reaches renderer`}).toBe(mode === 'dark');
     for (const interaction of ['normal','hover','focus']) {
       await page.mouse.move(0,0);
       await account.evaluate(button=>button.blur());
       if (interaction === 'hover') await account.hover();
       if (interaction === 'focus') await account.focus();
-      const contrast = await account.evaluate(button=>{
+      const contrast = await account.evaluate(async button=>{
+        // Theme and hover changes animate colors; measure the settled state.
+        await Promise.all(button.getAnimations().map(animation=>animation.finished));
         const style=getComputedStyle(button);
         const luminance = color => {
           const rgb=color.match(/[\d.]+/g).slice(0,3).map(Number).map(x=>{x/=255;return x<=.04045?x/12.92:((x+.055)/1.055)**2.4;});
