@@ -325,6 +325,31 @@ step outcome, runs after failures, and missing diagnostics only warn. Diagnostic
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
 
+## Portable verification routing
+
+Each platform caller runs portable contracts and the independent Connect web
+artifact/Chromium fixtures in its existing Linux `select` job. Its success is
+a prerequisite of both platform jobs. `--execution portable` runs the theme,
+selector contracts and selected Connect web fixtures; `--execution platform`
+retains push/credential/staging and temporary-filesystem contracts, root and staged Engine Rust suites.
+The ordinary local verifier defaults to `full`, preserving both inventories,
+full-delta selection and unknown-input fallback. No environment variable silently
+changes this split.
+
+Connect Rust/client security, filesystem, credential and staging tests remain on
+both platforms, as do Desktop tests, actual Electron integration, packaging and
+Mac native assertions. Both platform jobs depend on the successful Linux `select`
+prerequisite; portable failures prevent their allocation. This is once per
+platform caller, not reuse of another workflow's results. Reverting the explicit
+routing and workflow
+placement restores the previous duplicate execution.
+
+The supplied six-hour cohort reports Mac changed-tree median 10:16 (n=32) and
+successful whole-run median 21:50 (n=19); these are mixed profiles/cache states.
+Only the portable fraction plus browser setup is projected to leave Mac runner
+time. No measured whole-run savings or queue reduction is established by local
+routing tests. Linux selection now takes longer before native jobs become
+eligible; candidate timings must assess that latency tradeoff separately.
 The disposable Mac Storage fixture waits for real Storage/Retention read receipts
 before its single Change click. Its TypeScript CI driver separates the owned
 Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
