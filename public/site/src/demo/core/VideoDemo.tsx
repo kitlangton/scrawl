@@ -81,7 +81,12 @@ export function Demo() {
     if (!element) return
     const next = Math.max(0, Math.min(duration, seconds))
     setTime(next)
-    if (element.readyState >= 1) element.currentTime = next
+    if (element.readyState >= 1) {
+      // A metadata notification can still be queued after readiness changes.
+      // This newer request supersedes any seek waiting for that notification.
+      pendingSeek.current = null
+      element.currentTime = next
+    }
     else {
       pendingSeek.current = next
       element.load()

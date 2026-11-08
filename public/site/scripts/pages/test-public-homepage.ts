@@ -203,6 +203,17 @@ test("source homepage preserves accepted responsive layout and interactions", as
       try {
         for (const width of [1280, 768, 390, 320]) {
           const page = await browser.newPage({ viewport: { width, height: 900 }, reducedMotion: "reduce" })
+          // Metadata readiness can precede delivery of its notification. Hold
+          // that real event so Home must supersede the earlier cold seek.
+          if (width === 320) await page.addInitScript(() => {
+            document.addEventListener("loadedmetadata", event => {
+              if (!(event.target instanceof HTMLVideoElement)) return
+              event.stopImmediatePropagation()
+              const element = event.target
+              ;(window as Window & { releaseDemoMetadata?: () => void }).releaseDemoMetadata = () =>
+                element.dispatchEvent(new Event("loadedmetadata"))
+            }, { capture: true, once: true })
+          })
           // Reproduce late consent arrival over the mobile frog: the original
           // flow could lose pointer-up after pointer-down had reached the frog.
           if (analyticsEnabled && width === 320) await page.addInitScript(() => {
@@ -382,8 +393,21 @@ test("source homepage preserves accepted responsive layout and interactions", as
           await track.focus()
           await track.press("ArrowRight")
           assert.equal(await track.getAttribute("aria-valuenow"), "5")
+          if (width === 320) await page.waitForFunction(() => {
+            const element = document.querySelector(".video-demo video") as HTMLVideoElement
+            return element.readyState >= 1 && !!(window as Window & { releaseDemoMetadata?: () => void }).releaseDemoMetadata
+          })
           await track.press("Home")
           assert.equal(await track.getAttribute("aria-valuenow"), "0")
+          if (width === 320) {
+            await page.evaluate(() => (window as Window & { releaseDemoMetadata?: () => void }).releaseDemoMetadata!())
+            await page.waitForFunction(() => {
+              const element = document.querySelector(".video-demo video") as HTMLVideoElement
+              return !element.seeking
+            })
+            assert.equal(await page.locator(".video-demo video").evaluate((element: HTMLVideoElement) => element.currentTime), 0,
+              "late metadata must not restore the superseded ArrowRight seek after Home")
+          }
           assert.equal(await page.locator(".track .seg").first().evaluate(element => getComputedStyle(element).borderTopWidth), "1px")
           assert.equal(await page.getByRole("button", { name: /close-up|Full recording/ }).count(), 0)
           if (width <= 700) {
