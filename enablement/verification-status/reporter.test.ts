@@ -194,6 +194,8 @@ test('stale PR base metadata cannot admit proof against old main', async () => {
     if(mode==='unavailable') throw Error('main ref unavailable');
     return {object:{sha:++reads>1 && mode==='advance'?'new-main':'live-main'}};
    }
+   // The stale PR base still produces a valid-looking docs-only comparison.
+   if(path.includes('/compare/old...head')) return {merge_base_commit:{sha:'old'},files:[{filename:'enablement/docs/check.md'}]};
    if(path.includes('/compare/live-main...head')) return {merge_base_commit:{sha:'old'},files:[{filename:'enablement/docs/check.md'}]};
    if(path.includes('/compare/old...live-main')) return {files:[{filename:mode==='code'?'capture/engine/runtime/capture.rs':'enablement/docs/base.md'}]};
    throw Error('Unexpected stale-base query: '+path);
