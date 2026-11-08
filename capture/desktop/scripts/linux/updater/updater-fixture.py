@@ -13,12 +13,13 @@ import ssl
 import time
 
 API = '/repos/tryapparent/apparent/releases/latest'
+STABLE_API = '/repos/tryapparent/apparent/releases?per_page=100&page='
 MAIN_API = '/repos/tryapparent/apparent/releases?per_page=10&page='
 CANDIDATE_SHA = 'b' * 40
 
 
 def metadata_path(control):
-    return MAIN_API + '1' if control.get('channel', 'stable') == 'main' else API
+    return MAIN_API + '1' if control.get('channel', 'stable') == 'main' else STABLE_API + '1'
 
 
 def response(control, path, payload):
@@ -38,7 +39,13 @@ def response(control, path, payload):
             return 503, b'controlled fixture failure\n'
         # Put the usable Main release on a later page, beyond unrelated releases.
         return 200, json.dumps([{'tag_name': 'v1.0.0', 'prerelease': False,
-                                'draft': False, 'assets': []}] if main else release).encode()
+                                'draft': False, 'assets': []}] if main else [
+                                    {'tag_name': 'recipient-component', 'prerelease': False,
+                                     'draft': False, 'published_at': '2026-11-08T00:00:00Z', 'assets': []},
+                                    release]).encode()
+    if path == API:
+        return 200, json.dumps({'tag_name': 'recipient-component', 'prerelease': False,
+                                'draft': False, 'published_at': '2026-11-08T00:00:00Z', 'assets': []}).encode()
     if main and path == MAIN_API + '2':
         return 200, json.dumps([release]).encode()
     if main and path == MAIN_API + '3':
