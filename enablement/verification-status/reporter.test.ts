@@ -58,6 +58,7 @@ test('reconciliation preserves docs exemption and discards moved candidates', as
   let reads=0; const writes:any[]=[];
   reconcile((path,body) => {
    if(body) {writes.push(body);return {};}
+   if(path.endsWith('/git/ref/heads/main')) return {object:{sha:'b'}};
    if(path.endsWith('/pulls/1')) return ++reads > 1 && moved ? {...pr,head:{...pr.head,sha:'new'}} : pr;
    if(path.includes('/compare/')) return {merge_base_commit:{sha:'b'},files:[{filename:'enablement/docs/continuous-delivery.md'}]};
    throw Error(path);
@@ -75,6 +76,7 @@ test('latest attempt, newer run, relevant base invalidation and docs base reuse'
   const result = (id:number) => ({...run,id,head_sha:'a',head_branch:'feature',path: id===1?'.github/workflows/verification.yml':'.github/workflows/verification-mac.yml',conclusion:mode==='failed'?'failure':'success',run_attempt:mode==='rerun' && runReads>2?3:2});
   reconcile((path,body) => {
    if(body){writes.push(body);return {};}
+   if(path.endsWith('/git/ref/heads/main')) return {object:{sha:'b'}};
    if(path.endsWith('/pulls/1')) return pr;
    if(path.includes('/permission')) return {permission:'write'};
    if(path.includes('/compare/')) return path.includes('/compare/old') ? {files:[{filename:mode==='base-code'?'Cargo.toml':'enablement/docs/test.md'}]} : {merge_base_commit:{sha:mode.startsWith('base-')?'old':'b'},files:[{filename:mode.startsWith('policy-') || mode==='review-race'?'.github/workflows/verification-platform.yml':'capture/engine/main.rs'}]};
@@ -140,6 +142,7 @@ test('known old green becomes pending on initial and final read failure; later P
   const states=new Map([['head1','success'],['head2','success']]); let reads=0;
   assert.throws(()=>reconcileAll((path,body)=>{
    if(body){states.set(path.split('/').at(-1)!,body.state);return {};}
+   if(path.endsWith('/git/ref/heads/main')) return {object:{sha:'base'}};
    if(path.includes('/pulls?')) return [make(1),make(2)];
    if(path.endsWith('/pulls/1')) {if(++reads===failAt) throw Error('API unavailable');return make(1);}
    if(path.endsWith('/pulls/2')) return make(2);
@@ -168,6 +171,7 @@ test('base rename cannot hide removed native source behind a documentation desti
  const writes:any[]=[];
  reconcile((path,body)=>{
   if(body){writes.push(body);return {};}
+  if(path.endsWith('/git/ref/heads/main')) return {object:{sha:'base'}};
   if(path.endsWith('/pulls/1'))return candidate;
   if(path.includes('/compare/base...head'))return {merge_base_commit:{sha:'old'},files:[{filename:'enablement/docs/check.md'}]};
   if(path.includes('/compare/old...base'))return {files:[{filename:'capture/engine/docs/retired.md',previous_filename:'capture/engine/runtime/retired.rs',status:'renamed'}]};
@@ -175,4 +179,29 @@ test('base rename cannot hide removed native source behind a documentation desti
  },1);
  assert.equal(writes.at(-1).state,'pending');
  assert.equal(writes.at(-1).description,'Integrate changed base inputs');
+});
+
+
+test('stale PR base metadata cannot admit proof against old main', async () => {
+ const {reconcile}=await import('./reporter.ts');
+ const candidate={number:1,state:'open',html_url:'https://github.com/'+repo+'/pull/1',base:{ref:'main',sha:'old',repo:{full_name:repo}},head:{sha:'head',ref:'feature',repo:{full_name:repo}}};
+ for(const mode of ['code','docs','advance','unavailable']) {
+  const writes:any[]=[];let reads=0;
+  reconcile((path,body)=>{
+   if(body){writes.push(body);return {};}
+   if(path.endsWith('/pulls/1')) return candidate;
+   if(path.endsWith('/git/ref/heads/main')) {
+    if(mode==='unavailable') throw Error('main ref unavailable');
+    return {object:{sha:++reads>1 && mode==='advance'?'new-main':'live-main'}};
+   }
+   // The stale PR base still produces a valid-looking docs-only comparison.
+   if(path.includes('/compare/old...head')) return {merge_base_commit:{sha:'old'},files:[{filename:'enablement/docs/check.md'}]};
+   if(path.includes('/compare/live-main...head')) return {merge_base_commit:{sha:'old'},files:[{filename:'enablement/docs/check.md'}]};
+   if(path.includes('/compare/old...live-main')) return {files:[{filename:mode==='code'?'capture/engine/runtime/capture.rs':'enablement/docs/base.md'}]};
+   throw Error('Unexpected stale-base query: '+path);
+  },1);
+  assert.equal(writes.at(-1).state,mode==='docs'?'success':'pending',mode);
+  if(mode==='code') assert.equal(writes.at(-1).description,'Integrate changed base inputs');
+  if(mode==='advance') assert.equal(writes.at(-1).description,'Main advanced during reconciliation');
+ }
 });
