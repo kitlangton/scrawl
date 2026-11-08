@@ -120,14 +120,21 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
   let state = 'pending';
   let description = 'Manual exact-candidate verification required';
   const evidence: any[] = [];
+  let baseSha: string | undefined;
+  const readBase = () => {
+    const sha = fetch(`${prefix}/git/ref/heads/main`).object?.sha;
+    if (typeof sha !== 'string' || !sha) throw Error('Missing live main ref');
+    return sha;
+  };
   try {
+    baseSha = readBase();
     if (candidate.head.repo?.full_name !== repo) throw Error('Fork requires trusted verification');
-    const comparison = fetch(`${prefix}/compare/${candidate.base.sha}...${sha}`);
+    const comparison = fetch(`${prefix}/compare/${baseSha}...${sha}`);
     if (comparison.files?.length >= 300 || !comparison.files?.length) throw Error('Incomplete or empty delta');
     const kind = scope(comparison.files.flatMap((f: any) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])]));
     // New relevant base inputs invalidate proof; unrelated documentation does not.
-    if (comparison.merge_base_commit.sha !== candidate.base.sha) {
-      const baseDelta = fetch(`${prefix}/compare/${comparison.merge_base_commit.sha}...${candidate.base.sha}`);
+    if (comparison.merge_base_commit.sha !== baseSha) {
+      const baseDelta = fetch(`${prefix}/compare/${comparison.merge_base_commit.sha}...${baseSha}`);
       if (!baseDelta.files?.length || baseDelta.files.length >= 300 || scope(baseDelta.files.flatMap((f: any) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])])) !== 'docs') throw Error('Integrate changed base inputs');
     }
     if (kind === 'public') {
@@ -150,7 +157,7 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
         const runner = index ? 'macos-15-intel' : 'ubuntu-24.04';
         if (caller.jobs?.verify?.uses !== './.github/workflows/verification-platform.yml' || caller.jobs.verify.with?.runner !== runner || caller.jobs.verify.if || caller.jobs.verify['continue-on-error']) throw Error('Unsupported verification caller');
         const admitted = policy(source, runner);
-        const trusted = policy(content(fetch, '.github/workflows/verification-platform.yml', candidate.base.sha), runner);
+        const trusted = policy(content(fetch, '.github/workflows/verification-platform.yml', baseSha), runner);
         admitted.names = [...new Set([...trusted.names, ...admitted.names])];
         if (admitted.names.some(name => !Object.hasOwn(admitted.steps, name))) throw Error('Candidate removed a required job');
         const runs = pages(fetch, `${prefix}/actions/workflows/${filename}/runs?head_sha=${sha}&branch=${encodeURIComponent(candidate.head.ref)}`, 'workflow_runs');
@@ -179,6 +186,9 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
     if (fresh.run_attempt !== run.run_attempt || fresh.status !== run.status || fresh.conclusion !== run.conclusion) {state = 'pending'; description = 'Verification changed during reconciliation';}
   }
   if (fingerprint(read()) !== fingerprint(candidate)) return;
+  // PR base.sha can remain pinned to an old main commit. Authenticate live main
+  // again after all evidence reads instead of trusting that cached PR field.
+  if (baseSha && readBase() !== baseSha) {state = 'pending'; description = 'Main advanced during reconciliation';}
   const report = process.env.GITHUB_RUN_ID ? `https://github.com/${repo}/actions/runs/${process.env.GITHUB_RUN_ID}` : candidate.html_url;
   if (process.env.GITHUB_STEP_SUMMARY) {
     appendFileSync(process.env.GITHUB_STEP_SUMMARY, `### PR #${number}: ${state}\n\nCandidate: \`${sha}\`\n\n${evidence.map(run => `- [${run.path.includes('mac') ? 'Mac' : run.path.includes('public') ? 'Public' : 'Linux'} verification](https://github.com/${repo}/actions/runs/${run.id}) — ${run.status} / ${run.conclusion ?? 'pending'}`).join('\n')}\n\n`);
