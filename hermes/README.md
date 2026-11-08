@@ -1,6 +1,6 @@
 # Apparent for Hermes
 
-Native Python plugin, version **0.2.0**. Paste an Apparent recording handoff into
+Native Python plugin, version **0.2.1**. Paste an Apparent recording handoff into
 Hermes and press Send. `apparent_inspect` returns the spoken instructions,
 timestamped interaction context and actual contact-sheet pixels together.
 Pass `frame` to read a numbered keyframe when a detail needs closer inspection.
