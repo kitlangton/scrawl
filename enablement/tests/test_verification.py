@@ -20,6 +20,28 @@ class SelectionTests(unittest.TestCase):
         guard.start()
         self.addCleanup(guard.stop)
 
+    def test_mac_native_checks_precede_full_suites_without_parallel_gui(self):
+        workflow = (SCRIPT.parents[1] / '.github/workflows/verification-platform.yml').read_text()
+        names = [
+            'Build and package the exact Mac candidate for native checks',
+            'Native Mac Storage and error-reporting controls against the installed Rust GUI',
+            'Native GPUI Copy capture ID against the same installed App',
+            'Native Electron selected-reference control against the installed Rust App',
+            'Early Mac Electron to Rust Settings integration (not native GUI proof)',
+            'Verify the independent Connect client package',
+            'Execute the same changed-tree checks (not GUI acceptance)',
+            'Actual Electron to Rust Settings integration (not native GUI proof)',
+        ]
+        positions = [workflow.index('      - name: ' + name) for name in names]
+        self.assertEqual(positions, sorted(positions))
+        self.assertEqual(workflow.count('bash capture/desktop/scripts/packaging/install-app.sh'), 1)
+        for step in workflow[positions[0]:positions[4]].split('      - name: ')[1:]:
+            self.assertIn("if: runner.os == 'macOS' && needs.select.outputs.root == 'true'", step)
+            self.assertNotIn('continue-on-error:', step)
+        linux_bridge = workflow[positions[-1] + len('      - name: '):].split('      - name: ', 1)[0]
+        self.assertIn("if: runner.os == 'Linux'", linux_bridge)
+        self.assertIn('needs: [select, desktop-ui, rust]', workflow)
+
     def test_documents_do_not_compile_app(self):
         result = verification.select(["enablement/refactor.md", "AGENTS.md", "docs/capture.md"])
         self.assertFalse(result["root"])
