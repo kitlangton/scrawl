@@ -4,6 +4,7 @@ import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -23,7 +24,10 @@ def run(*args, cwd, env=None, input=None):
 
 class PrePushGuardTests(unittest.TestCase):
     def setUp(self):
-        self.tmp = tempfile.TemporaryDirectory(prefix=".pf-", dir=Path.home())
+        # macOS's default /var/folders TMPDIR is long and /var is a symlink;
+        # the production socket preflight intentionally rejects both. Linux
+        # inherits the private per-job Clanker root supplied by the caller.
+        self.tmp = tempfile.TemporaryDirectory(prefix="h", dir="/private/tmp" if sys.platform == "darwin" else None)
         self.addCleanup(self.tmp.cleanup)
         self.repo = Path(self.tmp.name) / "repo"
         self.repo.mkdir()
@@ -40,6 +44,15 @@ class PrePushGuardTests(unittest.TestCase):
                      "test_temp_preflight.py", "test_owner_lanes.py"):
             (self.repo / "enablement" / "tests" / name).write_text(fixture_test)
         shutil.copy2(SELECTOR, self.repo / "enablement" / "verification.py")
+        local_tests = self.repo / "enablement/local-tests"
+        local_tests.mkdir()
+        shutil.copy2(SELECTOR.parent / "local-tests/run.ts", local_tests / "run.ts")
+        # Finite TS contract fixtures, just like the Python fixtures above.
+        for name in ("local-tests/run.test.ts", "prerequisites/native.test.ts", "timing/command.test.ts",
+                     "verification-status/reporter.test.ts"):
+            path = self.repo / "enablement" / name
+            path.parent.mkdir(exist_ok=True)
+            path.write_text("import {test} from 'node:test'; test('fixture', () => {});\n")
         # The real verifier now runs the shared frontend color guard. Preserve
         # its actual dependency closure in this disposable hook repository.
         theme = self.repo / "shared/ui/scripts"
@@ -60,6 +73,24 @@ class PrePushGuardTests(unittest.TestCase):
         # Default-policy fixtures must not inherit the live build runner's
         # allocation. Exercise explicit allocations separately below.
         self.env.pop("T3_BUILD_JOBS", None)
+        # Complete owner-level fallback is intentional for unknown history.
+        # Stub expensive package tools, retaining the real selector and guards.
+        for directory in ("connect/client", "connect/service", "connect/web", "public/site",
+                          "capture/desktop/ui/frontend", "enablement/directory-width/tests", "hermes/tests"):
+            (self.repo / directory).mkdir(parents=True, exist_ok=True)
+        # Fixture directories must survive the commit/clean-tree guard.
+        for directory in ("enablement/directory-width/tests", "hermes/tests"):
+            (self.repo / directory / "test_fixture.py").write_text(fixture_test)
+        for tool in ("npm", "bun", "cargo", "xvfb-run"):
+            stub = self.bin / tool
+            stub.write_text('#!/bin/sh\nexit "${MOCK_STATUS:-0}"\n')
+            stub.chmod(0o755)
+        node = self.bin / "node"
+        node.write_text('#!/bin/sh\ncase "$1" in scripts/site-build/verify.mjs|scripts/test-browser.mjs) exit "${MOCK_STATUS:-0}";; esac\nexec ' + shutil.which("node") + ' "$@"\n')
+        node.chmod(0o755)
+        run("git", "add", ".", cwd=self.repo)
+        run("git", "commit", "-qm", "finite owner fixtures", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
 
     def push(self, oid=None, local="refs/heads/feature", remote="refs/heads/main", env=None):
         line = f"{local} {oid or self.head} {remote} {'0' * 40}\n"
@@ -74,9 +105,26 @@ class PrePushGuardTests(unittest.TestCase):
         self.assertEqual(result.stdout.strip(), str(self.repo))
 
     def test_feature_push_runs_contracts_without_cargo(self):
+        run("git", "update-ref", "refs/remotes/origin/main", self.head, cwd=self.repo)
+        (self.repo / "README.md").write_text("docs\n")
+        run("git", "add", "README.md", cwd=self.repo)
+        run("git", "commit", "-qm", "docs", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
         result = self.push(remote="refs/heads/feature")
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertFalse(self.log.exists())
+
+    def test_new_contract_filename_is_not_silently_omitted(self):
+        run("git", "update-ref", "refs/remotes/origin/main", self.head, cwd=self.repo)
+        (self.repo / "enablement/tests/test_new_feature.py").write_text(
+            "import unittest\nclass NewFeature(unittest.TestCase):\n    def test_regression(self):\n        self.fail('new regression reached')\n")
+        run("git", "add", ".", cwd=self.repo)
+        run("git", "commit", "-qm", "new contract", cwd=self.repo)
+        self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
+        result = self.push(remote="refs/heads/feature")
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("new regression reached", result.stderr)
+        self.assertIn("push rejected", result.stderr)
 
     def test_clean_head_requires_build_and_tests(self):
         result = self.push()
@@ -144,21 +192,19 @@ class PrePushGuardTests(unittest.TestCase):
     def test_browser_only_push_runs_existing_package_checks_not_rust(self):
         run("git", "update-ref", "refs/remotes/origin/main", self.head, cwd=self.repo)
         browser = self.repo / "connect/web"
-        browser.mkdir(parents=True)
+        browser.mkdir(parents=True, exist_ok=True)
         (browser / "package.json").write_text('{}\n')
         run("git", "add", ".", cwd=self.repo)
         run("git", "commit", "-qm", "independent browser", cwd=self.repo)
         self.head = run("git", "rev-parse", "HEAD", cwd=self.repo).stdout.strip()
-        for tool in ("bun", "node"):
+        for tool in ("bun", "npm"):
             stub = self.bin / tool
-            stub.write_text(f'#!/bin/sh\nprintf "%s\\n" "{tool} $*" >> "$COMMAND_LOG"\nexit "${{MOCK_STATUS:-0}}"\n')
+            stub.write_text(f'#!/bin/sh\ncase "$*" in *reporter.test.ts*) exit 0;; esac\nprintf "%s\\n" "{tool} $*" >> "$COMMAND_LOG"\nexit "${{MOCK_STATUS:-0}}"\n')
             stub.chmod(0o755)
         result = self.push()
         self.assertEqual(result.returncode, 0, result.stderr)
         self.assertEqual(self.log.read_text().splitlines(), [
-            "bun install --frozen-lockfile", "bun run build",
-            "node --test test/artifact.test.mjs test/closure.test.mjs test/routes.test.mjs",
-            "node scripts/test-browser.mjs",
+            "bun install --frozen-lockfile", "npm test",
         ])
         result = self.push(env=dict(self.env, MOCK_STATUS="1"))
         self.assertNotEqual(result.returncode, 0)

@@ -28,10 +28,38 @@ older client/server source.
 
 `Repository checks` runs automatically on PRs targeting main and main pushes.
 It validates the theme, selector, push-hook, publication-admission contracts and
-workflow syntax with read-only permissions. Feature pushes run the inexpensive
-contracts locally; they do not rebuild the application.
+workflow syntax with read-only permissions. Every non-deletion push runs cheap
+contracts plus the affected owners' local suites, selected by
+`enablement/local-tests/run.ts` over the full merge-base-to-HEAD delta. Reporter,
+native-prerequisite, timing and local-selector regressions are included in the
+cheap contracts in CI and locally. Failed selected commands reject the push.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
+
+Preview selection without executing tests:
+`node --experimental-strip-types enablement/local-tests/run.ts --base origin/main --head HEAD`.
+The hook supplies the merge-base; both rename sides and deletions are included.
+Unknown/shared/root-build inputs, missing history and empty deltas select all
+owners. Root documentation alone runs contracts. Tooling changes additionally
+run directory-width tests; Hermes changes run its inspection suite. Public runs
+its standalone verifier. Connect web runs its full package suite and Public
+composition; client changes also run root integration; service changes include
+client, browser, Public and root consumers. Desktop frontend changes run npm tests,
+synthetic Electron smokes (Xvfb on Linux) and conservative root verification.
+Capture script changes also discover every tracked Python contract directory
+under Desktop/Agent scripts, including nested packaging and Linux harness tests;
+these run before expensive suites. New enablement test filenames are discovered
+automatically. Other capture changes retain the broad Rust/Engine verifier. Shared UI
+also selects Desktop, service and root integration. Package manifests/lockfiles
+select the entire owner, with locked installs and ordinary build prerequisites.
+Missing tools/packages fail rather than silently skip. Use Node 22.23+ and Bun
+1.3.10 as in CI; run hook-backed pushes once through `t3-build` on Clanker.
+
+This is owner-level selection, not inferred per-file test coverage. It runs the
+canonical automated local suites; platform-only/ignored native scenarios, release
+and publication checks still require their existing explicit procedures. A Linux
+hook cannot certify macOS behavior. The advisory owner-lane report below remains
+separate; it does not control the enforced hook selection.
 
 `Linux verification` and `Mac verification` are manual diagnostic entrypoints,
 each coalescing superseded runs within its own platform. Both call the same reusable
@@ -197,9 +225,9 @@ Supply a short absolute, user-owned mode-0700 temporary root. Ancestors must be
 root/current-user owned and not group/world writable, except root-owned sticky
 ancestors supported by the Engine. Symlinks are rejected without following them.
 The check diagnoses rather than replaces `TMPDIR`, repairs permissions or deletes
-anything. For an isolated run, create a fresh directory with
-`tempfile.TemporaryDirectory(prefix='.av-', dir=Path.home())`, explicitly pass it
-as child `TMPDIR`, and keep its context alive until all foreground checks exit.
+anything. For an isolated run on Clanker, create a private per-job
+`/tmp/apparent-dev-<job>-<run>/` directory, explicitly pass it as child `TMPDIR`,
+and keep its context alive until all foreground checks exit.
 Retain ownership/cleanup receipts outside that tree for long-running work.
 
 The pathname budget models ordinary `agent_capture` socket fixtures: Linux

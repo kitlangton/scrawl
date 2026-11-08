@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Conservative changed-tree verification shared by pre-push and Actions.
 
-Feature pushes and repository CI run contract checks. Full platform verification
-and publication remain manual-only.
+Repository CI runs contract checks. Pre-push owner selection is TypeScript in
+local-tests/run.ts; full platform verification and publication remain manual-only.
 Explicit local --run retains conservative changed-tree checks.
 Both sides of renames/deletions are included. Missing history broadens checks.
 """
@@ -198,10 +198,10 @@ def check_temp_environment():
 
 def run_pr_checks():
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
-                    "test_temp_preflight.py", "test_owner_lanes.py"):
-        subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                        "-p", pattern], cwd=ROOT, check=True)
+    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                    "-p", "test_*.py"], cwd=ROOT, check=True)
+    subprocess.run(["node", "--experimental-strip-types", "enablement/local-tests/run.ts", "--contracts"],
+                   cwd=ROOT, check=True)
 
 
 def observed_compile(command, **kwargs):
