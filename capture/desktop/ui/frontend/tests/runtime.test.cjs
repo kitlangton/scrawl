@@ -70,11 +70,27 @@ for (const reply of ['not json\n', '{}\n', '{"state":{"phase":"new_phase"}}\n', 
   });
 }
 
-test('absolute deadline bounds an unresponsive server', async (t) => {
-  const f = await fixture(t, null);
-  const before = performance.now();
-  assert.equal((await readRuntimeState(f.home, 50)).status, 'error');
-  assert.ok(performance.now() - before < 1000);
+test('absolute deadline bounds an unresponsive server', { timeout: 1000 }, async (t) => {
+  let received;
+  const request = new Promise((resolve) => { received = resolve; });
+  let closed;
+  const connectionClosed = new Promise((resolve) => { closed = resolve; });
+  const f = await fixture(t, (socket) => {
+    socket.once('close', () => closed());
+    received();
+  });
+  // Keep real socket I/O, but advance the deadline only after its request arrived.
+  // A loaded runner may otherwise spend the entire 50 ms on filesystem admission.
+  t.mock.timers.enable({ apis: ['setTimeout'] });
+  let settled = false;
+  const result = readRuntimeState(f.home, 50).then((value) => { settled = true; return value; });
+  await request;
+  t.mock.timers.tick(49);
+  await new Promise(setImmediate);
+  assert.equal(settled, false);
+  t.mock.timers.tick(1);
+  assert.equal((await result).status, 'error');
+  await connectionClosed;
   assert.deepEqual(f.requests, ['state\n']);
 });
 

@@ -136,9 +136,10 @@ impl Drop for Pause {
 
 fn pause_boundary(samples: &[f32]) -> Option<(usize, usize)> {
     let islands = crate::capture::engine::runtime::audio::audio::speech_islands(samples);
-    let clips = crate::shared::hex::plan_clips(&islands, samples.len() as u64 * 1_000 / RATE as u64);
-    // Match the normal Parakeet path's lead-in; draining still advances through all captured audio.
-    let start = clips.first()?.0.saturating_sub(PAD_MS as u64) as usize * RATE / 1_000;
+    let clips = islands;
+    // Energy chooses only when to cut. Every drained sample must reach recognition.
+    clips.first()?;
+    let start = 0; // Preserve quiet lead-in before advancing the consumed cursor.
     // Eligibility uses elapsed capture time, not the trimmed input length: a short
     // phrase after initial silence should still run before Stop.
     clips
@@ -283,7 +284,7 @@ mod tests {
     }
 
     #[test]
-    fn early_chunk_trims_leading_silence_without_shifting_word_times() {
+    fn early_chunk_preserves_quiet_lead_in_without_shifting_word_times() {
         let samples = Arc::new(Mutex::new(vec![0.0; 2 * RATE].into()));
         let (sent, received) = mpsc::channel();
         let pause = Pause::start_with(Arc::clone(&samples), move |chunk, offset| {
@@ -299,8 +300,8 @@ mod tests {
         let (length, offset) = received
             .recv_timeout(Duration::from_secs(3))
             .expect("first phrase should be transcribed during recording");
-        assert_eq!(offset, 1_800);
-        assert_eq!(length, 4 * RATE + 2 * PAD_MS * RATE / 1_000);
+        assert_eq!(offset, 0);
+        assert_eq!(length, 6 * RATE + PAD_MS * RATE / 1_000);
         let wav = crate::capture::engine::runtime::audio::audio::encode_wav_16k(&samples.lock().unwrap()).unwrap();
         pause.finish(&wav).unwrap();
     }
@@ -319,8 +320,8 @@ mod tests {
         let (length, offset) = received
             .recv_timeout(Duration::from_secs(3))
             .expect("a short phrase after silence must be processed during recording");
-        assert_eq!(offset, 1_800);
-        assert_eq!(length, RATE + 2 * PAD_MS * RATE / 1_000);
+        assert_eq!(offset, 0);
+        assert_eq!(length, 3 * RATE + PAD_MS * RATE / 1_000);
         let wav = crate::capture::engine::runtime::audio::audio::encode_wav_16k(&samples.lock().unwrap()).unwrap();
         pause.finish(&wav).unwrap();
     }
@@ -371,7 +372,7 @@ mod tests {
         samples.extend(vec![0.0; RATE / 1_000]);
         assert_eq!(
             pause_boundary(&samples),
-            Some((800 * RATE / 1_000, 4 * RATE + RATE / 5))
+            Some((0, 4 * RATE + RATE / 5))
         );
     }
 
@@ -386,11 +387,11 @@ mod tests {
     }
 
     #[test]
-    fn a_short_noise_blip_after_silence_is_not_a_transcription_chunk() {
+    fn a_short_isolated_word_after_silence_reaches_recognition() {
         let mut samples = vec![0.0; 4 * RATE];
         samples.extend(vec![0.2; RATE / 20]);
         samples.extend(vec![0.0; RATE]);
-        assert_eq!(pause_boundary(&samples), None);
+        assert_eq!(pause_boundary(&samples), Some((0, 4 * RATE + RATE / 4)));
     }
 
     #[test]
@@ -425,7 +426,7 @@ mod tests {
             all.extend_from_slice(&chunk);
             samples.lock().unwrap().extend_from_slice(&chunk);
             let (_, offset) = received.recv_timeout(Duration::from_secs(3)).unwrap();
-            assert_eq!(offset, if i == 0 { 0 } else { i * 5_000 - 200 });
+            assert_eq!(offset, if i == 0 { 0 } else { (i - 1) * 5_000 + 4_200 });
         }
         {
             let captured = samples.lock().unwrap();
@@ -441,6 +442,27 @@ mod tests {
         assert_eq!(length, 800 * RATE / 1_000);
     }
 
+    #[test]
+    fn cancellation_does_not_wait_for_in_flight_recognition_or_send_a_tail() {
+        let samples = Arc::new(Mutex::new(Samples::from(vec![0.2; 4 * RATE])));
+        samples.lock().unwrap().extend(vec![0.0; RATE]);
+        let (entered, seen) = mpsc::channel();
+        let (release, wait) = mpsc::channel();
+        let pause = Pause::start_with(samples, move |_, _| {
+            entered.send(()).unwrap();
+            wait.recv().unwrap();
+            Ok(TranscriptData::default())
+        }).unwrap();
+        seen.recv_timeout(Duration::from_secs(3)).unwrap();
+        let worker_stop = Arc::clone(&pause.stop);
+        let started = std::time::Instant::now();
+        drop(pause);
+        assert!(started.elapsed() < Duration::from_secs(1));
+        assert!(worker_stop.load(Ordering::Acquire));
+        release.send(()).unwrap();
+        assert!(seen.recv_timeout(Duration::from_secs(3)).is_err());
+    }
+
     /// Local-only benchmark: set APPARENT_PAUSE_TEST_WAV and APPARENT_MODELS_DIR.
     #[test]
     #[ignore]
@@ -450,6 +472,8 @@ mod tests {
         let start = std::time::Instant::now();
         let baseline = crate::capture::engine::runtime::audio::transcription::speech::transcribe(std::path::Path::new(&path)).unwrap();
         let batch_ms = start.elapsed().as_millis();
+        let samples = crate::capture::engine::runtime::audio::audio::decode_wav_16k(&wav).unwrap();
+        let whole = crate::capture::engine::runtime::audio::transcription::speech::Incremental::new().unwrap().transcribe(&samples, 0).unwrap();
         let pause = simulate(&wav, 1.0).unwrap();
         let stop = std::time::Instant::now();
         let candidate = pause.finish(&wav).unwrap();
@@ -459,7 +483,11 @@ mod tests {
             baseline.words.len(),
             candidate.words.len()
         );
-        assert!(!baseline.text.is_empty() && !candidate.text.is_empty());
+        if let Ok(out) = std::env::var("APPARENT_PAUSE_TEST_REPORT") {
+            std::fs::write(out, serde_json::to_vec_pretty(&serde_json::json!({"whole": whole, "batch": baseline, "pause": candidate})).unwrap()).unwrap();
+        }
+        assert_eq!(baseline.text.is_empty(), candidate.text.is_empty());
+        assert!(baseline.missing.is_none() && candidate.missing.is_none());
         assert!(candidate.words.windows(2).all(|w| w[0].t0 <= w[1].t0));
     }
 }
