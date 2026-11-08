@@ -3,10 +3,9 @@
 //! `voice-control` before Hex moved it, holds the port and bearer token; `GET /health`, `GET /models`, `POST /transcriptions`).
 //!
 //! Hex returns text and a duration but no word times, and Apparent needs them to hand each
-//! keyframe its words. So the recording is cut into speech islands (`audio::speech_islands`),
-//! each island is transcribed on its own, and its words are spread across it by length. Those
-//! times are estimates (`TranscriptData::estimated`): they place words inside the right island
-//! but not on the right syllable, so spoken cues never cut keyframes from them.
+//! keyframe its words. The recording is sent in continuous bounded chunks; energy suggests
+//! cut points but never excludes samples. Words are spread over each chunk by length.
+//! Times are estimates (`TranscriptData::estimated`), so spoken cues never cut keyframes.
 //!
 //! "Hex isn't connected" covers a missing discovery file, a refused connection, a rejected
 //! token and any API version but 2. Nothing here logs or prints the token.
@@ -60,13 +59,8 @@ const RESPONSE_LIMIT: u64 = 8 * 1024 * 1024;
 const BUSY_RETRIES: u32 = 5;
 const BUSY_BACKOFF: Duration = Duration::from_millis(200);
 
-const MIN_ISLAND_MS: u64 = 120;
-const MERGE_GAP_MS: u64 = 700;
-const MAX_MERGED_MS: u64 = 30_000;
-const MAX_FORCED_MERGE_MS: u64 = 8 * 60_000;
-const MAX_CLIPS: usize = 24;
-/// Extra audio on each side of an island sent to Hex, so edge words aren't clipped.
-const CLIP_PAD_MS: u64 = 200;
+const MAX_CLIP_MS: u64 = 30_000;
+const CUT_SEARCH_MS: u64 = 5_000;
 
 #[derive(Clone, PartialEq, Eq)]
 pub struct Endpoint {
@@ -455,33 +449,31 @@ pub fn watch() {
         });
 }
 
-/// Speech spans worth one request each: tiny blips dropped, near neighbours joined so a clip
-/// holds whole phrases, and never more than `MAX_CLIPS`.
-pub fn plan_clips(islands: &[(u64, u64)], duration_ms: u64) -> Vec<(u64, u64)> {
-    let mut clips: Vec<(u64, u64)> = Vec::new();
-    for &(start, end) in islands {
-        let (start, end) = (start.min(duration_ms), end.min(duration_ms));
-        if end.saturating_sub(start) < MIN_ISLAND_MS {
-            continue;
-        }
-        match clips.last_mut() {
-            Some(last)
-                if start.saturating_sub(last.1) < MERGE_GAP_MS && end - last.0 <= MAX_MERGED_MS =>
-            {
-                last.1 = end;
-            }
-            _ => clips.push((start, end)),
-        }
-    }
-    while clips.len() > MAX_CLIPS {
-        let Some(index) = (1..clips.len())
-            .filter(|&i| clips[i].1 - clips[i - 1].0 <= MAX_FORCED_MERGE_MS)
-            .min_by_key(|&i| clips[i].0 - clips[i - 1].1)
-        else {
-            break;
+/// Continuous source-clock coverage. Cut at the quietest 50 ms window in the last
+/// five seconds of each bounded request. Energy never decides which samples are sent.
+pub fn plan_clips(samples: &[f32]) -> Vec<(u64, u64)> {
+    let duration_ms = (samples.len() as u64).div_ceil(SAMPLE_RATE_KHZ);
+    let mut clips = Vec::new();
+    let mut start = 0_u64;
+    while start < duration_ms {
+        let limit = start.saturating_add(MAX_CLIP_MS).min(duration_ms);
+        let end = if limit == duration_ms {
+            limit
+        } else {
+            // Equal minima choose the earlier cut, leaving context before the next phrase.
+            ((limit - CUT_SEARCH_MS)..limit).step_by(50)
+                .map(|at| {
+                    let from = (at * SAMPLE_RATE_KHZ) as usize;
+                    let to = ((at + 50) * SAMPLE_RATE_KHZ) as usize;
+                    let energy: f64 = samples[from..to].iter().map(|&v| {
+                        if v.is_finite() { f64::from(v).powi(2) } else { 0.0 }
+                    }).sum();
+                    (at + 25, energy)
+                })
+                .min_by(|a, b| a.1.total_cmp(&b.1)).unwrap().0
         };
-        clips[index - 1].1 = clips[index].1;
-        clips.remove(index);
+        clips.push((start, end));
+        start = end;
     }
     clips
 }
@@ -531,8 +523,8 @@ pub fn spread_words(text: &str, start: u64, end: u64) -> (Vec<TranscriptSegment>
 }
 
 /// Transcribes each clip with `send` (given that clip's WAV) and spreads its words over it.
-/// A clip Hex refuses is skipped; any other failure (or every clip refused) fails the whole
-/// recording so the caller can use another transcriber.
+/// Any failed clip fails the whole recording so the caller can use another transcriber;
+/// never publish a successful prefix after a rejected request.
 pub fn transcribe_clips(
     samples: &[f32],
     clips: &[(u64, u64)],
@@ -546,27 +538,16 @@ pub fn transcribe_clips(
         estimated: true,
         ..Default::default()
     };
-    let mut rejected = 0;
     let mut texts: Vec<String> = Vec::new();
     for &(start, end) in clips {
         ensure!(Instant::now() < deadline, "Hex took too long");
-        let from = (start.saturating_sub(CLIP_PAD_MS) * SAMPLE_RATE_KHZ) as usize;
-        let to = (((end + CLIP_PAD_MS) * SAMPLE_RATE_KHZ) as usize).min(samples.len());
+        let from = (start * SAMPLE_RATE_KHZ) as usize;
+        let to = ((end * SAMPLE_RATE_KHZ) as usize).min(samples.len());
         if from >= to {
             continue;
         }
         let wav = audio::encode_wav_16k(&samples[from..to])?;
-        let text = match send(&wav) {
-            Ok(text) => text,
-            Err(Failure::Rejected { status, code }) => {
-                crate::capture::engine::runtime::apparent_log(format!(
-                    "Hex rejected a clip ({status} {code}); skipping it"
-                ));
-                rejected += 1;
-                continue;
-            }
-            Err(failure) => return Err(failure.into()),
-        };
+        let text = send(&wav)?;
         let text = text.split_whitespace().collect::<Vec<_>>().join(" ");
         if text.is_empty() {
             continue;
@@ -576,15 +557,11 @@ pub fn transcribe_clips(
         transcript.words.extend(words);
         texts.push(text);
     }
-    ensure!(
-        rejected == 0 || rejected < clips.len(),
-        "Hex refused every clip"
-    );
     transcript.text = texts.join(" ");
     Ok(transcript)
 }
 
-/// Transcribes a recording with `model`, as `transcribe_clips` over its speech islands.
+/// Transcribes the complete recording with bounded requests and source-clock estimates.
 pub fn transcribe_audio(
     client: &Client,
     model: &str,
@@ -592,12 +569,7 @@ pub fn transcribe_audio(
     audio: &RecordedAudio,
 ) -> Result<TranscriptData> {
     let samples = audio::decode_wav_16k(&audio.wav_bytes)?;
-    let duration_ms = samples.len() as u64 / SAMPLE_RATE_KHZ;
-    let mut clips = plan_clips(&audio::speech_islands(&samples), duration_ms);
-    if clips.is_empty() && duration_ms >= MIN_ISLAND_MS * 4 {
-        // Too quiet to find speech by energy: let Hex hear the whole thing.
-        clips.push((0, duration_ms));
-    }
+    let clips = plan_clips(&samples);
     transcribe_clips(&samples, &clips, model, |wav| {
         client.transcribe_retrying(wav, model, language)
     })
@@ -884,26 +856,31 @@ mod tests {
     }
 
     #[test]
-    fn clips_drop_blips_merge_neighbours_and_stay_bounded() {
-        assert_eq!(
-            plan_clips(
-                &[(0, 50), (1_000, 1_500), (1_900, 2_400), (5_000, 5_300)],
-                10_000
-            ),
-            vec![(1_000, 2_400), (5_000, 5_300)]
-        );
-        assert!(plan_clips(&[], 1_000).is_empty());
-        let many: Vec<_> = (0..100).map(|i| (i * 2_000, i * 2_000 + 500)).collect();
-        let clips = plan_clips(&many, 300_000);
-        assert!(clips.len() <= MAX_CLIPS);
-        assert_eq!(clips[0].0, 0);
-        assert_eq!(clips.last().unwrap().1, 99 * 2_000 + 500);
-        assert!(clips.windows(2).all(|pair| pair[0].1 <= pair[1].0));
-        // A long unbroken stretch is not glued to its neighbour.
-        assert_eq!(
-            plan_clips(&[(0, 29_800), (30_000, 31_000)], 40_000).len(),
-            2
-        );
+    fn chunk_wavs_preserve_every_pcm_sample_including_sub_ms_tail() {
+        let samples: Vec<f32> = (0..16_000 * 61 + 7).map(|i| ((i % 1000) as f32 - 500.0) / 2000.0).collect();
+        let clips = plan_clips(&samples);
+        let mut received = Vec::new();
+        transcribe_clips(&samples, &clips, "m", |wav| {
+            received.extend(audio::decode_wav_16k(wav).unwrap());
+            Ok(String::new())
+        }).unwrap();
+        let expected = audio::decode_wav_16k(&audio::encode_wav_16k(&samples).unwrap()).unwrap();
+        assert_eq!(received, expected);
+    }
+
+    #[test]
+    fn selection_preserves_quiet_gaps_short_words_and_final_tail() {
+        // Loud narration, a 100 ms command and quiet narration absent from energy islands.
+        let mut samples = vec![0.001; 61_003 * 16];
+        samples[16_000..32_000].fill(0.2);
+        samples[64_000..65_600].fill(0.2);
+        let clips = plan_clips(&samples);
+        assert_eq!(clips.first().unwrap().0, 0);
+        assert_eq!(clips.last().unwrap().1, 61_003);
+        assert!(clips.windows(2).all(|p| p[0].1 == p[1].0));
+        assert!(clips.iter().all(|&(a, b)| b > a && b - a <= 30_000));
+        assert_eq!(plan_clips(&vec![0.0; 800]), vec![(0, 50)]);
+        assert!(plan_clips(&[]).is_empty());
     }
 
     #[test]
@@ -942,40 +919,21 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_clip_is_skipped_but_other_failures_abort() {
+    fn a_refused_clip_aborts_even_after_a_successful_prefix() {
         let samples = vec![0.1_f32; 16_000 * 4];
-        let clips = [(0, 1_000), (2_000, 3_000)];
-        let mut first = true;
-        let transcript = transcribe_clips(&samples, &clips, "m", |_| {
-            if std::mem::take(&mut first) {
-                Err(Failure::Rejected {
-                    status: 400,
-                    code: "invalid-audio".into(),
-                })
-            } else {
-                Ok("kept".into())
+        let mut calls = 0;
+        assert!(transcribe_clips(&samples, &[(0, 1_000), (2_000, 3_000)], "m", |_| {
+            calls += 1;
+            if calls == 1 { Ok("prefix".into()) } else {
+                Err(Failure::Rejected { status: 400, code: "invalid-audio".into() })
             }
-        })
-        .unwrap();
-        assert_eq!(transcript.text, "kept");
-        assert!(
-            transcribe_clips(&samples, &clips, "m", |_| Err(Failure::Rejected {
-                status: 400,
-                code: "x".into()
-            }))
-            .is_err()
-        );
-        assert!(transcribe_clips(&samples, &clips, "m", |_| Err(Failure::Busy)).is_err());
-        assert!(
-            transcribe_clips(&samples, &clips, "m", |_| Err(Failure::Unavailable(
-                "down".into()
-            )))
-            .is_err()
-        );
+        }).is_err());
+        assert_eq!(calls, 2);
+        assert!(transcribe_clips(&samples, &[(0, 1_000)], "m", |_| Err(Failure::Busy)).is_err());
     }
 
     #[test]
-    fn transcribe_audio_sends_only_speech_to_the_fake_hex() {
+    fn transcribe_audio_sends_continuous_audio_to_the_fake_hex() {
         let fake = fake_hex(|_, path, _| {
             assert!(path.starts_with("/transcriptions?model=parakeet_v3"));
             (
@@ -996,17 +954,11 @@ mod tests {
             pause: Default::default(),
         };
         let transcript = transcribe_audio(&client(fake.port), "parakeet_v3", "en", &audio).unwrap();
-        assert_eq!(fake.requests.lock().unwrap().len(), 2);
-        assert_eq!(transcript.words.len(), 6);
-        assert!(
-            transcript.words[..3]
-                .iter()
-                .all(|w| w.t0 >= 1_000 && w.t1 <= 2_000)
-        );
-        assert!(
-            transcript.words[3..]
-                .iter()
-                .all(|w| w.t0 >= 4_000 && w.t1 <= 5_000)
-        );
+        let requests = fake.requests.lock().unwrap();
+        assert_eq!(requests.len(), 1);
+        assert_eq!(requests[0].2, audio.wav_bytes.len());
+        assert_eq!(transcript.words.len(), 3);
+        assert_eq!(transcript.words.first().unwrap().t0, 0);
+        assert_eq!(transcript.words.last().unwrap().t1, 6_000);
     }
 }
