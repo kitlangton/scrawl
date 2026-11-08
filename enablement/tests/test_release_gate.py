@@ -88,10 +88,38 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
+    def test_parallel_partitions_are_required_and_use_full_candidate(self):
+        workflow = (Path(__file__).resolve().parents[2] /
+                    '.github/workflows/verification-platform.yml').read_text()
+        self.assertIn('needs: [select, desktop-ui, connect-client, connect-browser, rust]', workflow)
+        self.assertIn('all(job["result"] == "success" for job in jobs.values())', workflow)
+        for suite in ('connect-client', 'connect-browser'):
+            section = re.search(r'^  ' + suite + r':\n(.*?)(?=^  [a-z]|\Z)',
+                                workflow, re.M | re.S)[1]
+            self.assertIn('needs: select', section)
+            self.assertIn('fetch-depth: 0', section)
+            self.assertIn('BASE=$(git hash-object -t tree /dev/null)', section)
+            self.assertIn('--base "$BASE" --suite ' + suite + ' --run --online', section)
+        client = workflow.split('  connect-client:', 1)[1].split('  connect-browser:', 1)[0]
+        self.assertIn('workspaces: connect/client -> target', client)
+        rust = workflow.split('  rust:', 1)[1].split('  release-ready:', 1)[0]
+        self.assertNotIn('connect/client -> target', rust)
+        self.assertNotIn('setup-chrome', rust)
+        for platform in ('linux', 'macos'):
+            original = copy.deepcopy(self.jobs[platform])
+            for suite in ('connect-client', 'connect-browser'):
+                for conclusion in ('failure', 'cancelled', 'skipped'):
+                    self.jobs[platform] = copy.deepcopy(original)
+                    job = next(j for j in self.jobs[platform] if suite in j['name'])
+                    job['conclusion'] = conclusion
+                    with self.assertRaises(ValueError):
+                        self.admit(platform)
+            self.jobs[platform] = original
+
     def test_manual_feature_checks_preserve_publication_boundary(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()
-        for job in ('desktop-ui', 'rust'):
+        for job in ('desktop-ui', 'rust', 'connect-client', 'connect-browser'):
             section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
             self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'", section)
         receipt = workflow.split('  release-ready:\n', 1)[1]
@@ -131,7 +159,8 @@ class AdmissionTests(unittest.TestCase):
         workflow = Path(__file__).resolve().parents[2] / gate.WORKFLOWS['macos']
         self.assertIn('runner: macos-15-intel', workflow.read_text())
         names = ['verify / select', 'verify / desktop-ui (macos-15-intel)',
-                 'verify / rust (macos-15-intel)', 'verify / Release verification']
+                 'verify / rust (macos-15-intel)', 'verify / connect-client (macos-15-intel)',
+                 'verify / connect-browser (macos-15-intel)', 'verify / Release verification']
         self.jobs['macos'] = [dict(name=name, status='completed', conclusion='success')
                               for name in names]
         self.assertEqual(self.admit('macos'), self.sha)

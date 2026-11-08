@@ -108,7 +108,7 @@ class OwnerTests(unittest.TestCase):
     def test_workflow_keeps_full_verification_and_separate_advisory(self):
         workflow = (lanes.ROOT / '.github/workflows/verification-platform.yml').read_text()
         self.assertIn('git hash-object -t tree /dev/null', workflow)
-        self.assertIn('verification.py --base "$BASE" --run --online', workflow)
+        self.assertIn('verification.py --base "$BASE" --suite rust --run --online', workflow)
         self.assertIn('owner_lanes.py --base HEAD^', workflow)
         self.assertNotIn('needs.select.outputs.selected', workflow)
 

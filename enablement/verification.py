@@ -202,7 +202,19 @@ def run_pr_checks():
                         "-p", pattern], cwd=ROOT, check=True)
 
 
-def run_checks(selection, offline=True):
+SUITES = ("all", "rust", "connect-client", "connect-browser")
+
+
+def run_checks(selection, offline=True, suite="all"):
+    if suite not in SUITES:
+        raise ValueError(f"Unknown verification suite: {suite}")
+    selection = dict(selection)
+    if suite == "connect-client":
+        selection.update(root=False, engine=False, browser=False)
+    elif suite == "connect-browser":
+        selection.update(root=False, engine=False)
+    elif suite == "rust":
+        selection["browser"] = False
     if selection["root"] or selection["engine"]:
         check_temp_environment()
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
@@ -235,6 +247,13 @@ def run_checks(selection, offline=True):
             if command == "test":
                 args += ["--", "--test-threads=2"]
             subprocess.run(args, cwd=ROOT, check=True)
+    if suite == "connect-client":
+        check_temp_environment()
+        for command in ("build", "test"):
+            args = cargo + [command, "--manifest-path", "connect/client/Cargo.toml", dependency_mode]
+            if command == "test":
+                args += ["--", "--test-threads=2"]
+            subprocess.run(args, cwd=ROOT, check=True)
     if selection.get("browser"):
         # Use the existing package fixtures, including the separate loopback
         # build. Do not substitute a production artifact with synthetic config.
@@ -248,6 +267,7 @@ def run_checks(selection, offline=True):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--base", required=True)
+    parser.add_argument("--suite", choices=SUITES, default="all", help="Explicit CI partition; default retains all changed-tree checks")
     parser.add_argument("--preflight", action="store_true", help="Check temporary environment only; no builds or mutations")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--run", action="store_true")
@@ -268,7 +288,7 @@ def main():
     if args.pr:
         run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online)
+        run_checks(selection, offline=not args.online, suite=args.suite)
 
 
 if __name__ == "__main__":

@@ -86,6 +86,56 @@ jobs:
             npm run test:electron
           fi
 
+  connect-client:
+    needs: select
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    name: connect-client (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: connect/client -> target
+      - name: Independent Connect client build and tests
+        shell: bash
+        run: |
+          verification_tmp="$(mktemp -d "$HOME/.apparent-client.XXXXXX")"
+          trap 'rm -rf -- "$verification_tmp"' EXIT
+          export TMPDIR="$verification_tmp"
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "$BASE" --suite connect-client --run --online
+
+  connect-browser:
+    needs: select
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    name: connect-browser (${{ inputs.runner }})
+    runs-on: ${{ inputs.runner }}
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
+      - name: Independent Connect browser build and fixtures
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+        run: |
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "$BASE" --suite connect-browser --run --online
+
   rust:
     needs: select
     if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
@@ -119,26 +169,11 @@ jobs:
           workspaces: |
             . -> target
             capture/engine -> target
-            connect/client -> target
       - uses: actions/setup-node@v4
         if: needs.select.outputs.root == 'true' || needs.select.outputs.browser == 'true'
         with:
           node-version: '22'
-      - uses: oven-sh/setup-bun@v2
-        if: needs.select.outputs.browser == 'true'
-        with:
-          bun-version: '1.3.10'
-      - uses: browser-actions/setup-chrome@v1
-        if: needs.select.outputs.browser == 'true'
-        id: chrome
-      - name: Verify the independent Connect client package
-        if: needs.select.outputs.root == 'true'
-        run: |
-          cargo build --manifest-path connect/client/Cargo.toml --locked
-          cargo test --manifest-path connect/client/Cargo.toml --locked -- --test-threads=2
       - name: Execute the same changed-tree checks (not GUI acceptance)
-        env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
           verification_tmp="$(mktemp -d "$HOME/.apparent-verification.XXXXXX")"
@@ -162,7 +197,7 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online
+          python3 enablement/verification.py --base "$BASE" --suite rust --run --online
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -267,8 +302,13 @@ jobs:
 
   release-ready:
     name: Release verification
-    needs: [select, desktop-ui, rust]
+    needs: [select, desktop-ui, connect-client, connect-browser, rust]
     if: github.ref == 'refs/heads/main' || (github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/t3/onboarding-mac-release-baseline' && github.event_name == 'workflow_dispatch')
     runs-on: ubuntu-24.04
     steps:
+      - name: Require every verification partition
+        env:
+          RESULTS: ${{ toJSON(needs) }}
+        run: |
+          python3 -c 'import json, os; jobs = json.loads(os.environ["RESULTS"]); assert all(job["result"] == "success" for job in jobs.values()), jobs'
       - run: echo "Platform checks passed for $GITHUB_SHA"

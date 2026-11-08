@@ -38,6 +38,17 @@ each coalescing superseded runs within its own platform. Both call the same reus
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
 latest push delta: changes from a cancelled earlier run cannot escape verification.
+After the small `select` preflight, `rust`, `desktop-ui`, `connect-client` and
+`connect-browser` run independently on each caller's platform. The client job
+retains its locked package build/tests and package-local target cache; root tests
+still run their real-provider client integrations. The browser job retains every
+build and browser fixture. All partitions are required by the release receipt
+and admission inventory; failed, cancelled or skipped partitions cannot admit it.
+Verifier `--suite rust|connect-client|connect-browser` routes these jobs explicitly;
+the default `all` preserves the existing local changed-tree command inventory
+(the independent client build/tests were historically separate workflow commands).
+Each job plans against the empty tree; dependency caches are not proof reuse.
+
 Explicit `workflow_dispatch` on a feature branch runs the same full test jobs.
 Feature dispatch does not emit the main-only `Release verification` receipt and
 cannot authorize publication. Neither workflow has an automatic push trigger.
