@@ -155,13 +155,13 @@ test('known old green becomes pending on initial and final read failure; later P
 });
 test('PR lifecycle hint clears old green even when PR enumeration fails', async () => {
  const {reconcileAll}=await import('./reporter.ts');let state='success';
- assert.throws(()=>reconcileAll((path,body)=>{if(body){state=body.state;return {};}throw Error('listing unavailable');}, {pull_request:{head:{sha:'head'},base:{ref:'main',repo:{full_name:repo}},html_url:'https://github.com'}}));
+ assert.throws(()=>reconcileAll((path,body)=>{if(body){state=body.state;return {};}throw Error('listing unavailable');}, {pull_request:{number:1,head:{sha:'head'},base:{ref:'main',repo:{full_name:repo}},html_url:'https://github.com'}}));
  assert.equal(state,'pending');
 });
 
 test('manual lifecycle hint clears known head when listing fails', async () => {
  const {reconcileAll}=await import('./reporter.ts');let state='success';
- assert.throws(()=>reconcileAll((path,body)=>{if(body){state=body.state;return {};}throw Error('listing unavailable');}, {workflow_run:{id:1,head_sha:'head',head_repository:{full_name:repo},pull_requests:[{head:{sha:'head'},base:{ref:'main'}}]}}));
+ assert.throws(()=>reconcileAll((path,body)=>{if(body){state=body.state;return {};}throw Error('listing unavailable');}, {workflow_run:{id:1,event:'workflow_dispatch',path:'.github/workflows/verification.yml',head_sha:'head',head_repository:{full_name:repo},pull_requests:[{head:{sha:'head'},base:{ref:'main'}}]}}));
  assert.equal(state,'pending');
 });
 
