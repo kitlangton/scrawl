@@ -886,6 +886,7 @@
       "group": "agent",
       "name": "Parakeet on device",
       "says": "Transcribes with Hex's Parakeet model, or downloads Apparent's own copy (730 MB) at first launch.",
+      "note": "Apparent's default Unified English model supports English only. Linux pause and whole-WAV recognition request en; appleLocale does not control them. Other languages require an explicitly configured recognizer command; Command/Hex failure falls back to local Parakeet. Non-English Linux runtime acceptance remains open in #1056.",
       "status": "stable@0.3.6",
       "platforms": ["linux"],
       "docs": ["capture/desktop/docs/linux/linux.md"]
