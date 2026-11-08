@@ -30,8 +30,8 @@ older client/server source.
 It validates the theme, selector, push-hook, publication-admission contracts and
 workflow syntax with read-only permissions. Every non-deletion push runs cheap
 contracts plus the affected owners' local suites, selected by
-`enablement/local-tests/run.ts` over the full merge-base-to-HEAD delta. Reporter,
-native-prerequisite, timing and local-selector regressions are included in the
+`enablement/local-tests/run.ts` over the full merge-base-to-HEAD delta. Native
+prerequisite, timing and local-selector regressions are included in the
 cheap contracts in CI and locally. Failed selected commands reject the push.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
@@ -53,8 +53,9 @@ root rebuild and receives its exact executable through `APPARENT_BIN`. New enabl
 automatically. Other capture changes retain the broad Rust/Engine verifier. Shared UI
 also selects Desktop, service and root integration. Package manifests/lockfiles
 select the entire owner, with locked installs and ordinary build prerequisites.
-Missing tools/packages fail rather than silently skip. Use Node 22.23+ and Bun
-1.3.10 as in CI; run hook-backed pushes once through `t3-build` on Clanker.
+Missing tools/packages fail rather than silently skip. Use Node 22.23+; selected
+web/Public packages also need Bun 1.3.10. Run hook-backed pushes once through
+`t3-build` on Clanker.
 
 This is owner-level selection, not inferred per-file test coverage. It runs the
 canonical automated local suites; platform-only/ignored native scenarios, release

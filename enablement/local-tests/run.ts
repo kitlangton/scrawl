@@ -101,7 +101,6 @@ export function contractTests(cwd = root): Command[] {
   return [
     { argv: ['node', '--experimental-strip-types', '--test', 'enablement/local-tests/run.test.ts',
       ...prerequisites, 'enablement/timing/command.test.ts'], cwd: '.' },
-    { argv: ['bun', 'test', 'enablement/verification-status/'], cwd: '.' },
   ];
 }
 

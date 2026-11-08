@@ -7,7 +7,7 @@ import { spawnSync } from 'node:child_process';
 import { select, owners, changedPaths, captureToolTests, commands, contractTests, execute, root } from './run.ts';
 
 test('owner selection retains consumers and unrelated packages stay out', () => {
-  assert.deepEqual(select(['enablement/verification-status/reporter.ts']), ['tooling']);
+  assert.deepEqual(select(['enablement/local-tests/run.ts']), ['tooling']);
   assert.deepEqual(select(['capture/desktop/ui/frontend/src/Settings.tsx']), ['capture', 'desktop']);
   assert.deepEqual(select(['connect/client/src/config.rs']), ['capture', 'client']);
   assert.deepEqual(select(['shared/ui/src/button.tsx']), ['capture', 'desktop', 'service']);
@@ -25,15 +25,16 @@ test('unknown, missing history and empty deltas cannot silently skip coverage', 
   assert.deepEqual(select(['README.md'], false), [...owners]);
 });
 
-test('CI reporter, prerequisite and timing regressions are mandatory even on docs pushes', () => {
+test('prerequisite, selector and timing regressions are mandatory even on docs pushes', () => {
   const plan = commands([], 'base', 'head');
   const args = [...plan, ...contractTests()].flatMap(command => command.argv);
-  for (const path of ['enablement/verification-status/',
-    'enablement/prerequisites/native.test.ts', 'enablement/timing/command.test.ts', 'enablement/local-tests/run.test.ts']) {
+  for (const path of ['enablement/prerequisites/native.test.ts',
+    'enablement/timing/command.test.ts', 'enablement/local-tests/run.test.ts']) {
     assert.ok(args.includes(path), path);
   }
   assert.ok(args.includes('--pr'));
   assert.ok(!args.includes('cargo'));
+  assert.ok(!args.some(arg => arg.includes('verification-status')), 'retired reporter stays absent from local gates');
 });
 
 test('package gates execute complete canonical suites including browser and Electron smoke', () => {
