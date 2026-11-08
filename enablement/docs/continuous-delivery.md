@@ -324,10 +324,12 @@ policy and publishes **Verification complete**. It never dispatches native work.
 PR edits and platform/Public workflow lifecycle events no longer start reporters.
 There are no automatic credentialed status writes or global PR scans.
 
-This status is a manually refreshed snapshot, not a continuously maintained merge
-gate. Do not add it to required checks under this manual-only design. Existing
-source review, platform/native acceptance and exact-commit publication admission
-remain required independently; a green repository-check run does not substitute.
+Main requires this Actions-owned status. Under the manual-only design it must be
+explicitly refreshed from trusted main after the candidate's required manual
+workflows finish, and again when the candidate or relevant base evidence changes.
+No automated refresh is implied by a green repository-check run. Preserve the
+required check and existing source review, platform/native acceptance and
+exact-commit publication admission; do not write a status by hand.
 
 The manual reporter retains its evidence rules: native changes require both manual
 exact-head platform workflows, their latest run/attempt and the required successful
@@ -361,3 +363,13 @@ gh workflow run checks.yml --ref main -f pull_request=1094
 Its own Actions-token quota preflight must pass before status writes. A user-token
 quota check or rerunning application/native verification does not repair reporter
 delivery. If quota remains insufficient, retain the hold until the reported reset.
+
+
+The disposable Mac Storage fixture waits for real Storage/Retention read receipts
+before its single Change click. Its TypeScript CI driver separates the owned
+Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
+operation. The initial picker and nested Go sheet are distinct readiness phases;
+no mutation, keyboard shortcut or preference write is retried. Existing exact
+PID/window/sheet/control checks, Choose/Cancel/Reset assertions, native consent,
+process cleanup and test deadlines remain required. This is test orchestration,
+not a change to installed Desktop routing or application persistence policy.
