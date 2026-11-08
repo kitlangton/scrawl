@@ -99,6 +99,17 @@ test('capture script changes discover offline contracts including nested and new
   assert.ok(suites.every(command => command.argv.at(-1) === 'test*.py'));
 }));
 
+test('new native prerequisite tests join the mandatory contract inventory automatically', () => fixture((dir) => {
+  const folder = join(dir, 'enablement/prerequisites');
+  mkdirSync(folder, { recursive: true });
+  assert.throws(() => contractTests(dir), /inventory is empty/);
+  writeFileSync(join(folder, 'new-picker.test.ts'), '');
+  writeFileSync(join(folder, 'helper.ts'), '');
+  const args = contractTests(dir)[0].argv;
+  assert.ok(args.includes('enablement/prerequisites/new-picker.test.ts'));
+  assert.ok(!args.includes('enablement/prerequisites/helper.ts'));
+}));
+
 test('command failure stops subsequent tests and absent required package fails', () => fixture((dir) => {
   const receipt = join(dir, 'must-not-exist');
   assert.throws(() => execute([

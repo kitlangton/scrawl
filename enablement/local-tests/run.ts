@@ -1,5 +1,6 @@
 // Local owner-level gates. Native/release proof remains separately required.
 import { spawnSync } from 'node:child_process';
+import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -86,10 +87,14 @@ export function commands(selected: Owner[], base: string, head: string, platform
   return result;
 }
 
-export function contractTests(): Command[] {
+export function contractTests(cwd = root): Command[] {
+  const prerequisites = readdirSync(resolve(cwd, 'enablement/prerequisites'))
+    .filter(name => name.endsWith('.test.ts')).sort()
+    .map(name => `enablement/prerequisites/${name}`);
+  if (!prerequisites.length) throw Error('Native prerequisite contract inventory is empty');
   return [
     { argv: ['node', '--experimental-strip-types', '--test', 'enablement/local-tests/run.test.ts',
-      'enablement/prerequisites/native.test.ts', 'enablement/timing/command.test.ts'], cwd: '.' },
+      ...prerequisites, 'enablement/timing/command.test.ts'], cwd: '.' },
     { argv: ['bun', 'test', 'enablement/verification-status/'], cwd: '.' },
   ];
 }
