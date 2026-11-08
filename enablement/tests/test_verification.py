@@ -96,7 +96,7 @@ class SelectionTests(unittest.TestCase):
         self.assertEqual((selected["root"], selected["engine"], selected["browser"]),
                          (False, False, True))
         for path in ["connect/web/src/Other.tsx", "connect/web/src/sharedlinks.tsx",
-                     "public/site/scripts/cd/publish_pages.py", "public/site/public/hosted/source-pond-v4.png",
+                     "public/site/scripts/cd/publish-pages.ts", "public/site/public/hosted/source-pond-v4.png",
                      "public/site/public/hosted/agent-pond-v4.png", "public/site/public/hosted/agent-reading-v4.png",
                      "public/site/public/HostGrotesk-Variable.ttf", "public/site/public/apparent-wordmark.svg"]:
             with self.subTest(path=path):
@@ -312,7 +312,7 @@ class SelectionTests(unittest.TestCase):
                                 changed = commit()
                                 broad(base, changed)
                     for path in ["Cargo.lock", "build.rs", "src/unknown.rs",
-                                 "enablement/tests/test_verification.py", "public/site/scripts/cd/publish_pages.py"]:
+                                 "enablement/tests/test_verification.py", "public/site/scripts/cd/publish-pages.ts"]:
                         git("read-tree", head)
                         oid = git("hash-object", "-w", "--stdin", input="mixed input\n")
                         git("update-index", "--add", "--cacheinfo", "100644", oid, path)

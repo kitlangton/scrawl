@@ -91,7 +91,7 @@ class Recipe:
         self.jobs, self.ids, self.serial = [], [], 0
         self.report = {"schema": 1, "proof": "native execution required; synthetic transport tests are not native proof",
                        "gates": {key: "UNRUN" for key in (
-                           "environment", "scene", "gui_ready", "save_recording", "saved_receipt", "bundle_structure",
+                           "environment", "h264_decoder", "scene", "gui_ready", "save_recording", "saved_receipt", "bundle_structure",
                            "cancel_recording", "cancelled_receipt", "cancel_idle", "owned_process_cleanup",
                            "selected_target_pixels", "movie_full_decode", "movie_nonblack_changing",
                            "visual_bundle_review", "shortcut_picker_acceptance", "audio", "cancel_disk_cleanup", "runner_cleanup")},
@@ -205,8 +205,38 @@ class Recipe:
         self.save()
         return owned
 
+    def check_decoder(self):
+        """Probe this candidate's GStreamer, not FFmpeg's decoder registry."""
+        self.report["stage"] = "h264_decoder"
+        sample = self.out / "decoder-sample.mp4"
+        commands = (
+            ["ffmpeg", "-nostdin", "-v", "error", "-f", "lavfi", "-i", "color=c=blue:s=160x90:d=0.2",
+             "-c:v", "libx264", "-pix_fmt", "yuv420p", str(sample)],
+            [str(self.binary), "decoder-check", str(sample)],
+        )
+        for argv in commands:
+            self.serial += 1
+            stem = f"command-{self.serial:03d}"
+            record = {"argv": argv, "stdout": stem + ".stdout", "stderr": stem + ".stderr"}
+            self.report["commands"].append(record)
+            self.save()
+            with (self.out / record["stdout"]).open("w") as stdout, (self.out / record["stderr"]).open("w") as stderr:
+                try:
+                    result = subprocess.run(argv, env=self.env, stdout=stdout, stderr=stderr, timeout=20)
+                    record["exit"] = result.returncode
+                except (OSError, subprocess.TimeoutExpired) as error:
+                    raise Failure("environment", f"H.264 decoder preflight could not run; see {stem} streams: {error}") from error
+            self.save()
+            if result.returncode:
+                raise Failure("environment", f"H.264 decoder preflight failed; prepare the guest runtime before capture. See {stem} streams")
+        if "(160x90)" not in (self.out / record["stdout"]).read_text():
+            raise Failure("environment", "H.264 decoder preflight did not return the sample's native dimensions")
+        self.report["gates"]["h264_decoder"] = "PASS"
+        self.save()
+
     def run(self):
         self.prepare()
+        self.check_decoder()
         self.report["stage"] = "scene"
         ready = self.out / "scene.json"
         scene_job = self.launch([sys.executable, str(Path(__file__).resolve()), "--scene", str(ready)], "scene.log")

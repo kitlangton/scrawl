@@ -53,8 +53,10 @@ feature pushes while preserving exact-HEAD/clean-tree guards. Explicit local
 `enablement/verification.py --run` and direct main pushes retain conservative
 changed-tree build/tests. Repository checks run the cheap contracts and workflow
 validation automatically on PRs and main pushes. Full Linux/macOS verification
-and all publication workflows remain manual-only. Linux and web publication require the
-exact commit's successful Linux/shared verification; Mac publication additionally
+and all publication workflows remain manual-only. Linux and Connect publication require the
+exact commit's successful Linux/shared verification. Public publication uses its own
+successful web/shared checks and sealed artifact in `stream-public.yml`, without
+requiring Rust, Desktop or Connect verification. Mac publication additionally
 requires its successful Mac verification. A queued or failed Mac run does not block
 Linux publication, and Linux success never substitutes for Mac verification. Native/product acceptance still applies to changed
 behavior. Fetch main before publishing; feature planning compares the full delta
