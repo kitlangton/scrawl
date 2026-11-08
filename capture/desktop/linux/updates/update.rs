@@ -15,6 +15,9 @@ use serde::Deserialize;
 use sha2::{Digest, Sha256};
 
 const REPO: &str = "tryapparent/apparent";
+// The pre-signing tip and its last published compatibility bridge. These
+// histories stay out of Main; only exact-tree release bridges may cross them.
+const LEGACY_MAIN: [&str; 2] = ["a5cf47d7dc7d0f89b1552cfb2d5e4b0ab489526a", "1a55d5ebe05c948211ff74356c00b8dbfe58ecc6"];
 static CHECK: Mutex<()> = Mutex::new(());
 
 pub fn set_channel_in(path: &Path, channel: &str) -> Result<()> {
@@ -280,7 +283,7 @@ fn arch() -> Option<&'static str> {
 }
 
 fn main_candidate(release: &Release, arch: &str, checksum: &str) -> Result<Candidate> {
-    let sha = release.tag_name.strip_prefix("linux-main-").context("not a main preview")?;
+    let sha = release.tag_name.strip_prefix("linux-main-v2-").context("not a main preview")?;
     ensure!(sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit()), "invalid main revision");
     let suffix = format!("-linux-{arch}.AppImage");
     let image = release.assets.iter().find(|asset| asset.name.starts_with("Apparent-") && asset.name.ends_with(&suffix))
@@ -302,7 +305,7 @@ fn main_releases(releases: Vec<Release>, arch: &str) -> Vec<Release> {
     let suffix = format!("-linux-{arch}.AppImage");
     let mut releases: Vec<_> = releases.into_iter().filter(|release| {
         release.prerelease && !release.draft && release.published_at.is_some()
-            && release.tag_name.strip_prefix("linux-main-").is_some_and(|sha| {
+            && release.tag_name.strip_prefix("linux-main-v2-").is_some_and(|sha| {
                 sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())
             })
             && release.assets.iter().any(|asset| {
@@ -339,16 +342,13 @@ fn first_usable_main(releases: Vec<Release>, arch: &str, fetch: &impl Fn(&str) -
 }
 
 fn latest_main_candidate(arch: &str) -> Result<Candidate> {
+    latest_main_candidate_with(arch, &|url| get(url, None))
+}
+
+fn latest_main_candidate_with(arch: &str, fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<Candidate> {
     // Release lists include Mac previews, old Scrawl assets and stable releases.
     // GitHub pages by creation date, not publication date: inspect all pages before choosing.
-    let mut releases = Vec::new();
-    for page in 1.. {
-        let body = get(&format!("https://api.github.com/repos/{REPO}/releases?per_page=10&page={page}"), None)?;
-        let page_releases: Vec<Release> = serde_json::from_slice(&body).context("invalid release list")?;
-        if page_releases.is_empty() { break; }
-        releases.extend(page_releases);
-    }
-    first_usable_main(releases, arch, &|url| get(url, None))?
+    first_usable_main(release_history(fetch)?, arch, fetch)?
         .context("no published Linux main preview yet")
 }
 
@@ -378,18 +378,23 @@ fn stable_candidate(arch: &str) -> Result<Option<Candidate>> {
     stable_candidate_with(arch, &|url| get(url, None))
 }
 
-fn stable_candidate_with(arch: &str, fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<Option<Candidate>> {
+fn release_history(fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<Vec<Release>> {
     let mut releases = Vec::new();
     let mut complete = false;
     for page in 1..=10 {
         let body = fetch(&format!("https://api.github.com/repos/{REPO}/releases?per_page=100&page={page}"))?;
-        let page_releases: Vec<Release> = serde_json::from_slice(&body).context("invalid stable release list")?;
-        ensure!(page_releases.len() <= 100, "oversized stable release page");
+        let page_releases: Vec<Release> = serde_json::from_slice(&body).context("invalid release list")?;
+        ensure!(page_releases.len() <= 100, "oversized release page");
         complete = page_releases.len() < 100;
         releases.extend(page_releases);
         if complete { break; }
     }
-    ensure!(complete, "stable release discovery exceeded its page limit");
+    ensure!(complete, "release discovery exceeded its page limit");
+    Ok(releases)
+}
+
+fn stable_candidate_with(arch: &str, fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<Option<Candidate>> {
+    let releases = release_history(fetch)?;
 
     // GitHub's /latest can name a standalone component instead of the desktop app.
     // Only published versioned desktop releases belong to the Stable channel.
@@ -467,6 +472,34 @@ fn main_advances(current: Option<&str>, candidate: &Candidate, fetch: &impl Fn(&
         Some("behind" | "identical") => Ok(false),
         _ => anyhow::bail!("Main update is not a verified descendant of the installed revision"),
     }
+}
+
+/// Legacy updaters record a bridge ID while executing the unchanged canonical
+/// build. Authenticate that exact mapping before checking normal forward ancestry.
+fn main_advances_from_bridge(current: Option<&str>, candidate: &Candidate, compiled: Option<&str>,
+    fetch: &impl Fn(&str) -> Result<Vec<u8>>) -> Result<bool>
+{
+    let ordinary = main_advances(current, candidate, fetch);
+    if ordinary.is_ok() || candidate.channel != "main" { return ordinary }
+    let (Some(current), Some(compiled)) = (current, compiled) else { return ordinary };
+    if current == compiled { return ordinary }
+    ensure!([current, compiled].iter().all(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())),
+        "invalid bridge revision");
+    let commit = |sha: &str| -> Result<serde_json::Value> {
+        let body = fetch(&format!("https://api.github.com/repos/{REPO}/git/commits/{sha}"))?;
+        let value: serde_json::Value = serde_json::from_slice(&body)?;
+        ensure!(value["sha"].as_str() == Some(sha), "unexpected bridge commit identity");
+        Ok(value)
+    };
+    let bridge = commit(current)?;
+    ensure!(bridge["parents"].as_array().is_some_and(|parents| parents.len() == 2)
+        && bridge["parents"][0]["sha"].as_str().is_some_and(|parent| LEGACY_MAIN.contains(&parent))
+        && bridge["parents"][1]["sha"].as_str() == Some(compiled), "not a known Main compatibility bridge");
+    let source = commit(compiled)?;
+    let tree = source["tree"]["sha"].as_str().context("missing bridge source tree")?;
+    ensure!(tree.len() == 40 && tree.bytes().all(|b| b.is_ascii_hexdigit())
+        && bridge["tree"]["sha"].as_str() == Some(tree), "bridge differs from the verified build");
+    main_advances(Some(compiled), candidate, fetch)
 }
 
 fn target() -> Result<Option<PathBuf>> {
@@ -600,7 +633,7 @@ fn check() -> Result<bool> {
         None => option_env!("GITHUB_SHA").filter(|sha| sha.len() == 40 && sha.bytes().all(|b| b.is_ascii_hexdigit())),
         _ => None, // An explicit channel switch keeps its existing semantics.
     };
-    if !main_advances(current, &candidate, &|url| get(url, None))? { return Ok(false) }
+    if !main_advances_from_bridge(current, &candidate, option_env!("GITHUB_SHA"), &|url| get(url, None))? { return Ok(false) }
     install(&candidate, &image)?;
     super::super::integration::shell::notify("Apparent updated", "The new version will start the next time you open Apparent. Your previous AppImage is kept beside it.");
     Ok(true)
@@ -696,6 +729,45 @@ mod tests {
     }
 
     #[test]
+    fn signing_bridge_recovers_only_the_exact_verified_source() {
+        let bridge = "b".repeat(40);
+        let source = "c".repeat(40);
+        let tree = "d".repeat(40);
+        let next = "e".repeat(40);
+        let candidate = Candidate { id: next.clone(), channel: "main", url: String::new(), sha256: String::new() };
+        for legacy in LEGACY_MAIN {
+            for fault in ["", "parent", "tree", "identity", "offline", "extra-parent", "rollback"] {
+                let fetch = |url: &str| -> Result<Vec<u8>> {
+                    let value = if url.contains("/compare/") {
+                        let base = if url.contains(&format!("/{bridge}...")) { &bridge } else { &source };
+                        serde_json::json!({"base_commit":{"sha":base}, "status":
+                            if base == &bridge { "diverged" } else if fault == "rollback" { "behind" } else { "ahead" }})
+                    } else if url.ends_with(&format!("/git/commits/{bridge}")) {
+                        if fault == "offline" { anyhow::bail!("offline") }
+                        let mut parents = vec![serde_json::json!({"sha":if fault == "parent" { &source } else { legacy }}), serde_json::json!({"sha":source})];
+                        if fault == "extra-parent" { parents.push(serde_json::json!({"sha":next})); }
+                        serde_json::json!({"sha":if fault == "identity" { &source } else { &bridge }, "parents":parents,
+                            "tree":{"sha":if fault == "tree" { &source } else { &tree }}})
+                    } else {
+                        assert!(url.ends_with(&format!("/git/commits/{source}")));
+                        serde_json::json!({"sha":source,"tree":{"sha":tree}})
+                    };
+                    Ok(serde_json::to_vec(&value)?)
+                };
+                let result = main_advances_from_bridge(Some(&bridge), &candidate, Some(&source), &fetch);
+                match fault {
+                    "" => assert!(result.unwrap()),
+                    "rollback" => assert!(!result.unwrap()),
+                    _ => assert!(result.is_err(), "{fault}"),
+                }
+            }
+        }
+        // Once D is staged while bridge C is running, a repeat check must use D.
+        assert!(!main_advances_from_bridge(Some(&next), &candidate, Some(&source), &|_| panic!("staged identity needs no bridge lookup")).unwrap());
+        assert!(main_advances_from_bridge(Some(&bridge), &candidate, None, &|_| anyhow::bail!("no embedded source")).is_err());
+    }
+
+    #[test]
     fn main_updates_require_forward_ancestry_not_different_shas() {
         let current = "a".repeat(40);
         let candidate = Candidate { id: "b".repeat(40), channel: "main", url: String::new(), sha256: String::new() };
@@ -720,8 +792,27 @@ mod tests {
     }
 
     #[test]
+    fn canonical_main_preview_is_not_hidden_by_the_legacy_bridge() {
+        let image = "Apparent-0.3.13-linux-x86_64.AppImage";
+        let release = |tag: String, published: &str| Release {
+            assets: [image.to_owned(), format!("{image}.sha256")].into_iter().map(|name| ReleaseAsset {
+                browser_download_url: format!("https://github.com/{REPO}/releases/download/{tag}/{name}"), name,
+            }).collect(),
+            tag_name: tag, prerelease: true, draft: false, published_at: Some(published.into()),
+        };
+        let releases = vec![
+            release(format!("linux-main-{}", "a".repeat(40)), "2099-01-01T00:00:00Z"),
+            release(format!("linux-main-v2-{}", "b".repeat(40)), "2026-11-04T00:00:00Z"),
+        ];
+        let candidate = first_usable_main(releases, "x86_64", &|_| {
+            Ok(format!("{}  {image}", "c".repeat(64)).into_bytes())
+        }).unwrap().unwrap();
+        assert_eq!(candidate.id, "b".repeat(40));
+    }
+
+    #[test]
     fn main_channel_rejects_other_architecture_and_unpublished_releases() {
-        let tag = format!("linux-main-{}", "a".repeat(40));
+        let tag = format!("linux-main-v2-{}", "a".repeat(40));
         let image = "Apparent-0.3.13-linux-aarch64.AppImage";
         let release = || Release {
             tag_name: tag.clone(), prerelease: true, draft: false, published_at: Some("2026-11-01T01:00:00Z".into()),
@@ -823,14 +914,14 @@ mod tests {
         let apparent = "Apparent-0.3.13-linux-x86_64.AppImage";
         let releases = vec![
             release("preview-mac-1", "2026-10-29T01:00:00Z", false, apparent),
-            release(&format!("linux-main-{}", "a".repeat(40)), "2026-10-27T01:00:00Z", false, apparent),
-            release(&format!("linux-main-{}", "b".repeat(40)), "2026-10-28T01:00:00Z", false, apparent),
-            release(&format!("linux-main-{}", "c".repeat(40)), "2026-10-29T01:00:00Z", true, apparent),
-            release(&format!("linux-main-{}", "d".repeat(40)), "2026-10-30T01:00:00Z", false,
+            release(&format!("linux-main-v2-{}", "a".repeat(40)), "2026-10-27T01:00:00Z", false, apparent),
+            release(&format!("linux-main-v2-{}", "b".repeat(40)), "2026-10-28T01:00:00Z", false, apparent),
+            release(&format!("linux-main-v2-{}", "c".repeat(40)), "2026-10-29T01:00:00Z", true, apparent),
+            release(&format!("linux-main-v2-{}", "d".repeat(40)), "2026-10-30T01:00:00Z", false,
                 "Scrawl-0.3.13-linux-x86_64.AppImage"),
         ];
         assert_eq!(main_releases(releases, "x86_64")[0].tag_name,
-            "linux-main-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
+            "linux-main-v2-bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb");
         assert!(main_releases(Vec::new(), "x86_64").is_empty());
     }
 
@@ -838,7 +929,7 @@ mod tests {
     fn main_channel_falls_back_when_newest_preview_is_incomplete() {
         let image = format!("Apparent-{}-linux-x86_64.AppImage", env!("CARGO_PKG_VERSION"));
         let release = |letter: &str, date: &str| {
-            let tag = format!("linux-main-{}", letter.repeat(40));
+            let tag = format!("linux-main-v2-{}", letter.repeat(40));
             let url = format!("https://github.com/{REPO}/releases/download/{tag}/");
             Release {
                 tag_name: tag, prerelease: true, draft: false, published_at: Some(date.into()),
@@ -852,7 +943,7 @@ mod tests {
             release("b", "2026-10-29T01:00:00Z"),
         ];
         let candidate = first_usable_main(releases, "x86_64", &|url| {
-            if url.contains(&format!("linux-main-{}", "b".repeat(40))) {
+            if url.contains(&format!("linux-main-v2-{}", "b".repeat(40))) {
                 Ok(b"invalid checksum".to_vec())
             } else {
                 Ok(format!("{}  {image}", "c".repeat(64)).into_bytes())
@@ -865,31 +956,37 @@ mod tests {
     fn main_channel_orders_publications_across_release_pages() {
         let image = "Apparent-0.3.13-linux-x86_64.AppImage";
         let release = |letter: &str, date: &str| {
-            let tag = format!("linux-main-{}", letter.repeat(40));
-            Release {
-                tag_name: tag.clone(), prerelease: true, draft: false, published_at: Some(date.into()),
-                assets: [image.to_owned(), format!("{image}.sha256")].into_iter().map(|name| ReleaseAsset {
-                    browser_download_url: format!("https://github.com/{REPO}/releases/download/{tag}/{name}"), name,
-                }).collect(),
-            }
+            let tag = format!("linux-main-v2-{}", letter.repeat(40));
+            let assets: Vec<_> = [image.to_owned(),format!("{image}.sha256")].into_iter().map(|name| {
+                serde_json::json!({"browser_download_url":format!("https://github.com/{REPO}/releases/download/{tag}/{name}"),"name":name})
+            }).collect();
+            serde_json::json!({"tag_name":tag,"prerelease":true,"draft":false,"published_at":date,
+                "assets":assets})
         };
         // A later page can contain a later publication when GitHub orders by tag creation.
-        let pages = [
-            vec![release("a", "2026-10-28T01:00:00Z")],
-            vec![release("b", "2026-10-29T01:00:00Z")],
-        ];
-        let candidate = first_usable_main(pages.into_iter().flatten().collect(), "x86_64", &|_| {
+        let candidate = latest_main_candidate_with("x86_64", &|url| {
+            if url.ends_with("?per_page=100&page=1") {
+                return Ok(serde_json::to_vec(&vec![release("a", "2026-10-28T01:00:00Z"); 100])?);
+            }
+            if url.ends_with("?per_page=100&page=2") {
+                return Ok(serde_json::to_vec(&vec![release("b", "2026-10-29T01:00:00Z")])?);
+            }
+            assert!(url.ends_with(".sha256"), "stop after the final partial page");
             Ok(format!("{}  {image}", "c".repeat(64)).into_bytes())
-        }).unwrap().unwrap();
+        }).unwrap();
         assert_eq!(candidate.id, "b".repeat(40));
+        assert!(latest_main_candidate_with("x86_64", &|url| {
+            assert!(url.contains("/releases?per_page=100&page="));
+            Ok(serde_json::to_vec(&vec![stable_release_fixture("recipient-component", "x86_64"); 100])?)
+        }).is_err(), "incomplete history must fail before fetching an asset");
     }
 
     #[test]
     fn main_release_rejects_foreign_name_and_digest() {
         let expected = format!("Apparent-{}-linux-x86_64.AppImage", env!("CARGO_PKG_VERSION"));
-        let url = format!("https://github.com/{REPO}/releases/download/linux-main-{}/", "a".repeat(40));
+        let url = format!("https://github.com/{REPO}/releases/download/linux-main-v2-{}/", "a".repeat(40));
         let release = |name: &str| Release {
-            tag_name: format!("linux-main-{}", "a".repeat(40)),
+            tag_name: format!("linux-main-v2-{}", "a".repeat(40)),
             prerelease: true, draft: false, published_at: Some("2026-10-28T01:00:00Z".into()),
             assets: [name.to_owned(), format!("{expected}.sha256")].iter().map(|name| ReleaseAsset {
                 name: name.clone(), browser_download_url: format!("{url}{name}"),
@@ -899,7 +996,7 @@ mod tests {
         assert!(main_candidate(&release("other.AppImage"), "x86_64", &checksum).is_err());
         assert!(main_candidate(&release(&expected), "x86_64", "invalid").is_err());
         let candidate = main_candidate(&release(&expected), "x86_64", &checksum).unwrap();
-        assert!(candidate.url.contains("linux-main-"));
+        assert!(candidate.url.contains("linux-main-v2-"));
         assert!(main_candidate(&release(&expected), "x86_64", &format!("{}  other.AppImage", "b".repeat(64))).is_err());
         let mut foreign = release(&expected);
         foreign.assets[1].browser_download_url = "https://example.org/checksum".into();

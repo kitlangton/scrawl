@@ -14,6 +14,8 @@ import stat
 import sys
 from pathlib import Path
 import subprocess
+import time
+from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -202,39 +204,87 @@ def run_pr_checks():
                         "-p", pattern], cwd=ROOT, check=True)
 
 
+def observed_compile(command, **kwargs):
+    return observed_run(command, timing_label="rust-test-compilation", **kwargs)
+
+
+def observed_run(command, timing_label=None, **kwargs):
+    """Synthetic timing only; never changes command selection or acceptance."""
+    if command[:3] == ["python3", "-m", "unittest"]:
+        # Time the contract suite here, not its nested disposable verifiers.
+        # Those fixtures must retain their ordinary command inventory and must
+        # not append synthetic observations to the real job's timing artifact.
+        child_env = dict(kwargs.get("env", os.environ))
+        child_env.pop("APPARENT_TIMING_FILE", None)
+        kwargs["env"] = child_env
+    is_cargo = command[0] == "cargo" or command[:4] == ["taskpolicy", "-c", "utility", "cargo"]
+    label = ("rust-build" if is_cargo and "build" in command else
+             "rust-test-execution" if is_cargo and "test" in command else
+             "contract-checks" if command[0] == "python3" else "browser-checks")
+    label = timing_label or label
+    if timing_label is None and is_cargo and "test" in command and os.environ.get("APPARENT_TIMING_FILE"):
+        # Compile the identical test selection first; execution still uses Cargo
+        # and retains every original filter/harness argument.
+        compile_command = command[:command.index("--")] if "--" in command else list(command)
+        compile_command += ["--no-run"]
+        observed_compile(compile_command, **{key: value for key, value in kwargs.items()
+                                          if key not in ("stdout", "text")})
+    started = datetime.now(timezone.utc).isoformat()
+    tick = time.monotonic()
+    status = None
+    try:
+        result = subprocess.run(command, **kwargs)
+        status = result.returncode
+        return result
+    except subprocess.CalledProcessError as error:
+        status = error.returncode
+        raise
+    finally:
+        output = os.environ.get("APPARENT_TIMING_FILE")
+        if output:
+            try:
+                with open(output, "a") as stream:
+                    stream.write(json.dumps({"schema": 1, "label": label,
+                        "started": started, "elapsed_ms": round((time.monotonic() - tick) * 1000),
+                        "code": status, "sha": os.environ.get("GITHUB_SHA")}) + "\n")
+            except OSError:
+                pass
+
+
 def run_checks(selection, offline=True):
     if selection["root"] or selection["engine"]:
         check_temp_environment()
-    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+    observed_run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
+    observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_*push*.py"], cwd=ROOT, check=True)
-    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+    observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_verification.py"], cwd=ROOT, check=True)
-    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+    observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
                     "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
     cargo = ["cargo"]
     if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
     jobs = os.environ.get("T3_BUILD_JOBS", "3")
     dependency_mode = "--offline" if offline else "--locked"
+    timings = ["--timings"] if os.environ.get("APPARENT_TIMING_FILE") else []
     if selection["root"]:
-        subprocess.run(cargo + ["build", "-j", jobs, dependency_mode], cwd=ROOT, check=True)
+        observed_run(cargo + ["build", "-j", jobs, dependency_mode] + timings, cwd=ROOT, check=True)
         if selection.get("focused"):
             for test_filter in selection["focused"]:
-                result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, test_filter,
+                result = observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, test_filter,
                                                 "--", "--test-threads=2"], cwd=ROOT,
                                         stdout=subprocess.PIPE, text=True, check=True)
                 print(result.stdout, flush=True)
                 if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
                     raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
         else:
-            subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, "--", "--test-threads=2"], cwd=ROOT, check=True)
+            observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, "--", "--test-threads=2"], cwd=ROOT, check=True)
     if selection["engine"]:
         for command in ("build", "test"):
-            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode]
+            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + timings
             if command == "test":
                 args += ["--", "--test-threads=2"]
-            subprocess.run(args, cwd=ROOT, check=True)
+            observed_run(args, cwd=ROOT, check=True)
     if selection.get("browser"):
         # Use the existing package fixtures, including the separate loopback
         # build. Do not substitute a production artifact with synthetic config.
@@ -242,7 +292,7 @@ def run_checks(selection, offline=True):
         for command in (["bun", "install", "--frozen-lockfile"], ["bun", "run", "build"],
                         ["node", "--test", "test/artifact.test.mjs", "test/closure.test.mjs", "test/routes.test.mjs"],
                         ["node", "scripts/test-browser.mjs"]):
-            subprocess.run(command, cwd=browser, check=True)
+            observed_run(command, cwd=browser, check=True)
 
 
 def main():

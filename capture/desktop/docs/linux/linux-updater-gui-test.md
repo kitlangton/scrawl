@@ -106,10 +106,10 @@ retain the build/package logs alongside the evidence.
 
 `--channel main` persists Main in the private config and keeps the same loading,
 HTTP failure/retry, checksum, staging, Later, Escape and restart assertions.
-Startup advertises `linux-main-<source HEAD>` matching the embedded revision;
+Startup advertises `linux-main-v2-<source HEAD>` matching the embedded revision;
 no AppImage may be downloaded. The fixture serves the canonical paginated
-GitHub releases API: an unrelated stable release on page 1, the usable Main
-prerelease on page 2, and an empty page 3. Asset URLs retain the canonical GitHub
+GitHub releases API: unrelated stable releases on page 1, the usable Main
+prerelease on page 2. Page 1 has 100 entries; the partial second page ends discovery. Tags use `linux-main-v2-<sha>`. Asset URLs retain the canonical GitHub
 release path. The synthetic newer revision is forty `b` characters (the runner
 refuses a matching source HEAD). Its compare response for `source...bbbb…` is
 `ahead`; the reverse is `behind`. Before checksum/staging, a controlled `diverged`
@@ -125,7 +125,9 @@ two total image downloads: the rejected checksum and successful stage. Restart
 must report the synthetic Main ID with pending restart cleared.
 
 Immediately before restart, Main also starts an owned capture through
-`capture start --request-id <32hex>` without waiting for portal consent. It
+`capture start --request-id <32hex>`. It selects the sole 1280×800 disposable
+output through the stock portal UI, using the visible Outputs/Region tabs as an
+OCR anchor and viewport-checked pointer coordinates. It
 retains the request ID, start receipt, exact-ID inspection and global state in
 `capture-guard-*`/`capture-start.*` artifacts. Starting or recording is accepted
 only with an error-free receipt for that request and the same active capture ID.
