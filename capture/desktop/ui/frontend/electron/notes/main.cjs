@@ -25,6 +25,14 @@ let finishing = false, finished = false;
 const send = (value) => process.stdout.write(JSON.stringify(value) + '\n');
 app.whenReady().then(() => {
   if (process.platform === 'darwin') app.setActivationPolicy('accessory');
+  // Native Linux capture/placement uses physical pixels; Electron uses DIP.
+  // Mac native coordinates are already points.
+  const toDip = point => process.platform === 'linux' ? screen.screenToDipPoint(point) : point;
+  function logicalRect(rect) {
+    const start = toDip({ x: Math.round(rect[0]), y: Math.round(rect[1]) });
+    const end = toDip({ x: Math.round(rect[0] + rect[2]), y: Math.round(rect[1] + rect[3]) });
+    return [start.x, start.y, Math.max(1, end.x - start.x), Math.max(1, end.y - start.y)];
+  }
   session.defaultSession.setPermissionRequestHandler((_wc, _permission, reply) => reply(false));
   session.defaultSession.setPermissionCheckHandler(() => false);
   const page = pathToFileURL(path.join(__dirname, '../../dist/index.html')).href;
@@ -44,9 +52,10 @@ app.whenReady().then(() => {
     return win;
   }
   popup = window('popup', 332, 200); badge = window('badge', 150, 44);
-  const display = screen.getDisplayNearestPoint({ x: Math.round(frame[0] + frame[2] / 2), y: Math.round(frame[1] + frame[3] / 2) });
+  const logicalFrame = logicalRect(frame);
+  const display = screen.getDisplayNearestPoint({ x: Math.round(logicalFrame[0] + logicalFrame[2] / 2), y: Math.round(logicalFrame[1] + logicalFrame[3] / 2) });
   const area = display.workArea;
-  badge.setPosition(Math.min(area.x + area.width - 156, Math.round(frame[0] + frame[2] / 2 + 150)), area.y + 12);
+  badge.setPosition(Math.min(area.x + area.width - 156, Math.round(logicalFrame[0] + logicalFrame[2] / 2 + 150)), area.y + 12);
   const placed = new Map();
   const requested = new Map();
   function setRequestedBounds(win, bounds, opening) {
@@ -61,7 +70,9 @@ app.whenReady().then(() => {
   function placeSurface(win, focus, force = false, bounds = win.getBounds()) {
     if (process.platform !== 'linux') return;
     const { x, y, width, height } = bounds;
-    const rect = [x, y, width, height];
+    const start = screen.dipToScreenPoint({ x, y });
+    const end = screen.dipToScreenPoint({ x: x + width, y: y + height });
+    const rect = [start.x, start.y, Math.max(1, end.x - start.x), Math.max(1, end.y - start.y)];
     const key = JSON.stringify(rect);
     if (!force && !focus && placed.get(win) === key) return;
     placed.set(win, key);
@@ -100,13 +111,13 @@ app.whenReady().then(() => {
       let requestedBadge;
       const openingBadge = !badge.isVisible();
       if (state.badgeRect) {
-        const rect = state.badgeRect;
+        const rect = logicalRect(state.badgeRect);
         const work = screen.getDisplayNearestPoint({ x: Math.round(rect[0] + rect[2] / 2), y: Math.round(rect[1] + rect[3] / 2) }).workArea;
         const bounds = badgeBounds(rect, work);
         requestedBadge = { ...bounds, width: 150, height: 44 };
         setRequestedBounds(badge, requestedBadge, openingBadge);
       }
-      const point = { x: Math.round(state.position[0]), y: Math.round(state.position[1]) };
+      const point = toDip({ x: Math.round(state.position[0]), y: Math.round(state.position[1]) });
       if (state.mode !== 'badge') {
         const work = screen.getDisplayNearestPoint(point).workArea;
         const bounds = popupBounds(point, work, state.mode === 'list' ? 350 : 220);

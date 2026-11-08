@@ -364,7 +364,9 @@ illustration reflect that button rather than the Mac Screen menu. The existing
 notes editor remains the only place to enter real text; the coach
 never takes keyboard focus or submits a note. On Hyprland, the native adapter
 reconciles X11 keyboard focus after compositor placement for the same current
-owned editor request. Rust advances to screen drawing only after
+owned editor request. Linux note positions convert native pixels to Electron DIP
+and placement converts back, so scaled editors retain their complete controls.
+Rust advances to screen drawing only after
 the current capture's notes session reports a nonempty durable save. Opening the
 editor, keeping a draft, dismissing, empty Enter or a failed write cannot satisfy
 this lesson. Screen marks made before the saved-note transition cannot satisfy
