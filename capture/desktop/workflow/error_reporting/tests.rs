@@ -2,6 +2,31 @@
 use super::*;
 use std::net::{TcpListener, TcpStream};
 
+#[test]
+fn development_children_cannot_inherit_a_production_reporting_marker() {
+    let mut command = Command::new("unused");
+    command.env("APPARENT_DESKTOP_REPORTING", "1");
+    configure_child(&mut command);
+    assert_eq!(command.get_envs().find(|(key, _)| *key == "APPARENT_DESKTOP_REPORTING").unwrap().1.unwrap(), "0");
+}
+
+#[test]
+fn electron_failures_are_content_free_unhandled_and_attributed_to_the_child() {
+    for (failure, process) in [
+        (Failure::ElectronMainException, "electron-main"),
+        (Failure::ElectronMainRejection, "electron-main"),
+        (Failure::ElectronRendererGone, "electron-renderer"),
+        (Failure::ElectronChildGone, "electron-child"),
+    ] {
+        let report = Report::new(failure, std::panic::Location::caller(), Consent { generation: "private-generation".into() });
+        let payload = report.payload("phc_synthetic").unwrap();
+        assert_eq!(payload["properties"]["process"], process);
+        assert_eq!(payload["properties"]["$exception_list"][0]["mechanism"]["handled"], false);
+        assert_eq!(payload["properties"]["operation"], failure.code());
+        assert!(!payload.to_string().contains("private-generation"));
+    }
+}
+
 struct Scratch(PathBuf);
 impl Scratch {
     fn new() -> Self {

@@ -64,6 +64,7 @@ pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<T
 /// XWayland choice, while preserving an explicitly retained Wayland display.
 fn renderer_command(runtime: PathBuf, app: PathBuf) -> Command {
     let mut command = Command::new(runtime);
+    crate::capture::desktop::workflow::error_reporting::configure_child(&mut command);
     if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() {
         command.arg("--ozone-platform=x11");
     }

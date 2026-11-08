@@ -29,6 +29,7 @@ export async function stagePopupAssets(root, destination) {
 }
 export async function stagePopupEntries(root, destination) {
   await mkdir(path.join(destination, 'electron'), { recursive: true });
+  await cp(path.join(root, 'electron/runtime.cjs'), path.join(destination, 'electron/runtime.cjs'));
   for (const surface of ['notes', 'share']) {
     const source = path.join(root, 'electron', surface);
     try { await stat(source); }

@@ -76,6 +76,24 @@ coverage. The narrow direct-HTTP adapter avoids
 SDK autocapture/raw messages and independent retry queues; its exception schema
 follows PostHog's Rust wire contract. Connect logging is unchanged.
 
+Installed release Electron hosts also report main-process uncaught exceptions and
+unhandled rejections, plus abnormal renderer/utility-process exits. TypeScript
+owns the hooks and fatal-exit policy; generated CommonJS is staged with the UI
+assets for Settings, onboarding and notes. Rust-owned child launchers admit this
+only when the release reporter is installed; ordinary development hosts do not
+send under a production build identity. The same config, queue and rate limits
+apply. Only four fixed categories cross the same-user socket, never Error objects,
+rejection reasons, URLs, process names, exit codes or stack text. Main-process
+failures attempt admission for at most 600 ms before exiting; socket acceptance
+does not prove delivery. An existing quit waits at most 600 ms for pending failure
+admissions, so Notes can report its renderer crash before closing. Ordinary quits
+without a pending failure do not wait. Exception admission bypasses the Settings
+worker's config-write lock; it cannot mutate settings. Clean and deliberately
+killed child exits are excluded.
+Reports inherit the running Rust build identity and identify the affected process.
+This provides process-failure categories, not JavaScript stacks or native dumps;
+renderer JavaScript errors and hangs remain outside this slice's coverage.
+
 ## Onboarding (`capture/desktop/settings/onboarding.rs`, `capture/desktop/native/Onboarding.swift`)
 
 Rust decides what shows (`Flow`, `launch_plan`, `Gate`, tested) and stores progress under `"onboarding"` in `~/.config/apparent/config.json`, including the tour's current step (`resume`), so any quit (macOS's "Quit & Reopen" too) picks up there; the SwiftUI window in `apparent-helper onboarding` only renders the state it's sent and reports buttons (`grant:<permission>` for a row).

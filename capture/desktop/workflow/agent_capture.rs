@@ -349,18 +349,51 @@ impl SettingsRequest {
 enum ErrorReportingRequest {
     Read { deadline: u64 },
     Set { enabled: bool, deadline: u64 },
+    Exception { kind: ExceptionKind, deadline: u64 },
+}
+
+#[derive(serde::Deserialize, Debug)]
+#[serde(rename_all = "snake_case")]
+enum ExceptionKind { MainException, MainRejection, RendererGone, ChildGone }
+
+#[test]
+fn exception_wire_rejects_raw_details_and_accepts_only_fixed_kinds() {
+    for kind in ["main_exception", "main_rejection", "renderer_gone", "child_gone"] {
+        let request = serde_json::json!({"errorReporting":"exception", "kind":kind, "deadline":1});
+        assert!(matches!(parse_request(&request.to_string()), Some(Wire::ErrorReporting(_))));
+        let mut with_text = request.clone();
+        with_text["message"] = serde_json::json!("private content");
+        assert!(parse_request(&with_text.to_string()).is_none());
+    }
+    for kind in ["private error text", "", "renderer_exception"] {
+        assert!(parse_request(&serde_json::json!({"errorReporting":"exception", "kind":kind, "deadline":1}).to_string()).is_none());
+    }
+    let expired = ErrorReportingRequest::Exception { kind: ExceptionKind::MainException, deadline: 1 };
+    assert_eq!(expired.execute(std::path::Path::new("unused"), 1)["error"], "admission_expired");
 }
 
 impl ErrorReportingRequest {
     fn deadline(&self) -> u64 {
-        match self { Self::Read { deadline } | Self::Set { deadline, .. } => *deadline }
+        match self { Self::Read { deadline } | Self::Set { deadline, .. } | Self::Exception { deadline, .. } => *deadline }
     }
 
     fn execute(&self, config: &std::path::Path, deadline: u64) -> serde_json::Value {
         if storage_clock_ms() >= deadline { return serde_json::json!({"error":"admission_expired"}); }
+        if let Self::Exception { kind, .. } = self {
+            use super::error_reporting::{report, Failure};
+            report(match kind {
+                ExceptionKind::MainException => Failure::ElectronMainException,
+                ExceptionKind::MainRejection => Failure::ElectronMainRejection,
+                ExceptionKind::RendererGone => Failure::ElectronRendererGone,
+                ExceptionKind::ChildGone => Failure::ElectronChildGone,
+            });
+            // Admission is best effort; this is never a delivery acknowledgement.
+            return serde_json::json!({"accepted": true});
+        }
         let (operation, enabled) = match self {
             Self::Read { .. } => ("read", None),
             Self::Set { enabled, .. } => ("set", Some(*enabled)),
+            Self::Exception { .. } => unreachable!(),
         };
         match crate::capture::desktop::workflow::error_reporting::error_reporting_bridge_in(config, operation, enabled, || storage_clock_ms() < deadline) {
             Ok(enabled) => serde_json::json!({"errorReporting":{"enabled":enabled}}),
@@ -504,6 +537,7 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
     // Rendezvous channel: one persistent worker, no queued/accumulating blocked writers.
     // The listener and GUI remain free while this worker waits on the existing flock.
     let (storage_tx, storage_rx) = std::sync::mpsc::sync_channel::<(SettingsRequest, u64, UnixStream)>(0);
+    let reporting_config = config_path.clone();
     let (connect_tx, connect_rx) = std::sync::mpsc::sync_channel::<(u64, UnixStream)>(0);
     let connect_config = config_path.clone();
     std::thread::Builder::new()
@@ -580,6 +614,13 @@ fn listen_at_config(path: PathBuf, config_path: PathBuf) -> Result<flume::Receiv
                             }
                             Wire::ErrorReporting(request) => {
                                 let deadline = request.deadline().min(storage_clock_ms() + 3000);
+                                if matches!(request, ErrorReportingRequest::Exception { .. }) {
+                                    // Queue-only admission: no network or config mutation.
+                                    // A contended Settings flock must not drop a fatal report.
+                                    let response = request.execute(&reporting_config, deadline.min(storage_clock_ms() + 500));
+                                    let _ = writeln!(stream, "{response}");
+                                    continue;
+                                }
                                 match storage_tx.try_send((SettingsRequest::ErrorReporting(request), deadline, stream)) {
                                     Ok(()) => {},
                                     Err(std::sync::mpsc::TrySendError::Full((_, _, mut stream)) | std::sync::mpsc::TrySendError::Disconnected((_, _, mut stream))) => { let _ = writeln!(stream, "{{\"error\":\"app_busy\"}}"); }
@@ -1221,7 +1262,11 @@ mod tests {
         };
         std::thread::sleep(Duration::from_millis(30));
         assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000})), serde_json::json!({"errorReporting":{"enabled":true}}));
+        for kind in ["main_exception", "main_rejection", "renderer_gone", "child_gone"] {
+            assert_eq!(call(serde_json::json!({"errorReporting":"exception", "kind":kind, "deadline":storage_clock_ms()+3000})), serde_json::json!({"accepted":true}));
+        }
         for invalid in [
+            serde_json::json!({"errorReporting":"exception","kind":"main_exception","message":"private","deadline":1}),
             serde_json::json!({"errorReporting":"set","deadline":1}),
             serde_json::json!({"errorReporting":"set","enabled":"false","deadline":1}),
             serde_json::json!({"errorReporting":"set","enabled":null,"deadline":1}),
@@ -1241,6 +1286,7 @@ mod tests {
         let deadline = storage_clock_ms()+3000;
         writeln!(blocked, "{}", serde_json::json!({"errorReporting":"set","enabled":false,"deadline":deadline})).unwrap();
         assert_eq!(call(serde_json::json!({"errorReporting":"read","deadline":storage_clock_ms()+3000}))["error"], "app_busy");
+        assert_eq!(call(serde_json::json!({"errorReporting":"exception","kind":"main_exception","deadline":storage_clock_ms()+500})), serde_json::json!({"accepted":true}));
         let mut state = UnixStream::connect(&path).unwrap();
         writeln!(state, "state").unwrap();
         let request = receiver.recv_timeout(Duration::from_secs(1)).unwrap();
