@@ -273,7 +273,10 @@ adapter; macOS keeps an installed `apparent-helper onboarding --permissions-only
 process alive for AVFoundation/Speech consent and permission guidance panels.
 That mode never creates the onboarding window, admits only fixed permission
 identifiers/actions, closes granted guides, and cleans up guides on pipe closure.
-The Electron pipe carries presentation only. Native fallback remains available;
+The Electron pipe carries presentation only. Linux onboarding explicitly uses
+X11, matching GPUI and the notes/ink surfaces after the app clears
+`WAYLAND_DISPLAY`; Electron must not auto-select an unavailable Wayland socket.
+Native fallback remains available;
 its presentation can be removed only after Mac permission/media and isolated
 Linux acceptance. Packaged assets route this workflow to Electron; missing assets, spawn failure
 or a renderer crash restore the native presentation. During capture, construction
