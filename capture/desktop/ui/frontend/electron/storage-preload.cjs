@@ -22,3 +22,14 @@ contextBridge.exposeInMainWorld('apparent', Object.freeze({
   navigateSettings: (pane) => ipcRenderer.invoke('apparent:navigate-settings', pane),
   showCaptureFolder: () => ipcRenderer.invoke('apparent:show-capture-folder'),
 }));
+
+contextBridge.exposeInMainWorld('apparentAbout', Object.freeze({
+  read: () => ipcRenderer.invoke('apparent:about-read'),
+  link: link => ipcRenderer.invoke('apparent:about-link', link),
+  act: action => ipcRenderer.invoke('apparent:about-action', action),
+  subscribe: callback => {
+    const listener = (_event, state) => callback(state);
+    ipcRenderer.on('apparent:about-state', listener);
+    return () => ipcRenderer.removeListener('apparent:about-state', listener);
+  },
+}));

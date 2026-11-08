@@ -34,10 +34,12 @@ pub(super) fn assets() -> Option<(PathBuf, PathBuf)> {
     None
 }
 
-pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<Transport> {
+pub(super) fn open(about: bool, events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<Transport> {
     use std::io::BufRead;
     let (app, runtime) = assets().ok_or_else(|| anyhow::anyhow!("Packaged Storage Settings unavailable"))?;
-    let mut child = command(runtime, app)
+    let mut launch = command(runtime, app);
+    if about { launch.arg("--settings-about"); }
+    let mut child = launch
         .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?;
     let stdin = child.stdin.take();
     let stdout = child.stdout.take();
@@ -48,7 +50,9 @@ pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<T
                 // This presentation may navigate or reveal the effective folder;
                 // it cannot invoke other native Settings actions through this pipe.
                 if let Ok(action) = serde_json::from_str::<Action>(&line)
-                    && matches!(action, Action::Navigate { .. } | Action::ShowCaptures | Action::Close)
+                    && (matches!(action, Action::Navigate { .. } | Action::ShowCaptures | Action::Close)
+                        || about && (matches!(action, Action::CheckForUpdates | Action::DismissUpdateCheck | Action::UpdateNow | Action::UpdateLater | Action::Tour)
+                            || matches!(&action, Action::Set { key, value } if key == "updateChannel" && matches!(value.as_str(), Some("stable" | "main")))))
                 {
                     events(Event::Action(action));
                 }

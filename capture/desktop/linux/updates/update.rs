@@ -195,7 +195,7 @@ while kill -0 "$pid" 2>/dev/null && [ "$i" -lt 100 ]; do sleep 0.1; i=$((i+1)); 
 kill -0 "$pid" 2>/dev/null && exit 1
 unchanged || exit 1
 rm -f "$ready"
-APPARENT_UPDATE_READY="$ready" "$image" app </dev/null & child=$!
+APPARENT_UPDATE_READY="$ready" APPARENT_UPDATE_REOPEN_SETTINGS=1 "$image" app </dev/null & child=$!
 i=0
 while [ "$i" -lt 150 ]; do
     if [ -f "$ready" ] && kill -0 "$child" 2>/dev/null; then rm -f "$ready"; exit 0; fi
@@ -218,9 +218,9 @@ if [ -x "$backup" ]; then
     if mv -f "$backup" "$image"; then
         if [ -f "$marker" ]; then mv -f "$marker" "$failed_marker" || rm -f "$marker"; fi
         if [ -f "$previous_marker" ]; then mv -f "$previous_marker" "$marker" || rm -f "$marker"; else rm -f "$marker"; fi
-        exec "$image" app </dev/null
+        APPARENT_UPDATE_REOPEN_SETTINGS=1 exec "$image" app </dev/null
     fi
-    exec "$backup" app </dev/null
+    APPARENT_UPDATE_REOPEN_SETTINGS=1 exec "$backup" app </dev/null
 fi
 exit 1"#)
         .arg("apparent-update-relaunch")
@@ -1136,6 +1136,24 @@ mod tests {
         assert!(terminated_cooperatively && still_alive, "SIGTERM must be observed without forcing exit");
         assert!(lock_released, "later updates must remain possible");
         assert!(left_images_untouched, "a live child forbids rollback or blacklisting");
+    }
+
+    #[test]
+    fn successful_update_relaunch_requests_settings() {
+        let dir = std::env::temp_dir().join(format!("apparent-update-settings-{}", crate::shared::ids::make_bundle_id()));
+        fs::create_dir(&dir).unwrap();
+        let image = dir.join("Apparent.AppImage");
+        let backup = dir.join("previous.AppImage");
+        let receipt = dir.join("settings-requested");
+        fs::write(&image, b"#!/bin/sh\nprintf '%s' \"$APPARENT_UPDATE_REOPEN_SETTINGS\" > \"$TEST_SETTINGS_RECEIPT\"\ntouch \"$APPARENT_UPDATE_READY\"\nsleep 1\n").unwrap();
+        fs::write(&backup, b"#!/bin/sh\nexit 1\n").unwrap();
+        for path in [&image, &backup] {
+            fs::set_permissions(path, fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        assert!(relaunch_command(&image, &backup, u32::MAX).unwrap()
+            .env("TEST_SETTINGS_RECEIPT", &receipt).status().unwrap().success());
+        assert_eq!(fs::read(&receipt).unwrap(), b"1");
+        fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

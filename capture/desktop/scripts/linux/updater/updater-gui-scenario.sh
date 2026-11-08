@@ -260,8 +260,8 @@ import json,os,sys
 s=json.load(open(sys.argv[1])); r=s['running']
 assert r and r['pid'] != int(sys.argv[2]) and not s['pendingRestart'] and r['updateId']==os.environ['UPDATER_CANDIDATE_ID'], s
 PY
-"$image" app >> "$out/app.log" 2>&1
-ui '{"op":"click","text":"About","label":"reopen-about"}'
+# The update itself must reopen Settings on About; launching the app here
+# would conceal a regression by opening Settings through single-instance IPC.
 ui '{"op":"assert","text":"Check for Updates","label":"relaunch-verified"}'
 ui '{"op":"hold","seconds":3,"label":"finished"}'
 python3 - "$out/requests.jsonl" <<'PY'

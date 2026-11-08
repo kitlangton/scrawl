@@ -29,7 +29,7 @@ class PhraseMatchError(ValueError):
 
 
 def erase_long_light_lines(image):
-    """OCR-only preprocessing: keep text; remove bright straight button outlines."""
+    """OCR-only preprocessing: keep text; remove contrasting straight button outlines."""
     image = image.convert('L')
     pixels = image.load()
     width, height = image.size
@@ -39,7 +39,7 @@ def erase_long_light_lines(image):
             start = None
             limit = height if vertical else width
             for inner in range(limit + 1):
-                bright = inner < limit and pixels[(outer, inner) if vertical else (inner, outer)] > 190
+                bright = inner < limit and pixels[(outer, inner) if vertical else (inner, outer)] > 80
                 if bright and start is None:
                     start = inner
                 if not bright and start is not None:
@@ -177,14 +177,14 @@ class Evidence:
         self.samples.append({'file': str(path), 'seconds': stamp})
         return path
 
-    def words(self, path, cleaned=False):
+    def words(self, path, cleaned=False, page_mode=11):
         if cleaned:
             from PIL import Image
             derived = self.directory / 'ocr-input.png'
             with Image.open(path) as image:
                 erase_long_light_lines(image).save(derived)
             path = derived
-        result = subprocess.run(['tesseract', str(path), 'stdout', '--psm', '11', 'tsv'],
+        result = subprocess.run(['tesseract', str(path), 'stdout', '--psm', str(page_mode), 'tsv'],
                                 check=True, capture_output=True, text=True, timeout=10)
         self.last_ocr = result.stdout
         return list(csv.DictReader(io.StringIO(result.stdout), delimiter='\t'))
@@ -207,6 +207,12 @@ class Evidence:
                         return path, finder(words, phrase)
                     except ValueError as cleaned_error:
                         last = cleaned_error
+            # Chromium's outlined controls can disappear in sparse-text mode.
+            # Retain the same unique phrase admission with full-page OCR.
+            try:
+                return path, finder(self.words(path, page_mode=3), phrase)
+            except ValueError as page_error:
+                last = page_error
             if time.monotonic() >= deadline:
                 (self.directory / 'failed-ocr.tsv').write_text(self.last_ocr)
                 raise RuntimeError(f'{last}; last frame: {path}')

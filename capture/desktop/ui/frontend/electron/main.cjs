@@ -13,6 +13,8 @@ const { ConnectSettings, actions } = require('./connect.cjs');
 const followWindowTheme = require('@apparent/ui/window-theme');
 nativeTheme.themeSource = 'system';
 const settings = process.argv.includes('--settings-storage');
+const about = settings && process.argv.includes('--settings-about');
+let aboutState;
 
 // Deliberately separate from the installed application's profile and identity.
 app.setName(settings ? 'Apparent Settings' : 'Apparent UI Foundation');
@@ -83,7 +85,7 @@ app.whenReady().then(() => {
   let lastResult = { status: 'disconnected' };
   const validate = (event, args) => {
     if (window.isDestroyed() || event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame ||
-        event.senderFrame.url !== page || args.length !== 0) throw new Error('Forbidden bridge request');
+        event.senderFrame.url !== (about ? page + '#about' : page) || args.length !== 0) throw new Error('Forbidden bridge request');
   };
   const validateFoundation = (event, args) => {
     if (settings) throw new Error('Unavailable in Storage Settings');
@@ -101,9 +103,29 @@ app.whenReady().then(() => {
     settingsPainted = true;
     showSettings();
   });
+  ipcMain.handle('apparent:about-link', (event, link, ...args) => {
+    validate(event, args);
+    if (!about || !['website', 'source'].includes(link)) throw new Error('Forbidden link');
+    return shell.openExternal(link === 'website' ? 'https://app.tryapparent.com' : 'https://github.com/tryapparent/apparent');
+  });
+  ipcMain.handle('apparent:about-read', (event, ...args) => {
+    validate(event, args);
+    if (!about) throw new Error('Unavailable outside About');
+    return aboutState;
+  });
+  ipcMain.handle('apparent:about-action', (event, action, ...args) => {
+    validate(event, args);
+    if (!about || !action || typeof action !== 'object') throw new Error('Forbidden About action');
+    const simple = ['check-for-updates', 'dismiss-update-check', 'update-now', 'update-later', 'tour'];
+    if (!(Object.keys(action).length === 1 && simple.includes(action.action)) &&
+        !(Object.keys(action).length === 3 && action.action === 'set' && action.key === 'updateChannel' && ['stable', 'main'].includes(action.value)))
+      throw new Error('Forbidden About action');
+    process.stdout.write(`${JSON.stringify(action)}\n`);
+  });
   ipcMain.handle('apparent:navigate-settings', (event, ...args) => {
     validate(event, []);
-    if (!settings || args.length !== 1 || !['general', 'recording', 'permissions', 'agents', 'about'].includes(args[0])) throw new Error('Forbidden Settings page');
+    const destinations = about ? ['general', 'recording', 'permissions', 'agents', 'storage'] : ['general', 'recording', 'permissions', 'agents', 'about'];
+    if (!settings || args.length !== 1 || !destinations.includes(args[0])) throw new Error('Forbidden Settings page');
     process.stdout.write(`${JSON.stringify({ action: 'navigate', pane: args[0] })}\n`);
   });
   ipcMain.handle('apparent:show-capture-folder', (event, ...args) => {
@@ -122,6 +144,10 @@ app.whenReady().then(() => {
     lines.on('line', line => {
       try {
         const command = JSON.parse(line);
+        if (command.type === 'about-state' && about) {
+          aboutState = command;
+          window.webContents.send('apparent:about-state', command);
+        }
         if (command.type === 'close') closeSettings();
         if (command.type === 'show') showSettings();
       } catch { /* malformed parent message has no effect */ }
@@ -328,7 +354,7 @@ app.whenReady().then(() => {
     }).finally(() => { pending = undefined; });
     return pending;
   });
-  void window.loadURL(page);
+  void window.loadURL(about ? page + '#about' : page);
 });
 app.on('window-all-closed', () => app.quit());
 
