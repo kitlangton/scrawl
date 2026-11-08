@@ -41,8 +41,9 @@ The homepage is now built directly from Public's TypeScript/React sources. The
 recovered source includes the photo layout, mobile examples, responsive movie
 camera, timeline and frog QR interaction. The old checked-in HTML/JS snapshot and
 compiled-bundle overlay tools are retired; editing the source changes the packaged
-homepage. The latest branding candidate remains under the explicit publication
-review hold in `feature-grid.md`; this recovery does not approve or publish it.
+homepage. Simon approved publishing this design on 2026-11-08 after comparison
+confirmed it matches the live site. The inherited branding-only hold is cleared;
+normal exact-commit verification and publication gates remain required.
 
 To minimize recovery scope, delivery retains main's existing composed Pages
 arrangement and manual release gates. Public imports no Connect implementation.
