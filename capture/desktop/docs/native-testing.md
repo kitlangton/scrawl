@@ -173,6 +173,28 @@ template writable or replace it. Admin changes require a separately owned
 derivative. KDE is a separate template and is not supplied by selecting
 `--desktop kde` on this image.
 
+For product capture or Settings tests, consume runner/reaper commit `1278ea9a2`
+from PR #1082. It creates fresh guest staging/output directories exactly once
+with mode 0700 regardless of guest umask, refusing collisions. Earlier environment
+qualification remains valid at its stated scope; it does not prove app writes.
+Do not weaken config/bundle ancestor validation or modify the template to repair
+an incorrectly staged test. Preserve the actual exported `XAUTHORITY` when
+launching the XWayland app under a private test HOME; KDE exports an authority
+file under its runtime directory rather than necessarily `~/.Xauthority`.
+
+The separate stopped KDE variant is
+`/home/simon/VMs/apparent-kde-noble-20261108/`, with the same file names and SSH
+user. Disk SHA256:
+`56626132d5f210813798d16d07bfceb34e4a9eb387cbcd74cbd18daa2ac989c8`;
+firmware SHA256 matches the GNOME entry above. Its preparation receipt records
+the signed Ubuntu source and released GNOME parent. Fresh environment
+qualification with runner `1278ea9a2 --desktop kde --outputs 2 --relative-mouse`
+established KWin 5.27.11/Plasma 5.27.12, XWayland 23.2.6, two 1280×800 DRM
+outputs at 1× and EV_REL USB mouse. Fixture-only locking/power management is
+disabled; no product state or privilege grants were added. This is environment
+proof only, with the same read-only/disposable-consumer rules and unrun product
+gates as GNOME.
+
 ```sh
 python3 capture/desktop/scripts/linux/gui/gui-vm.py \
   --template "$GUI_TEMPLATE/system.qcow2" \
