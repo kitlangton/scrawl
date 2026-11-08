@@ -190,10 +190,21 @@ PY
   timeout 12 "$image" capture state > "$out/capture-guard-before-state.json" 2> "$out/capture-guard-before-state.stderr"
   python3 "$out/assert-owned-capture.py" "$capture_id" "$out/capture-start.json" "$out/capture-guard-before-state.json"
   python3 "$out/assert-owned-capture.py" "$capture_id" "$out/capture-guard-before.json" "$out/capture-guard-before-state.json"
+  cat > "$out/select-settings.py" <<'PY'
+import json,re,sys
+windows=[w for w in json.load(sys.stdin) if w.get('pid')==int(sys.argv[1]) and w.get('title')=='apparent Settings']
+assert len(windows)==1, 'expected exactly one Settings window owned by the acknowledged app'
+address=windows[0].get('address','')
+assert re.fullmatch('0x[0-9a-fA-F]+', address), 'invalid Settings window address'
+print(address)
+PY
   click_update_guard() {
-    # Starting capture can move focus to the capsule. An inactive-window click
-    # may only focus Settings; require an actual coordinator acknowledgment.
+    # Portal consent can cover Settings. Focus only this app's actual Settings
+    # window, never the update-button pixels in the portal's screen preview.
     for attempt in 1 2 3; do
+      hyprctl clients -j > "$out/capture-guard-windows-$attempt.json"
+      settings_address="$(python3 "$out/select-settings.py" "$baseline_pid" < "$out/capture-guard-windows-$attempt.json")"
+      hyprctl eval "local w = hl.get_windows({ title = 'apparent Settings' })[1]; assert(w and w.address == '$settings_address', 'Settings window changed'); hl.dispatch(hl.dsp.window.float({ action = 'set', window = w })); hl.dispatch(hl.dsp.focus({ window = w }))" > "$out/capture-guard-focus-$attempt.log"
       ui "{\"op\":\"click\",\"text\":\"Update now\",\"label\":\"restart-blocked-by-capture-$attempt\"}"
       for _ in $(seq 1 20); do
         if grep -Fq 'Update restart deferred until capture is idle' "$out/app.log"; then return 0; fi
