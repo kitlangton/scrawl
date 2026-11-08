@@ -20,6 +20,21 @@ assets and CSP rather than a less-restricted Electron development server.
 
 ## Narrow contract
 
+The separate installed `--controls` presentation is Linux's no-tray fallback.
+It reuses this packaged runtime and shared buttons, with four allowlisted parent-pipe
+commands: Record screen, Choose target, Latest capture and Settings. Rust owns
+onboarding/busy admission, including a fresh check at coordinator dispatch; the
+renderer owns no capture state or persistence. Parent EOF closes it. Missing
+assets, failed startup or a crashed child restore a native controls window;
+ordinary dismissal stays closed until relaunch. Setup and active capture defer
+automatic presentation. See [Linux access](../../docs/linux/linux.md).
+
+`tests/controls/host.test.ts` executes shipped host code against inert native
+effects. `tests/controls/smoke.ts` exercises the shipped renderer and real pipes
+in an isolated display with a configured Electron sandbox; run it after building
+with `node --experimental-strip-types --test tests/controls/smoke.ts`. These
+checks are separate from installed GNOME no-tray/tray-host and capture proof.
+
 The existing producer is `capture/desktop/workflow/agent_capture.rs` and the
 `None` action in `App::agent_request` in `capture/desktop/mod.rs`. The Electron
 main process connects to `$HOME/.config/apparent/agent-control/capture.sock`,

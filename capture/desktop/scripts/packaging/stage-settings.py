@@ -91,6 +91,8 @@ for (const name of ['main', 'preload']) {
   fs.writeFileSync(path.join(destination, name + '.cjs'), result.outputText);
 }
 """, str(app / "electron/installer")], cwd=frontend, check=True)
+    (app / "dist/src/controls").mkdir(parents=True)
+    shutil.copy2(frontend / "dist/src/controls/index.html", app / "dist/src/controls/index.html")
     (app / "package.json").write_text(json.dumps({"name": "apparent-settings", "version": "0.0.0", "main": "electron/settings.cjs"}) + "\n")
     shutil.copytree(frontend / "node_modules/electron/dist", destination / "runtime", symlinks=True)
     if sys.platform == "darwin":
