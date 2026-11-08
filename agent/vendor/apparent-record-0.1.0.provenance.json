@@ -1,14 +1,15 @@
 {
-  "sourceSha": "62010646fe954d72e2502a2403e6e3ad2fbe2017",
-  "runId": 42315302146,
-  "artifactId": 13550173286,
-  "componentSha256": "b4d20fa79ba334f806a994e10420b6f9c9b4b3f1b1533da892a6c4a41f8b655e",
-  "recordTarSha256": "1addc6531bd3cc827eb700edaeb6fd23df4e01dbe3abfbd76ee0ddda172e5349",
-  "attestationVerified": true,
-  "sourceWorkflowSubjectChecked": true,
+  "package": "@apparent/record",
+  "version": "0.1.0",
+  "sourceSha": "2c82de382922654356fce1dabb222c55324009f0",
+  "runId": 42462332124,
+  "runAttempt": 1,
+  "artifactId": 13610581246,
+  "componentSha256": "db2f8b8d690840430136cc39befe86c306f28b689d493935d7276626af54088d",
+  "packageTarballSha256": "3ea24f3217f44fb5a39975993d87624bc4600fc020aa2712278b350a7698bb4d",
+  "producerAdmission": "supported delivery consume; exact receipt/source/workflow/run/attempt/hash/inventory and GitHub attestation verified by producer owner",
   "limits": [
-    "Standard visual selection is Record-owned and bounded",
-    "Saved requires exact public facts and handoff resolution",
-    "No fresh native standard-path proof"
+    "Consumer verifies exact inner bytes from accepted owner handoff",
+    "No new native capture, model, clipboard, installed routing or Saved authority from package installation"
   ]
 }

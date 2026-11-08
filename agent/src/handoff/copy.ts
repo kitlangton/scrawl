@@ -9,6 +9,7 @@ import { createNativeClipboardPort, MAX_UTF8_TEXT_BYTES, type NativeClipboardPor
 import type { NativeHostPort } from '@apparent/app-contracts/native';
 import { resolveBundle, readManifest, checkImageReference, hasMicrophoneSamples, configuredExperiment } from '../bundle.js';
 import { keyframeTexts } from '../semantic/context.js';
+import { readCanonicalRecordOutput } from '@apparent/record/processing/bundle';
 
 type Ports = { host: Pick<NativeHostPort, 'readSnapshot'>; clipboard: NativeClipboardPort };
 export type CopyResult = { status: 'applied'; digest: string; byteLength: number } |
@@ -40,14 +41,16 @@ export async function localCopyText(input = 'latest'): Promise<string> {
       throw new Error('Bundle is unfinished or media is pending; no clipboard handoff was attempted');
   }
   const { value: bundle } = await readManifest(bundlePath);
+  const output = readCanonicalRecordOutput(bundle);
   const references = [bundle.contactSheet, ...bundle.keyframes.map((frame: any) => frame.file), ...bundle.marks.map((mark: any) => mark.frame).filter(Boolean), ...(bundle.autocrop ? [bundle.autocrop.fullFrames, bundle.autocrop.fullContactSheet] : [])];
   for (const reference of references) await checkImageReference(bundlePath, reference);
   const warnings: ProcessingWarning[] = [];
+  warnings.push(...(output?.warnings ?? []));
   if (bundle.interactionTelemetry === 'videoOnly') warnings.push({ kind: 'videoOnlyInteractionTelemetry' });
   if (bundle.imageQualityWarning) warnings.push({ kind: 'imageQuality', message: bundle.imageQualityWarning });
   if (bundle.source !== 'iphone' && bundle.context?.microphoneCapture !== 'off') {
     if (!await hasMicrophoneSamples(bundlePath, bundle.audio)) warnings.push({ kind: 'noMicrophoneAudio' });
-    else if (!bundle.transcript.text.trim()) {
+    else if (!output && !bundle.transcript.text.trim()) {
       if (bundle.transcript.missing) warnings.push({ kind: 'noTranscript', message: bundle.transcript.missing.reason });
       else if (bundle.transcript.source === 'none') warnings.push({ kind: 'noTranscript', message: 'Recognition did not run. The audio is saved.' });
       else warnings.push({ kind: 'noWordsTranscribed' });
@@ -65,6 +68,8 @@ export async function localCopyText(input = 'latest'): Promise<string> {
     context: bundle.context, contextChanges: bundle.contextChanges?.map((event: any) => ({ timeMs: event.t, key: event.key, value: event.value ?? undefined })),
     screenAtStart: bundle.screens?.find((screen: any) => screen.t0 === 0)?.name,
     transcript: { text: bundle.transcript.text, segments: bundle.transcript.segments.map((segment: any) => ({ startMs: segment.t0, text: segment.text })) },
+    transcriptStatus: output?.transcriptStatus,
+    acceptedStrokeDocument: output?.acceptedStrokeDocument ? { path: join(bundlePath, output.acceptedStrokeDocument.path), strokeCount: output.acceptedStrokeDocument.strokeCount } : output?.acceptedStrokeDocument,
     frames, semanticFrameText: semanticFrameText ? { mode: 'rich-context', frames: semanticFrameText } : undefined,
     marks: bundle.marks.map((mark: any) => ({ id: mark.id, shape: mark.shape, pin: mark.pin ?? undefined, framePath: mark.frame ? join(bundlePath, mark.frame) : undefined })),
     events: bundle.events.filter((event: any) => ['click', 'app_event', 'note'].includes(event.kind)).map((event: any) => event.kind === 'app_event'

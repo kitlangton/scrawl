@@ -2,6 +2,8 @@ import { constants } from 'node:fs';
 import { open, readdir, stat, lstat } from 'node:fs/promises';
 import { homedir } from 'node:os';
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path';
+import { createHash } from 'node:crypto';
+import { readCanonicalRecordOutput } from '@apparent/record/processing/bundle';
 
 export const MAX_MANIFEST = 64 * 1024 * 1024;
 const MAX_WAV_HEADER = 1024 * 1024;
@@ -129,6 +131,15 @@ export async function readManifest(path: string): Promise<{ raw: Buffer; value: 
   let value: any;
   try { value = JSON.parse(text); } catch { throw new Error('apparent.json is not valid JSON'); }
   validateManifest(value);
+  const output = readCanonicalRecordOutput(value);
+  const companion = output?.acceptedStrokeDocument;
+  if (companion) {
+    if (companion.byteLength > MAX_MANIFEST) throw new Error('Accepted-stroke document exceeds 64 MiB safety limit');
+    if (!await checkImageReference(path, companion.path)) throw new Error('Accepted-stroke document is missing or not a regular file');
+    const bytes = await readRegular(join(path, companion.path), companion.byteLength);
+    if (bytes.length !== companion.byteLength || createHash('sha256').update(bytes).digest('hex') !== companion.sha256)
+      throw new Error('Accepted-stroke document does not match its declared length and SHA-256');
+  }
   return { raw, value };
 }
 

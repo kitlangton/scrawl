@@ -1,3 +1,0 @@
-# @apparent/engine-sdk 0.4.5 vendoring provenance
-
-Accepted from main source 4119a08bf6d7057f2123f728553035681de00e06, run 42333036882, artifact 13558053710. Component SHA-256: 579abad9ae046f9967e87f7a35cf2bb53523f9b72892ed93dfbe7e51a1a53d9d. Package tarball SHA-256: 177f4433964425b0a5d7e4f3228a4db5a47ebcf51deadc5783e7341652d441b2. The accepted main receipt binds the previously verified PR build from source fa152688241998ff1c3d8b4c49095ea8d9df578e, run 42331685438, artifact 13557563470. Source/workflow/run-bound attestation was verified. The owning close API releases local process references after all awaited calls settle; its outcome does not establish terminal state, native clearance or Saved.
