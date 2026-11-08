@@ -342,7 +342,7 @@ export function assembleProcessingOutput(
   if (input.note?.trim()) lines.push(`Note: ${input.note.trim()}`);
   for (const warning of input.warnings ?? []) {
     if (warning.kind === "videoOnlyInteractionTelemetry")
-      lines.push("Interaction context: video only; clicks and Shift ink were not collected. A visible click in the video will not appear in events, marks or click keyframes.");
+      lines.push("Interaction context: click telemetry was not collected. A visible click in the video will not appear in events, marks or click keyframes.");
     else if (warning.kind === "imageQuality") lines.push(`Image quality: ${warning.message}`);
     else if (warning.kind === "noMicrophoneAudio") lines.push("No microphone audio was saved. Check the microphone and try again.");
     else if (warning.kind === "audioInitialGap") lines.push(audioInitialGapText(warning.atMs));

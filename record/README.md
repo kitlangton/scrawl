@@ -539,3 +539,7 @@ origin. A copied/edited local bundle remains caller-supplied local data; origina
 publication authority must come from its existing native receipt/binding. Do not
 infer erase replay or final canvas from accepted history. Agent adoption and actual
 joined voice/ink native acceptance remain separate consumer gates.
+
+The legacy-named `videoOnlyInteractionTelemetry` warning describes unavailable
+click telemetry only; it does not establish Shift-ink absence. Original accepted
+history may be collected, collected-empty or unavailable independently.
