@@ -142,8 +142,8 @@ test("processing warnings preserve explicit video-only and transcript failure fa
   const output = assembleProcessingOutput({ durationMs: 3_000, bundlePath: "/captures/warnings.apparent",
     transcript: { text: "", segments: [] }, frames: [],
     warnings: [{ kind: "videoOnlyInteractionTelemetry" }, { kind: "noTranscript", message: "The selected model was unavailable." }] });
-  assert.match(output.summaryMarkdown, /Interaction context: video only; clicks and Shift ink were not collected/);
-  assert.doesNotMatch(output.summaryMarkdown, /CLI|recording shortcut/);
+  assert.match(output.summaryMarkdown, /Interaction context: click telemetry was not collected/);
+  assert.doesNotMatch(output.summaryMarkdown, /CLI|recording shortcut|Shift ink/);
   assert.match(output.summaryMarkdown, /No transcript: The selected model was unavailable\./);
 });
 

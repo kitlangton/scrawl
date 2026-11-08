@@ -25,7 +25,7 @@ test("assembles deterministic v1 bytes, preserves context/variants, and inventor
  const original=structuredClone(base), one=assembleCanonicalBundle(base,validators), two=assembleCanonicalBundle(base,validators);
  assert.deepEqual(one.apparentJson,two.apparentJson);assert.deepEqual(one.summaryMd,two.summaryMd);assert.deepEqual(base,original);
  const doc=JSON.parse(new TextDecoder().decode(one.apparentJson));
- assert.deepEqual(doc,{version:1,id:"bundle-a",createdAtMs:1234,durationMs:4000,target:{mode:"display",displayId:1,frame:{x:0,y:0,width:800,height:600,scale:1},windowTitle:"PRIVATE WINDOW",app:"Editor"},transcript:{source:"fixture",model:"fixture",text:"hello",segments:[{t0:200,t1:4000,text:"hello"}],estimated:true},strokes:[],marks:[],events:docs.interactions.events,keyframes:[{index:1,t:1000,reason:"scene_change",file:"frames/frame-01.png",event:"changed"}],contactSheet:"contact-sheet.png",video:"capture.mp4",videoOffsetMs:125,context:{workspace:"demo"},contextChanges:[{t:600,key:"mode",value:"edit"}],destination:{session:"session-a",title:"",via:"sdk"},windows:[{t:700,windows:[{id:2,app:"Editor",title:"PRIVATE WINDOW",bounds:[0,0,400,300],layer:0,frontmost:true}]}],cursor:[[900,.25,.5]]});
+ assert.deepEqual(doc,{version:1,id:"bundle-a",createdAtMs:1234,durationMs:4000,target:{mode:"display",displayId:1,frame:{x:0,y:0,width:800,height:600,scale:1},windowTitle:"PRIVATE WINDOW",app:"Editor"},transcript:{source:"fixture",model:"fixture",text:"hello",segments:[{t0:200,t1:4000,text:"hello"}],estimated:true},strokes:[],marks:[],events:docs.interactions.events,keyframes:[{index:1,t:1000,reason:"scene_change",file:"frames/frame-01.png",event:"changed"}],contactSheet:"contact-sheet.png",video:"capture.mp4",videoOffsetMs:125,context:{workspace:"demo"},contextChanges:[{t:600,key:"mode",value:"edit"}],destination:{session:"session-a",title:"",via:"sdk"},windows:[{t:700,windows:[{id:2,app:"Editor",title:"PRIVATE WINDOW",bounds:[0,0,400,300],layer:0,frontmost:true}]}],cursor:[[900,.25,.5]],recordOutput:{schema:"apparent.record-output/1",transcriptStatus:{state:"collected",content:"nonempty",segmentCount:1},warnings:[],acceptedStrokeDocument:null}});
  assert.equal(doc.createdAtMs,1234);assert.equal(doc.videoOffsetMs,125);assert.equal(doc.keyframes[0].index,1);
  assert.equal(doc.events[0].kind,"app_change");assert.equal(doc.events[1].kind,"drag");assert.equal(doc.windows[0].windows[0].title,"PRIVATE WINDOW");
  assert.match(new TextDecoder().decode(one.summaryMd),/\/captures\/demo\.apparent/);assert.doesNotMatch(new TextDecoder().decode(one.summaryMd),/PRIVATE WINDOW/);
@@ -34,11 +34,13 @@ test("assembles deterministic v1 bytes, preserves context/variants, and inventor
   "For session: session-a (session-a)",
   "Visuals are saved in this bundle, but are optional for this text-first handoff. Use apparent zoom if the words need screen context; contact-sheet.png and frames/ are also available there.",
   "workspace: demo",
+  "Transcript collected; 1 segment.",
   "  · 0:00 “hello”",
   "  · 0:00 mode → edit",
   "- #1 (0:01) changed",
   "  /captures/demo.apparent/frames/frame-01.png",
   "Video: /captures/demo.apparent/capture.mp4",
+  "Accepted strokes: unavailable.",
   "Contact sheet: /captures/demo.apparent/contact-sheet.png",
   "Bundle: /captures/demo.apparent",
   "",

@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { tmpdir } from "node:os";
 import test from "node:test";
 import { crc32, deflateSync } from "node:zlib";
-import { assembleCanonicalBundle, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
+import { assembleCanonicalBundle, readCanonicalRecordOutput, type BundleAssemblyInput } from "@apparent/record/processing/bundle";
 import { prepareRecordPublication } from "../../dist/backend/publication/staging.js";
 import { createCompletedCapturePublisher } from "../../dist/backend/publication/completed-capture.js";
 import { createRecordPublicationOutput } from "../../dist/backend/publication/output.js";
@@ -1780,6 +1780,7 @@ test("standard visual selection CAS preserves its original plan and refuses a di
     const doc=JSON.parse(new TextDecoder().decode(assembly.apparentJson));
     assert.deepEqual(doc.transcript,{source:"fixture-provider",model:"fixture-model-v7",text:empty?"":"hello there",segments:empty?[]:[{t0:200,t1:estimated?4000:1200,text:"hello there"}],...(estimated?{estimated:true}:{})});
     assert.deepEqual(assembly.processing.transcriptStatus,{state:"collected",content:empty?"empty":"nonempty",segmentCount:empty?0:1});
+    assert.deepEqual(readCanonicalRecordOutput(doc)!.transcriptStatus,assembly.processing.transcriptStatus);
     assert.equal(doc.keyframes[0].said,empty?undefined:"hello there");assert.equal(doc.audio,audio.relativePath);
     const {formatLocalHandoff}=await import("../../dist/backend/handoff/index.js");
     const handoff=formatLocalHandoff({savedBundle:{status:"saved",bundlePath:assembly.bundlePath},processing:assembly.processing,requestVideoProof:false}).text;
@@ -1871,6 +1872,10 @@ test("standard original ink persists exact projection and publishes its sealed s
         additionalCanonicalFacts: final.additionalCanonicalFacts });
       const canonical = JSON.parse(new TextDecoder().decode(assembly.apparentJson));
       assert.equal(canonical.strokes.length, empty ? 0 : 3);
+      const cold = readCanonicalRecordOutput(canonical)!;
+      assert.deepEqual(cold.transcriptStatus, assembly.processing.transcriptStatus);
+      assert.deepEqual(cold.acceptedStrokeDocument, collected ? { path: input.facts.acceptedStrokes!.file.relativePath,
+        strokeCount: document.strokes.length, sha256: sha(input.facts.acceptedStrokes!.bytes), byteLength: input.facts.acceptedStrokes!.bytes.byteLength } : null);
       if (collected) {
         const fact = input.facts.acceptedStrokes!;
         const entry = assembly.inventory.entries.find(entry => entry.path === fact.file.relativePath)!;
@@ -1926,7 +1931,7 @@ test("standard original ink persists exact projection and publishes its sealed s
           assert.throws(() => projectOriginalAcceptedStrokes(badMaterials, input.facts.acceptedStrokes));
         }
       } else {
-        assert.equal(assembly.processing.acceptedStrokeDocument, undefined);
+        assert.equal(assembly.processing.acceptedStrokeDocument, null);
         assert.equal(assembly.inventory.entries.some(entry => entry.role === "companion"), false);
         assert.throws(() => projectOriginalAcceptedStrokes(materials, { file: sealed("facts/strokes.json", bytes(document), "foreign"), bytes: bytes(document) }), /unavailable/);
       }
@@ -1952,4 +1957,37 @@ test("sealed transcript text and segment count are independent; failures cannot 
     input.processingWarnings=[];setSealedWarnings(input,[{code:"transcript-unavailable"}]);
     assert.throws(()=>assembleCanonicalBundle(input),/contradicts collected/);
   }
+});
+
+test("cold Record output retains original warnings/status, stays absent for legacy and rejects contradictions", async () => {
+  const input = await fixture();
+  const audio = addAudioMaterial(input); input.materialReferences = [{ role: "audio", relativePath: audio.relativePath }];
+  setSealedWarnings(input, [{ code: "audio-initial-gap", atMs: 125 }]);
+  const assembly = assembleCanonicalBundle(input);
+  const canonical = JSON.parse(new TextDecoder().decode(assembly.apparentJson));
+  const cold = readCanonicalRecordOutput(canonical)!;
+  assert.deepEqual(cold.transcriptStatus, assembly.processing.transcriptStatus);
+  assert.deepEqual(cold.warnings, [{ kind: "audioInitialGap", atMs: 125 }]);
+  assert.equal(cold.acceptedStrokeDocument, null);
+  cold.warnings.length = 0;
+  assert.equal(readCanonicalRecordOutput(canonical)!.warnings.length, 1, "reader returns isolated values");
+  const legacy = structuredClone(canonical); delete legacy.recordOutput;
+  assert.equal(readCanonicalRecordOutput(legacy), undefined, "legacy absence is not inferred from text or audio");
+  const invalid: Array<(value: any) => void> = [
+    value => { value.recordOutput.schema = "future"; },
+    value => { value.recordOutput.transcriptStatus.segmentCount++; },
+    value => { value.recordOutput.transcriptStatus.content = "empty"; },
+    value => { value.recordOutput.transcriptStatus = { state: "unavailable" }; },
+    value => { value.recordOutput.warnings[0].atMs = value.durationMs; },
+    value => { delete value.audio; },
+    value => { value.recordOutput.warnings.push(value.recordOutput.warnings[0]); },
+    value => { value.recordOutput.warnings = [{ kind: "transcriptUnavailable" }]; },
+    value => { value.recordOutput.warnings = [{ kind: "imageQuality", message: "untrusted" }]; },
+    value => { value.recordOutput.ownerToken = "not-a-supported-field"; },
+    value => { value.recordOutput.acceptedStrokeDocument = { path: "../foreign", strokeCount: 0, sha256: "a".repeat(64), byteLength: 1 }; },
+    value => { value.recordOutput.acceptedStrokeDocument = { path: "apparent.json", strokeCount: 0, sha256: "a".repeat(64), byteLength: 1 }; },
+    value => { value.recordOutput.acceptedStrokeDocument = { path: "facts/strokes.json", strokeCount: 1, sha256: "a".repeat(64), byteLength: 1 }; },
+    value => { value.recordOutput.acceptedStrokeDocument = { path: "facts/strokes.json", strokeCount: 0, sha256: "A".repeat(64), byteLength: 1 }; },
+  ];
+  for (const mutate of invalid) { const bad = structuredClone(canonical); mutate(bad); assert.throws(() => readCanonicalRecordOutput(bad)); }
 });

@@ -47,6 +47,9 @@ try {
     import { createRecordFixture } from '@apparent/record/fixtures';
     const initialGap: AudioInitialGapWarning = {kind:"audioInitialGap",atMs:125};
     void initialGap;
+    const coldProcessing: Parameters<typeof assembleProcessingOutput>[0] = {durationMs:200,bundlePath:'/offline.apparent',transcript:{text:'',segments:[]},frames:[],
+      transcriptStatus:{state:'collected',content:'empty',segmentCount:0},acceptedStrokeDocument:null};
+    void coldProcessing;
     const transcriptStatus: TranscriptStatus = {state:"collected",content:"nonempty",segmentCount:0};
     const terminalStatus: CaptureFact["transcriptStatus"] = transcriptStatus;
     void terminalStatus;
@@ -83,6 +86,10 @@ try {
     const require = createRequire(import.meta.url);
     for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk', '@apparent/app-contracts']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
+    const coldSummary = assembleProcessingOutput({durationMs:200,bundlePath:'/offline.apparent',transcript:{text:'',segments:[]},frames:[],
+      transcriptStatus:{state:'collected',content:'empty',segmentCount:0},acceptedStrokeDocument:null}).summaryMarkdown;
+    assert.match(coldSummary, /Transcript collected; no words\./);
+    assert.match(coldSummary, /Accepted strokes: unavailable\./);
     assert.equal(typeof createRecordHostRuntime, 'function');
     const requested = process.cwd() + '/requested.apparent';
     const exactDestinations = new AbsentDestinationAllocator(process.cwd() + '/private-control', process.cwd() + '/default-output');
@@ -120,7 +127,7 @@ try {
     import { readRetainedDerivativeArtifacts, type ReadRetainedDerivativeArtifactsInput } from '@apparent/record/processing/retained-artifacts';
     import { Media2Client, preflightMedia2Dispatch, type Media2JobInput } from '@apparent/engine-sdk/media2';
     import { readFrameVisualObservations, type FrameVisualObservationInput, type FrameVisualObservation, type VisualObservationSource } from '@apparent/engine-sdk/observations';
-    import { assembleCanonicalBundle, projectOriginalAcceptedStrokes, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
+    import { assembleCanonicalBundle, projectOriginalAcceptedStrokes, readCanonicalRecordOutput, type CanonicalRecordOutput, type BundleAssemblyInput, type BundleValidators, type CanonicalStroke } from '@apparent/record/processing/bundle';
     import type { PreparePublicationInput } from '@apparent/record/publication';
     import { validateMaterialsDocument, validateFactFile, type MaterialsDocument, type ContextFacts, type InteractionFacts, type TranscriptFacts, type StrokeFacts, type StrokeRgb } from '@apparent/engine-sdk/capture';
     import {readCaptureMaterials, type CaptureMaterialsInput} from '@apparent/record/host/materials';
@@ -151,6 +158,8 @@ try {
     const consume = (input: BundleAssemblyInput) => assembleCanonicalBundle(input, validators);
     const projectInk = (materials: MaterialsDocument, fact: BundleAssemblyInput['facts']['acceptedStrokes']): CanonicalStroke[] | undefined => projectOriginalAcceptedStrokes(materials, fact);
     void projectInk;
+    const coldOutput: CanonicalRecordOutput | undefined = readCanonicalRecordOutput({version:1});
+    void coldOutput;
     const retainedVideo: BundleAssemblyInput['materialReferences'] = [{ role: 'video', relativePath: 'capture.mp4' }];
     const loadAndAssemble = async (input: CaptureMaterialsInput, policy: Omit<BundleAssemblyInput, 'manifest' | 'payloadBytes' | 'facts'>) => {
       const loaded = await readCaptureMaterials(input);
@@ -180,7 +189,7 @@ try {
   const bundleRuntime = await run(process.execPath, ['--input-type=module', '-e', `
     import assert from 'node:assert/strict';
     import {createRequire} from 'node:module';
-    import { assembleCanonicalBundle, projectOriginalAcceptedStrokes } from '@apparent/record/processing/bundle';
+    import { assembleCanonicalBundle, projectOriginalAcceptedStrokes, readCanonicalRecordOutput } from '@apparent/record/processing/bundle';
     import { RecordMedia2Job } from '@apparent/record/processing/media2-consumer';
     import { readRetainedDerivativeArtifacts } from '@apparent/record/processing/retained-artifacts';
     import { validateMaterialsDocument, validateFactFile } from '@apparent/engine-sdk/capture';
@@ -190,6 +199,12 @@ try {
     assert.equal(typeof readCaptureMaterials, 'function');
     assert.equal(typeof assembleCanonicalBundle, 'function');
     assert.equal(typeof projectOriginalAcceptedStrokes, 'function');
+    assert.equal(readCanonicalRecordOutput({ version: 1 }), undefined);
+    const coldBundle = { version: 1, durationMs: 200, audio: 'audio.wav', transcript: { text: '', segments: [] }, strokes: [],
+      recordOutput: { schema: 'apparent.record-output/1', transcriptStatus: {state:'collected',content:'empty',segmentCount:0},
+        warnings: [{kind:'audioInitialGap',atMs:25}], acceptedStrokeDocument: {path:'facts/strokes.json',strokeCount:0,sha256:'a'.repeat(64),byteLength:100} } };
+    assert.deepEqual(readCanonicalRecordOutput(coldBundle), coldBundle.recordOutput);
+    assert.throws(() => readCanonicalRecordOutput({...coldBundle, recordOutput:{...coldBundle.recordOutput, schema:'future'}}));
     assert.equal(typeof validateMaterialsDocument, 'function');
     assert.equal(typeof validateFactFile, 'function');
     for (const name of ['react','react-dom','electron']) assert.throws(()=>createRequire(import.meta.url).resolve(name));
