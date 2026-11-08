@@ -10,7 +10,10 @@ test('Settings renderer and window follow Electron theme changes without reload'
   t.after(async()=>{await application.close();await fs.rm(home,{recursive:true,force:true});});
   const page = await application.firstWindow();
   await page.locator('.settings-shell').waitFor();
-  await expect.poll(() => application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].isVisible())).toBe(true);
+  // The shipped host permits 15s for committed DOM plus its first frame before
+  // exiting for native fallback. Allow that startup deadline before theme checks.
+  await expect.poll(() => application.evaluate(({BrowserWindow}) => BrowserWindow.getAllWindows()[0].isVisible()),
+    {timeout:16000, message:'Settings presents within its existing startup deadline'}).toBe(true);
   assert.equal(await page.evaluate(() => typeof window.apparentSettingsMounted), 'function');
   assert.deepEqual(await application.evaluate(({BrowserWindow}) => {
     const {width, height} = BrowserWindow.getAllWindows()[0].getBounds();
