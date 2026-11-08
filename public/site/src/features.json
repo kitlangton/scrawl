@@ -1366,7 +1366,7 @@
     },
     {
       "id": "linux-appimage-updates",
-      "note": "Stable discovery filters published versioned desktop releases by CPU architecture, excluding component artifacts and previews. No compatible stable release is a successful no-update result; network and integrity failures remain errors.",
+      "note": "Stable discovery filters published versioned desktop releases by CPU architecture, excluding component artifacts and previews. Main selects canonical linux-main-v2 releases and excludes legacy compatibility bridges; both channels bound release discovery. Signed exact-tree compatibility releases let legacy Main updaters reach the corrected build. No compatible stable release is a successful no-update result; network and integrity failures remain errors.",
       "group": "install",
       "name": "Linux AppImage update channels",
       "says": "Installed AppImages check at launch and hourly, and stage verified updates for the next launch. Both channels use explicitly published desktop releases; failed checks preserve the installed image. Settings and CLI offer Stable or Main, manual check results and live version status. Update now waits until capture is idle.",

@@ -3,6 +3,10 @@ name: Release (Linux)
 on:
   workflow_dispatch:
     inputs:
+      bridge_commit:
+        description: Signed compatibility bridge; publish aliases of already verified v2 assets.
+        required: false
+        default: ""
       tag:
         description: Version tag to build and attach to its release. Leave empty only for a Main preview.
         required: false
@@ -23,7 +27,9 @@ permissions:
 
 concurrency:
   # Verification cannot replace the pending publisher behind a running Main build.
-  group: release-linux-${{ github.ref }}-${{ inputs.tag }}-${{ inputs.verify_only == true && 'verify-only' || 'publish' }}
+  # Canonical publication writes only v2 tags. Compatibility publication alone
+  # writes legacy tags; its own serialized lane cannot be evicted by Main builds.
+  group: release-linux-${{ inputs.bridge_commit != '' && 'compatibility' || 'canonical' }}-${{ github.ref }}-${{ inputs.tag }}-${{ inputs.verify_only == true && 'verify-only' || 'publish' }}
   # Finish the running build/publication; GitHub coalesces to the latest pending run.
   cancel-in-progress: false
 
@@ -43,6 +49,11 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Compatibility publication contracts
+        run: node --experimental-strip-types --test capture/desktop/scripts/linux/maintenance/signing-bridge.test.ts
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}
@@ -50,9 +61,14 @@ jobs:
           VERIFY_RUN_ID: ${{ github.event.workflow_run.id }}
           TAG: ${{ inputs.tag }}
           VERIFY_ONLY: ${{ inputs.verify_only }}
+          BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
         shell: bash
         run: |
           set -euo pipefail
+          if [[ -n "$BRIDGE_COMMIT" ]]; then
+            [[ "$GITHUB_REF" == refs/heads/main && -z "$TAG" && "$VERIFY_ONLY" != true && "${{ inputs.publish_main }}" != true ]]
+            REQUEST_SHA=$(node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts inspect "$BRIDGE_COMMIT")
+          fi
           if [[ "$VERIFY_ONLY" == true ]]; then
             echo "sha=$REQUEST_SHA" >> "$GITHUB_OUTPUT"
             exit 0
@@ -71,7 +87,7 @@ jobs:
 
   preview-needed:
     needs: admit
-    if: needs.admit.outputs.sha != ''
+    if: needs.admit.outputs.sha != '' && inputs.bridge_commit == ''
     permissions:
       contents: read
     runs-on: ubuntu-24.04
@@ -89,7 +105,7 @@ jobs:
           if [[ "$VERIFY_ONLY" == "true" ]]; then
             echo "build=true" >> "$GITHUB_OUTPUT"
           elif [[ "$PUBLISH_MAIN" == "true" && -z "$TAG" ]] && \
-             [[ "$(gh release view "linux-main-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
+             [[ "$(gh release view "linux-main-v2-$CANDIDATE_SHA" --repo "$GITHUB_REPOSITORY" --json isDraft --jq .isDraft 2>/dev/null || true)" == "false" ]]; then
             echo "build=false" >> "$GITHUB_OUTPUT"
           else
             echo "build=true" >> "$GITHUB_OUTPUT"
@@ -143,7 +159,7 @@ jobs:
       - name: Build with PostHog error reporting
         env:
           APPARENT_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
-        run: cargo build --release --locked
+        run: GITHUB_SHA="$CANDIDATE_SHA" cargo build --release --locked
       - name: Unit tests and model test executable
         run: |
           cargo test --release --locked -- --test-threads=2
@@ -252,3 +268,24 @@ jobs:
         run: |
           version=$(sed -n 's/^version = "\(.*\)"/\1/p' Cargo.toml | head -1)
           GITHUB_SHA="$CANDIDATE_SHA" APPARENT_VERSION="$version" python3 capture/desktop/scripts/linux/maintenance/publish-main-preview.py
+
+  signing-bridge:
+    needs: admit
+    if: inputs.bridge_commit != '' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main'
+    permissions:
+      contents: write
+      actions: read
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Publish unchanged verified assets for legacy updaters
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRIDGE_COMMIT: ${{ inputs.bridge_commit }}
+        run: node --experimental-strip-types capture/desktop/scripts/linux/maintenance/signing-bridge.ts publish "$BRIDGE_COMMIT"
