@@ -161,3 +161,18 @@ test('manual lifecycle hint clears known head when listing fails', async () => {
  assert.throws(()=>reconcileAll((path,body)=>{if(body){state=body.state;return {};}throw Error('listing unavailable');}, {workflow_run:{id:1,head_sha:'head',head_repository:{full_name:repo},pull_requests:[{head:{sha:'head'},base:{ref:'main'}}]}}));
  assert.equal(state,'pending');
 });
+
+test('base rename cannot hide removed native source behind a documentation destination', async () => {
+ const {reconcile}=await import('./reporter.ts');
+ const candidate={number:1,state:'open',html_url:'https://github.com/'+repo+'/pull/1',base:{ref:'main',sha:'base',repo:{full_name:repo}},head:{sha:'head',ref:'feature',repo:{full_name:repo}}};
+ const writes:any[]=[];
+ reconcile((path,body)=>{
+  if(body){writes.push(body);return {};}
+  if(path.endsWith('/pulls/1'))return candidate;
+  if(path.includes('/compare/base...head'))return {merge_base_commit:{sha:'old'},files:[{filename:'enablement/docs/check.md'}]};
+  if(path.includes('/compare/old...base'))return {files:[{filename:'capture/engine/docs/retired.md',previous_filename:'capture/engine/runtime/retired.rs',status:'renamed'}]};
+  throw Error(path);
+ },1);
+ assert.equal(writes.at(-1).state,'pending');
+ assert.equal(writes.at(-1).description,'Integrate changed base inputs');
+});

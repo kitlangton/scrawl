@@ -128,7 +128,7 @@ export function reconcile(fetch: API, number: number, listed?: any): void {
     // New relevant base inputs invalidate proof; unrelated documentation does not.
     if (comparison.merge_base_commit.sha !== candidate.base.sha) {
       const baseDelta = fetch(`${prefix}/compare/${comparison.merge_base_commit.sha}...${candidate.base.sha}`);
-      if (!baseDelta.files?.length || baseDelta.files.length >= 300 || scope(baseDelta.files.map((f: any) => f.filename)) !== 'docs') throw Error('Integrate changed base inputs');
+      if (!baseDelta.files?.length || baseDelta.files.length >= 300 || scope(baseDelta.files.flatMap((f: any) => [f.filename, ...(f.previous_filename ? [f.previous_filename] : [])])) !== 'docs') throw Error('Integrate changed base inputs');
     }
     if (kind === 'public') {
       const path = '.github/workflows/stream-public.yml';
