@@ -51,8 +51,17 @@ function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
   const dir = mkdtempSync(join(tmpdir(), 'hook-'));
   const env = { ...process.env };
   // cwd cannot isolate Git fixtures from a real push's GIT_DIR / index.
-  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
-  try { action(dir, env); } finally { rmSync(dir, { recursive: true, force: true }); }
+  // The imported production helpers spawn with process.env too; isolate that
+  // synchronous scope, not just the explicit fixture setup commands.
+  const inherited: Record<string, string> = {};
+  for (const key of Object.keys(env)) if (key.startsWith('GIT_')) {
+    inherited[key] = env[key]!;
+    delete env[key]; delete process.env[key];
+  }
+  try { action(dir, env); } finally {
+    Object.assign(process.env, inherited);
+    rmSync(dir, { recursive: true, force: true });
+  }
 }
 
 test('real Git delta includes earlier commits and both sides of cross-owner rename/deletion', () => fixture((dir, env) => {
