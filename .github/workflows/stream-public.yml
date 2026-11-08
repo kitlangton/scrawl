@@ -49,6 +49,10 @@ jobs:
           echo "CHROME_PATH=$(node --input-type=module -e 'import {chromium} from "playwright-core"; console.log(chromium.executablePath())')" >> "$GITHUB_ENV"
       - name: Verify Public source, browsers, shared inputs and prepared movie worker
         working-directory: public/site
+        env:
+          PUBLIC_POSTHOG_TOKEN: ${{ secrets.APPARENT_POSTHOG_TOKEN }}
+          PUBLIC_POSTHOG_HOST: https://eu.i.posthog.com
+          PUBLIC_POSTHOG_ENVIRONMENT: production
         run: npm run verify
       - name: Seal the checked Public-only Pages artifact
         run: node public/site/scripts/cd/publish-pages.ts seal "$GITHUB_SHA"
