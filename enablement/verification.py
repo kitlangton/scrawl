@@ -210,6 +210,13 @@ def observed_compile(command, **kwargs):
 
 def observed_run(command, timing_label=None, **kwargs):
     """Synthetic timing only; never changes command selection or acceptance."""
+    if command[:3] == ["python3", "-m", "unittest"]:
+        # Time the contract suite here, not its nested disposable verifiers.
+        # Those fixtures must retain their ordinary command inventory and must
+        # not append synthetic observations to the real job's timing artifact.
+        child_env = dict(kwargs.get("env", os.environ))
+        child_env.pop("APPARENT_TIMING_FILE", None)
+        kwargs["env"] = child_env
     is_cargo = command[0] == "cargo" or command[:4] == ["taskpolicy", "-c", "utility", "cargo"]
     label = ("rust-build" if is_cargo and "build" in command else
              "rust-test-execution" if is_cargo and "test" in command else

@@ -327,6 +327,16 @@ class SelectionTests(unittest.TestCase):
 
 
 class TimingTests(unittest.TestCase):
+    def test_contract_children_do_not_inherit_outer_timing_mode(self):
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
+            output = Path(directory) / "timing.jsonl"
+            with patch.dict(os.environ, {"APPARENT_TIMING_FILE": str(output)}), patch.object(
+                    verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.observed_run(["python3", "-m", "unittest", "discover"], check=True)
+                self.assertNotIn("APPARENT_TIMING_FILE", run.call_args.kwargs["env"])
+                self.assertEqual(os.environ["APPARENT_TIMING_FILE"], str(output))
+            self.assertIn('"label": "contract-checks"', output.read_text())
+
     def test_compile_then_execute_preserves_test_union_and_failure(self):
         command = ["cargo", "test", "--locked", "some_filter", "--", "--ignored"]
         with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
