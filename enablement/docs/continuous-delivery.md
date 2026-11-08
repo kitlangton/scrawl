@@ -322,8 +322,9 @@ changes this split.
 Connect Rust/client security, filesystem, credential and staging tests remain on
 both platforms, as do Desktop tests, actual Electron integration, packaging and
 Mac native assertions. Both platform jobs depend on the successful Linux `select`
-prerequisite; portable failures prevent their allocation. This is once per platform caller, not reuse
-of another workflow's results. Reverting the explicit routing and workflow
+prerequisite; portable failures prevent their allocation. This is once per
+platform caller, not reuse of another workflow's results. Reverting the explicit
+routing and workflow
 placement restores the previous duplicate execution.
 
 The supplied six-hour cohort reports Mac changed-tree median 10:16 (n=32) and
