@@ -256,6 +256,7 @@ struct Native {
 impl gpui::Render for Native {
     fn render(&mut self, _: &mut Window, _: &mut Context<Self>) -> impl IntoElement {
         let mut root = div()
+            .size_full()
             .flex()
             .flex_col()
             .gap_4()
