@@ -21,6 +21,9 @@ jobs:
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
       - name: Install disk-image contract dependency (no KVM required)
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends qemu-utils
       - name: Install OCR preprocessing dependency
@@ -29,6 +32,7 @@ jobs:
         run: |
           python3 capture/desktop/scripts/linux/updater/test-updater-gui.py
           python3 enablement/native/linux/test-gui-vm.py
+          node --experimental-strip-types --experimental-vm-modules --test enablement/native/linux/fixture-closure.test.ts
           python3 capture/desktop/scripts/linux/gui/test-capture-smoke.py
       - name: Check driver syntax
         run: |

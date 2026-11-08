@@ -133,6 +133,17 @@ def file_digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
+def validate_fixture_closure(binary, fixtures):
+    """Fail before overlay/expiry/boot if a manifest requires unstaged files."""
+    names = [path.name for path in fixtures]
+    if len(names) != len(set(names)) or 'apparent' in names:
+        raise RuntimeError('duplicate staged fixture basename')
+    if 'input-seals.sha256' in names:
+        execute(['node', '--experimental-strip-types', '--experimental-vm-modules',
+                 str(Path(__file__).with_name('fixture-closure.ts')), 'check',
+                 str(binary), *map(str, fixtures)], timeout=15)
+
+
 # Used verbatim on both ends: successful scp alone is not verified retention.
 MANIFEST_SCRIPT = '''import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -326,6 +337,12 @@ def main():
             raise RuntimeError('require memory >= 2048, job-timeout >= 30 and positive boot/scenario timeouts')
         if any(',' in str(path.resolve()) for path in (directory, args.template, args.ovmf_vars)):
             raise RuntimeError('QEMU disk and firmware paths must not contain commas')
+        validate_fixture_closure(args.binary, args.fixture_file)
+        if args.retain_cold_state:
+            # A known access denial must stop before creating owned resources.
+            # This is a capability precheck, not proof of future cold absence;
+            # cleanup still performs the complete inode census again.
+            cold_retention.open_resource_owners({})
         status['candidate_sha256'] = file_digest(args.binary)
         stage('overlay')
         overlay = directory / "disk.qcow2"

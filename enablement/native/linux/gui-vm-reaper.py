@@ -96,6 +96,7 @@ def open_resource_owners(resources, proc=Path('/proc'), seconds=2):
             raise TimeoutError('cold resource ownership observation expired')
         if not process.name.isdigit():
             continue
+        access_stage = 'uid-status'
         try:
             # /proc directory ownership can become root for a non-dumpable
             # same-UID process. Read actual UIDs, never infer them from that.
@@ -109,19 +110,26 @@ def open_resource_owners(resources, proc=Path('/proc'), seconds=2):
                 raise RuntimeError('process UID observation is malformed') from error
             if os.getuid() not in process_uids:
                 continue
+            access_stage = 'fd-list'
             for index, descriptor in enumerate((process / 'fd').iterdir()):
                 if index >= 4096 or time.monotonic() >= end:
                     raise TimeoutError('cold resource ownership observation incomplete')
                 try:
+                    access_stage = 'fd-stat'
                     meta = descriptor.stat()
                     if (meta.st_dev, meta.st_ino) in targets:
                         owners.add(int(process.name))
                 except FileNotFoundError:
                     pass
+                access_stage = 'fd-list'
         except FileNotFoundError:
             pass
         except PermissionError as error:
-            raise RuntimeError('cold resource ownership access is unknown') from error
+            # No descriptor names/targets, argv, environment or contents.
+            # Unknown remains a refusal; never skip a same-UID process/FD.
+            stage = 'fd-stat' if error.filename and '/fd/' in str(error.filename) else access_stage
+            raise RuntimeError('cold resource ownership access is unknown '
+                               f'(pid={int(process.name)}, stage={stage}, errno={error.errno})') from None
     if time.monotonic() >= end:
         raise TimeoutError('cold resource ownership observation expired')
     return sorted(owners)
