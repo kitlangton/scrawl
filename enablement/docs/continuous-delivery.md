@@ -302,3 +302,43 @@ forwarded and exit status is preserved. Artifact upload is guarded by the timing
 step outcome, runs after failures, and missing diagnostics only warn. Diagnostics
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
+
+## PR verification status (bootstrap required)
+
+The `verification-status` job in `checks.yml` is a credentialed, event-driven default-branch reporter.
+It publishes the commit status **Verification complete**, independent of the cheap
+Repository checks. It never dispatches native work. PR changes, main pushes and
+manual verification lifecycle events reconcile open main PRs under one serialized
+writer. Candidate code is read as data, never executed with the reporter token.
+
+Native changes require both manual exact-head workflows, their latest run and
+latest attempt, the complete current or parallel job union, and successful Mac
+native assertions. Feature-only skipped release receipts are excluded. Unknown
+inventories, missing history, fork candidates and policy mismatches stay pending;
+failed/cancelled runs and skipped/missing required jobs fail. Successful evidence
+is retained across unrelated owner-documentation changes on main; other new base
+inputs require integration. Owner documentation alone needs no platform run.
+Public-only changes require manual Public verification at the exact head (PR merge
+checks do not substitute); they require neither Mac nor Rust. This PR status never
+admits publication or replaces native product acceptance outside CI.
+
+Bootstrap in order: merge reviewed reporter code into main under existing gates;
+open/update the authorized probe PR; inspect pending in `gh pr view --json
+statusCheckRollup`; dispatch only approved manual verification, demonstrate real
+failure and success transitions with Actions/status links; then add precisely
+`Verification complete` to required checks while preserving all live protections.
+No protection should be enabled on an unproven reporter. Initial read-only inspection
+found no main branch protection and no rulesets. This workflow cannot receive its
+own default-branch events before merge. Parent delivery ownership must retain the
+live transition proof and protection activation steps. A direct hand-written green
+status is not reporter proof. No polling, watchdog or expensive automatic run is
+part of this mechanism.
+
+Policy-changing PRs deliberately remain pending when their platform/caller workflow
+bytes differ from main. Before making this context required, the integration owner
+must provide a separately reviewed trusted-policy admission path for such changes;
+otherwise future verification-workflow maintenance deadlocks. The initial reporter
+PR can use the existing unmodified merge gates, but must not claim live proof or
+activate enforcement until that bootstrap is resolved. GitHub status writes have
+no compare-and-swap: final candidate/evidence re-reads and serialized writers reduce
+the race window; later lifecycle events reconcile concurrent external changes.
