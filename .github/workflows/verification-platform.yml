@@ -29,12 +29,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --experimental-strip-types --test enablement/prerequisites/native.test.ts
+      - run: node --experimental-strip-types --test enablement/prerequisites/*.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
-          python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
           python3 -m unittest discover -s enablement/tests -p 'test_commit_push_checkpoint.py'
-          python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
           python3 -m unittest discover -s enablement/tests -p 'test_temp_preflight.py'
           python3 -m unittest discover -s enablement/tests -p 'test_owner_lanes.py'
           python3 -m unittest discover -s capture/desktop/scripts/tests/mac -p 'test_*.py'
@@ -53,11 +51,23 @@ jobs:
           name: owner-plan-${{ inputs.runner }}
           path: ${{ runner.temp }}/owner-plan.json
           if-no-files-found: error
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
       - id: plan
         run: |
           # Full tree: a cancelled earlier main run must not hide its delta.
           BASE=$(git hash-object -t tree /dev/null)
           python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
+      - name: Portable contracts and Connect browser fixtures (Linux, no native proof)
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "$BASE" --run --online --execution portable
 
   desktop-ui:
     needs: select
@@ -147,13 +157,6 @@ jobs:
           node --experimental-strip-types --test enablement/timing/mac-cache.test.ts
           echo "APPARENT_TIMING_FILE=$RUNNER_TEMP/verification-timings.jsonl" >> "$GITHUB_ENV"
           touch "$RUNNER_TEMP/verification-timings.jsonl"
-      - uses: oven-sh/setup-bun@v2
-        if: needs.select.outputs.browser == 'true'
-        with:
-          bun-version: '1.3.10'
-      - uses: browser-actions/setup-chrome@v1
-        if: needs.select.outputs.browser == 'true'
-        id: chrome
       - name: Prepare private temporary root before first Cargo
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         shell: bash
@@ -184,8 +187,6 @@ jobs:
           node --experimental-strip-types enablement/timing/command.ts client-test-compilation cargo test --manifest-path connect/client/Cargo.toml --locked --timings --no-run
           node --experimental-strip-types enablement/timing/command.ts client-test-execution cargo test --manifest-path connect/client/Cargo.toml --locked --timings -- --test-threads=2
       - name: Execute the same changed-tree checks (not GUI acceptance)
-        env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
           verification_tmp="$(mktemp -d "$HOME/.apparent-verification.XXXXXX")"
@@ -209,7 +210,7 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online
+          python3 enablement/verification.py --base "$BASE" --run --online --execution platform
       - name: Retain completed Mac dependency seeds after later native failures
         if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
         # Swatinem's post action reads this variable. Arm it only after all
