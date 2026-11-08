@@ -27,8 +27,16 @@ older client/server source.
 ## Repository checks
 
 `Repository checks` runs automatically on PRs targeting main and main pushes.
-It validates the theme, selector, push-hook, publication-admission contracts and
-workflow syntax with read-only permissions. Feature pushes run the inexpensive
+It is the only automatic workflow: one run per PR open/reopen/commit update
+against main, and one per push to main. It validates the theme, selector,
+push-hook, publication-admission contracts and workflow syntax with read-only
+permissions. Public web verification runs as a reusable job when Public/shared
+web inputs change. The updater harness runs as a reusable job on main pushes
+when its inputs change. Changes to the CI orchestrator select both consumers;
+unavailable diff history selects both rather than skipping checks. Git diffs
+include deleted and renamed source paths. There are no PR-edit or verification
+lifecycle triggers. Superseded PR/main runs coalesce within their own event/ref.
+Neither reusable consumer publishes on an automatic run. Feature pushes run the inexpensive
 contracts locally; they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
@@ -321,8 +329,7 @@ not a change to installed Desktop routing or application persistence policy.
 
 The automatic verification status reporter and its `Verification complete` commit
 status have been removed to eliminate repeated GitHub API reconciliation.
-Repository checks still run on PRs and main pushes. Linux, Mac and Public
-verification workflows remain available under their existing manual triggers.
-Exact-head verification, independent review, native acceptance and publication
-admission requirements remain unchanged; inspect their workflow evidence directly.
-The retired status must not remain a required branch-protection check.
+Linux, Mac and Public verification workflows remain available under their existing
+manual triggers. Exact-head verification, independent review, native acceptance
+and publication admission remain required; inspect their workflow evidence
+directly. The retired status is no longer required by branch protection.

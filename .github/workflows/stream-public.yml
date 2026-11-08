@@ -1,22 +1,12 @@
 name: Public — checks & deploy
 
 on:
-  pull_request:
-    branches: [main]
-    paths:
-      - 'public/site/**'
-      - 'shared/ui/**'
-      - 'shared/analytics/**'
-      - 'shared/assets/**'
-      - '.github/workflows/stream-public.yml'
-  push:
-    branches: [main]
-    paths:
-      - 'public/site/**'
-      - 'shared/ui/**'
-      - 'shared/analytics/**'
-      - 'shared/assets/**'
-      - '.github/workflows/stream-public.yml'
+  workflow_call:
+    secrets:
+      APPARENT_POSTHOG_TOKEN:
+        required: false
+      WEBSITE_PAGES_API_TOKEN:
+        required: false
   workflow_dispatch:
 
 permissions:
