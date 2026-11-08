@@ -162,7 +162,7 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online
+          python3 enablement/verification.py --base "$BASE" --run --online --overlap-root-build
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash

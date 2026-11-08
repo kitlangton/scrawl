@@ -279,3 +279,12 @@ freshness without failing the successful commit. No background worker is started
 other worktrees are untouched. Existing worktrees acquire the hook when they
 integrate this change; frozen evidence checkouts need not be updated. Local hook
 checks do not replace current-main integration and review before merge.
+
+Root platform verification uses `--overlap-root-build`: Cargo must report
+successful test compilation before the required real app build starts. The
+compiled harness runs with two test threads alongside one build worker; both
+must succeed before any bridge/native step runs. Allocations below three
+workers and focused filters retain sequential build/test execution. The helper
+owns both process groups, reaps them on failure/cancellation and preserves Cargo
+diagnostics. This changes scheduling only; full platform tests and release
+receipts remain required.
