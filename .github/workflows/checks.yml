@@ -3,6 +3,7 @@ name: Repository checks
 on:
   pull_request:
     branches: [main]
+    types: [opened, reopened, synchronize, ready_for_review, converted_to_draft]
   push:
     branches: [main]
 
@@ -14,6 +15,22 @@ concurrency:
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
 jobs:
+  # PR checkout is GitHub's proposed merge, so these checks cover integration.
+  # Draft updates retain cheap feedback without allocating full platform suites.
+  linux:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+    uses: ./.github/workflows/verification-platform.yml
+    with:
+      runner: ubuntu-24.04
+      release_receipt: false
+
+  macos:
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+    uses: ./.github/workflows/verification-platform.yml
+    with:
+      runner: macos-15-intel
+      release_receipt: false
+
   select:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04

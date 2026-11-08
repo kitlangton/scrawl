@@ -69,7 +69,8 @@ feature pushes while preserving exact-HEAD/clean-tree guards. Explicit local
 `enablement/verification.py --run` and direct main pushes retain conservative
 changed-tree build/tests. Repository checks run the cheap contracts and workflow
 validation automatically on PRs and main pushes. Full Linux/macOS verification
-and all publication workflows remain manual-only. Linux and Connect publication require the
+runs in that workflow for ready PRs and main pushes; drafts retain cheap checks.
+Separate platform diagnostics and all publication workflows remain manual-only. Linux and Connect publication require the
 exact commit's successful Linux/shared verification. Public publication uses its own
 successful web/shared checks and sealed artifact in `stream-public.yml`, without
 requiring Rust, Desktop or Connect verification. Mac publication additionally

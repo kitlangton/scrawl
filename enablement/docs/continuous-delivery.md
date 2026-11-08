@@ -72,7 +72,16 @@ and publication checks still require their existing explicit procedures. A Linux
 hook cannot certify macOS behavior. The advisory owner-lane report below remains
 separate; it does not control the enforced hook selection.
 
-`Linux verification` and `Mac verification` are manual diagnostic entrypoints,
+The same workflow also calls the full Linux and Mac platform suites on main
+pushes and on non-draft PRs (opened, reopened, updated or marked ready for review).
+Drafts retain inexpensive checks; converting a PR back to draft cancels its
+superseded full run. Each update tests GitHub's proposed merge commit, with
+read-only permissions and no release receipt. These jobs appear directly on the
+PR, so their actual completion is visible without a status reporter or manual
+dispatch. Existing separate manual runs do not substitute for this integrated
+candidate. Publication remains manual and retains its existing admission policy.
+
+`Linux verification` and `Mac verification` remain manual diagnostic entrypoints,
 each coalescing superseded runs within its own platform. Both call the same reusable
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
