@@ -450,6 +450,9 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.before = { ...await poll(snapshot, 'Initial authoritative read'), files: await assertFiles(null) };
     assert.equal(report.before.location.storage.source, 'builtin');
     assert.equal(report.before.location.storage.effectivePath, builtin);
+    // Startup cards share Rust's bounded Settings queue. A busy initial read
+    // explicitly asks for Refresh; exercise that real control before the picker.
+    await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget() });
     await locationStatus.getByText(report.before.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
     await change.click({ timeout: budget() });
     report.nativeBeforeGo = await poll(() => panel('inspect'), 'Native Change picker');

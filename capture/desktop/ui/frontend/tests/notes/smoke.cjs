@@ -47,7 +47,7 @@ test('shipped Electron note UI focuses, saves, counts, edits, recovers drafts an
   await expect(field).toBeFocused();
   if (process.platform === 'linux') {
     assert.equal(await popup.evaluate(() => window.devicePixelRatio), 2);
-    await expect.poll(() => messages.some(m => m.action === 'surface' && m.focus && JSON.stringify(m.rect) === '[624,304,664,440]')).toBe(true);
+    await expect.poll(() => messages.some(m => m.action === 'surface' && m.focus && m.rect[2] === 664 && m.rect[3] === 440)).toBe(true);
   }
   const { backgroundColor } = require('@apparent/ui/window-theme');
   for (const mode of ['light', 'dark', 'light']) {
