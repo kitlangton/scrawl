@@ -115,6 +115,7 @@ app.whenReady().then(()=>{
   });
   // Renderer never chooses native dimensions or screen coordinates.
   // Parent's bounded state defines content; main measures its own trusted document.
+  let appliedShape=null;
   async function measure(){
     if(!loaded || window.isDestroyed())return;
     if(current?.phase!=='hidden' && Date.now()-lastInput>5000){app.exit(1);return;}
@@ -127,7 +128,11 @@ app.whenReady().then(()=>{
       const height=Math.min(160,Math.max(58,Math.ceil(size.height)));
       const before=window.getBounds();
       if(before.width!==width || before.height!==height)position({x:Math.round(before.x+(before.width-width)/2),y:before.y,width,height});
-      if(process.platform==='linux')window.setShape(geometry.shape(width,height));
+      if(process.platform==='linux'){
+        const scale=screen.getDisplayMatching(window.getBounds()).scaleFactor;
+        const key=JSON.stringify([width,height,scale]);
+        if(key!==appliedShape){window.setShape(geometry.shape(width,height));appliedShape=key;}
+      }
       return size.revision===current?.revision;
     }catch{app.exit(1);}
   }

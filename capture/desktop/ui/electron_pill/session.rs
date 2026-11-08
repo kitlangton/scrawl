@@ -85,7 +85,12 @@ impl Session {
         // leaves current Electron on Wayland, where our X11 shape/ID contract
         // is invalid. Select XWayland at process startup instead.
         #[cfg(target_os = "linux")]
-        launch.arg("--ozone-platform=x11");
+        {
+            launch.arg("--ozone-platform=x11");
+            // Use the same X11 scale as the retained native controls. Chromium
+            // can infer 2x from virtual-output physical metrics on a 1x desktop.
+            launch.arg(format!("--force-device-scale-factor={}", crate::capture::desktop::linux::x11::ui_scale()));
+        }
         launch.arg(app.join("electron/pill/main.cjs"));
         #[cfg(target_os = "linux")]
         {

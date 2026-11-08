@@ -25,6 +25,11 @@ test('shared pill renders authoritative states and isolates commands',async t=>{
  await expect.poll(()=>sent.some(message=>message.ready===true)).toBe(true);
  const nativeId=await application.evaluate(({BrowserWindow})=>Number(BrowserWindow.getAllWindows()[0].getMediaSourceId().split(':')[1]));
  assert.equal(sent.find(message=>message.ready===true).windowId,nativeId);
+ if(process.platform==='linux'){
+   await application.evaluate(({BrowserWindow})=>{const w=BrowserWindow.getAllWindows()[0];const original=w.setShape.bind(w);w.__shapeCalls=0;w.setShape=(...args)=>{w.__shapeCalls++;return original(...args);};});
+   await page.evaluate(async()=>{for(let i=0;i<3;i++)await window.apparentPill.layout(1);});
+   assert.equal(await application.evaluate(({BrowserWindow})=>BrowserWindow.getAllWindows()[0].__shapeCalls),0,'Unchanged row layout must not reset the X11 shape');
+ }
  assert.equal(await page.evaluate(()=>typeof window.require),'undefined');
  assert.equal(await page.evaluate(()=>typeof window.process),'undefined');
  assert.deepEqual(await page.evaluate(()=>Object.keys(window.apparentPill)),['read','layout','manualDrag','beginDrag','beginPaste','cancelPaste','act','subscribe']);
