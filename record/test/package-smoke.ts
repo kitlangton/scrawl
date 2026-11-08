@@ -47,6 +47,9 @@ try {
     import { createRecordFixture } from '@apparent/record/fixtures';
     const initialGap: AudioInitialGapWarning = {kind:"audioInitialGap",atMs:125};
     void initialGap;
+    const coldProcessing: Parameters<typeof assembleProcessingOutput>[0] = {durationMs:200,bundlePath:'/offline.apparent',transcript:{text:'',segments:[]},frames:[],
+      transcriptStatus:{state:'collected',content:'empty',segmentCount:0},acceptedStrokeDocument:null};
+    void coldProcessing;
     const transcriptStatus: TranscriptStatus = {state:"collected",content:"nonempty",segmentCount:0};
     const terminalStatus: CaptureFact["transcriptStatus"] = transcriptStatus;
     void terminalStatus;
@@ -83,6 +86,10 @@ try {
     const require = createRequire(import.meta.url);
     for (const name of ['react', 'react-dom', 'electron', '@apparent/ui', '@apparent/engine-sdk', '@apparent/app-contracts']) assert.throws(() => require.resolve(name));
     assert.equal(typeof RecordWorkflow, 'function');
+    const coldSummary = assembleProcessingOutput({durationMs:200,bundlePath:'/offline.apparent',transcript:{text:'',segments:[]},frames:[],
+      transcriptStatus:{state:'collected',content:'empty',segmentCount:0},acceptedStrokeDocument:null}).summaryMarkdown;
+    assert.match(coldSummary, /Transcript collected; no words\./);
+    assert.match(coldSummary, /Accepted strokes: unavailable\./);
     assert.equal(typeof createRecordHostRuntime, 'function');
     const requested = process.cwd() + '/requested.apparent';
     const exactDestinations = new AbsentDestinationAllocator(process.cwd() + '/private-control', process.cwd() + '/default-output');

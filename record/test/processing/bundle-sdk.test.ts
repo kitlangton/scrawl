@@ -1931,7 +1931,7 @@ test("standard original ink persists exact projection and publishes its sealed s
           assert.throws(() => projectOriginalAcceptedStrokes(badMaterials, input.facts.acceptedStrokes));
         }
       } else {
-        assert.equal(assembly.processing.acceptedStrokeDocument, undefined);
+        assert.equal(assembly.processing.acceptedStrokeDocument, null);
         assert.equal(assembly.inventory.entries.some(entry => entry.role === "companion"), false);
         assert.throws(() => projectOriginalAcceptedStrokes(materials, { file: sealed("facts/strokes.json", bytes(document), "foreign"), bytes: bytes(document) }), /unavailable/);
       }

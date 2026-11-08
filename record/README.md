@@ -543,3 +543,14 @@ joined voice/ink native acceptance remain separate consumer gates.
 The legacy-named `videoOnlyInteractionTelemetry` warning describes unavailable
 click telemetry only; it does not establish Shift-ink absence. Original accepted
 history may be collected, collected-empty or unavailable independently.
+
+`ProcessingInput.acceptedStrokeDocument` accepts the existing object for collected
+history (including zero strokes), explicit `null` for unavailable and omitted for
+legacy unknown. The assembler persists explicit `null` when original collection is
+unavailable. Cold consumers can pass the reader's null directly, or resolve its
+relative collected path with their existing safe file reader and pass `{path,
+strokeCount}`. No new status field is needed. The formatter renders supplied
+transcript collection status and explicit unavailable accepted history; omitted
+legacy metadata leaves its previous formatting intact. A transcript-unavailable
+warning does not duplicate an explicit unavailable status. These are supplied
+local output facts, not new native collection or Saved assertions.

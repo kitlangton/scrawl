@@ -107,3 +107,22 @@ for (const strokeCount of [undefined, 0, 2]) test(`missing click telemetry does 
   if (strokeCount !== undefined) assert.ok(text.includes(`Accepted strokes: ${strokeCount}. Original annotation data:`));
   assert.deepEqual(input.processing.warnings, [{ kind: "videoOnlyInteractionTelemetry" }]);
 });
+
+for (const state of ["legacy", "empty", "unavailable", "nonempty", "untimed"] as const) test(`handoff preserves explicit transcript and accepted-history state (${state})`, () => {
+  const input = structuredClone(base);
+  if (state !== "legacy") {
+    input.processing.transcriptStatus = state === "unavailable" ? { state: "unavailable" } : {
+      state: "collected", content: state === "empty" ? "empty" : "nonempty", segmentCount: state === "nonempty" ? 2 : 0 };
+    input.processing.acceptedStrokeDocument = state === "unavailable" ? null : { path: `${input.processing.bundlePath}/facts/strokes.json`, strokeCount: 0 };
+  }
+  if (state === "empty" || state === "unavailable") input.processing.transcript = { text: "", segments: [] };
+  if (state === "untimed") input.processing.transcript = { text: "Synthetic untimed speech", segments: [] };
+  if (state === "unavailable") input.processing.warnings = [{ kind: "transcriptUnavailable" }];
+  const text = formatLocalHandoff(input).text;
+  if (state === "legacy") assert.doesNotMatch(text, /Transcript collected;|Transcript unavailable\.|Accepted strokes:/);
+  else {
+    assert.ok(text.includes(state === "empty" ? "Transcript collected; no words." : state === "unavailable" ? "Transcript unavailable." : state === "untimed" ? "Transcript collected; untimed text." : "Transcript collected; 2 segments."));
+    if (state === "unavailable") { assert.equal(text.match(/Transcript unavailable\./g)?.length, 1); assert.ok(text.includes("Accepted strokes: unavailable.")); }
+    else assert.ok(text.includes("Accepted strokes: 0. Original annotation data:"));
+  }
+});
