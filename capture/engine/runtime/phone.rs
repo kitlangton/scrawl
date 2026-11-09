@@ -537,6 +537,7 @@ pub fn build_movie_bundle(
                                 &preview_marks,
                                 events_ref,
                                 &crate::shared::windows::ActivityLog::default(),
+                                None,
                             );
                         return Ok((probe, raw_frames, decode_ms, true, prep));
                     }

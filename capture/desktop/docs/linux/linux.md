@@ -65,6 +65,8 @@ Wayland tells no app where the pointer is over another app's window. Apparent re
 
 While ⇧ is held, the ink overlay takes the pointer (`linux::overlay::take_pointer`), so XWayland reports where it is and the ink follows it; a click while ⇧ is held lands on the overlay, not the app. On KDE Wayland, Apparent hides the recording overlay between strokes because KWin 5 otherwise blocks clicks into native apps even with an empty X input shape. Ink remains in the bundle, but disappears from the desktop when ⇧ is released.
 
+On Hyprland 0.56.2 with Lua configuration, the released overlay stays visible for its existing fade. A process-owned runtime rule matches only its exact Fade title and prevents focus; Draw uses a different title. Each Shift transition unmaps locally before asynchronous compositor reconciliation, so a late reply cannot remap an older input state. Reloading config hides and re-establishes the rule; unsupported syntax or policy failure retains the hide-between-strokes fallback. Finishing unmaps before disabling the rule. The one reused rule is disabled on ordinary cleanup; a crash can leave an inert rule matching only that process's unique title until config reload. This is a native compositor repair; the current Electron surface has no production overlay interaction to migrate independently.
+
 A click's position is right over X11 apps and with an absolute pointing device. With a mouse or touchpad over a Wayland app, XWayland still has the pointer where it last saw it, so the click's position is stale: the keyframe is cut at the right moment, but its ripple can be in the wrong place. A GNOME Shell extension that reports the pointer would close this gap (see the PR's open questions).
 
 Without the `input` group, a capture on Wayland has no clicks, keys or ⇧ ink outside Apparent's own windows, and records only the screen and voice.
@@ -143,7 +145,7 @@ In a further disposable mixed-scale Omarchy VM run, a Region selected on the 1.2
 
 ## Apparent's own windows are in the recording
 
-Neither X11 nor GNOME's or KDE's screencasts let an app leave its windows out, so the pill and the ink are in `recording.mp4` and the keyframes. The ink is drawn again at the same place on the keyframes, so it doesn't double. The candidate frames used to pick keyframes paint over the pill (`linux::media::own_window_masks`), so its ticking clock never counts as activity.
+Neither X11 nor GNOME's or KDE's screencasts let an app leave its windows out, so the pill and live ink are in `recording.mp4`. Fresh verified Hyprland screen/area movies identify their captured ink with `videoInk: "captured"`; output preserves those pixels without duplicate replay. KDE Wayland uses `"capturedVideo"` to stop movie replay while still images reconstruct marks after the live overlay hides on release. Other backends and historical bundles retain legacy replay, which can redraw and prolong captured ink. The candidate frames used to pick keyframes paint over the pill (`linux::media::own_window_masks`), so its ticking clock never counts as activity.
 
 This is a capture-source limitation, not a missing mask in the keyframe selector. On
 X11, `ximagesrc` records the already-composited root image; GNOME's `RecordArea`

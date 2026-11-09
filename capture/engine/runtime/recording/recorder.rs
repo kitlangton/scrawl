@@ -108,6 +108,7 @@ pub struct ScreenRecording {
     pub duration_ms: u64,
     /// The capture time (on the frames' clock) of the video's start.
     pub video_offset_ms: u64,
+    pub video_ink: Option<crate::shared::model::VideoInk>,
 }
 
 /// The capture size for `target` with its long edge at most `long_edge` px (and at most its
@@ -293,11 +294,16 @@ impl ScreenCaptureSession {
         let collected = buffer.into_frames();
         let valid_video =
             video_path.filter(|path| path.exists() && path.metadata().is_ok_and(|m| m.len() > 0));
+        #[cfg(target_os = "linux")]
+        let video_ink = valid_video.as_ref().and_then(|_| platform::screen_video_ink());
+        #[cfg(not(target_os = "linux"))]
+        let video_ink = None;
         ScreenRecording {
             frames: collected,
             video: valid_video,
             duration_ms: duration_ms.max(100),
             video_offset_ms: self.video_offset_ms.load(Ordering::Acquire),
+            video_ink,
         }
     }
 }
