@@ -12,6 +12,8 @@ pub mod publication;
 use crate::capture::desktop::helper;
 use crate::capture::engine::autocrop::autocrop;
 use crate::capture::engine::bundle::recover;
+use crate::capture::engine::keyframes::{captured_ink_frame_warning, select_keyframes_with_video_ink};
+#[cfg(test)]
 use crate::capture::engine::keyframes::select_keyframes;
 use crate::capture::engine::render;
 use crate::capture::engine::runtime as capture;
@@ -400,13 +402,14 @@ pub fn finalize_capture_bundle(
             {
                 let mut preview_marks = marks_of(&strokes);
                 let budget = keyframe_budget(duration_ms);
-                let preview = select_keyframes(
+                let preview = select_keyframes_with_video_ink(
                     &frames,
                     &strokes,
                     &mut preview_marks,
                     &events,
                     &TranscriptData::default(),
                     budget,
+                    video_ink,
                 );
                 // Marks alone filled the budget, so speech can't change the selection.
                 let marks_fill = preview.len() == budget
@@ -635,16 +638,18 @@ pub fn build_bundle_from_parts(
         }
         let bench = std::env::var_os("APPARENT_BENCH").is_some();
         let started = std::time::Instant::now();
-        let selected = select_keyframes(
+        let selected = select_keyframes_with_video_ink(
             &frames,
             &strokes,
             &mut marks,
             &events,
             &transcript,
             keyframe_budget(duration_ms),
+            extras.video_ink,
         );
         let select_only_at = std::time::Instant::now();
-        let matches_prepared = extras.prepared.as_ref().is_some_and(|prep| {
+        let completion_warning = captured_ink_frame_warning(&selected, &marks, extras.video_ink);
+        let matches_prepared = completion_warning.is_none() && extras.prepared.as_ref().is_some_and(|prep| {
             prep.video_ink == extras.video_ink && prep.keyframes.len() == selected.len()
                 && prep.keyframes.iter().zip(&selected).all(|(a, (b, _))| {
                     a.index == b.index
@@ -665,7 +670,12 @@ pub fn build_bundle_from_parts(
         }
 
         let mut extras = extras;
-        let mut keyframe_warning = None;
+        let mut keyframe_warning = completion_warning;
+        let mut warn = |message: String| {
+            keyframe_warning = Some(match keyframe_warning.take() {
+                Some(previous) => format!("{previous} {message}"), None => message,
+            });
+        };
         let (keyframes, autocrop, selected_at, annotated_at, rendered_at, output) =
             if matches_prepared {
                 drop(frames);
@@ -701,7 +711,7 @@ pub fn build_bundle_from_parts(
                                     capture::apparent_log(format!(
                                         "Full-quality keyframes: decoded {matched} of {total}"
                                     ));
-                                    keyframe_warning = Some(format!(
+                                    warn(format!(
                                         "Only {matched} of {total} keyframes could be decoded at full quality; the rest use smaller candidate frames."
                                     ));
                                 }
@@ -711,7 +721,7 @@ pub fn build_bundle_from_parts(
                                 capture::apparent_log(format!(
                                     "Full-quality keyframes failed: {error:#}"
                                 ));
-                                keyframe_warning = Some(format!(
+                                warn(format!(
                                     "Full-quality keyframes could not be decoded from the MP4. This capture uses smaller candidate frames.{}",
                                     if cfg!(target_os = "linux") {
                                         " Check Settings › Recording for an H.264 decoder repair instruction."
@@ -1461,6 +1471,45 @@ mod tests {
                 .chunks_exact(4)
                 .any(|p| p[0] > 150 && p[1] < 40 && p[2] < 40)
         );
+        std::fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn unfinished_captured_ink_keeps_full_frames_and_both_quality_warnings() {
+        let root = std::env::temp_dir().join(make_bundle_id());
+        let target = TargetInfo {
+            mode: CaptureMode::Display,
+            app: None, bundle_id: None, window_title: None, window_id: None,
+            display_id: 1,
+            frame: TargetFrame { x: 0.0, y: 0.0, width: 32.0, height: 32.0, scale: 1.0 },
+        };
+        let stroke = Stroke {
+            color: None, t0: 900, t1: 1000, fw: 32, fh: 32, on: None,
+            pin: None, laser: false, pts: vec![3000, 4000, 0, 5000, 5000, 100],
+        };
+        let (_, bundle, summary) = build_bundle_from_parts(
+            &root, target, 1008,
+            vec![RgbaFrame::new(1008, 32, 32, vec![255; 32 * 32 * 4])],
+            vec![stroke.clone()], vec![], TranscriptData::default(), None, None,
+            SourceExtras {
+                video_ink: Some(model::VideoInk::Captured),
+                full_frames: Some(Box::new(|_| anyhow::bail!("decoder missing"))),
+                autocrop: Some(Some(autocrop::Settings::default())),
+                ..Default::default()
+            },
+        ).unwrap();
+        let warning = bundle.image_quality_warning.as_deref().unwrap();
+        assert!(warning.contains("no settled post-stroke sample"));
+        assert!(warning.contains("could not be decoded"));
+        assert!(summary.contains(warning));
+        assert!(bundle.autocrop.is_none());
+        assert_eq!(bundle.strokes[0].pts, stroke.pts);
+        assert_eq!(bundle.keyframes[0].t, 1008);
+        let decoder = png::Decoder::new(std::io::Cursor::new(
+            std::fs::read(root.join(&bundle.keyframes[0].file)).unwrap(),
+        ));
+        let reader = decoder.read_info().unwrap();
+        assert_eq!((reader.info().width, reader.info().height), (32, 32));
         std::fs::remove_dir_all(root).unwrap();
     }
 
