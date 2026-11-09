@@ -41,7 +41,16 @@ contracts locally; they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
-`Linux verification` and `Mac verification` are manual diagnostic entrypoints,
+The same workflow also calls the full Linux and Mac platform suites on main
+pushes and on non-draft PRs (opened, reopened, updated or marked ready for review).
+Drafts retain inexpensive checks; converting a PR back to draft cancels its
+superseded full run. Each update tests GitHub's proposed merge commit, with
+read-only permissions and no release receipt. These jobs appear directly on the
+PR, so their actual completion is visible without a status reporter or manual
+dispatch. Existing separate manual runs do not substitute for this integrated
+candidate. Publication remains manual and retains its existing admission policy.
+
+`Linux verification` and `Mac verification` remain manual diagnostic entrypoints,
 each coalescing superseded runs within its own platform. Both call the same reusable
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
@@ -295,6 +304,29 @@ checks do not replace current-main integration and review before merge.
 
 ## Verification timing diagnostics
 
+Mac verification pins Rust 1.99.1 and checks the disposable Intel hosted runner's
+compiler inventory before dependency-cache restore. Only the known unused 1.98.0
+stable toolchain may be removed; unknown identities fail before mutation. Keep all
+three workspace paths in the Rust cache even if client execution moves jobs:
+Actions cache versions include paths as well as the visible key. Compiler,
+environment and manifest invalidation remain Swatinem defaults. Mac dependency
+caches may save after later native failures on main and feature branches under
+Actions' normal branch isolation. Saving after failure is armed only once the
+changed-tree compilation and tests succeed, avoiding immutable partial seeds
+after compiler/setup failures. Caches never admit verification or publication.
+
+The existing unoptimized-root observation (Mac run 42505355940) restored a 748 MiB
+fallback cache in about 34 seconds and compiled root tests in 3m20s. Main already
+has that profile; this change claims no profile or compatible-hit speedup.
+Pinning prevents future compiler drift, and failure saves can avoid repeated cold
+dependency compilation after a failed run. Those savings are projected, not a
+measured walltime reduction; successful exact-key hits already skip cache saves.
+No main-only save restriction is used, so isolated feature branches can seed caches.
+
+After native prerequisites pass, the prepared Electron download-cache path is
+exported to subsequent job steps. Clean packaging installs reuse that archive
+while retaining the ordinary installer and its checksum/version checks.
+
 Platform Rust jobs retain seven-day observation-only JSONL spans and Cargo HTML
 compiler timings. Spans report elapsed active command time, never CPU time or
 billed savings. Runner queue time is separate: use Actions job queued/started
@@ -316,6 +348,31 @@ step outcome, runs after failures, and missing diagnostics only warn. Diagnostic
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
 
+## Portable verification routing
+
+Each platform caller runs portable contracts and the independent Connect web
+artifact/Chromium fixtures in its existing Linux `select` job. Its success is
+a prerequisite of both platform jobs. `--execution portable` runs the theme,
+selector contracts and selected Connect web fixtures; `--execution platform`
+retains push/credential/staging and temporary-filesystem contracts, root and staged Engine Rust suites.
+The ordinary local verifier defaults to `full`, preserving both inventories,
+full-delta selection and unknown-input fallback. No environment variable silently
+changes this split.
+
+Connect Rust/client security, filesystem, credential and staging tests remain on
+both platforms, as do Desktop tests, actual Electron integration, packaging and
+Mac native assertions. Both platform jobs depend on the successful Linux `select`
+prerequisite; portable failures prevent their allocation. This is once per
+platform caller, not reuse of another workflow's results. Reverting the explicit
+routing and workflow
+placement restores the previous duplicate execution.
+
+The supplied six-hour cohort reports Mac changed-tree median 10:16 (n=32) and
+successful whole-run median 21:50 (n=19); these are mixed profiles/cache states.
+Only the portable fraction plus browser setup is projected to leave Mac runner
+time. No measured whole-run savings or queue reduction is established by local
+routing tests. Linux selection now takes longer before native jobs become
+eligible; candidate timings must assess that latency tradeoff separately.
 The disposable Mac Storage fixture waits for real Storage/Retention read receipts
 before its single Change click. Its TypeScript CI driver separates the owned
 Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
