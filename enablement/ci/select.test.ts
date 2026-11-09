@@ -90,6 +90,42 @@ test('Public and updater retain their previous automatic input coverage', () => 
   }
 });
 
+test('every automatic Mac entrypoint waits for successful Linux verification and cheap checks', () => {
+  const ci = workflow('checks.yml');
+  const ancestors = (name: string): string[] => {
+    const needs = ci.jobs[name].needs ?? [];
+    return [needs].flat().flatMap((parent: string) => [parent, ...ancestors(parent)]);
+  };
+  const macJobs = Object.entries(ci.jobs).filter(([, job]: any) => {
+    const runners = [job.with?.runner, job['runs-on'], ...Object.values(job.strategy?.matrix ?? {}).flat()];
+    return runners.some(runner => typeof runner === 'string' && runner.startsWith('macos-'));
+  });
+  assert.ok(macJobs.length > 0, 'must inspect the actual Mac job inventory');
+  for (const [name, job] of macJobs as [string, any][]) {
+    const prerequisites = ancestors(name);
+    for (const required of ['linux', 'contracts', 'hermes']) {
+      assert.ok(prerequisites.includes(required), `${name} must wait for ${required}`);
+    }
+    // GitHub implicitly requires success() for needs unless a status function
+    // overrides it. Failures, cancellations and skips must not allocate Macs.
+    for (const entry of [name, ...prerequisites]) {
+      assert.doesNotMatch(ci.jobs[entry].if ?? '', /\b(always|failure|cancelled)\s*\(/, entry);
+      assert.equal(ci.jobs[entry]['continue-on-error'], undefined, entry);
+    }
+  }
+  assert.equal(ci.jobs.hermes['runs-on'], 'ubuntu-24.04');
+  assert.equal(ci.jobs.hermes.needs, undefined, 'cheap inspection must not wait for full suites');
+});
+
+test('Mac inspection preserves its checks but runs only for ready PRs and main pushes', () => {
+  const ci = workflow('checks.yml');
+  const inspection = ci.jobs['hermes-macos'];
+  assert.ok(inspection);
+  assert.equal(inspection['runs-on'], 'macos-15-intel');
+  assert.deepEqual(inspection.steps, ci.jobs.hermes.steps);
+  assert.equal(inspection.if, ci.jobs.macos.if);
+});
+
 test('unknown history runs all checks and git deltas include deleted and renamed owner paths', () => {
   assert.equal(changedPaths('', ''), null);
   assert.equal(changedPaths('0'.repeat(40), 'a'.repeat(40)), null);
