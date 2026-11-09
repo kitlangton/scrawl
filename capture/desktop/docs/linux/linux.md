@@ -89,10 +89,11 @@ Plasma 5 can report successful GlobalShortcuts binding with an empty result. App
 
 Multi-output ScreenCast portal capture requires a verified output identity.
 Hyprland supplies its connector name; other portal backends currently have no
-validated equivalent in Apparent and are rejected when multiple outputs are
-connected, with a notification advising one connected display. The rejected
-output's restore token is cleared and its portal session closes before video
-starts. This does not change X11 or GNOME's direct Mutter capture path.
+validated equivalent in Apparent and are rejected before opening the sharing
+dialog when multiple outputs are connected, with a notification advising one
+connected display. The selected output's restore token is cleared. Capable
+backends still validate the returned stream and close a rejected session before
+video starts. This does not change X11 or GNOME's direct Mutter capture path.
 On Ubuntu 24.04, KDE Plasma 5.27.12/KWin 5.27.11 returned only stream size and
 source type: choosing Virtual-2 while Apparent selected Virtual-1 previously
 saved Virtual-2's wallpaper with Virtual-1's bundle target. Equal dimensions
