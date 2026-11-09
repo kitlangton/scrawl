@@ -1,4 +1,4 @@
-name: Repository checks
+name: Continuous delivery
 
 on:
   pull_request:
