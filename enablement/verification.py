@@ -298,6 +298,13 @@ def run_checks(selection, offline=True, execution="full", overlap_root_build=Fal
                         raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
             else:
                 observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, "--", "--test-threads=2"], cwd=ROOT, check=True)
+    if native and selection["root"] and not selection.get("focused"):
+        # Rust cfg(test) suppresses runtime experiment defaults. Check the rebuilt
+        # production CLI too, using isolated config with no upload permission.
+        candidate = (ROOT / os.environ.get("CARGO_TARGET_DIR", "target") / "debug/apparent").resolve()
+        observed_run(["node", "--experimental-strip-types", "--test",
+                      "connect/client/tests/encryption-default.test.ts"], cwd=ROOT,
+                     env=dict(os.environ, APPARENT_BIN=str(candidate)), check=True)
     if native and selection["engine"]:
         for command in ("build", "test"):
             args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + timings

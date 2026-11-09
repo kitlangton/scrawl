@@ -765,14 +765,14 @@ mod tests {
         let fixture = Fixture::new();
         let path = fixture.0.join("config.json");
         let config = load_config_from(&path);
-        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture"] {
+        for name in ["nativeLaunch", "movableRecordingControls", "exportNarration", "onboardingFirstCapture", "hostedEncryption"] {
             assert!(experiment_enabled_in(&config, name), "{name}");
             set_experiment_in(&path, name, false).unwrap();
             assert!(!experiment_enabled_in(&load_config_from(&path), name), "{name}");
             set_experiment_in(&path, name, true).unwrap();
             assert!(experiment_enabled_in(&load_config_from(&path), name), "{name}");
         }
-        for name in ["hostedSync", "hostedSharing", "hostedEncryption", "clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
+        for name in ["hostedSync", "hostedSharing", "clipboardImage", "autoPasteDraft", "unknownFutureFeature"] {
             assert!(!experiment_enabled_in(&config, name), "{name}");
         }
         assert!(config.cloud.is_none());

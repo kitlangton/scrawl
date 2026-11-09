@@ -68,8 +68,10 @@ fn safe_error(error: &anyhow::Error, allowed: &dyn Fn() -> bool) -> SafeError {
 impl Client {
     // A renewable but expired access grant is not a completed renewal. Only the
     // explicit health/network path can establish that; local presentation cannot.
-    fn settings_usable(credential: &Credential) -> bool {
+    fn settings_usable(&self, credential: &Credential) -> bool {
         credential.usable() && credential.expires_at.is_none_or(|expiry| expiry > now())
+            && (!self.provider.experiment(HOSTED_ENCRYPTION)
+                || self.endpoint_identity(credential).is_ok())
     }
     // Strict read for presentation: unlike the application's tolerant preferences
     // reader, corrupt relevant state must not be displayed as a successful sign-out.
@@ -147,8 +149,8 @@ impl Client {
         let origin = server.as_deref().unwrap_or(DEFAULT_SERVER);
         let upload = self.settings_grant("upload", origin)?;
         let read = self.settings_grant("read", origin)?;
-        let connected = upload.as_ref().is_some_and(Self::settings_usable)
-            || read.as_ref().is_some_and(Self::settings_usable);
+        let connected = upload.as_ref().is_some_and(|grant| self.settings_usable(grant))
+            || read.as_ref().is_some_and(|grant| self.settings_usable(grant));
         // Prefer the upload grant even when it cannot supply identity: a read
         // grant may belong to a different account. Never substitute its initial.
         let account_initial = upload.as_ref().or(read.as_ref())
@@ -162,11 +164,11 @@ impl Client {
                 && config.enabled
                 && config.upload_consent
                 && self.provider.experiment(HOSTED_SYNC)
-                && upload.as_ref().is_some_and(Self::settings_usable),
+                && upload.as_ref().is_some_and(|grant| self.settings_usable(grant)),
             reauthorization_required: upload
                 .as_ref()
                 .or(read.as_ref())
-                .is_some_and(|grant| !Self::settings_usable(grant)),
+                .is_some_and(|grant| !self.settings_usable(grant)),
             server,
             connected,
         })
@@ -209,6 +211,11 @@ impl Client {
         let Some(credential) = credential else {
             return Health::AuthRequired;
         };
+        if self.provider.experiment(HOSTED_ENCRYPTION)
+            && self.endpoint_identity(&credential).is_err()
+        {
+            return Health::AuthRequired;
+        }
         let epoch = match self.cancellation() {
             Ok(epoch) => epoch,
             Err(_) => return Health::Offline,

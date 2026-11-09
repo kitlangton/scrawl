@@ -149,7 +149,11 @@ for jobs,requested,focused,execution in [('3',True,[],'platform'),('3',False,[],
    return subprocess.CompletedProcess(command,0,stdout='test result: ok. 2 passed; 0 failed')
   with patch.object(v,'check_temp_environment'),patch.object(v.subprocess,'run',side_effect=execute),patch.dict(os.environ,{'T3_BUILD_JOBS':jobs,'APPARENT_TIMING_FILE':os.environ['APPARENT_ADAPTER_TIMING']}):
    v.run_checks(dict(selection,focused=focused),offline=False,execution=execution,overlap_root_build=requested)
-  helpers=[c for c in commands if c[0]=='node']
+  helpers=[c for c in commands if c[0]=='node' and any(arg.endswith('/ci/root.ts') for arg in c)]
+  production=[c for c in commands if 'connect/client/tests/encryption-default.test.ts' in c]
+  assert bool(production)==(execution!='portable' and not focused),commands
+  if production:
+   assert commands.index(production[0]) < next(i for i,c in enumerate(commands) if 'capture/engine/Cargo.toml' in c),commands
   overlap=requested and int(jobs)>=3 and not focused and execution!='portable'
   assert bool(helpers)==overlap,(jobs,requested,focused,execution,commands)
   if overlap:

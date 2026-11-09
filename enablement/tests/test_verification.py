@@ -146,6 +146,25 @@ class SelectionTests(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 verification.run_checks(selection)
 
+    def test_production_cli_check_follows_build_and_tests_and_propagates_failure(self):
+        selection = {"root": True, "engine": False, "browser": False, "focused": []}
+        command = ["node", "--experimental-strip-types", "--test",
+                   "connect/client/tests/encryption-default.test.ts"]
+        with patch.object(verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+            verification.run_checks(selection, execution="platform")
+            calls = run.call_args_list
+            cli = next(i for i, call in enumerate(calls) if call.args[0] == command)
+            self.assertTrue(any("build" in call.args[0] for call in calls[:cli]))
+            self.assertTrue(any("test" in call.args[0] for call in calls[:cli]))
+            self.assertTrue(Path(calls[cli].kwargs["env"]["APPARENT_BIN"]).is_absolute())
+        def execute(argv, **kwargs):
+            if argv == command:
+                raise subprocess.CalledProcessError(7, argv)
+            return subprocess.CompletedProcess(argv, 0)
+        with patch.object(verification.subprocess, "run", side_effect=execute):
+            with self.assertRaises(subprocess.CalledProcessError):
+                verification.run_checks(selection, execution="platform")
+
     def test_retired_context_deletion_is_document_only_not_unknown_markdown(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

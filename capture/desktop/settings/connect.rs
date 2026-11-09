@@ -471,7 +471,7 @@ impl Controller {
         if let Some(snapshot) = &self.snapshot {
             if snapshot.reauthorization_required {
                 view.status = "Sign-in required".into();
-                view.detail = "This computer's authorization has expired or been revoked. Sign in again to reconnect; local captures still work.".into();
+                view.detail = "Sign in again to authorize this computer for Connect. Local captures still work.".into();
             } else if snapshot.uploads_enabled {
                 view.status = "Uploads on".into();
                 view.detail = "New captures can upload privately to your Connect account.".into();
