@@ -1100,10 +1100,7 @@ impl Client {
         let job = self.jobs().ok()?.into_iter().find(|j| {
             !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled"
         })?;
-        Some(format!(
-            "apparent fetch {} --out ./{}.apparent --wait 120\napparent inspect ./{}.apparent\n",
-            job.id, job.id, job.id
-        ))
+        Some(format!("apparent inspect {}\n", job.id))
     }
     fn raw_request(
         &self,

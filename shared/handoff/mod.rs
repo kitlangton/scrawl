@@ -879,7 +879,7 @@ pub struct Config {
     /// Explicit off allows typed captures without microphone access; applies at next start.
     #[serde(default)]
     pub microphone_enabled: Option<bool>,
-    /// Smart routing's settings (`routing::look`).
+    /// Legacy routing settings, retained for config compatibility.
     #[serde(default)]
     pub routing: Option<RoutingConfig>,
     /// Where new captures go (`default_captures_dir`); absent keeps the built-in folder.
@@ -1064,43 +1064,6 @@ pub fn warm_recognizer() -> bool {
 }
 
 
-
-/// `routing.apps` from config.json, `~` expanded. Tests see none.
-pub fn routing_apps() -> Vec<(String, PathBuf)> {
-    routing_paths(|routing| routing.apps)
-}
-
-/// `routing.servers` in config.json: URL prefixes and the folders they serve, `~` expanded.
-pub fn routing_servers() -> Vec<(String, PathBuf)> {
-    routing_paths(|routing| routing.servers)
-}
-
-fn routing_paths(
-    pick: fn(RoutingConfig) -> std::collections::BTreeMap<String, String>,
-) -> Vec<(String, PathBuf)> {
-    if cfg!(test) {
-        return Vec::new();
-    }
-    let home = dirs::home_dir().unwrap_or_default();
-    config()
-        .routing
-        .map(pick)
-        .unwrap_or_default()
-        .into_iter()
-        .map(|(id, path)| {
-            let path = match path.strip_prefix("~/") {
-                Some(rest) => home.join(rest),
-                None => PathBuf::from(path),
-            };
-            (id, path)
-        })
-        .collect()
-}
-
-/// Whether Mac captures of a dev site go straight to its session (`autoSend`, default on).
-pub fn auto_send() -> bool {
-    config().auto_send.unwrap_or(true)
-}
 
 /// Whether the menu offers video export (`videoExport`, default on). `apparent export` works
 /// either way.

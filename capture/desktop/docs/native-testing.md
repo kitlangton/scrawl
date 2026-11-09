@@ -132,6 +132,69 @@ speaker stimulus is used. This recipe makes no microphone-quality claim.
 
 ## Run and native consent
 
+The runner defaults to `--desktop hyprland`. For a separately prepared GNOME or
+KDE Wayland image, pass `--desktop gnome` or `--desktop kde`. It requires the
+test account's compositor process and exported X11/Wayland/runtime environment,
+Wayland session type and matching desktop identity before staging the candidate.
+A GDM/SDDM greeter or another desktop is not readiness. The selected desktop is
+recorded in `result.json`; this check does not establish product acceptance.
+Use a stopped, sanitized standalone image/firmware pair with its preparation
+provenance and hashes. The Omarchy templates contain neither GNOME Shell nor
+KWin; selecting an option does not install or configure a desktop. The existing
+capture smoke recipe below remains an Omarchy-tested recipe until separately
+verified on those desktops. Keep compositor/version, multi-output and native
+product evidence separate from driver contracts.
+
+### Released GNOME environment (Clanker, 2026-11-08)
+
+The read-only standalone template is
+`/home/simon/VMs/apparent-gnome-noble-20261108/`: `system.qcow2`, matching
+`OVMF_VARS.fd`, test-only `test_access` key and SSH user `scrawl`. Inspect its
+`preparation.json`, `versions.tsv` and `template.sha256` before use. Disk SHA256:
+`822c0c89fd0d84aac4a6eb53b30f46d3452dfcbe6252825d84513a88853d1da7`;
+firmware SHA256:
+`eb0a2e4955aa6549433e8f8371913916559660e9fd2571a248a9527bd653f232`.
+The source is Canonical's Ubuntu 24.04 noble 20261017 image, verified against
+its signed SHA manifest; full source hash and signing provenance are in the
+preparation receipt.
+
+Fresh environment qualification established same-user GNOME Wayland
+(`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`), gnome-shell 46.0/libmutter 46.2,
+two logical 1280×800 outputs at 1× and USB mouse EV_REL X/Y. Optional
+`--outputs 2 --relative-mouse` requires runner commit `aaf681411` (PR #1082);
+the default launcher is unchanged. StatusNotifierWatcher is absent, the account
+has no broad passwordless sudo, and the image has no Apparent state/autostart or
+personal data. This is environment qualification only: capture, scale/coordinates,
+focus/ink, package and receiver acceptance remain unrun by this qualification.
+
+Use `--desktop gnome --isolated-network` with an owned private per-job `--results`
+directory; the runner creates disposable disk/firmware copies. Never open the
+template writable or replace it. Admin changes require a separately owned
+derivative. KDE is a separate template and is not supplied by selecting
+`--desktop kde` on this image.
+
+For product capture or Settings tests, consume runner/reaper commit `1278ea9a2`
+from PR #1082. It creates fresh guest staging/output directories exactly once
+with mode 0700 regardless of guest umask, refusing collisions. Earlier environment
+qualification remains valid at its stated scope; it does not prove app writes.
+Do not weaken config/bundle ancestor validation or modify the template to repair
+an incorrectly staged test. Preserve the actual exported `XAUTHORITY` when
+launching the XWayland app under a private test HOME; KDE exports an authority
+file under its runtime directory rather than necessarily `~/.Xauthority`.
+
+The separate stopped KDE variant is
+`/home/simon/VMs/apparent-kde-noble-20261108/`, with the same file names and SSH
+user. Disk SHA256:
+`56626132d5f210813798d16d07bfceb34e4a9eb387cbcd74cbd18daa2ac989c8`;
+firmware SHA256 matches the GNOME entry above. Its preparation receipt records
+the signed Ubuntu source and released GNOME parent. Fresh environment
+qualification with runner `1278ea9a2 --desktop kde --outputs 2 --relative-mouse`
+established KWin 5.27.11/Plasma 5.27.12, XWayland 23.2.6, two 1280×800 DRM
+outputs at 1× and EV_REL USB mouse. Fixture-only locking/power management is
+disabled; no product state or privilege grants were added. This is environment
+proof only, with the same read-only/disposable-consumer rules and unrun product
+gates as GNOME.
+
 ```sh
 python3 capture/desktop/scripts/linux/gui/gui-vm.py \
   --template "$GUI_TEMPLATE/system.qcow2" \

@@ -169,6 +169,7 @@ impl Inventory {
                 "events",
                 "note",
                 "interactionTelemetry",
+                "videoInk",
             ] {
                 ensure!(
                     old[field] == expected_value[field],

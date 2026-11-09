@@ -224,12 +224,28 @@ def ssh_prefix(port, key, known_hosts, user):
             "-i", str(key), "-p", str(port), f"{user}@127.0.0.1"]
 
 
-def wait_for_desktop(prefix, process, seconds):
+def desktop_probe(desktop):
+    if desktop == 'hyprland':
+        return ('pgrep -u "$(id -u)" -x Hyprland >/dev/null && '
+                'systemctl --user show-environment | grep -q "^HYPRLAND_INSTANCE_SIGNATURE="')
+    compositor, identity = {'gnome': ('gnome-shell', 'GNOME'),
+                            'kde': ('kwin_wayland', 'KDE')}.get(desktop, (None, None))
+    if compositor is None:
+        raise ValueError(f'unsupported desktop: {desktop}')
+    # Probe the test account, not GDM/SDDM's greeter. Do not source the exported
+    # environment as shell code; it supplies data only.
+    return (f'pgrep -u "$(id -u)" -x {compositor} >/dev/null && '
+            'desktop_env=$(systemctl --user show-environment) && '
+            'printf "%s\\n" "$desktop_env" | grep -q "^DISPLAY=." && '
+            'printf "%s\\n" "$desktop_env" | grep -q "^WAYLAND_DISPLAY=." && '
+            'printf "%s\\n" "$desktop_env" | grep -q "^XDG_RUNTIME_DIR=/." && '
+            'printf "%s\\n" "$desktop_env" | grep -qx "XDG_SESSION_TYPE=wayland" && '
+            f'printf "%s\\n" "$desktop_env" | grep -Eq "^XDG_CURRENT_DESKTOP=([^:]+:)*{identity}(:[^:]+)*$"')
+
+
+def wait_for_desktop(prefix, process, seconds, desktop='hyprland'):
     deadline = time.monotonic() + seconds
-    command = prefix + [
-        'pgrep -u "$(id -u)" -x Hyprland >/dev/null && '
-        'systemctl --user show-environment | grep -q "^HYPRLAND_INSTANCE_SIGNATURE="'
-    ]
+    command = prefix + [desktop_probe(desktop)]
     last = None
     while time.monotonic() < deadline:
         if process.poll() is not None:
@@ -258,7 +274,9 @@ def main():
     parser.add_argument("--ovmf-vars", type=Path, required=True, help="template's powered-off OVMF vars")
     parser.add_argument("--ssh-key", type=Path, required=True)
     parser.add_argument("--ssh-user", required=True)
-    parser.add_argument("--scenario", type=Path, required=True, help="guest bash script; runs after Hyprland starts")
+    parser.add_argument("--scenario", type=Path, required=True, help="guest bash script; runs after the selected desktop starts")
+    parser.add_argument("--desktop", choices=('hyprland', 'gnome', 'kde'), default='hyprland',
+                        help="required test-user Wayland desktop (default: hyprland)")
     parser.add_argument("--audio-file", type=Path, help="optional WAV stimulus staged inside the guest")
     parser.add_argument("--binary", type=Path, required=True, help="candidate executable (sibling .so files are staged too)")
     parser.add_argument("--results", type=Path, required=True, help="new directory; retained after the run")
@@ -279,7 +297,7 @@ def main():
     scenario_completed = False
     start = time.monotonic()
     deadline = start + args.job_timeout
-    status = {'version': 1, 'stage': 'preflight', 'progress': ['preflight'],
+    status = {'version': 1, 'desktop': args.desktop, 'stage': 'preflight', 'progress': ['preflight'],
               'environment': 'unknown', 'driver': 'running', 'product': 'unrun',
               'unrun': ['scenario'], 'scenario_exit': None, 'candidate_sha256': None,
               'primary_failure': None, 'secondary_failures': [], 'artifact_retention': 'not_attempted',
@@ -338,7 +356,7 @@ def main():
                 raise
             prefix = ssh_prefix(port, args.ssh_key.resolve(), directory / "known_hosts", args.ssh_user)
             try:
-                wait_for_desktop(prefix, process, min(args.boot_timeout, max(0, deadline - time.monotonic() - 25)))
+                wait_for_desktop(prefix, process, min(args.boot_timeout, max(0, deadline - time.monotonic() - 25)), args.desktop)
             except RuntimeError as error:
                 # A QEMU exit is a boot/driver failure, not product evidence.
                 setattr(error, 'cmd', command)

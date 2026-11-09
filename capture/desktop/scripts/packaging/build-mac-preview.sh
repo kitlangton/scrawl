@@ -40,6 +40,7 @@ case "$NOTARIZE" in
 esac
 SPARKLE_DIR="$(capture/desktop/scripts/release/setup-sparkle.sh)"
 APPARENT_PREVIEW_BUILD=1 APPARENT_HELPER_BUNDLE_ID=dev.simonvanlaak.apparent.preview.helper \
+  APPARENT_RELEASE_VERSION="$VERSION" APPARENT_RELEASE_CHANNEL=preview APPARENT_REPORTING_ENVIRONMENT=production \
   cargo build --release --locked -j 3
 
 dist="$ROOT/dist"

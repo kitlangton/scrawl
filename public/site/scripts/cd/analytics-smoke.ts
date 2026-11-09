@@ -10,7 +10,7 @@ import { execFileSync } from 'node:child_process'
 import { chromium } from 'playwright-core'
 
 const site = resolve(import.meta.dirname, '../..')
-const root = mkdtempSync(join(tmpdir(), 'public-analytics-smoke-'))
+const root = mkdtempSync(join(tmpdir(), 'apparent-dev-public-analytics-'))
 const packageOutput = join(root, 'public')
 const env = {
   ...process.env,
@@ -89,6 +89,9 @@ try {
     assert.equal(events[0].event, '$pageview')
     assert.equal(events[0].api_key, 'phc_synthetic')
     assert.equal(events[0].properties.page, '/')
+    assert.equal(events[0].properties.$current_url, publicOrigin + '/')
+    assert.equal(events[0].properties.$pathname, '/')
+    assert.equal(events[0].properties.$host, 'app.tryapparent.com')
     assert.equal(events[0].properties.acquisition_source, 'other')
     assert.equal(events[0].properties.acquisition_medium, 'unspecified')
     assert.match(String(events[0].properties.distinct_id), /^anon:[a-f0-9-]{36}$/)

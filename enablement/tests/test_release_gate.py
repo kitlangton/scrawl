@@ -2,6 +2,7 @@
 import copy
 import re
 import importlib.util
+import os
 from pathlib import Path
 import subprocess
 import sys
@@ -14,6 +15,24 @@ spec.loader.exec_module(gate)
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_linux_packaging_compiles_the_published_release_identity(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/release-linux.yml').read_text()
+        step = workflow.split('      - name: Build with PostHog error reporting\n', 1)[1].split('      - name:', 1)[0]
+        script = '\n'.join(line[10:] for line in step.split('        run: |\n', 1)[1].splitlines())
+        # Exercise the shipped selection shell, replacing only the heavy compiler.
+        script = script.replace('GITHUB_SHA="$CANDIDATE_SHA" cargo build --release --locked',
+                                'printf "%s\\n" "$APPARENT_RELEASE_VERSION" "$APPARENT_RELEASE_CHANNEL" "$APPARENT_REPORTING_ENVIRONMENT"')
+        sha = 'a' * 40
+        for tag, verify, expected in [
+            ('v1.2.3', 'false', ['v1.2.3', 'stable', 'production']),
+            ('', 'false', ['linux-main-v2-' + sha, 'preview', 'production']),
+            ('', 'true', ['linux-main-v2-' + sha, 'preview', 'synthetic']),
+        ]:
+            result = subprocess.run(['bash', '-eu', '-c', script], capture_output=True, text=True,
+                                    env=dict(os.environ, TAG=tag, VERIFY_ONLY=verify, CANDIDATE_SHA=sha))
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(result.stdout.splitlines(), expected)
+
     def test_baseline_restoration_does_not_publish_or_start_full_platform_runs(self):
         root = Path(__file__).resolve().parents[2] / '.github/workflows'
         for name in ('verification.yml', 'verification-mac.yml',
@@ -50,7 +69,7 @@ class AdmissionTests(unittest.TestCase):
         root = Path(__file__).resolve().parents[2] / '.github/workflows'
         workflow = (root / 'stream-public.yml').read_text()
         checks, deploy = workflow.split('\n  deploy:\n')
-        for event in ('pull_request', 'push', 'workflow_dispatch'):
+        for event in ('workflow_call', 'workflow_dispatch'):
             self.assertIn('\n  ' + event + ':', checks)
         self.assertIn('npm run verify', checks)
         self.assertNotIn('connect/', checks)
@@ -88,38 +107,10 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
-    def test_parallel_partitions_are_required_and_use_full_candidate(self):
-        workflow = (Path(__file__).resolve().parents[2] /
-                    '.github/workflows/verification-platform.yml').read_text()
-        self.assertIn('needs: [select, desktop-ui, connect-client, connect-browser, rust]', workflow)
-        self.assertIn('all(job["result"] == "success" for job in jobs.values())', workflow)
-        for suite in ('connect-client', 'connect-browser'):
-            section = re.search(r'^  ' + suite + r':\n(.*?)(?=^  [a-z]|\Z)',
-                                workflow, re.M | re.S)[1]
-            self.assertIn('needs: select', section)
-            self.assertIn('fetch-depth: 0', section)
-            self.assertIn('BASE=$(git hash-object -t tree /dev/null)', section)
-            self.assertIn('--base "$BASE" --suite ' + suite + ' --run --online', section)
-        client = workflow.split('  connect-client:', 1)[1].split('  connect-browser:', 1)[0]
-        self.assertIn('workspaces: connect/client -> target', client)
-        rust = workflow.split('  rust:', 1)[1].split('  release-ready:', 1)[0]
-        self.assertNotIn('connect/client -> target', rust)
-        self.assertNotIn('setup-chrome', rust)
-        for platform in ('linux', 'macos'):
-            original = copy.deepcopy(self.jobs[platform])
-            for suite in ('connect-client', 'connect-browser'):
-                for conclusion in ('failure', 'cancelled', 'skipped'):
-                    self.jobs[platform] = copy.deepcopy(original)
-                    job = next(j for j in self.jobs[platform] if suite in j['name'])
-                    job['conclusion'] = conclusion
-                    with self.assertRaises(ValueError):
-                        self.admit(platform)
-            self.jobs[platform] = original
-
     def test_manual_feature_checks_preserve_publication_boundary(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()
-        for job in ('desktop-ui', 'rust', 'connect-client', 'connect-browser'):
+        for job in ('desktop-ui', 'rust'):
             section = re.search(r'^  ' + job + r':\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
             self.assertIn("if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'", section)
         receipt = workflow.split('  release-ready:\n', 1)[1]
@@ -160,7 +151,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn('runner: macos-15-intel', workflow.read_text())
         names = ['verify / select', 'verify / desktop-ui (macos-15-intel)',
                  'verify / rust (macos-15-intel)', 'verify / connect-client (macos-15-intel)',
-                 'verify / connect-browser (macos-15-intel)', 'verify / Release verification']
+                 'verify / Release verification']
         self.jobs['macos'] = [dict(name=name, status='completed', conclusion='success')
                               for name in names]
         self.assertEqual(self.admit('macos'), self.sha)

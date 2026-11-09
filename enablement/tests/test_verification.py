@@ -20,38 +20,6 @@ class SelectionTests(unittest.TestCase):
         guard.start()
         self.addCleanup(guard.stop)
 
-    def test_explicit_partitions_preserve_default_command_union(self):
-        selection = dict(root=True, engine=True, browser=True, focused=[])
-        def commands(suite):
-            with patch.object(verification.subprocess, "run",
-                              return_value=subprocess.CompletedProcess([], 1)) as run:
-                verification.run_checks(selection, suite=suite)
-            return [(tuple(c.args[0]), c.kwargs.get("cwd")) for c in run.call_args_list
-                    if c.args[0][0] not in ("python3", "sh")]
-        default = commands("all")
-        self.assertEqual([c[0] for c in default], [
-            ("cargo", "build", "-j", os.environ.get("T3_BUILD_JOBS", "3"), "--offline"),
-            ("cargo", "test", "-j", os.environ.get("T3_BUILD_JOBS", "3"), "--offline", "--", "--test-threads=2"),
-            ("cargo", "build", "--manifest-path", "capture/engine/Cargo.toml", "-j", os.environ.get("T3_BUILD_JOBS", "3"), "--offline"),
-            ("cargo", "test", "--manifest-path", "capture/engine/Cargo.toml", "-j", os.environ.get("T3_BUILD_JOBS", "3"), "--offline", "--", "--test-threads=2"),
-            ("bun", "install", "--frozen-lockfile"), ("bun", "run", "build"),
-            ("node", "--test", "test/artifact.test.mjs", "test/closure.test.mjs", "test/routes.test.mjs"),
-            ("node", "scripts/test-browser.mjs")])
-        client = commands("connect-client")
-        self.assertEqual(commands("rust") + commands("connect-browser"), default)
-        self.assertEqual([c[0] for c in client], [
-            ("cargo", "build", "--manifest-path", "connect/client/Cargo.toml", "--offline"),
-            ("cargo", "test", "--manifest-path", "connect/client/Cargo.toml", "--offline",
-             "--", "--test-threads=2")])
-        self.assertFalse(any("connect/client/Cargo.toml" in c[0] for c in default))
-        with self.assertRaises(ValueError):
-            verification.run_checks(selection, suite="typo")
-        for suite in ("rust", "connect-client", "connect-browser"):
-            with self.subTest(suite=suite), patch.object(verification.subprocess, "run",
-                    side_effect=subprocess.CalledProcessError(1, "failed")):
-                with self.assertRaises(subprocess.CalledProcessError):
-                    verification.run_checks(selection, suite=suite)
-
     def test_documents_do_not_compile_app(self):
         result = verification.select(["enablement/refactor.md", "AGENTS.md", "docs/capture.md"])
         self.assertFalse(result["root"])
@@ -356,6 +324,45 @@ class SelectionTests(unittest.TestCase):
                     git("update-index", "--add", "--cacheinfo", "100644", oid, "README.md")
                     documented = commit()
                     self.assertEqual(verification.plan(base, documented)["focused"], sorted(reviewed["tests"]))
+
+
+class TimingTests(unittest.TestCase):
+    def test_contract_children_do_not_inherit_outer_timing_mode(self):
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
+            output = Path(directory) / "timing.jsonl"
+            with patch.dict(os.environ, {"APPARENT_TIMING_FILE": str(output)}), patch.object(
+                    verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.observed_run(["python3", "-m", "unittest", "discover"], check=True)
+                self.assertNotIn("APPARENT_TIMING_FILE", run.call_args.kwargs["env"])
+                self.assertEqual(os.environ["APPARENT_TIMING_FILE"], str(output))
+            self.assertIn('"label": "contract-checks"', output.read_text())
+
+    def test_compile_then_execute_preserves_test_union_and_failure(self):
+        command = ["cargo", "test", "--locked", "some_filter", "--", "--ignored"]
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
+            output = Path(directory) / "timing.jsonl"
+            with patch.dict(os.environ, {"APPARENT_TIMING_FILE": str(output)}), patch.object(
+                    verification.subprocess, "run", side_effect=[
+                        subprocess.CompletedProcess([], 0),
+                        subprocess.CalledProcessError(7, command)]) as run:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    verification.observed_run(command, check=True)
+            self.assertEqual(run.call_args_list[0].args[0],
+                             ["cargo", "test", "--locked", "some_filter", "--no-run"])
+            self.assertEqual(run.call_args_list[1].args[0], command)
+            import json
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual([row["label"] for row in rows],
+                             ["rust-test-compilation", "rust-test-execution"])
+            self.assertEqual(rows[-1]["code"], 7)
+
+    def test_browser_build_is_not_rust(self):
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
+            output = Path(directory) / "timing.jsonl"
+            with patch.dict(os.environ, {"APPARENT_TIMING_FILE": str(output)}), patch.object(
+                    verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+                verification.observed_run(["bun", "run", "build"], check=True)
+            self.assertIn('"label": "browser-checks"', output.read_text())
 
 
 if __name__ == "__main__":

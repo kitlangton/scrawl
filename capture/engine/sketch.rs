@@ -2165,6 +2165,7 @@ mod tests {
                 shortcut: "⌘K".into(),
             }],
             interaction_telemetry: None,
+            video_ink: None,
             keyframes: vec![Keyframe {
                 index: 1,
                 t: 5100,
