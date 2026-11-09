@@ -8,6 +8,7 @@ import { ControlGuide } from './control-guide';
 import { practiceExit } from '../../electron/onboarding/presentation.ts';
 import { OnboardingAccount } from './account';
 import type { AccountState } from '../../electron/onboarding/account';
+import { subscribeOnboardingState } from './state';
 type Row={permission:string;status:string;required:boolean;reopening:boolean;relaunch:boolean};
 type Action=string|{action:'shortcut';kind:'record';keyCode:number;modifiers:number;key:string;reserved:false};
 type Editor={recording:boolean;externallyManaged:boolean;error:string|null};
@@ -25,7 +26,7 @@ export function NativeOnboarding(){
   useEffect(()=>()=>{penRun.current++;if(penTimer.current)clearTimeout(penTimer.current)},[]);
   useEffect(()=>{if(state?.step!=='welcome'||!state?.penPicker||state?.penError){penRun.current++;penActive.current=false;if(penTimer.current)clearTimeout(penTimer.current);penTimer.current=null;setPenPhase('idle');penCommitted.current=false}},[state?.step,state?.penPicker,state?.penError]);
   document.documentElement.classList.add('native-onboarding-shell');
-  useEffect(()=>{const bridge=window.nativeOnboarding;const off=bridge?.onState(setState);void bridge?.readState().then(setState);return()=>off?.()},[]);
+  useEffect(()=>{const bridge=window.nativeOnboarding;return bridge?subscribeOnboardingState(bridge,setState):undefined},[]);
   async function action(value:Action){try{setError('');await window.nativeOnboarding?.action(value)}catch{setError('The app connection was interrupted. Close setup and reopen it from apparent.')}}
   const shortcutAdvance=useRef<string|null>(null);
   useEffect(()=>{
