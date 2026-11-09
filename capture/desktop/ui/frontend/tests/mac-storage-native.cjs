@@ -306,6 +306,16 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const rendererErrors = [];
     page.on('pageerror', error => rendererErrors.push(error.message));
     await page.getByText('Connected · idle', { exact: true }).waitFor({ timeout: budget(10000) });
+    // CDP readiness does not establish that System Events can inspect this
+    // native app. Check the exact owned window before any control mutation;
+    // otherwise the first AX request can stall with an uninspectable modal open.
+    // Only read-only readiness is polled, within the existing overall deadline.
+    report.nativeWindowReadiness = await poll(async () => {
+      const observed = await panel('diagnose');
+      assert.match(observed, /^depth=0;role=AXWindow;title=Apparent — UI foundation;/);
+      assert.ok(!observed.includes('\ndepth=1;'), 'Owned native window already has a sheet');
+      return observed;
+    }, 'Owned Electron AX window readiness');
     const reporting = page.getByRole('region', { name: 'Send technical error reports', exact: true });
     const reportingToggle = reporting.getByRole('checkbox', { name: 'Send technical error reports', exact: true });
     // Preserve the actual IPC result and rendered state if initial readback fails.
