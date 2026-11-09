@@ -28,6 +28,18 @@ def wav(path, samples, rate=16000):
 
 
 class DriverTests(unittest.TestCase):
+    def test_library_path_is_scoped_to_candidate_calls_and_launches(self):
+        self.driver.env.pop('LD_LIBRARY_PATH', None)
+        self.driver.env['SCRAWL_GUI_LIBRARY_PATH'] = str(self.root)
+        command = [self.driver.binary, '-c', 'import os; print(os.environ["LD_LIBRARY_PATH"])']
+        self.assertEqual(self.driver.call(command).strip(), str(self.root))
+        child = self.driver.launch(command, 'candidate-env')
+        self.assertEqual(child.wait(timeout=3), 0)
+        self.assertEqual((self.out / 'candidate-env.log').read_text().strip(), str(self.root))
+        self.assertEqual(self.driver.call(['sh', '-c', 'test -z "${LD_LIBRARY_PATH+x}"']), '')
+        child = self.driver.launch(['sh', '-c', 'test -z "${LD_LIBRARY_PATH+x}"'], 'system-env')
+        self.assertEqual(child.wait(timeout=3), 0)
+
     def setUp(self):
         self.temp = tempfile.TemporaryDirectory(dir=os.environ.get('TMPDIR'))
         self.addCleanup(self.temp.cleanup)

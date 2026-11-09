@@ -344,7 +344,16 @@ test('permission refresh keeps setup unfocused and avoids repeating native geome
  }
  const area={x:0,y:0,width:1440,height:900};
  const electron={app:{setName(){},getPath(){return'/tmp'},setPath(){},whenReady(){return{then:fn=>fn()}},dock:{hide(){}},quit(){}},BrowserWindow:Window,ipcMain:{handle(){}},screen:{getCursorScreenPoint:()=>({x:0,y:0}),getDisplayNearestPoint:()=>({workArea:area})},session:{defaultSession:{setPermissionRequestHandler(){},setPermissionCheckHandler(){}}}};
- vm.runInNewContext('(function(){'+fs.readFileSync(require.resolve('../electron/onboarding.cjs'),'utf8')+'})()',{require:name=>name==='electron'?electron:require('node:module').createRequire(require.resolve('../electron/onboarding.cjs'))(name),__dirname:path.resolve(__dirname,'../electron'),module:{exports:{}},process:{versions:{electron:'fixture'},env:{},argv:[],stdin,stdout},console});
+ // This Node fixture impersonates Electron before any bundle exists. Execute
+ // the real TS policies; a cached dist directory must not be a test dependency.
+ const hostRequire=require('node:module').createRequire(require.resolve('../electron/onboarding.cjs'));
+ const policies=new Map(['presentation','account','hyprland'].map(name=>[`../dist/onboarding-${name}.cjs`,`./onboarding/${name}.ts`]));
+ const load=name=>{
+  if(name==='electron')return electron;
+  if(name.startsWith('../dist/'))assert.ok(policies.has(name),`Map the production policy source for ${name}`);
+  return hostRequire(policies.get(name)||name);
+ };
+ vm.runInNewContext('(function(){'+fs.readFileSync(require.resolve('../electron/onboarding.cjs'),'utf8')+'})()',{require:load,__dirname:path.resolve(__dirname,'../electron'),module:{exports:{}},process:{versions:{electron:'fixture'},env:{},argv:[],stdin,stdout},console});
  const send=status=>stdin.emit('data',JSON.stringify({type:'state',step:'permissions',rows:[{permission:'microphone',status,required:true}],ready:false})+'\n');
  send('not-determined');const initial=calls.slice();send('granted');
  assert.equal(calls.filter(x=>x==='state').length,2);

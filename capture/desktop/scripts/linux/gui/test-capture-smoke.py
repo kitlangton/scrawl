@@ -20,6 +20,7 @@ spec.loader.exec_module(smoke)
 PEER = r'''#!/usr/bin/env python3
 import json, os, pathlib, socket, sys, time
 root = pathlib.Path(os.environ['SCRAWL_GUI_OUTPUT'])
+assert os.environ['LD_LIBRARY_PATH'] == os.environ['SCRAWL_GUI_LIBRARY_PATH']
 if sys.argv[1] == 'decoder-check':
     if os.environ.get('PEER_NO_DECODER'):
         print('synthetic missing H.264 decoder', file=sys.stderr)
@@ -76,7 +77,7 @@ class SyntheticRecipe(smoke.Recipe):
         if '--scene' in argv:
             # Only the scene producer is replaced. CLI calls use actual subprocesses,
             # file persistence, stdout/stderr and exits through the real recipe.
-            code = "import pathlib,sys,time; pathlib.Path(sys.argv[1]).write_text('{\"synthetic\":true}'); time.sleep(120)"
+            code = "import os,pathlib,sys,time; assert 'LD_LIBRARY_PATH' not in os.environ; pathlib.Path(sys.argv[1]).write_text('{\"synthetic\":true}'); time.sleep(120)"
             argv = [sys.executable, '-c', code, argv[-1]]
         return super().launch(argv, log)
 
@@ -204,19 +205,25 @@ class TransportTests(unittest.TestCase):
             binary.write_text(PEER)
             binary.chmod(0o700)
             systemctl = tools / 'systemctl'
-            systemctl.write_text('#!/bin/sh\nprintf "DISPLAY=:synthetic\\nXDG_RUNTIME_DIR=' + str(runtime) + '\\n"\n')
+            authority = runtime / 'xauthority'
+            authority.write_text('synthetic session authority')
+            systemctl.write_text('#!/bin/sh\nprintf "DISPLAY=:synthetic\\nXDG_RUNTIME_DIR=' + str(runtime) +
+                                 '\\nXAUTHORITY=' + str(authority) + '\\n"\n')
             systemctl.chmod(0o700)
             ffmpeg = tools / 'ffmpeg'
-            ffmpeg.write_text('#!/bin/sh\nfor last; do :; done\nprintf "SYNTHETIC NOT MEDIA" > "$last"\n')
+            ffmpeg.write_text('#!/bin/sh\nset -eu\ntest -z "${LD_LIBRARY_PATH+x}"\n'
+                              'for last; do :; done\nprintf "SYNTHETIC NOT MEDIA" > "$last"\n')
             ffmpeg.chmod(0o700)
-            env = {'PATH': str(tools) + os.pathsep + os.environ['PATH'], 'SCRAWL_GUI_OUTPUT': str(out)}
+            env = dict(os.environ, PATH=str(tools) + os.pathsep + os.environ['PATH'],
+                       SCRAWL_GUI_OUTPUT=str(out), SCRAWL_GUI_LIBRARY_PATH=str(tools))
+            env.pop('LD_LIBRARY_PATH', None)
             if fail:
                 env['PEER_FAIL'] = '1'
             if pending:
                 env['PEER_PENDING'] = '1'
             if no_decoder:
                 env['PEER_NO_DECODER'] = '1'
-            with patch.dict(os.environ, env):
+            with patch.dict(os.environ, env, clear=True):
                 recipe = SyntheticRecipe(out, binary, 1)
                 try:
                     if no_decoder:
@@ -232,6 +239,7 @@ class TransportTests(unittest.TestCase):
                         recipe.run()
                 finally:
                     recipe.cleanup()
+            self.assertEqual(recipe.env['XAUTHORITY'], str(authority))
             report = json.loads((out / 'capture-smoke-report.json').read_text())
             self.assertEqual(report['gates']['owned_process_cleanup'], 'PASS', report)
             self.assertFalse((out / '.config/apparent/agent-control/capture.sock').exists())

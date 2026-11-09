@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import socket
 import subprocess
@@ -33,6 +34,69 @@ def load_reaper():
 
 
 class GuestIsolationTests(unittest.TestCase):
+    def test_guest_staging_is_private_under_group_writable_umask(self):
+        # Ported from the released PR #1082 prerequisite, 1278ea9a2.
+        with tempfile.TemporaryDirectory() as root:
+            binary, output = Path(root) / 'bin with spaces', Path(root) / 'output with spaces'
+            subprocess.run(['sh', '-c', 'umask 0002; ' + runner.guest_staging_command(str(binary), str(output))], check=True)
+            self.assertEqual(binary.stat().st_mode & 0o777, 0o700)
+            self.assertEqual(output.stat().st_mode & 0o777, 0o700)
+
+    def test_guest_staging_refuses_existing_paths_without_chmod(self):
+        for existing_name in ('binary', 'output'):
+            with self.subTest(existing=existing_name), tempfile.TemporaryDirectory() as root:
+                binary, output = Path(root) / 'binary', Path(root) / 'output'
+                existing = Path(root) / existing_name
+                existing.mkdir()
+                existing.chmod(0o775)
+                marker = existing / 'owned-elsewhere'
+                marker.write_text('preserve')
+                result = subprocess.run(['sh', '-c', 'umask 0002; ' + runner.guest_staging_command(str(binary), str(output))],
+                                        capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertEqual(existing.stat().st_mode & 0o777, 0o775)
+                self.assertEqual(marker.read_text(), 'preserve')
+
+    def test_candidate_libraries_do_not_poison_real_system_bash(self):
+        if sys.platform != 'linux':
+            self.skipTest('loader fixture requires Linux ELF library search')
+        bash, ldd = shutil.which('bash'), shutil.which('ldd')
+        if not bash or not ldd:
+            self.skipTest('loader fixture requires Bash and ldd')
+        linked = subprocess.run([ldd, bash], capture_output=True, text=True, timeout=5)
+        if linked.returncode or 'libtinfo.so.6' not in linked.stdout:
+            self.skipTest('loader fixture requires Bash linked against libtinfo.so.6')
+        with tempfile.TemporaryDirectory() as root:
+            root = Path(root)
+            # Faithful loader failure: the candidate bundles a library with the
+            # same SONAME as Bash's runtime but incompatible contents.
+            (root / 'libtinfo.so.6').write_text('incompatible candidate library')
+            old = subprocess.run(['bash', '-c', 'exit 0'], env=dict(os.environ, LD_LIBRARY_PATH=str(root)),
+                                 capture_output=True, text=True)
+            self.assertNotEqual(old.returncode, 0)
+            self.assertIn('libtinfo.so.6', old.stderr)
+            self.assert_system_scenario_environment(root)
+
+    def test_scenario_keeps_system_library_environment(self):
+        # The environment contract remains covered on macOS and on Linux hosts
+        # whose Bash does not use the ELF library needed by the poison fixture.
+        with tempfile.TemporaryDirectory() as root:
+            self.assert_system_scenario_environment(Path(root))
+
+    def assert_system_scenario_environment(self, root):
+        scenario = root / 'scenario with spaces.sh'
+        scenario.write_text('set -eu\n'
+                            'test -z "${LD_LIBRARY_PATH+x}"\n'
+                            'bash -c "printf system-shell-ready"\n'
+                            'test "$SCRAWL_GUI_LIBRARY_PATH" = "$SCRAWL_GUI_OUTPUT"\n'
+                            'test "$SCRAWL_GUI_BINARY" = /synthetic/candidate\n')
+        env = dict(os.environ)
+        env.pop('LD_LIBRARY_PATH', None)
+        command = runner.scenario_command(str(scenario), str(root), '/synthetic/candidate', str(root), '')
+        new = subprocess.run(['sh', '-c', command], env=env, capture_output=True, text=True)
+        self.assertEqual(new.returncode, 0, new.stderr)
+        self.assertEqual(new.stdout, 'system-shell-ready')
+
     def test_command_failure_keeps_exact_command_and_both_streams(self):
         command = [sys.executable, '-c', 'import sys; print("out"); sys.stderr.write("diagnostic\\n"); sys.exit(7)']
         with self.assertRaises(subprocess.CalledProcessError) as failed:
@@ -246,15 +310,117 @@ class GuestIsolationTests(unittest.TestCase):
                 runner.make_overlay(nested, directory / "job.qcow2")
 
 
+class PreparationTests(unittest.TestCase):
+    def inputs(self, root):
+        for name in ('template', 'vars', 'key'):
+            (root / name).write_text('synthetic ' + name)
+        (root / 'candidate').write_text('#!/bin/sh\nexit 0\n')
+        (root / 'candidate').chmod(0o700)
+        (root / 'scenario').write_text('#!/bin/bash\nexit 0\n')
+        return ['gui-vm.py', '--template', str(root / 'template'), '--ovmf-vars', str(root / 'vars'),
+                '--ssh-key', str(root / 'key'), '--ssh-user', 'fixture',
+                '--scenario', str(root / 'scenario'), '--binary', str(root / 'candidate')]
+
+    def invoke(self, options, results, *extra):
+        with patch.object(sys, 'argv', [*options, '--results', str(results), *extra]), \
+             patch.object(runner, 'make_overlay', side_effect=RuntimeError('allocation sentinel')) as overlay, \
+             patch.object(runner, 'arm_expiry') as expiry, \
+             contextlib.redirect_stdout(io.StringIO()):
+            code = runner.main()
+        expiry.assert_not_called()
+        return code, json.loads((results / 'result.json').read_text()), overlay
+
+    def test_invalid_local_inputs_fail_before_overlay_or_expiry(self):
+        cases = {
+            'plain Python': lambda root: (root / 'scenario').write_text('#!/usr/bin/env python3\nprint("wrong entry")\n'),
+            'broken Bash': lambda root: (root / 'scenario').write_text('#!/bin/bash\nif then\n'),
+            'nonexecutable': lambda root: (root / 'candidate').chmod(0o600),
+            'missing scenario': lambda root: (root / 'scenario').unlink(),
+            'dangling library': lambda root: (root / 'libmissing.so').symlink_to(root / 'missing'),
+            'broken polyglot': lambda root: (root / 'scenario').write_text(
+                Path(__file__).with_name('capture-smoke.py').read_text() + '\ndef invalid(:\n'),
+        }
+        for name, damage in cases.items():
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                options = self.inputs(root)
+                damage(root)
+                code, status, overlay = self.invoke(options, root / 'r')
+                self.assertNotEqual(code, 0)
+                overlay.assert_not_called()
+                self.assertEqual(status['primary_failure']['stage'], 'preflight')
+                self.assertEqual(status['product'], 'unrun')
+
+    def test_preflight_checks_supported_python_without_executing_scenario(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            options = self.inputs(root)
+            source = Path(__file__).with_name('capture-smoke.py').read_text()
+            (root / 'scenario').write_text(source + '\nraise RuntimeError("must never execute on host")\n')
+            code, status, overlay = self.invoke(options, root / 'r', '--preflight-only')
+            self.assertEqual(code, 0)
+            overlay.assert_not_called()
+            self.assertEqual(status['inputs']['scenario_interpreter'], 'bash/python3')
+            self.assertEqual(status['product'], 'unrun')
+            self.assertEqual(status['environment'], 'unrun')
+            self.assertEqual(status['progress'], ['preflight', 'cleanup'])
+            self.assertEqual(status['artifact_retention'], 'not_attempted')
+
+    def test_prepared_receipt_rejects_changed_binary_library_driver_and_template(self):
+        for name in ('candidate', 'scenario', 'libfixture.so', 'vars', 'template'):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                options = self.inputs(root)
+                (root / 'libfixture.so').write_text('library v1')
+                code, _, overlay = self.invoke(options, root / 'prepared', '--preflight-only')
+                self.assertEqual(code, 0)
+                overlay.assert_not_called()
+                with (root / name).open('a') as changed:
+                    changed.write('\n# changed\n')
+                code, status, overlay = self.invoke(options, root / 'r', '--prepared-inputs', str(root / 'prepared/result.json'))
+                self.assertNotEqual(code, 0)
+                overlay.assert_not_called()
+                self.assertIn('prepared inputs changed', status['primary_failure']['message'])
+                self.assertEqual(status['product'], 'unrun')
+
+    def test_unchanged_prepared_inputs_reach_allocation(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            options = self.inputs(root)
+            code, _, _ = self.invoke(options, root / 'prepared', '--preflight-only')
+            self.assertEqual(code, 0)
+            _, status, overlay = self.invoke(options, root / 'r', '--prepared-inputs', str(root / 'prepared/result.json'))
+            overlay.assert_called_once()
+            self.assertEqual(status['primary_failure']['stage'], 'overlay')
+            self.assertEqual(status['primary_failure']['message'], 'allocation sentinel')
+
+    def test_prepared_receipt_binds_file_roles_even_when_inventory_is_identical(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            options = self.inputs(root)
+            code, _, _ = self.invoke(options, root / 'prepared', '--preflight-only')
+            self.assertEqual(code, 0)
+            key = options.index('--ssh-key') + 1
+            firmware = options.index('--ovmf-vars') + 1
+            options[key], options[firmware] = options[firmware], options[key]
+            code, status, overlay = self.invoke(options, root / 'r', '--prepared-inputs', str(root / 'prepared/result.json'))
+            self.assertNotEqual(code, 0)
+            overlay.assert_not_called()
+            self.assertIn('prepared inputs changed', status['primary_failure']['message'])
+
+
 class RunnerFailureTests(unittest.TestCase):
     """Real owned child/streams and disk cleanup; VM/SSH/systemd are inert adapters."""
 
-    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False, desktop=None):
+    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False, desktop=None, stale_scenario=False):
         root = Path(root)
         binary = root / 'candidate'
         binary.write_bytes(b'synthetic candidate')
+        binary.chmod(0o700)
         for name in ('vars', 'key', 'template', 'scenario'):
             (root / name).write_text('synthetic input')
+        if stale_scenario:
+            (root / 'stale-scenario').touch()
         guest = root / 'guest'
         guest.mkdir()
         (guest / 'evidence.txt').write_text('only evidence')
@@ -267,7 +433,11 @@ operation = sys.argv[2]
 if operation == 'ssh':
     command = sys.argv[-1]
     if command.startswith('sha256sum '):
-        print(hashlib.sha256((root / 'candidate').read_bytes()).hexdigest())
+        source = 'scenario' if 'scrawl-gui-scenario-' in command else 'candidate'
+        content = (root / source).read_bytes()
+        if source == 'scenario' and (root / 'stale-scenario').exists():
+            content += b'changed during transport'
+        print(hashlib.sha256(content).hexdigest())
     elif command.startswith('python3 -c '):
         import shlex
         script = shlex.split(command)[2]
@@ -368,6 +538,17 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
             with self.subTest(desktop=desktop), tempfile.TemporaryDirectory() as root:
                 code, _, _ = self.exercise(root, scenario_exit=0, desktop=desktop)
                 self.assertEqual(code, 0)
+
+    def test_changed_staged_scenario_never_reaches_product_execution(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, status, results = self.exercise(root, scenario_exit=0, stale_scenario=True)
+            self.assertNotEqual(code, 0)
+            self.assertEqual(status['primary_failure']['stage'], 'staging')
+            self.assertIn('staged input hash differs', status['primary_failure']['message'])
+            self.assertEqual(status['product'], 'unrun')
+            self.assertIsNone(status['scenario_exit'])
+            self.assertFalse((results / 'scenario.log').exists())
+            self.assertEqual(status['cleanup']['disk'], 'retained_cold')
 
     def test_first_real_scenario_failure_survives_transfer_and_cleanup_failures(self):
         with tempfile.TemporaryDirectory() as root:

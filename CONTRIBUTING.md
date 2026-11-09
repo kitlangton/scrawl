@@ -13,7 +13,7 @@ If you cannot safely share a recording, a text-only issue is just as welcome. Do
 
 ## Contribute code
 
-Before a larger change, open an issue to discuss the approach. For a pull request, explain the behavior you changed and how you tested it. See [README.md](README.md#testing) for the project test commands and [AGENTS.md](AGENTS.md) for repository-specific build and safety rules.
+Before a larger change, open an issue to discuss the approach. For a pull request, explain the behavior you changed and how you tested it. See [development reference](enablement/docs/development.md#testing) for the project test commands and [AGENTS.md](AGENTS.md) for repository-specific build and safety rules.
 
 ## Guard local pushes
 
