@@ -3,6 +3,7 @@
 // and the appcast, so they change when those do. vite.config.ts emits them
 // into dist and serves them in dev.
 import { readFileSync } from "node:fs"
+import { posix } from "node:path"
 import { fileURLToPath } from "node:url"
 import { latestRelease } from "../../src/appcast.ts"
 
@@ -72,11 +73,20 @@ function commands(skill: string): string[] {
 
 export function agentFiles(): Record<string, string> {
   const readme = repo("README.md")
+  // Resolve repository links before combining guides into website-served text.
+  const guide = (path: string) => repo(path).replace(/\]\(([^)]+)\)/g, (link, target: string) => {
+    if (/^(https?:|mailto:)/.test(target)) return link
+    const destination = target.startsWith("#") ? path + target : posix.join(posix.dirname(path), target)
+    return `](${REPO}/blob/main/${destination})`
+  })
+  const recording = guide("capture/desktop/docs/guides/recording.md")
+  const processing = guide("capture/engine/docs/guides/processing.md")
+  const agents = guide("capture/agent/docs/usage.md")
   const skill = repo("capture/agent/skills/apparent/SKILL.md")
   const { version, macos } = release()
   const releaseNote = version ? `Version ${version}, for Apple silicon Mac, macOS ${macos} or later.` : "For platform-specific stable and preview builds, see official GitHub releases."
-  const tagline = readme.split("\n").find((l) => l && !l.startsWith("#"))!.trim()
-  const intro = readme.split(/\n## /)[0].split("\n\n").slice(2).join("\n\n").trim()
+  const tagline = readme.match(/^### (.+)$/m)![1]
+  const intro = readme.split(/^### .+$/m)[1].split("\n\n").filter((p) => p.trim())[0].trim()
   const summary = `> ${tagline} Apparent records your screen, voice, clicks and drawings and packs them into a bundle an AI coding agent can read. ${releaseNote}`
 
   const llms = `# Apparent
@@ -109,7 +119,7 @@ ${commands(skill).join("\n")}
 
 ## Optional
 
-- [README](${REPO}#readme): everything else, including cabled iPhone capture, auto-crop, local dev-page context, and retention. Captures are copied, not sent to sessions.
+- [README](${REPO}#readme): the project introduction and links to recording, processing and development guides. Captures are copied, not sent to sessions.
 - [Source code](${REPO}): Rust and Swift, MIT licensed.
 - [Appcast](${SITE}/appcast.xml): the Sparkle update feed.
 `
@@ -127,23 +137,23 @@ Headless CLI installation: ${REPO}/blob/main/capture/agent/docs/installation.md
 
 ## Install
 
-${section(readme, "## Install")}
+${section(guide("README.md"), "## Get started")}
 
 ## Agents
 
-${section(readme, "## Agents")}
+${section(agents, "## Agents")}
 
 ## Capture controls
 
-${section(readme, "## Capture Controls")}
+${section(recording, "## Capture Controls")}
 
 ## Export as video
 
-${section(readme, "## Export as video")}
+${section(processing, "## Export as video")}
 
 ## Keeping captures small
 
-${section(readme, "## Keeping captures small")}
+${section(processing, "## Keeping captures small")}
 
 ## The agent skill
 
