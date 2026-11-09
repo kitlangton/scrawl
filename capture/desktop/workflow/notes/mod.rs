@@ -275,7 +275,7 @@ impl Session {
                         Message::Action(action) => match action {
                             CommandMessage::Ready => ready = true,
                             CommandMessage::Finished => {
-                                ensure!(finish_requested, "Unexpected finish receipt");
+                                validate_finish_receipt(finish_requested)?;
                                 drained = true;
                             }
                             CommandMessage::Outside => {
@@ -362,6 +362,7 @@ impl Session {
                     }
                     Ok(())
                 })();
+                actor_lifecycle.lock().unwrap().observed_actor_result(result.is_err(), ready);
                 if finish_write && result.is_err() { transport_failed = true; }
                 if let Some(pin) = write_pin {
                     if result.is_ok() {
@@ -480,6 +481,47 @@ impl Drop for Session {
         }
         self.stopping.store(true, Ordering::Release);
         let _ = self.sender.try_send(Message::Stop);
+    }
+}
+
+fn validate_finish_receipt(finish_requested: bool) -> Result<()> {
+    ensure!(finish_requested, "Unexpected finish receipt");
+    Ok(())
+}
+
+#[cfg(test)]
+mod startup_protocol_tests {
+    use super::*;
+    #[test]
+    fn unexpected_finished_then_clean_exit_cannot_become_unavailable() {
+        let action: CommandMessage = serde_json::from_slice(br#"{"action":"finished"}"#).unwrap();
+        assert!(matches!(action, CommandMessage::Finished));
+        let result = validate_finish_receipt(false);
+        assert!(result.is_err());
+        for reader_ahead in [false, true] {
+        let mut state = lifecycle::Lifecycle::default();
+        // The reader can observe Ready ahead of the actor; actor ordering still wins.
+        if reader_ahead { state.observed_ready(); }
+        state.observed_actor_result(result.is_err(), false);
+        // Both late Finish and Finish already waiting must retain a real failure.
+        let waiting = state.finish();
+        state.complete(false, false, true);
+        assert!(waiting.recv().unwrap().is_err());
+        assert!(state.finish().recv().unwrap().is_err());
+        // Neither a subsequent valid message nor a drain may erase the violation.
+        state.observed_actor_result(false, false);
+        state.observed_ready();
+        state.complete(true, false, true);
+        assert!(state.finish().recv().unwrap().is_err());
+        }
+    }
+    #[test]
+    fn an_expected_finish_receipt_preserves_normal_drain() {
+        let mut state = lifecycle::Lifecycle::default();
+        state.observed_ready();
+        state.observed_actor_result(validate_finish_receipt(true).is_err(), true);
+        state.complete(true, false, false);
+        assert_eq!(state.finish().recv().unwrap(), Ok(FinishOutcome::Drained));
     }
 }
 

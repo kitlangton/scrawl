@@ -11,6 +11,7 @@ pub(super) struct Lifecycle {
     sealed: bool,
     ready: bool,
     admitted: bool,
+    startup_protocol_failed: bool,
     terminal: Option<FinishResult>,
     waiters: Vec<flume::Sender<FinishResult>>,
 }
@@ -30,6 +31,11 @@ impl Lifecycle {
     pub fn observed_note_request(&mut self) {
         self.admitted = true;
     }
+    pub fn observed_actor_result(&mut self, failed: bool, actor_ready: bool) {
+        // A valid JSON message can still violate the startup protocol. Later EOF
+        // cannot turn that uncertainty into evidence that no editor started.
+        self.startup_protocol_failed |= failed && !actor_ready;
+    }
     pub fn seal(&mut self) {
         self.sealed = true;
     }
@@ -47,9 +53,9 @@ impl Lifecycle {
 
     pub fn complete(&mut self, drained: bool, failed_writes: bool, startup_exit: bool) {
         self.seal();
-        let result = if drained && self.ready && !failed_writes {
+        let result = if drained && self.ready && !failed_writes && !self.startup_protocol_failed {
             Ok(FinishOutcome::Drained)
-        } else if startup_exit && !self.ready && !self.admitted && !failed_writes {
+        } else if startup_exit && !self.ready && !self.admitted && !failed_writes && !self.startup_protocol_failed {
             Ok(FinishOutcome::UnavailableBeforeAdmission)
         } else {
             Err("Notes did not finish saving; recording assets were retained.".into())
