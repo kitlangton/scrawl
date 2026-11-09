@@ -89,7 +89,7 @@ test('packaging failure cannot enter GUI assertions, ordinary suites or publish 
   assert.deepEqual(result.executed, [preflight, packaging]);
   assert.doesNotMatch(result.env, /CACHE_ON_FAILURE=true/);
 });
-test('native failure arrives before client/full suites without arming incomplete dependency seeds', t => {
+test('native failure arrives before full suites without arming incomplete dependency seeds', t => {
   const result = execute(t, 'macOS', 'native-storage-assertions');
   assert.equal(result.status, 31);
   assert.deepEqual(result.executed, [preflight, packaging, storage]);
