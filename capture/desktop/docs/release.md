@@ -92,8 +92,7 @@ is one Mac build (notarized DMG + Sparkle zip) and two Linux AppImages, built fr
 commit. Windows is not a supported release target. Do not dispatch the retained Windows workflow
 or publish a Windows zip.
 
-1. **Version:** bump `version` in `Cargo.toml` and `Cargo.lock` in a `release/<version>` PR, and in the
-   same PR change every `"status": "main"` in `public/site/src/features.json` to `"stable@<version>"`.
+1. **Version:** bump `version` in `Cargo.toml` and `Cargo.lock` in a `release/<version>` PR.
    PRs do not start Actions; the exact commit’s platform-specific main verification gates publication (Linux/shared for Linux; Linux/shared plus Mac for Mac).
    Test changed behavior locally before merging.
 2. **Mac build** (Studio, from that commit): `APPARENT_BUILD_NUMBER=<n> APPARENT_SPARKLE_DIR=~/.local/share/apparent-release/sparkle-2.9.4 ./capture/desktop/scripts/release/release-app.sh`.

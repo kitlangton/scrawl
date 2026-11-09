@@ -169,7 +169,7 @@ windows such as the user's whiteboard and is not equivalent to Screen/Area
 capture. Keep the existing controls and mark this as unsupported until a
 specific compositor/backend can produce a movie that retains the uncovered
 screen and whiteboard; verify the actual MP4 and decoded full-quality frames,
-not just candidate-frame selection, before changing the feature map.
+not just candidate-frame selection, before changing the documented support status.
 
 Sources: [ScreenCast portal interface](https://flatpak.github.io/xdg-desktop-portal/docs/doc-org.freedesktop.portal.ScreenCast.html)
 (`SelectSources` source types and options),

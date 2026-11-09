@@ -81,7 +81,7 @@ Integration must wire builds/artifact composition, route aliases, deployment and
 CI; exercise the exact composed artifact against the same browser contracts;
 verify live OAuth/callback/CORS/cookie behavior in separately authorized staging;
 then remove `public/site/src/hosted` and its route/SSR/prerender wiring. Preserve approved
-visuals and explicit consent. Update the feature map/docs in that integration
+visuals and explicit consent. Update the owner documentation in that integration
 change, not this exclusive-ownership slice. Roll back by restoring legacy route
 composition; no API, cookie, schema or native credential migration is required.
 

@@ -6,25 +6,14 @@ import { fileURLToPath } from "node:url"
 import { chromium } from "playwright-core"
 import { DEMO_CURSOR } from "../../src/demo/content/cursor-track.ts"
 import { cameraOffsetAt } from "../../src/demo/core/cursor-camera.ts"
-import { parseStatus } from "../../src/features.ts"
 import { browserAnalyticsDefinitions } from "../../../../shared/analytics/config.ts"
 import { movie, chunkPath } from "../../lib/pages-video-metadata.js"
 
 const site = join(dirname(fileURLToPath(import.meta.url)), "../..")
 const publicDir = process.env.SITE_ARTIFACT ? resolve(process.env.SITE_ARTIFACT) : join(site, "dist-apparent")
 
-test("experiment status accepts kebab-case flags while rejecting malformed identifiers", () => {
-  assert.deepEqual(parseStatus("experiment:linux-playback-ducking"), {
-    kind: "experiment",
-    flag: "linux-playback-ducking",
-  })
-  assert.deepEqual(parseStatus("experiment:hostedSync"), {
-    kind: "experiment",
-    flag: "hostedSync",
-  })
-  for (const status of ["experiment:-leading", "experiment:trailing-", "experiment:double--hyphen", "experiment:with space", "experiment:1leading"]) {
-    assert.throws(() => parseStatus(status), /unknown status/)
-  }
+test("retired feature map is absent from the built artifact", () => {
+  assert.equal(existsSync(join(publicDir, "map-tyyxsf5b")), false)
 })
 
 test("packaged homepage ships the brand favicon and its cache-busting URL", () => {

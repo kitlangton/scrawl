@@ -7,7 +7,7 @@ Apparent records screen, voice, cursor, clicks and ink so a human can point, tal
 - Minimize human effort: capture, marking and handoff should be quick. Record known window, element, URL and session context instead of making agents infer it from pixels or vague references.
 - Keep images visual and text semantic. Preserve time-aligned transcript, interactions and absolute paths in bundle text; avoid rasterized captions/card chrome. Cut keyframes on meaningful action or visual change, not speech pauses; retain full frames when cropping. See `capture/engine/docs/keyframes-and-text.md`.
 - Persist user-controlled settings and feature flags in documented, inspectable config (currently `~/.config/apparent/config.json`). Settings writes update it; file edits apply at a documented time. Preserve unrelated keys and secrets. Reconcile OS-owned effects such as permissions and login registration; config values alone do not prove application. Active capture state is runtime state, but must be discoverable before restart/change.
-- Share user-facing behavior and UI by default; platform adapters supply OS mechanics. Document actual limitations in `public/site/src/features.json` and test visible behavior on every claimed platform before release.
+- Share user-facing behavior and UI by default; platform adapters supply OS mechanics. Document actual limitations beside the owning implementation and test visible behavior on every claimed platform before release.
 - Keep changes owner-local and bounded. Move a legacy mechanism with its callers/tests, preserve contracts and verify consumers before removing donors. Coordinate real cross-owner contract changes; routine owner work need not wait for an integrator.
 - Delete verified dead implementations and obsolete tests/references rather than copying them into an archive. Establish requiredness from consumers, build/runtime/package inputs, supported compatibility/data readers and owner reservations—not merely deployment. Preserve active/uncommitted work, private captures, credentials and evidence. See `enablement/refactor.md` for campaign gates.
 
@@ -69,7 +69,7 @@ feature pushes while preserving exact-HEAD/clean-tree guards. Explicit local
 `enablement/verification.py --run` and direct main pushes retain conservative
 changed-tree build/tests. Continuous delivery runs the cheap contracts and workflow
 validation automatically on PRs and main pushes. Full Linux/macOS verification
-runs in that workflow for ready PRs and main pushes; drafts retain cheap checks.
+runs in that workflow for ready PRs and main pushes, except ordinary documentation-only changes; drafts retain cheap checks. Agent instructions, skills, shipped Markdown and unknown Markdown paths retain full verification.
 Separate platform diagnostics and all publication workflows remain manual-only. Linux and Connect publication require the
 exact commit's successful Linux/shared verification. Public publication uses its own
 successful web/shared checks and sealed artifact in `stream-public.yml`, without
@@ -98,12 +98,12 @@ At assignment start, identify the requested artifact, checks/platform proof and 
 - Never reset Kit's real TCC grants; use the preview workflow in `capture/desktop/docs/onboarding-and-settings.md`. Never wake/flash Kit's Studio displays or record/benchmark its real screen; use the safety gate `capture/desktop/scripts/perf/screen-guard.sh` and approved Pro/virtual-display/VM setup in `capture/desktop/docs/motion.md`.
 - Never play audio aloud on Kit's Macs to test capture/transcription; use recorded WAVs, approved silent loopback or Mac mini VMs. Tests must not post to a real OpenCode session.
 - Preserve old bundle session metadata but do not treat it as permission to forward captures. Use `apparent copy <bundle>` for clipboard handoff; ask before any separate delivery to a person, organization or session. Keep captures, recordings, transcripts, credentials and personal data out of public issues/uploads; sanitize evidence or use a synthetic reproduction. Search existing issues before filing an evidence-backed report; if access fails, report the blocker and retain a local draft.
-- Do not claim permission, GUI, native, platform parity or video proof from a build, feature-map entry, CLI help or bundle path alone. When Simon says “make it apparent,” follow `capture/agent/skills/make-it-apparent/SKILL.md`, inspect the complete recording and deliver a playable video in the current conversation; state limits and blockers truthfully.
+- Do not claim permission, GUI, native, platform parity or video proof from a build, CLI help or bundle path alone. When Simon says “make it apparent,” follow `capture/agent/skills/make-it-apparent/SKILL.md`, inspect the complete recording and deliver a playable video in the current conversation; state limits and blockers truthfully.
 
 ## Product gates and operations
 
 New user-facing features, including handoff/output changes, ship enabled by default; do not add an off-by-default experiment unless explicitly requested. Preserve consent, permission and safety gates. This policy does not itself enable existing experiments. Config is `~/.config/apparent/config.json`, the code checks `shared::handoff::experiment("<name>")`, tests use `shared::handoff::enable_experiment`, and `apparent reprocess`/`inspect` accept `--experiment <name>`. Invalid config values are skipped/logged and a bad key drops only that key. Current flags and output contract: `capture/engine/docs/keyframes-and-text.md`.
 
-Keep `public/site/src/features.json` accurate in the same PR when adding/removing/renaming a user-facing feature or changing its status. It records status, platforms, shortcuts, config keys and docs; release changes `main` entries to `stable@<version>`. `cargo test feature_map` checks code/config entries. Release procedures: `capture/desktop/docs/release.md`.
+Document user-facing behavior, platform limitations, shortcuts and config changes in the relevant owner documentation. Release procedures: `capture/desktop/docs/release.md`.
 
 Install/launch the Mac app through `capture/desktop/scripts/packaging/install-app.sh`, not a `target/` daemon: cleanup can unlink it and disturb TCC identity. For remote Mac installs use `capture/desktop/scripts/packaging/install-app-remote.sh`; release signing and update storage stay outside `target/` and `/tmp`. Details and recovery are in `capture/desktop/docs/onboarding-and-settings.md` and `capture/desktop/docs/release.md`.

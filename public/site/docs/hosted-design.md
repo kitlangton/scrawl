@@ -41,7 +41,7 @@ node scripts/site-build/package-apparent.mjs
 SITE_EVIDENCE="$TMPDIR/hosted-v4-evidence" npm run test:hosted
 ```
 
-The public build intentionally omits the private feature-map route; the ordinary build has a separately recorded pre-existing feature-map validation failure unrelated to this slice. Do not repair unrelated feature entries to validate this UI.
+The feature catalogue and its private map route have been retired from both ordinary and public builds.
 
 The browser script serves the exact `dist-apparent` artifact by default against a controlled synthetic API. It compares packaged art, font and wordmark bytes with public source assets, verifies SSR privacy and noindex, scopes, explicit consent, CSRF, duplicate-write protection, approval readback failures, loading/errors, expiry, waitlist, logout, tab keyboard behavior, disclosures, modal focus return and loaded illustrations. Layouts cover 1440, 1280, 390 and 320 CSS pixels plus 640×450 (the layout equivalent of a 1280×900 viewport at 200%, not actual browser zoom). Evidence stays outside git and includes screenshots and an asset-hash receipt.
 

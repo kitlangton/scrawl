@@ -25,8 +25,6 @@ export default {
     if (url.protocol === "https:") headers.set("Strict-Transport-Security", "max-age=31536000")
     headers.set("X-Content-Type-Options", "nosniff")
     headers.set("Referrer-Policy", "strict-origin-when-cross-origin")
-    // The unlinked feature map (scripts/site-build/feature-audit.ts MAP_DIR).
-    if (url.pathname.startsWith("/map-")) headers.set("X-Robots-Tag", "noindex, nofollow")
     if (url.pathname.endsWith(".mp4")) return ranged(request, request.method === "HEAD" ? await env.ASSETS.fetch(new Request(request.url, { headers: request.headers })) : response, headers)
     return new Response(response.body, { status: response.status, statusText: response.statusText, headers })
   },

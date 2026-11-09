@@ -10,9 +10,10 @@ on:
 permissions:
   contents: read
 
-# Main preserves the active run and replaces only pending runs; PR updates supersede active checks.
+# Main uses commit groups so docs cannot replace pending code verification.
+# PR updates supersede active checks.
 concurrency:
-  group: repository-checks-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
+  group: repository-checks-${{ github.event_name }}-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
@@ -23,6 +24,7 @@ jobs:
     if: >-
       !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
       (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false))
+      && (needs.select.result != 'success' || needs.select.outputs.platform != 'false')
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: ubuntu-24.04
@@ -35,6 +37,7 @@ jobs:
       !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
       (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
       (needs.select.result != 'success' || needs.select.outputs.macos != 'false')))
+      && (needs.select.result != 'success' || needs.select.outputs.platform != 'false')
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: macos-15-intel
@@ -47,6 +50,7 @@ jobs:
       macos: ${{ steps.paths.outputs.macos }}
       public: ${{ steps.paths.outputs.public }}
       updater: ${{ steps.paths.outputs.updater }}
+      platform: ${{ steps.paths.outputs.platform }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,6 +98,7 @@ jobs:
     if: >-
       !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
       (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false))
+      && (needs.select.result != 'success' || needs.select.outputs.platform != 'false')
     name: Hermes inspection (macos-15-intel)
     runs-on: macos-15-intel
     timeout-minutes: 5

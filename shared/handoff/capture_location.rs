@@ -44,8 +44,6 @@ pub fn read_in(path: &Path) -> Result<Snapshot> {
 }
 
 pub fn enabled_in(path: &Path) -> Result<bool> {
-    // Keep this concrete read visible to the feature-map scanner. The generic
-    // helper below serves callers whose flag is declared at their own boundary.
     let config = config_from_value(read_raw(path)?);
     Ok(experiment_overridden("electronCaptureLocation") || experiment_enabled_in(&config, "electronCaptureLocation"))
 }
