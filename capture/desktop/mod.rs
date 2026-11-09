@@ -6774,6 +6774,14 @@ pub fn run_app(
         let has_initial = initial_bundle.is_some();
         let coordinator = cx.new(|_| ApparentCoordinator::new(telemetry, initial_bundle));
         set_status_inbox_count(coordinator.read(cx).inbox.len());
+        #[cfg(target_os = "macos")]
+        let reopen_settings = crate::capture::desktop::sparkle::take_reopen_settings();
+        #[cfg(target_os = "linux")]
+        let reopen_settings = std::env::var_os("APPARENT_UPDATE_REOPEN_SETTINGS").as_deref() == Some(std::ffi::OsStr::new("1"));
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if reopen_settings {
+            coordinator.update(cx, |coord, _| coord.open_settings(Some(crate::capture::desktop::settings::Pane::About)));
+        }
         #[cfg(target_os = "linux")]
         if let Err(error) = crate::capture::desktop::linux::update::mark_relaunch_ready() {
             apparent_log(format!("Linux update relaunch readiness: {error:#}"));

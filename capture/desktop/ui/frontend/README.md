@@ -477,3 +477,17 @@ or `usr/share/apparent/settings/runtime`; popup packaging adds no second runtime
 when its `main.cjs` exists, alongside the same `dist/` and single `runtime/`. The absent
 share consumer adds no entry or routing. A share owner must verify its installed route
 on both platforms before enabling it; resolver availability alone is not that proof.
+
+## About updates
+
+Packaged Settings routes About through the shared Electron shell by default.
+The private parent pipe projects only version, updater availability, channel and
+check status. React/TypeScript owns the check/result controls and keyboard choices;
+the native owner remains authoritative for config writes, update transactions,
+capture-safe admission and relaunch. Website/Source accept fixed link identifiers.
+Other panes retain their existing routes. Missing assets or a failed child restore
+native About; retain that fallback until packaged Linux/macOS update, restart,
+navigation and failure acceptance verifies its replacement and all consumers.
+Run the focused renderer/bridge check with
+`xvfb-run -a node --experimental-strip-types --test tests/about/smoke.ts`
+on Linux after building. This synthetic parent-state test is not native update proof.

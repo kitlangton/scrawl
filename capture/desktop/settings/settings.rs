@@ -1829,6 +1829,7 @@ pub(super) enum Transport {
 pub struct Session {
     generation: u64,
     storage: bool,
+    about: bool,
     panel: Panel,
     connect: Option<super::connect::Controller>,
     transport: Transport,
@@ -1924,6 +1925,7 @@ impl Session {
         Ok(Self {
             generation,
             storage,
+            about: pane == Some(Pane::About),
             panel,
             connect,
             transport,
@@ -1945,8 +1947,8 @@ impl Session {
         let events: std::sync::Arc<dyn Fn(Event) + Send + Sync> = std::sync::Arc::new(move |event| {
             target(Event::Presentation { generation, event: Box::new(event) });
         });
-        if allow_storage && electron_storage(pane, crate::shared::handoff::experiment("electronCaptureLocation")) {
-            match super::presentation::open(events.clone()) {
+        if allow_storage && (pane == Some(Pane::About) || electron_storage(pane, crate::shared::handoff::experiment("electronCaptureLocation"))) {
+            match super::presentation::open(pane == Some(Pane::About), events.clone()) {
                 Ok(transport) => return Ok((transport, true)),
                 Err(error) => crate::capture::engine::runtime::apparent_log(format!("Storage Settings fallback: {error:#}")),
             }
@@ -2066,7 +2068,7 @@ impl Session {
                 // EOF without a normal Close means Electron crashed or failed to
                 // launch. Keep Settings usable without touching saved policy.
                 let generation = super::presentation::generation();
-                if let Ok((transport, storage)) = Self::open_presentation(Some(Pane::Storage), generation, &self.events, false) {
+                if let Ok((transport, storage)) = Self::open_presentation(Some(if self.about { Pane::About } else { Pane::Storage }), generation, &self.events, false) {
                     self.generation = generation;
                     self.storage = storage;
                     self.last_view.clear();
@@ -2167,14 +2169,15 @@ impl Session {
 
     pub fn show(&mut self, pane: Option<Pane>) {
         if let Some(pane) = pane {
-            let storage = electron_storage(Some(pane), crate::shared::handoff::experiment("electronCaptureLocation"));
-            if storage != self.storage {
+            let storage = pane == Pane::About || electron_storage(Some(pane), crate::shared::handoff::experiment("electronCaptureLocation"));
+            if storage != self.storage || (self.storage && self.about != (pane == Pane::About)) {
                 let generation = super::presentation::generation();
                 match Self::open_presentation(Some(pane), generation, &self.events, true) {
                     Ok((transport, storage)) => {
                         self.send(&serde_json::json!({"type": "close"}));
                         self.generation = generation;
                         self.storage = storage;
+                        self.about = pane == Pane::About;
                         self.last_view.clear();
                         super::presentation::retire(std::mem::replace(&mut self.transport, transport));
                     }
@@ -2205,7 +2208,18 @@ impl Session {
     pub fn sync(&mut self, host: &dyn Host) {
         // Storage reads its narrow projected socket contract. Do not forward the
         // other pages' state to a renderer which does not present those pages.
-        if self.storage { return; }
+        if self.storage {
+            if self.about {
+                let view = self.panel.view(host);
+                let message = serde_json::json!({"type":"about-state", "version":view.version,
+                    "updates":view.updates, "updateCheck":view.update_check,
+                    "updateChannel":view.update_channel, "mainUpdates":view.main_updates,
+                    "linux":cfg!(target_os = "linux")});
+                let text = message.to_string();
+                if text != self.last_view { self.send(&message); self.last_view = text; }
+            }
+            return;
+        }
         let mut view = serde_json::to_value(self.panel.view(host)).unwrap_or_default();
         view["type"] = "state".into();
         // Switched from Hex to Apple Speech: get its model now, not at the first capture.

@@ -1031,7 +1031,7 @@ impl SettingsWindow {
                     view.act(Action::CancelShortcut);
                 }
                 view.menu = None;
-                if !LINUX && pane == Pane::Storage {
+                if pane == Pane::About || (!LINUX && pane == Pane::Storage) {
                     view.act(Action::Navigate { pane });
                     return;
                 }
