@@ -2,6 +2,11 @@ name: Mac verification
 
 on:
   workflow_dispatch:
+    inputs:
+      native_candidate:
+        description: Prepare an ad-hoc ARM64 app artifact for separate native acceptance
+        type: boolean
+        default: false
 
 permissions:
   contents: read
@@ -128,3 +133,58 @@ jobs:
             security delete-keychain "$APPARENT_APPLE_SIGNING_DIR/signing.keychain-db" || true
             rm -rf -- "$APPARENT_APPLE_SIGNING_DIR"
           fi
+
+  # Preparation only: ordinary verification and the old signed Preview candidate
+  # retain their existing gates. This app is never launched on the build runner.
+  native-candidate:
+    if: github.event_name == 'workflow_dispatch' && inputs.native_candidate && github.repository == 'tryapparent/apparent'
+    runs-on: macos-15
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Require actual ARM64 hardware and runtime
+        run: |
+          test "$GITHUB_ACTIONS" = true
+          test "$RUNNER_ENVIRONMENT" = github-hosted
+          test "$(uname -m)" = arm64
+          test "$(sysctl -n hw.optional.arm64)" = 1
+          test "$(node -p process.arch)" = arm64
+          node --experimental-strip-types --test capture/desktop/scripts/packaging/native-candidate.test.ts
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: '1.99.1'
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: native-candidate-arm64
+      - uses: maxim-lobanov/setup-xcode@v1
+        with:
+          xcode-version: '26.0'
+      - name: Prepare Metal and locked native inputs
+        run: |
+          xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+          npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
+          node capture/desktop/ui/frontend/node_modules/electron/install.js
+          node --experimental-strip-types enablement/prerequisites/native.ts
+          cargo fetch --locked
+      - name: Package the exact checkout without launch or installed routing
+        env:
+          CARGO_NET_OFFLINE: 'true'
+          APPARENT_NO_LAUNCH: '1'
+        run: |
+          export APPARENT_APP_DIR="$RUNNER_TEMP/Apparent Native Candidate.app"
+          test ! -e "$APPARENT_APP_DIR" && test ! -L "$APPARENT_APP_DIR"
+          bash capture/desktop/scripts/packaging/install-app.sh
+          node --experimental-strip-types capture/desktop/scripts/packaging/native-candidate.ts
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-candidate-arm64-${{ github.sha }}
+          retention-days: 3
+          if-no-files-found: error
+          path: |
+            ${{ runner.temp }}/apparent-native-candidate/Apparent-Native-Candidate-arm64.zip
+            ${{ runner.temp }}/apparent-native-candidate/candidate.json

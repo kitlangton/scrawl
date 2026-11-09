@@ -366,3 +366,19 @@ including saved/cancelled receipts, retained nonzero stderr/stdout and a pending
 start timeout. Their media are deliberately invalid labelled strings and their
 scene producer is replaced. They test driver wiring, **not** native execution,
 X11 visibility, portal consent, encoder output or candidate product behavior.
+
+## Mac test-artifact preparation
+
+The manual `verification-mac.yml` workflow accepts `native_candidate=true` to
+prepare an ARM64 test app using the existing installer. Its default remains
+false; ordinary verification and the older signed Preview candidate keep their
+gates. The new app is never launched, uses ad-hoc signing and does not change
+installed routing, feeds or release admission. Artifacts expire after three days.
+
+`native-candidate.ts` seals the exact checkout commit/tree, actual ARM64 hardware
+and runtime, native executables, archive checksum and every packaged file's bytes
+(including owner workers). It extracts and checks the archive before upload.
+Before allocating a native provider, download and inspect that exact artifact:
+verify its run/source identity, archive checksum and expected owner worker bytes.
+The manifest records `nativeAcceptance: pending`. Separate installed
+clipboard/focus/pill and actual capture proof are still required.
