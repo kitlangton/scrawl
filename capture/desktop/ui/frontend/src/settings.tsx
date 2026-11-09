@@ -1,5 +1,6 @@
 import { useLayoutEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
+import { About } from './about/about';
 import { Storage } from './storage';
 import './style.css';
 import wordmark from '../../../../../shared/assets/brand/apparent-wordmark.svg';
@@ -20,6 +21,7 @@ declare global {
 }
 
 function Settings() {
+  const current = location.hash === '#about' ? 'About' : 'Storage';
   useLayoutEffect(() => {
     // React's DOM is committed here. The preload owns the first-frame wait;
     // a hidden page's animation scheduling must not hold up this acknowledgement.
@@ -38,14 +40,14 @@ function Settings() {
     <aside className="settings-sidebar" aria-label="Settings pages">
       <div className="settings-brand"><img src={wordmark} alt="Apparent" /><p>CAPTURE SETTINGS</p></div>
       <nav>{panes.map((pane, index) => <button key={pane} type="button" disabled={navigating}
-        aria-current={pane === 'Storage' ? 'page' : undefined}
-        onClick={() => { if (pane !== 'Storage') void navigate(pane); }}>
+        aria-current={pane === current ? 'page' : undefined}
+        onClick={() => { if (pane !== current) void navigate(pane); }}>
         <svg aria-hidden="true" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">{icons[index]}</svg>{pane}</button>)}</nav>
     </aside>
     <main className="settings-content">
-      <header><h1>Storage</h1><p>Choose where captures live and how long to keep them.</p></header>
+      <header><h1>{current}</h1>{current === 'Storage' && <p>Choose where captures live and how long to keep them.</p>}</header>
       {error && <p role="alert">{error}</p>}
-      <Storage settings />
+      {current === 'About' ? <About /> : <Storage settings />}
     </main>
   </div>;
 }

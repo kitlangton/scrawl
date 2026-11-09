@@ -11,7 +11,7 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyClass, AnyObject, AnyProtocol, Bool, NSObjectProtocol, ProtocolObject};
 use objc2::{AnyThread, DefinedClass, MainThreadMarker, msg_send};
 use objc2_app_kit::NSApplication;
-use objc2_foundation::{NSError, NSInteger, NSObject};
+use objc2_foundation::{NSError, NSInteger, NSObject, NSString, NSUserDefaults};
 
 use crate::capture::engine::runtime::apparent_log;
 
@@ -49,6 +49,15 @@ objc2::define_class!(
             Bool::new(!crate::capture::desktop::workflow::shutdown::busy())
         }
 
+        // Arm this only when Sparkle actually commits to relaunching, never
+        // during discovery/download or an installation deferred until quit.
+        #[unsafe(method(updaterWillRelaunchApplication:))]
+        fn will_relaunch_application(&self, _updater: &AnyObject) {
+            let defaults = NSUserDefaults::standardUserDefaults();
+            defaults.setBool_forKey(true, &NSString::from_str("ApparentUpdateReopenSettings"));
+            defaults.synchronize();
+        }
+
         #[unsafe(method(updater:didFindValidUpdate:))]
         fn did_find_update(&self, _updater: &AnyObject, _item: &AnyObject) {
             self.ivars()
@@ -77,6 +86,17 @@ objc2::define_class!(
         }
     }
 );
+
+/// Native one-shot relaunch state, not a user preference. Consume before opening
+/// Settings so subsequent ordinary launches do not reopen it.
+pub fn take_reopen_settings() -> bool {
+    let defaults = NSUserDefaults::standardUserDefaults();
+    let key = NSString::from_str("ApparentUpdateReopenSettings");
+    let reopen = defaults.boolForKey(&key);
+    defaults.removeObjectForKey(&key);
+    defaults.synchronize();
+    reopen
+}
 
 impl SparkleDelegate {
     fn new(status: &'static AtomicU8) -> Retained<Self> {
