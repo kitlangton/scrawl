@@ -14,6 +14,7 @@ const trace = value => appendFileSync(process.env.TRACE, JSON.stringify({value, 
 trace(action+':start');
 if (action === 'test') {
   if (mode === 'compile-fails') {console.log(JSON.stringify({reason:'build-finished',success:false})); process.exit(19);}
+  if (mode === 'compile-refused-zero') {console.log(JSON.stringify({reason:'build-finished',success:false})); process.exit(0);}
   if (mode === 'missing-barrier') {console.log('ordinary harness output'); process.exit(0);}
   writeFileSync(process.env.RUNNING, 'running');
   console.log('ordinary harness output');
@@ -87,7 +88,7 @@ test('actual commands overlap only after compilation, retain output/timings and 
   assertStopped(f.rows());
 });
 
-for (const [mode, expected] of [['compile-fails', 19], ['missing-barrier', 1]] as const)
+for (const [mode, expected] of [['compile-fails', 19], ['compile-refused-zero', 1], ['missing-barrier', 1]] as const)
   test(`${mode} cannot start the application build or pass`, {timeout: 8000}, async t => {
     const f = fixture(t, mode), result = await f.done;
     assert.equal(result.code, expected, result.stderr); assert.equal(f.rows().some(row => row.value === 'build:start'), false);
@@ -130,7 +131,9 @@ for (const [mode, signal] of [['cancel', 'SIGTERM'], ['disconnect', 'SIGKILL']] 
     assertStopped(f.rows()); assert.equal(unrelated.exitCode, null); assert.equal(unrelated.signalCode, null);
   });
 
-test('the real verifier adapter preserves default/focused/portable fallbacks and Cargo allocation', () => {
+test('the real verifier adapter preserves default/focused/portable fallbacks and Cargo allocation', t => {
+  const directory = mkdtempSync('/tmp/apparent-dev-root-adapter-');
+  t.after(() => rmSync(directory, {recursive: true, force: true}));
   const result = spawnSync('python3', ['-c', String.raw`
 import importlib.util,json,os,subprocess
 from unittest.mock import patch
@@ -144,7 +147,7 @@ for jobs,requested,focused,execution in [('3',True,[],'platform'),('3',False,[],
    commands.append(command)
    if command[0]=='sh': return subprocess.CompletedProcess(command,0 if mac else 1)
    return subprocess.CompletedProcess(command,0,stdout='test result: ok. 2 passed; 0 failed')
-  with patch.object(v,'check_temp_environment'),patch.object(v.subprocess,'run',side_effect=execute),patch.dict(os.environ,{'T3_BUILD_JOBS':jobs,'APPARENT_TIMING_FILE':'synthetic-timing'}):
+  with patch.object(v,'check_temp_environment'),patch.object(v.subprocess,'run',side_effect=execute),patch.dict(os.environ,{'T3_BUILD_JOBS':jobs,'APPARENT_TIMING_FILE':os.environ['APPARENT_ADAPTER_TIMING']}):
    v.run_checks(dict(selection,focused=focused),offline=False,execution=execution,overlap_root_build=requested)
   helpers=[c for c in commands if c[0]=='node']
   overlap=requested and int(jobs)>=3 and not focused and execution!='portable'
@@ -160,12 +163,13 @@ def failed(command,**kwargs):
  if command[0]=='node': raise subprocess.CalledProcessError(31,command)
  assert 'capture/engine/Cargo.toml' not in command
  return subprocess.CompletedProcess(command,1 if command[0]=='sh' else 0)
-with patch.object(v,'check_temp_environment'),patch.object(v.subprocess,'run',side_effect=failed),patch.dict(os.environ,{'T3_BUILD_JOBS':'3'}):
+with patch.object(v,'check_temp_environment'),patch.object(v.subprocess,'run',side_effect=failed),patch.dict(os.environ,{'T3_BUILD_JOBS':'3','APPARENT_TIMING_FILE':os.environ['APPARENT_ADAPTER_TIMING']}):
  try:v.run_checks(selection,execution='platform',overlap_root_build=True)
  except subprocess.CalledProcessError as e:assert e.returncode==31
  else:raise AssertionError('failed overlap passed')
-`], {encoding: 'utf8'});
+`], {encoding: 'utf8', env: {...process.env, APPARENT_ADAPTER_TIMING: join(directory, 'timings.jsonl')}});
   assert.equal(result.status, 0, result.stderr + result.stdout);
+  assert.ok(existsSync(join(directory, 'timings.jsonl')));
   const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8');
   assert.match(workflow, /verification\.py --base "\$BASE" --run --online --execution platform --overlap-root-build/);
   assert.equal((workflow.match(/--overlap-root-build/g) ?? []).length, 1);
