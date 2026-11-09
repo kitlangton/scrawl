@@ -2963,7 +2963,7 @@ impl ApparentCoordinator {
         // frame comes ~50 ms after its first).
         let dt = (real * motion::time_scale()).min(0.025);
         if let IslandPhase::Completed { finished_at, .. } = self.island_phase
-            && finished_at.elapsed() >= Duration::from_millis(25_000)
+            && finished_at.elapsed() >= Duration::from_millis(15_000)
             && self.share_pending.is_none()
             && !matches!(
                 self.completed_note.as_deref(),
