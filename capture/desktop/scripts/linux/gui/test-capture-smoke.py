@@ -73,6 +73,15 @@ print(json.dumps(reply))
 
 
 class SyntheticRecipe(smoke.Recipe):
+    def prepare(self):
+        # This transport fixture owns a synthetic guest, not the host's process
+        # namespace. Keep the real cleanup census after prepare has returned.
+        iterdir = Path.iterdir
+        def guest_entries(path):
+            return iter(()) if path == Path('/proc') else iterdir(path)
+        with patch.object(Path, 'iterdir', guest_entries):
+            return super().prepare()
+
     def launch(self, argv, log):
         if '--scene' in argv:
             # Only the scene producer is replaced. CLI calls use actual subprocesses,
