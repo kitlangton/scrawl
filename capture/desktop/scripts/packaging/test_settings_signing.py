@@ -19,6 +19,7 @@ class SigningTests(unittest.TestCase):
             frontend = root / "capture/desktop/ui/frontend"
             for relative in ("electron/main.cjs", "electron/preload.cjs", "electron/settings.cjs",
                              "dist/settings.html", "dist/onboarding.html", "dist/src/controls/index.html",
+                             "dist/src/installer/index.html",
                              "dist/assets/controls.js", "node_modules/electron/dist/electron"):
                 file = frontend / relative
                 file.parent.mkdir(parents=True, exist_ok=True)
@@ -38,6 +39,7 @@ class SigningTests(unittest.TestCase):
             for relative in ("electron/main.cjs", "electron/preload.cjs", "dist/assets/controls.js",
                              "node_modules/@apparent/ui/src/window-theme.cjs"):
                 self.assertTrue((destination / "app" / relative).is_file(), relative)
+            self.assertEqual((destination / "app/electron/installer/ui/src/installer/index.html").read_text(), "dist/src/installer/index.html")
             self.assertTrue((destination / "runtime/electron").is_file())
 
     def test_principal_executables_wait_for_nested_code(self):
