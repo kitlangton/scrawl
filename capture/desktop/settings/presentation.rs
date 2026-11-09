@@ -113,6 +113,10 @@ mod tests {
             (onboarding_command("/runtime/electron".into(), "/settings/app".into()), vec!["--onboarding"]),
         ] {
             assert_eq!(child.get_program(), "/runtime/electron");
+            if cfg!(debug_assertions) {
+                assert!(child.get_envs().any(|(key, value)| key == "APPARENT_DESKTOP_REPORTING" && value == Some(std::ffi::OsStr::new("0"))),
+                    "development Settings and onboarding must disable inherited reporting admission");
+            }
             let args: Vec<_> = child.get_args().map(|arg| arg.to_str().unwrap()).collect();
             let mut expected = vec![];
             if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() {
