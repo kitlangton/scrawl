@@ -23,10 +23,10 @@ export function loaderPaths(output: string): string[] {
   });
 }
 const qualifiedPaths = ['connect/service', 'shared/ui', 'shared/assets'];
-// a918e744d: complete service tests/helpers/scripts/lock and shared source/assets.
+// 49d3414b2: complete service tests/helpers/scripts/lock and shared source/assets.
 // Test fixtures use in-memory Miniflare and synthetic loopback services. No Git
 // ancestry, production credentials, browser, remote service or native app proof.
-const qualifiedTree = '58a9d2430d85b7dd072398c05faf7d4c301570662497e242c4f48a87625a2f26';
+const qualifiedTree = '88ca1a14744a5a67a2c398f2838e7facb8f35a20cabc46746f5059eb2aa6c045';
 const canonicalTest = 'npm run build && node --test --test-concurrency=1 test/*/*.test.mjs';
 
 function git(cwd: string, env: NodeJS.ProcessEnv, args: string[]): string {
@@ -78,6 +78,27 @@ function admitted(cwd: string, env: NodeJS.ProcessEnv, admission: Admission) {
   return main;
 }
 
+export function npmConfiguration(service: string, env: NodeJS.ProcessEnv) {
+  const invoke = (args: string[]) => execFileSync('npm', args, {cwd: service, env,
+    encoding: 'utf8', maxBuffer: 4 * 1024 * 1024, stdio: ['ignore', 'pipe', 'pipe']}).trim();
+  const config = JSON.parse(invoke(['config', 'list', '--json']));
+  if (!config || typeof config !== 'object' || Array.isArray(config)
+    || config['node-options'] !== null || config['script-shell'] !== null
+    || config['ignore-scripts'] !== false || config.global !== false || config['dry-run'] !== false
+    || config.workspaces !== null || !Array.isArray(config.workspace) || config.workspace.length
+    || config['include-workspace-root'] !== false) throw Error('unsupported npm lifecycle configuration');
+  const prefix = invoke(['prefix']);
+  if (realpathSync(prefix) !== realpathSync(service)) throw Error('npm uses a different package');
+  const paths = [config.userconfig, config.globalconfig, join(prefix, '.npmrc')];
+  if (paths.some(path => typeof path !== 'string' || !isAbsolute(path))) throw Error('unknown npm config path');
+  const presence = [...new Set<string>(paths)].sort().map(path => [path, existsSync(path)] as const);
+  const input = files(presence.filter(([, exists]) => exists).map(([path]) => path), ['/']);
+  // Bind effective values as well as the files npm read. Values may be private:
+  // only their digest enters a receipt, never configuration contents.
+  return {key: digest(JSON.stringify([Object.entries(config).sort(([a], [b]) => a.localeCompare(b)), presence, input.key])),
+    stable: input.stable};
+}
+
 export function serviceSnapshot(cwd: string, env: NodeJS.ProcessEnv, admission: Admission, argv: string[]): Snapshot {
   const main = admitted(cwd, env, admission);
   const tree = git(cwd, env, ['ls-tree', '-r', '-z', 'HEAD']);
@@ -90,6 +111,7 @@ export function serviceSnapshot(cwd: string, env: NodeJS.ProcessEnv, admission: 
     return path;
   });
   const service = join(cwd, 'connect/service');
+  const npm = npmConfiguration(service, env);
   // Hash ignored package inputs as well as every tracked source. Unknown extra
   // state in this package is included; escaping links and special files fail closed.
   const source = files([...tracked, service], [cwd], committed);
@@ -108,10 +130,10 @@ export function serviceSnapshot(cwd: string, env: NodeJS.ProcessEnv, admission: 
   const runtime = files([...runtimePaths].map(path => realpathSync(path)), ['/']);
   const endMain = admitted(cwd, env, admission);
   if (main !== endMain) throw Error('base changed during fingerprint');
-  const identity = {tree, source: source.key, runtime: runtime.key, argv, cwd,
+  const identity = {tree, source: source.key, runtime: runtime.key, npm: npm.key, argv, cwd,
     environment: Object.entries(env).sort(([a], [b]) => a.localeCompare(b)),
     versions: process.versions, platform: process.platform, arch: arch(), kernel: release(), umask: process.umask()};
-  return {key: digest(JSON.stringify(identity)), stable: digest(JSON.stringify([source.stable, runtime.stable, main])), head: admission.head};
+  return {key: digest(JSON.stringify(identity)), stable: digest(JSON.stringify([source.stable, runtime.stable, npm.stable, main])), head: admission.head};
 }
 
 export function serviceTests(command: Command, cwd: string, env: NodeJS.ProcessEnv, admission: Admission | undefined,
@@ -135,6 +157,7 @@ export function serviceTests(command: Command, cwd: string, env: NodeJS.ProcessE
       if (parent === dirname(parent)) break;
     }
     if (!existsSync(join(cwd, 'connect/service/node_modules/.package-lock.json'))) throw Error('missing npm installation');
+    npmConfiguration(join(cwd, command.cwd), env);
     admitted(cwd, env, admission);
   } catch {
     console.error('local-reuse: fresh service npm test (outside qualified closure)');
@@ -151,7 +174,13 @@ export function serviceTests(command: Command, cwd: string, env: NodeJS.ProcessE
   if (!tests.length) throw Error('service test inventory empty');
   const testCommand = {argv: [process.execPath, '--no-global-search-paths', '--test', '--test-concurrency=1', ...tests], cwd: command.cwd};
   const testEnv = serviceEnvironment(env);
-  reuse(cwd, () => serviceSnapshot(cwd, testEnv, admission!, testCommand.argv), () => run(testCommand, testEnv));
+  reuse(cwd, () => serviceSnapshot(cwd, testEnv, admission!, testCommand.argv), () => {
+    // Config can change while the fresh build runs. In that case use npm's
+    // canonical lifecycle so a later loader/shell override is not bypassed.
+    try { npmConfiguration(join(cwd, command.cwd), env); }
+    catch { run(command); return; }
+    run(testCommand, testEnv);
+  });
   return true;
 }
 

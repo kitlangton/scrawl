@@ -2,7 +2,7 @@
 
 The local runner reuses successful Connect service serial Node tests on Linux x64/glibc by
 default when their qualified inputs match. The audited closure is pinned in
-`service.ts` to the service, shared UI and shared assets at `a918e744d`. Changing
+`service.ts` to the service, shared UI and shared assets at `49d3414b2`. Changing
 that closure runs the original `npm test`. Expanding qualification requires
 reviewing the command's transitive reads, subprocesses and environment again.
 The service's 102 tests use synthetic identities and in-memory Miniflare, including
@@ -17,8 +17,11 @@ home. Miniflare's optional live geolocation fetch is disabled in this qualified
 phase, which never exercises `Request.cf`. Transport/lifecycle IDs are removed
 from that subprocess environment. Every remaining variable is hashed, including
 worker allocation, PATH, locale and temporary-directory settings. Environment
-values are never written into receipts. Runtime-loader and dependency-path
-overrides use the original fresh command.
+values are never written into receipts. Effective npm configuration and its
+user/global/project files are fingerprinted before and after verification.
+Node options, custom script shells, workspace/global execution and script policy
+overrides use the original fresh npm command, including changes during the build.
+Runtime-loader and dependency-path overrides also use the original fresh command.
 
 Qualification also requires a clean checked-out exact HEAD, no hidden index
 flags and integration with the current `origin/main` checkpoint. The runner

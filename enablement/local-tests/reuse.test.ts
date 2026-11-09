@@ -5,7 +5,7 @@ import {spawnSync, execFileSync} from 'node:child_process';
 import {chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {digest, receiptStore, reuse} from './receipt.ts';
-import {files, glibcNative, loaderPaths, serviceEnvironment, serviceTests} from './service.ts';
+import {files, glibcNative, loaderPaths, npmConfiguration, serviceEnvironment, serviceTests} from './service.ts';
 import {root} from './run.ts';
 
 function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
@@ -194,6 +194,40 @@ test('glibc runtime closure excludes only the inactive optional musl loaders', (
   for (const path of ['@img/sharp-linux-x64/lib/addon.node', '@parcel/watcher-linux-x64-glibc/watcher.node',
     '@cloudflare/workerd-linux-64/bin/workerd', 'unknown/addon.node', 'unknown-linux-x64-musl/addon.node']) assert.equal(glibcNative(`/repo/node_modules/${path}`), true);
 });
+
+test('npm lifecycle options from environment and each configuration file refuse qualification', () => fixture((dir, inherited) => {
+  const env = {...inherited};
+  for (const name of Object.keys(env)) if (/^npm_config_/i.test(name) || name === 'NODE_OPTIONS' || name === 'NODE_TEST_CONTEXT') delete env[name];
+  const user = join(dir, 'user.npmrc'), global = join(dir, 'global.npmrc'), project = join(dir, '.npmrc');
+  Object.assign(env, {npm_config_userconfig: user, npm_config_globalconfig: global, npm_config_cache: join(dir, 'cache')});
+  writeFileSync(user, ''); writeFileSync(global, ''); writeFileSync(project, '');
+  const source = join(root, 'connect/service/test/sharing/share-view.test.mjs');
+  writeFileSync(join(dir, 'package.json'), JSON.stringify({name: 'npm-config-fixture', private: true,
+    scripts: {test: `node --test ${JSON.stringify(source)}`}}));
+  const initial = npmConfiguration(dir, env);
+  for (const mode of ['environment', user, global, project]) {
+    const configured = {...env};
+    if (mode === 'environment') configured.npm_config_node_options = '--no-experimental-strip-types';
+    else writeFileSync(mode, 'node-options=--no-experimental-strip-types\n');
+    assert.throws(() => npmConfiguration(dir, configured), /unsupported npm lifecycle/);
+    const canonical = spawnSync('npm', ['test'], {cwd: dir, env: configured, encoding: 'utf8'});
+    assert.notEqual(canonical.status, 0, 'the original npm command must retain the loader failure');
+    assert.match(canonical.stdout + canonical.stderr, /ERR_UNKNOWN_FILE_EXTENSION|SyntaxError/);
+    if (mode !== 'environment') writeFileSync(mode, '');
+  }
+  const direct = spawnSync(process.execPath, ['--no-global-search-paths', '--test', source], {cwd: dir, env, encoding: 'utf8'});
+  assert.equal(direct.status, 0, direct.stderr);
+  assert.match(direct.stdout, /# pass 9/);
+  for (const [key, value] of [['script-shell', '/bin/false'], ['ignore-scripts', 'true'], ['global', 'true'], ['workspaces', 'true']]) {
+    writeFileSync(user, `${key}=${value}\n`);
+    assert.throws(() => npmConfiguration(dir, env), /unsupported npm lifecycle|Command failed/);
+  }
+  writeFileSync(user, '');
+  assert.equal(npmConfiguration(dir, env).key, initial.key);
+  assert.notEqual(npmConfiguration(dir, env).stable, initial.stable, 'config mutate/restore is not stable');
+  writeFileSync(user, 'color=false\n');
+  assert.notEqual(npmConfiguration(dir, env).key, initial.key, 'effective config is a receipt input');
+}));
 
 test('every runtime loader line is understood, including library paths with spaces', () => {
   assert.deepEqual(loaderPaths('\tlinux-vdso.so.1 (0x00000abc)\n\tlibx.so => /usr/lib/path with spaces/libx.so (0x1234)\n\t/lib64/ld-linux.so.2 (0x1234)\n'),
