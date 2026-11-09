@@ -100,6 +100,12 @@ class Recipe:
     def save(self):
         (self.out / "capture-smoke-report.json").write_text(json.dumps(self.report, indent=2) + "\n")
 
+    def command_environment(self, argv):
+        libraries = self.env.get("SCRAWL_GUI_LIBRARY_PATH")
+        if str(argv[0]) == str(self.binary) and libraries:
+            return dict(self.env, LD_LIBRARY_PATH=libraries)
+        return self.env
+
     def command(self, *args, timeout=8, allow_error=False):
         self.serial += 1
         stem = f"command-{self.serial:03d}"
@@ -109,7 +115,7 @@ class Recipe:
         self.save()
         with (self.out / record["stdout"]).open("w") as stdout, (self.out / record["stderr"]).open("w") as stderr:
             try:
-                p = subprocess.run(command, env=self.env, stdout=stdout, stderr=stderr, timeout=timeout)
+                p = subprocess.run(command, env=self.command_environment(command), stdout=stdout, stderr=stderr, timeout=timeout)
                 record["exit"] = p.returncode
             except subprocess.TimeoutExpired as error:
                 record["timeout"] = timeout
@@ -130,7 +136,7 @@ class Recipe:
 
     def launch(self, argv, log):
         with (self.out / log).open("w") as stream:
-            p = subprocess.Popen(argv, env=self.env, stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
+            p = subprocess.Popen(argv, env=self.command_environment(argv), stdout=stream, stderr=subprocess.STDOUT, start_new_session=True)
         self.jobs.append(p)
         return p
 
@@ -222,7 +228,7 @@ class Recipe:
             self.save()
             with (self.out / record["stdout"]).open("w") as stdout, (self.out / record["stderr"]).open("w") as stderr:
                 try:
-                    result = subprocess.run(argv, env=self.env, stdout=stdout, stderr=stderr, timeout=20)
+                    result = subprocess.run(argv, env=self.command_environment(argv), stdout=stdout, stderr=stderr, timeout=20)
                     record["exit"] = result.returncode
                 except (OSError, subprocess.TimeoutExpired) as error:
                     raise Failure("environment", f"H.264 decoder preflight could not run; see {stem} streams: {error}") from error
