@@ -64,12 +64,12 @@ impl Controller {
                     p.tone = Tone::Failure;
                     p.compact = false; p.artwork = false;
                 }
-                Health::AuthRequired => p.failure("Sign in again.", "Your authorization expired or was revoked. Local recording still works."),
+                Health::AuthRequired => p.failure("Sign in again.", "Sign in again to authorize this computer for Connect. Local recording still works."),
                 Health::Online => {}
             }
         }
         if snapshot.is_some_and(|s| s.reauthorization_required) {
-            p.failure("Sign in again.", "Your authorization expired or was revoked. Local recording still works.");
+            p.failure("Sign in again.", "Sign in again to authorize this computer for Connect. Local recording still works.");
         }
         if let Some(error) = self.error {
             let title = match error {

@@ -1,6 +1,8 @@
 # Encrypted Connect handoff — issue #189 candidate
 
-This owner-local implementation is an **off-by-default candidate**, not deployed encryption or a completed security audit. Local `.apparent` bundles remain ordinary. `experiments.hostedEncryption=true` selects encryption on each endpoint before its existing Connect approval. No production setting, account access, real recording or migration is enabled by this change.
+Endpoint encryption defaults on for newly queued private Connect uploads and fetches. Local `.apparent` bundles remain ordinary. An explicit `experiments.hostedEncryption=false` in `~/.config/apparent/config.json` opts out; omission selects encryption. Direct edits apply at the next operation. Upload consent and account approval remain required, and an approved reader is required before encrypted media leaves the recorder. Existing approvals without endpoint keys need fresh approval. This source default does not update installed apps, deploy service capabilities, migrate recordings or constitute a completed security audit.
+
+The default is still resolved by the synchronous Rust config provider consumed by the production native uploader and CLI. A TypeScript Record/Connect workflow owner is not yet wired into those callers; moving that authority requires a compatible runtime/packaging contract rather than a competing config writer. This bounded default repair leaves that migration debt explicit.
 
 ## Accepted journey and trust boundary
 
@@ -49,7 +51,7 @@ Simon confirmed these limits on 2026-11-02:
 2. **Lost keys:** losing every endpoint key makes existing ciphertext unrecoverable through password reset. No server backup/escrow or key-recovery UI is included.
 3. **Existing plaintext:** leave existing hosted plaintext untouched and clearly identified. No plaintext data migration, deletion or reupload is needed. Encrypted-mode fetch refuses plaintext unless the operator deliberately leaves that mode to retrieve legacy data.
 
-These scope decisions do not enable the disabled experiment or waive independent review and native/platform proof. The additive `0005.sql` schema change supports encrypted uploads; it is separate from migrating existing capture data and remains unapplied by this candidate.
+The default-on source change does not waive independent review and native/platform proof. The additive `0005.sql` schema change supports encrypted uploads; it is separate from migrating existing capture data. Source changes do not prove that this schema or matching account approval routes are deployed.
 
 ## Verification and rollout gates
 
@@ -61,4 +63,4 @@ The first dependency scan found vulnerable `crypto-bigint 0.5.5` through the unu
 
 Required: public enrollment/scopes/ownership/renewal/revocation; tamper, truncation, reordered/extra/missing parts, wrong keys, context substitution, randomized independent encryptions and age finalization; durable interruption/restart/consent races; byte-identical ordinary roundtrip with no plaintext in service objects; unsupported-format and encrypted-share denial; bounded resource failures; actual changed native worker/fetch wiring on macOS and Linux. A build or synthetic auth fixture is not GUI/live-Google proof. An agent review is independent code/security review, not a professional cryptographic audit.
 
-Run normal reviewed hooks and exact CI on the final source. Do not apply `0005`, deploy, enable collection, grant production access or merge as part of this candidate. The parent batch orchestrator alone integrates main. Reconcile the tracked historical issue/PR criteria with this contract in the implementation PR rather than silently weakening their security claims.
+Run normal reviewed hooks and exact CI on the final source. Service migration, deployment, account access and publication remain separate operations; the default does not grant upload consent. Reconcile tracked historical criteria with this contract rather than treating the source default as release or native verification evidence.

@@ -15,6 +15,43 @@ fn encrypted(f: &Fixture) {
         .unwrap();
 }
 
+#[test]
+fn encrypted_upgrade_requires_fresh_approval_and_never_reports_plaintext_grants_ready() {
+    use crate::settings::Health;
+    let f = Fixture::new();
+    let server = encryption_server("");
+    f.authorize(&server.url);
+    assert!(f.client.settings_snapshot().unwrap().uploads_enabled);
+    let bundle = f.bundle();
+    let plaintext_id = f.client.enqueue(&bundle).unwrap();
+    let queued_before = fs::read(f.client.state.join(format!("{plaintext_id}.job"))).unwrap();
+    encrypted(&f);
+    let snapshot = f.client.settings_snapshot().unwrap();
+    assert!(!snapshot.connected && !snapshot.uploads_enabled);
+    assert!(snapshot.reauthorization_required);
+    assert_eq!(f.client.settings_health(&|| true), Health::AuthRequired);
+    f.client.process_once().unwrap();
+    assert!(f.client.retry_capture(&plaintext_id).is_err());
+    assert_eq!(fs::read(f.client.state.join(format!("{plaintext_id}.job"))).unwrap(), queued_before);
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+    // A newly approved endpoint is usable, but losing its key fails closed again.
+    pair(&f, &server);
+    let snapshot = f.client.settings_snapshot().unwrap();
+    assert!(snapshot.connected && snapshot.uploads_enabled);
+    assert!(!snapshot.reauthorization_required);
+    let credential = f.client.stored_credential("upload").unwrap();
+    let identity = credential.encryption_identity.unwrap();
+    fs::remove_file(f.client.state.join(format!("{identity}.identity"))).unwrap();
+    let snapshot = f.client.settings_snapshot().unwrap();
+    assert!(!snapshot.uploads_enabled && snapshot.reauthorization_required);
+    assert_eq!(f.client.settings_health(&|| true), Health::AuthRequired);
+    // Explicit plaintext mode retains the existing approval without replacing keys.
+    f.client.provider.set_experiment(HOSTED_ENCRYPTION, false).unwrap();
+    let snapshot = f.client.settings_snapshot().unwrap();
+    assert!(snapshot.uploads_enabled && !snapshot.reauthorization_required);
+    assert_eq!(server.state.lock().unwrap().requests, 0);
+}
+
 // Worker-path cases start with synthetic credentials but real generated endpoint
 // identities. The separate login test below exercises actual approval admission.
 fn pair(f: &Fixture, server: &Server) {

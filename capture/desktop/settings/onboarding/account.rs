@@ -118,6 +118,18 @@ mod tests {
 
     #[test]
     fn real_read_enrollment_commits_private_credentials_without_upload_consent_or_tour_milestones() {
+        // AppConfig intentionally suppresses config experiment flags in tests.
+        // Isolate its encryption override so other parallel tests cannot inherit it.
+        const CHILD: &str = "APPARENT_ONBOARDING_ENCRYPTED_ACCOUNT_CHILD";
+        if std::env::var_os(CHILD).is_none() {
+            let output = std::process::Command::new(std::env::current_exe().unwrap())
+                .args(["--exact", "capture::desktop::settings::onboarding::account::tests::real_read_enrollment_commits_private_credentials_without_upload_consent_or_tour_milestones", "--test-threads=1"])
+                .env(CHILD, "1").output().unwrap();
+            assert!(output.status.success(), "{}\n{}", String::from_utf8_lossy(&output.stdout), String::from_utf8_lossy(&output.stderr));
+            assert!(String::from_utf8_lossy(&output.stdout).contains("1 passed"));
+            return;
+        }
+        crate::shared::handoff::enable_experiment("hostedEncryption");
         let root = std::env::temp_dir().join(format!("onboarding-account-{}-{}", std::process::id(), crate::capture::desktop::settings::onboarding::unix_ms()));
         std::fs::create_dir(&root).unwrap();
         use std::os::unix::fs::PermissionsExt;
@@ -127,7 +139,8 @@ mod tests {
         listener.set_nonblocking(true).unwrap();
         let origin = format!("http://{}", listener.local_addr().unwrap());
         std::fs::write(&config, serde_json::json!({"cloud":{"server":origin,"enabled":false,"uploadConsent":false,"private":"keep"},
-            "ingestToken":"synthetic-private", "onboarding":{"shortcutChosen":false,"firstCaptureCompleted":false}}).to_string()).unwrap();
+            "ingestToken":"synthetic-private", "experiments":{"hostedEncryption":true},
+            "onboarding":{"shortcutChosen":false,"firstCaptureCompleted":false}}).to_string()).unwrap();
         let server_origin = origin.clone();
         let server = std::thread::spawn(move || {
             let deadline = Instant::now() + Duration::from_secs(8);
@@ -154,6 +167,10 @@ mod tests {
                 let body: serde_json::Value = serde_json::from_slice(&body).unwrap();
                 let reply = if path == "/v1/device/start" {
                     assert_eq!(body["scope"], "read");
+                    let key = &body["encryptionKey"];
+                    assert_eq!(key["version"], 1, "approval must bind the endpoint key with encryption enabled");
+                    assert!(key["recipient"].as_str().is_some_and(|value| value.starts_with("age1")));
+                    assert_eq!(key["signing"].as_str().map(str::len), Some(64));
                     serde_json::json!({"deviceCode":"synthetic-device-secret","userCode":"TEST-CODE","expiresIn":20,"interval":1,
                         "verificationUri":format!("{server_origin}/connect/device?code=TEST-CODE")})
                 } else {
@@ -189,6 +206,8 @@ mod tests {
         assert_eq!(saved["cloud"]["private"], "keep"); assert_eq!(saved["ingestToken"], "synthetic-private");
         assert_eq!(saved["onboarding"]["shortcutChosen"], false); assert_eq!(saved["onboarding"]["firstCaptureCompleted"], false);
         assert!(root.join("hosted/read.credential").is_file()); assert!(!root.join("hosted/upload.credential").exists());
+        let credential: serde_json::Value = serde_json::from_slice(&std::fs::read(root.join("hosted/read.credential")).unwrap()).unwrap();
+        assert!(credential["encryption_identity"].as_str().is_some_and(|identity| !identity.is_empty()), "sign-in must retain its private endpoint identity");
         let public = serde_json::to_string(account.view()).unwrap();
         assert!(!public.contains("secret") && !public.contains("credential"));
         drop(account); std::fs::remove_dir_all(root).unwrap();
