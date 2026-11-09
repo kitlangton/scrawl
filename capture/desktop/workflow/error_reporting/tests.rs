@@ -142,6 +142,15 @@ fn payload_is_allowlisted_with_no_user_or_error_text() {
         "$lib",
         "$app_version",
         "build",
+        "commit_sha",
+        "build_modified",
+        "release_version",
+        "package_version",
+        "channel",
+        "environment",
+        "component",
+        "process",
+        "diagnostics_schema_version",
         "$os",
         "architecture",
         "operation",
@@ -151,6 +160,9 @@ fn payload_is_allowlisted_with_no_user_or_error_text() {
     ];
     allowed.sort();
     assert_eq!(keys, allowed);
+    assert_eq!(payload["properties"]["commit_sha"], env!("APPARENT_COMMIT_SHA"));
+    assert_eq!(payload["properties"]["release_version"], env!("APPARENT_RELEASE_VERSION"));
+    assert_eq!(payload["properties"]["build_modified"], env!("APPARENT_BUILD_MODIFIED") == "true");
     assert!(!payload.to_string().contains("private-consent-canary"));
     assert_ne!(
         payload["distinct_id"],

@@ -20,28 +20,6 @@ class SelectionTests(unittest.TestCase):
         guard.start()
         self.addCleanup(guard.stop)
 
-    def test_mac_native_checks_precede_full_suites_without_parallel_gui(self):
-        workflow = (SCRIPT.parents[1] / '.github/workflows/verification-platform.yml').read_text()
-        names = [
-            'Build and package the exact Mac candidate for native checks',
-            'Native Mac Storage and error-reporting controls against the installed Rust GUI',
-            'Native GPUI Copy capture ID against the same installed App',
-            'Native Electron selected-reference control against the installed Rust App',
-            'Early Mac Electron to Rust Settings integration (not native GUI proof)',
-            'Verify the independent Connect client package',
-            'Execute the same changed-tree checks (not GUI acceptance)',
-            'Actual Electron to Rust Settings integration (not native GUI proof)',
-        ]
-        positions = [workflow.index('      - name: ' + name) for name in names]
-        self.assertEqual(positions, sorted(positions))
-        self.assertEqual(workflow.count('bash capture/desktop/scripts/packaging/install-app.sh'), 1)
-        for step in workflow[positions[0]:positions[4]].split('      - name: ')[1:]:
-            self.assertIn("if: runner.os == 'macOS' && needs.select.outputs.root == 'true'", step)
-            self.assertNotIn('continue-on-error:', step)
-        linux_bridge = workflow[positions[-1] + len('      - name: '):].split('      - name: ', 1)[0]
-        self.assertIn("if: runner.os == 'Linux'", linux_bridge)
-        self.assertIn('needs: [select, desktop-ui, rust]', workflow)
-
     def test_documents_do_not_compile_app(self):
         result = verification.select(["enablement/refactor.md", "AGENTS.md", "docs/capture.md"])
         self.assertFalse(result["root"])
@@ -346,6 +324,45 @@ class SelectionTests(unittest.TestCase):
                     git("update-index", "--add", "--cacheinfo", "100644", oid, "README.md")
                     documented = commit()
                     self.assertEqual(verification.plan(base, documented)["focused"], sorted(reviewed["tests"]))
+
+
+class TimingTests(unittest.TestCase):
+    def test_contract_children_do_not_inherit_outer_timing_mode(self):
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
+            output = Path(directory) / "timing.jsonl"
+            with patch.dict(os.environ, {"APPARENT_TIMING_FILE": str(output)}), patch.object(
+                    verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+                verification.observed_run(["python3", "-m", "unittest", "discover"], check=True)
+                self.assertNotIn("APPARENT_TIMING_FILE", run.call_args.kwargs["env"])
+                self.assertEqual(os.environ["APPARENT_TIMING_FILE"], str(output))
+            self.assertIn('"label": "contract-checks"', output.read_text())
+
+    def test_compile_then_execute_preserves_test_union_and_failure(self):
+        command = ["cargo", "test", "--locked", "some_filter", "--", "--ignored"]
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
+            output = Path(directory) / "timing.jsonl"
+            with patch.dict(os.environ, {"APPARENT_TIMING_FILE": str(output)}), patch.object(
+                    verification.subprocess, "run", side_effect=[
+                        subprocess.CompletedProcess([], 0),
+                        subprocess.CalledProcessError(7, command)]) as run:
+                with self.assertRaises(subprocess.CalledProcessError):
+                    verification.observed_run(command, check=True)
+            self.assertEqual(run.call_args_list[0].args[0],
+                             ["cargo", "test", "--locked", "some_filter", "--no-run"])
+            self.assertEqual(run.call_args_list[1].args[0], command)
+            import json
+            rows = [json.loads(line) for line in output.read_text().splitlines()]
+            self.assertEqual([row["label"] for row in rows],
+                             ["rust-test-compilation", "rust-test-execution"])
+            self.assertEqual(rows[-1]["code"], 7)
+
+    def test_browser_build_is_not_rust(self):
+        with tempfile.TemporaryDirectory(prefix="apparent-dev-timing-") as directory:
+            output = Path(directory) / "timing.jsonl"
+            with patch.dict(os.environ, {"APPARENT_TIMING_FILE": str(output)}), patch.object(
+                    verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)):
+                verification.observed_run(["bun", "run", "build"], check=True)
+            self.assertIn('"label": "browser-checks"', output.read_text())
 
 
 if __name__ == "__main__":

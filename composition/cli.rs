@@ -361,9 +361,9 @@ enum Command {
         #[command(subcommand)]
         command: HexCommand,
     },
-    /// Print the agent-ready summary or JSON manifest for a `.apparent` bundle (or `latest`).
+    /// Fetch and inspect a Connect capture ID, or inspect a local bundle (or `latest`).
     Inspect {
-        /// Path to `.apparent` bundle directory, `apparent.json`, or `latest`.
+        /// Connect ID (fetches to ./<id>.apparent, waits 120s), local bundle, or `latest`.
         #[arg(default_value = "latest")]
         bundle: PathBuf,
         /// Emit raw `apparent.json` instead of `summary.md` (with `--marks`, the marks as JSON).
@@ -656,6 +656,10 @@ pub(crate) fn run() -> Result<()> {
         return Ok(());
     }
     let cli = Cli::parse();
+    run_cli(cli)
+}
+
+fn run_cli(cli: Cli) -> Result<()> {
     let command = match cli.command {
         Some(command) => command,
         // `apparent` typed in a terminal (on PATH through Settings › Agents or Homebrew) would
@@ -1083,6 +1087,7 @@ pub(crate) fn run() -> Result<()> {
                                 video: Some(linked),
                                 duration_ms: old.duration_ms,
                                 video_offset_ms: offset,
+                                video_ink: old.video_ink,
                             },
                             iter_strokes,
                             iter_events,
@@ -1157,6 +1162,7 @@ pub(crate) fn run() -> Result<()> {
                         strokes: old.strokes,
                         events: old.events,
                         interaction_telemetry: old.interaction_telemetry,
+                        video_ink: old.video_ink,
                         note: old.note,
                         windows: old.windows,
                         cursor: old.cursor,
@@ -1326,6 +1332,8 @@ pub(crate) fn run() -> Result<()> {
             for name in &experiments {
                 handoff::enable_experiment(name);
             }
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            let bundle = hosted::inspect_source(&bundle)?;
             let (dir, loaded) = handoff::load_bundle(&bundle)?;
             if marks {
                 let entries = agent_context::mark_entries(&loaded);
@@ -1644,6 +1652,18 @@ pub(crate) fn hosted_connect_alias_command_subprocess() -> Result<()> {
         panic!("not a hosted command");
     };
     hosted::command(command)
+}
+
+#[cfg(test)]
+pub(crate) fn hosted_inspect_command_subprocess() -> Result<()> {
+    let Some(args) = std::env::var_os("APPARENT_TEST_INSPECT_ARGS") else {
+        return Ok(());
+    };
+    let args: Vec<String> = serde_json::from_str(args.to_str().unwrap())?;
+    println!("APPARENT_INSPECT_OUTPUT_BEGIN");
+    run_cli(Cli::try_parse_from(args)?)?;
+    println!("APPARENT_INSPECT_OUTPUT_END");
+    Ok(())
 }
 
 fn copy_confirmation(dir: &std::path::Path) -> String {

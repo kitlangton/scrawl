@@ -662,6 +662,16 @@ pub fn place(id: u32, rect: [f64; 4]) {
     }
 }
 
+/// Reposition the owned ink surface without mapping it before the compositor has
+/// acknowledged its input policy.
+pub fn place_unmapped(id: u32, rect: [f64; 4]) {
+    if let Some(x) = x() {
+        let _ = x.conn.unmap_window(id);
+        configure(x, id, rect);
+        x.flush();
+    }
+}
+
 /// Whether the window already has this geometry (global pixels).
 fn at(x: &X, id: u32, rect: [f64; 4]) -> bool {
     x.conn

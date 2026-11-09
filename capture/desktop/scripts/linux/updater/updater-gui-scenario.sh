@@ -190,6 +190,17 @@ PY
   timeout 12 "$image" capture state > "$out/capture-guard-before-state.json" 2> "$out/capture-guard-before-state.stderr"
   python3 "$out/assert-owned-capture.py" "$capture_id" "$out/capture-start.json" "$out/capture-guard-before-state.json"
   python3 "$out/assert-owned-capture.py" "$capture_id" "$out/capture-guard-before.json" "$out/capture-guard-before-state.json"
+  # The stock portal picker is a compositor layer above Settings. Approve the
+  # sole synthetic VM output through that normal UI, never dismiss/bypass it.
+  hyprctl monitors -j > "$out/consent-monitors.json"
+  python3 - "$out/consent-monitors.json" <<'PY'
+import json,sys
+monitors=json.load(open(sys.argv[1]))
+assert len(monitors)==1 and monitors[0]['width']==1280 and monitors[0]['height']==800, monitors
+PY
+  ui '{"op":"click-point","text":"Outputs Region","viewport":[1280,800],"point":[294,192],"label":"portal-outputs-tab"}'
+  ui '{"op":"click-point","text":"Outputs Region","viewport":[1280,800],"point":[640,420],"label":"approve-disposable-output"}'
+  ui '{"op":"assert","text":"Update available","label":"settings-after-portal-consent"}'
   click_update_guard() {
     # Starting capture can move focus to the capsule. An inactive-window click
     # may only focus Settings; require an actual coordinator acknowledgment.
@@ -258,7 +269,7 @@ from collections import Counter
 import json,os,sys
 requests=[json.loads(line) for line in open(sys.argv[1])]
 main=os.environ['UPDATER_CHANNEL']=='main'
-metadata='/repos/tryapparent/apparent/releases?per_page=10&page=1' if main else '/repos/tryapparent/apparent/releases/latest'
+metadata='/repos/tryapparent/apparent/releases?per_page=100&page=1'
 counts=Counter(r['control']['serial'] for r in requests if r['control']['gate'] and r['path']==metadata)
 assert counts == ({2:1,3:1,4:1,5:1,6:1,7:1,9:1} if main else {2:1,3:1,4:1,5:1,6:1}), counts
 downloads=[r for r in requests if r['path'].endswith('.AppImage')]

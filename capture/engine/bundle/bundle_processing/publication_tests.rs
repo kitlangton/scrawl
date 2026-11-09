@@ -32,6 +32,7 @@ fn publication_rejects_corrupt_prepared_png_before_success() {
         &[],
         &[],
         &windows::ActivityLog::default(),
+        None,
     )
     .unwrap();
     prepared.contact_sheet_png = b"not a PNG".to_vec();
@@ -79,6 +80,7 @@ fn publication_checks_wav_persistence_before_transcription_or_manifest() {
             video: None,
             duration_ms: 1,
             video_offset_ms: 0,
+                video_ink: None,
         },
         vec![],
         vec![],
@@ -128,6 +130,7 @@ fn publication_screen_wrapper_checks_journal_and_keeps_required_audio() {
                 video: None,
                 duration_ms: 1,
                 video_offset_ms: 0,
+                video_ink: None,
             },
             vec![],
             vec![],
@@ -231,6 +234,7 @@ fn publication_finalizes_durable_typed_notes_with_matching_recovery_journal() {
             video: None,
             duration_ms: 1000,
             video_offset_ms: 0,
+                video_ink: None,
         },
         vec![],
         vec![],
@@ -285,6 +289,7 @@ fn publication_recovery_reconciles_only_durable_typed_notes_before_journal_valid
         strokes: vec![],
         events: vec![click.clone()],
         interaction_telemetry: None,
+            video_ink: None,
         note: Some("Unrelated capture note".into()),
         windows: vec![],
         cursor: vec![],

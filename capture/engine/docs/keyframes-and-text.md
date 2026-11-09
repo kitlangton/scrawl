@@ -35,12 +35,12 @@ Clipboard handoffs put access instructions first and the duration header with ti
 
 ## Transcription (`capture/engine/runtime/audio/transcription/transcribe.rs`, `shared/hex.rs`, `capture/engine/runtime/audio/transcription/command_transcriber.rs`)
 
-Apple SpeechAnalyzer by default (measured word times). `"transcriber": "hex"` + `"hexModel"` in `~/.config/apparent/config.json` (Settings › Recording, `apparent hex status`, `--transcriber` on `reprocess`/`import`) uses Hex's local API v2 (discovery file `local-api.json`, bearer token, never logged) only when Hex answers `/health` and has a ready model (`installed && verified`; Apparent never downloads). Hex gives text only, so each speech island (`audio::speech_islands`, clips merged to ≤ 24) is transcribed on its own and its words are spread over it by length: `source: "hex:<model>"`, `estimated: true`, which `keyframes.rs` reads to skip spoken cues. Any Hex failure falls back to Apple for that recording; Hex absent falls back silently (logged once). `"transcriber": "command"` (`capture/engine/runtime/audio/transcription/command_transcriber.rs`) runs the argv in `"transcribeCommand"` (no shell, own process group, wall-clock limit, 8 MiB stdout cap) and reads one versioned JSON transcript: `source: "command:<name>"`; any failure means Apple for that recording (Hex never tried; a missing or malformed command is logged once, like Hex being away), and nothing the program says or is given reaches the log. It gets no language from Apparent: `appleLocale` is Apple's, and the user's argv carries the model's. Its keys are read on their own (`Program::load_from`), never through `handoff::Config`. Settings reads `hex::cached_status` (a background poller), never the network.
+Apple SpeechAnalyzer by default (measured word times). `"transcriber": "hex"` + `"hexModel"` in `~/.config/apparent/config.json` (Settings › Recording, `apparent hex status`, `--transcriber` on `reprocess`/`import`) uses Hex's local API v2 (discovery file `local-api.json`, bearer token, never logged) only when Hex answers `/health` and has a ready model (`installed && verified`; Apparent never downloads). Hex gives text only, so continuous chunks of at most 30 seconds are transcribed and their words are spread over each chunk by length. The quietest 50 ms PCM window in the last five seconds suggests each cut; quiet audio and short words are never excluded. Any rejected chunk fails the entire attempt, allowing whole-recording fallback. Successful Hex transcripts use `source: "hex:<model>"`, `estimated: true`, which `keyframes.rs` reads to skip spoken cues. Any Hex failure falls back to Apple for that recording; Hex absent falls back silently (logged once). `"transcriber": "command"` (`capture/engine/runtime/audio/transcription/command_transcriber.rs`) runs the argv in `"transcribeCommand"` (no shell, own process group, wall-clock limit, 8 MiB stdout cap) and reads one versioned JSON transcript: `source: "command:<name>"`; any failure means Apple for that recording (Hex never tried; a missing or malformed command is logged once, like Hex being away), and nothing the program says or is given reaches the log. It gets no language from Apparent: `appleLocale` is Apple's, and the user's argv carries the model's. Its keys are read on their own (`Program::load_from`), never through `handoff::Config`. Settings reads `hex::cached_status` (a background poller), never the network.
 
 Hex requests use `"hexLanguage"` (Settings › Recording › Hex language), default `en`.
 The field accepts a language code or `auto`, trims/lowercases it, and saves on Return/Apply;
 blank resets to `en`. Apparent validates URL-safe code syntax only, leaving supported languages
-to Hex. The selection is read once per recording and reused for all speech islands/retries.
+to Hex. The selection is read once per recording and reused for all chunks/retries.
 It does not inherit Hex's dictation settings. An unsupported code follows the existing
 Hex-failure fallback. Models may ignore language hints (e.g. Parakeet v3).
 
@@ -51,6 +51,8 @@ Each app reserves the model for itself through `AssetInventory` (attributed to `
 ## Keyframe selection (`capture/engine/keyframes.rs`)
 
 Timed CLI screen captures deliberately have no click/Shift ink collector. Their manifest sets `interactionTelemetry: "videoOnly"` and their summary warns that a click visible in the movie is not a recorded event or click keyframe. Reprocessing and journal-backed recovery preserve the marker; old manifests and orphaned movies without it have unknown telemetry provenance. Use the app shortcut for click and ink context (subject to OS permissions). See `capture/engine/docs/capture.md`.
+
+For fresh Hyprland screen/area movies, `videoInk: "captured"` records that live ink is already in the source pixels. Keyframes, contact sheets, mark zooms and exports preserve that recorded progression instead of drawing a second, longer-lived copy. KDE Wayland uses `"capturedVideo"`: movie consumers suppress replay, while still images reconstruct the marks hidden on release. Semantic marks still drive text, selection and crop geometry; click effects remain separate. Older or unknown sources keep legacy replay. See [export and retention](export-and-retention.md).
 
 - Only cut keyframes on real visual or input events (`Mark` strokes drawn while holding `⇧`, flags, `Click`/`Drag` inside the capture target or phone taps/swipes, `Laser` points, or settled `SceneChange` transitions)—never cut extra keyframes on speech pauses alone over a static screen.
 - The one speech exception is a spoken cue with measured word timings (SpeechAnalyzer; never a Hex transcript, whose times are `estimated`): "now", "here", "look", "watch" snap to a transition that starts within −0.3 s…+1.2 s of the word, else take the frame 150 ms after it. A cue keyframe is dropped unless its image differs (scene diff ≥ 0.03) from every keyframe already chosen, so speech over an unchanged screen still yields one frame. Demonstratives and "see"/"there" are weak (they rank with ordinary scene changes) because they are usually filler.
@@ -125,11 +127,10 @@ regressions do not replace actual selected-module and installed-app capture proo
 
 On by default on Linux with the local Parakeet transcriber, without an experiment
 flag. The separate Mac `liveTranscribe` experiment is unchanged. The worker reads only
-new microphone samples, uses `audio::speech_islands` and Hex's short-blip filter,
+new microphone samples, uses `audio::speech_islands` only to choose cut points,
 and waits for at least three seconds of audio plus 700 ms of quiet before sending
-a chunk to its reusable model session. Each early chunk starts 200 ms before its
-first speech island and ends 200 ms after the last, instead of feeding a long
-silent lead-in to Parakeet. Its pending buffer is capped at 60 seconds; if it
+a chunk to its reusable model session. Each early chunk retains every sample since
+the previous cut, including quiet lead-ins, and ends 200 ms after the last detected island. Its pending buffer is capped at 60 seconds; if it
 falls behind or finds no safe cut, it falls back to whole-WAV transcription
 rather than dropping audio. At stop it reads the finished WAV to transcribe only
 the unprocessed tail, joins ordered text and absolute word
@@ -139,6 +140,10 @@ transcribers are unchanged. To compare without a live microphone, use
 on a Linux machine with Parakeet installed; `--live-speed` replays the saved WAV
 at real speed before timing finalization. Compare with a normal reprocess of the
 same bundle: chunk boundaries can change recognition even when finish is faster.
+
+The bounded native audio-selection repair for #218 retains the current Rust consumers.
+There is no TypeScript transcription runtime on this baseline; migrating Record workflow
+ownership remains separate debt rather than introducing an unverified second recognition path.
 
 ## Warm recognizer (`capture/engine/runtime/audio/transcription/warm_recognizer.rs`)
 

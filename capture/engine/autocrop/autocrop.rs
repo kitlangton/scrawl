@@ -1779,11 +1779,13 @@ pub fn annotate_and_crop(
     events: &[InteractionEvent],
     windows: &[WindowSnapshot],
     cursor: &[CursorSample],
+    video_ink: Option<crate::shared::model::VideoInk>,
 ) -> (
     Vec<(Keyframe, RgbaFrame)>,
     Option<(crate::shared::model::AutocropInfo, Vec<(Keyframe, RgbaFrame)>)>,
 ) {
     use crate::capture::engine::render::annotate_keyframe_marks_in_place;
+    let replay_ink = crate::shared::model::VideoInk::replay(video_ink);
     let plan = settings
         .filter(|_| target.mode == crate::shared::model::CaptureMode::Display && !selected.is_empty())
         .and_then(|settings| {
@@ -1832,7 +1834,7 @@ pub fn annotate_and_crop(
                 .into_iter()
                 .map(|(kf, mut frame)| {
                     scope.spawn(move || {
-                        annotate_keyframe_marks_in_place(&mut frame, &kf, strokes, marks, events);
+                        annotate_keyframe_marks_in_place(&mut frame, &kf, strokes, marks, events, replay_ink);
                         (kf, frame)
                     })
                 })
@@ -1852,7 +1854,7 @@ pub fn annotate_and_crop(
             .map(|((kf, mut raw), crop)| {
                 scope.spawn(move || {
                     let out = if crop.kind == CropKind::Full {
-                        annotate_keyframe_marks_in_place(&mut raw, &kf, strokes, marks, events);
+                        annotate_keyframe_marks_in_place(&mut raw, &kf, strokes, marks, events, replay_ink);
                         raw.clone()
                     } else {
                         let mut out = crop_frame(&raw, crop.rect);
@@ -1863,8 +1865,9 @@ pub fn annotate_and_crop(
                             &view.strokes,
                             &view.marks,
                             &view.events,
+                            replay_ink,
                         );
-                        annotate_keyframe_marks_in_place(&mut raw, &kf, strokes, marks, events);
+                        annotate_keyframe_marks_in_place(&mut raw, &kf, strokes, marks, events, replay_ink);
                         out
                     };
                     let r = crop.rect.map(f64::from);
@@ -2103,6 +2106,7 @@ mod tests {
             &[],
             &windows,
             &cursor,
+            None,
         );
         let has_target = |f: &RgbaFrame| f.rgba.chunks_exact(4).any(|p| p[..3] == [10, 220, 80]);
         assert!(
@@ -2175,6 +2179,7 @@ mod tests {
                     &[],
                     &windows,
                     &cursor,
+                    None,
                 );
                 assert!(
                     frames.iter().all(|(_, f)| has_subject(f)),
@@ -2513,6 +2518,7 @@ mod tests {
             &events,
             &windows,
             &[],
+            None,
         );
         let (info, full) = cropped.expect("cropped");
         assert_eq!((frames[0].1.width, frames[0].1.height), (600, 400));
@@ -2542,6 +2548,7 @@ mod tests {
                 &events,
                 &windows,
                 &[],
+                None,
             );
             assert!(cropped.is_none());
             assert_eq!(frames[0].1.width, 1728);

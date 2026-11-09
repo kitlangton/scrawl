@@ -14,7 +14,7 @@ import time
 
 API = '/repos/tryapparent/apparent/releases/latest'
 STABLE_API = '/repos/tryapparent/apparent/releases?per_page=100&page='
-MAIN_API = '/repos/tryapparent/apparent/releases?per_page=10&page='
+MAIN_API = '/repos/tryapparent/apparent/releases?per_page=100&page='
 CANDIDATE_SHA = 'b' * 40
 
 
@@ -28,7 +28,7 @@ def response(control, path, payload):
     main = control.get('channel', 'stable') == 'main'
     revision = control['source_head'] if main and mode == 'current' else CANDIDATE_SHA
     name = f'Apparent-{version}-linux-x86_64.AppImage'
-    tag = 'linux-main-' + revision if main else 'v' + version
+    tag = 'linux-main-v2-' + revision if main else 'v' + version
     prefix = f'/tryapparent/apparent/releases/download/{tag}/'
     release = {'tag_name': tag, 'draft': False, 'prerelease': main,
                'published_at': '2026-11-01T00:00:00Z',
@@ -39,7 +39,7 @@ def response(control, path, payload):
             return 503, b'controlled fixture failure\n'
         # Put the usable Main release on a later page, beyond unrelated releases.
         return 200, json.dumps([{'tag_name': 'v1.0.0', 'prerelease': False,
-                                'draft': False, 'assets': []}] if main else [
+                                'draft': False, 'assets': []}] * 100 if main else [
                                     {'tag_name': 'recipient-component', 'prerelease': False,
                                      'draft': False, 'published_at': '2026-11-08T00:00:00Z', 'assets': []},
                                     release]).encode()

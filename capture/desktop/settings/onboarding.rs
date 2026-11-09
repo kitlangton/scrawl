@@ -1091,7 +1091,7 @@ impl Session {
             }
         };
         let attempted = electron.and_then(|(app, runtime)| {
-            Self::spawn_renderer_transport(std::process::Command::new(runtime).arg(app).arg("--onboarding"), transport_generation, events.clone()).ok()
+            Self::spawn_renderer_transport(&mut super::presentation::onboarding_command(runtime, app), transport_generation, events.clone()).ok()
         });
         let shell = attempted.is_some();
         let (transport, fallback) = match attempted {

@@ -6,10 +6,10 @@
 //!
 //! On X11 none of this is used: the X server answers the same questions (`super::x11`).
 
-use std::collections::HashSet;
+use std::collections::{HashSet, VecDeque};
 use std::os::fd::{AsRawFd, OwnedFd};
 use std::sync::{Mutex, OnceLock};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 /// Linux input event codes (`linux/input-event-codes.h`).
 pub mod code {
@@ -44,6 +44,47 @@ pub struct Held {
     /// desktop's pointer) last put the pointer, 0–1 across the desktop; `None` once a mouse or
     /// touchpad has moved it since.
     pub absolute: Option<[f64; 2]>,
+    /// Ordered native button edges. Cross-device modifier order is qualified
+    /// separately from per-edge timestamp provenance.
+    /// Consumers reject pre-capture events and handle `button_events_lost` before replay.
+    /// Only left/right buttons are retained, never ordinary typed keys.
+    pub button_events: Vec<ButtonEvent>,
+    /// At least one edge was lost; consumers must discard any pending gesture.
+    pub button_events_lost: bool,
+}
+
+#[derive(Clone, Debug)]
+/// A native button transition, with modifiers captured while applying that event.
+/// This contains no position: a later cursor observation cannot locate this edge.
+pub struct ButtonEvent {
+    pub at: Instant,
+    pub button: u16,
+    pub pressed: bool,
+    pub modifiers: ButtonModifiers,
+    /// True only for a single descriptor. Independent device readiness cannot
+    /// establish a watermark, even when all device clocks are monotonic.
+    pub modifiers_known: bool,
+    /// `evdev_monotonic` when the kernel clock is available, otherwise `observation`.
+    pub time_source: &'static str,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ButtonModifiers {
+    pub shift: bool,
+    pub ctrl: bool,
+    pub alt: bool,
+    pub super_key: bool,
+}
+
+impl ButtonModifiers {
+    fn from_held(held: &Held) -> Self {
+        Self {
+            shift: held.shift(),
+            ctrl: held.ctrl(),
+            alt: held.alt(),
+            super_key: held.super_key(),
+        }
+    }
 }
 
 impl Held {
@@ -193,12 +234,19 @@ pub fn absolute_pointer() -> Option<[f64; 2]> {
 
 /// What is held, counting what was pressed and let go since the last call, for the one poller.
 pub fn take_held() -> Option<Held> {
-    let reader = READER.get()?;
-    let mut held = reader
+    READER.get().map(take_held_from)
+}
+
+fn take_held_from(reader: &Reader) -> Held {
+    let mut state = reader
         .held
         .lock()
-        .unwrap_or_else(std::sync::PoisonError::into_inner)
-        .clone();
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let events = std::mem::take(&mut state.button_events);
+    let lost = std::mem::take(&mut state.button_events_lost);
+    let mut held = state.clone();
+    held.button_events = events;
+    held.button_events_lost = lost;
     held.keys.extend(
         reader
             .pressed
@@ -206,7 +254,7 @@ pub fn take_held() -> Option<Held> {
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .drain(),
     );
-    Some(held)
+    held
 }
 
 /// What is held, when the devices are being read.
@@ -219,9 +267,52 @@ pub fn held() -> Option<Held> {
     })
 }
 
+fn event_instant(event: &[u8], clock: libc::clockid_t) -> (Instant, &'static str) {
+    let received = Instant::now();
+    let seconds = i64::from_ne_bytes(event[0..8].try_into().unwrap());
+    let micros = i64::from_ne_bytes(event[8..16].try_into().unwrap());
+    let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+    // SAFETY: now is writable for one timespec; clock is a supported evdev clock.
+    if clock != libc::CLOCK_MONOTONIC || unsafe { libc::clock_gettime(clock, &mut now) } != 0 {
+        return (received, "observation");
+    }
+    match event_age(now.tv_sec, now.tv_nsec, seconds, micros)
+        .and_then(|age| received.checked_sub(age))
+    {
+        Some(at) => (at, "evdev_monotonic"),
+        None => (received, "observation"),
+    }
+}
+
+fn event_age(now_seconds: i64, now_nanos: i64, seconds: i64, micros: i64) -> Option<Duration> {
+    if seconds < 0
+        || now_seconds < 0
+        || !(0..1_000_000).contains(&micros)
+        || !(0..1_000_000_000).contains(&now_nanos)
+    {
+        return None;
+    }
+    Duration::new(now_seconds as u64, now_nanos as u32)
+        .checked_sub(Duration::new(seconds as u64, micros as u32 * 1000))
+}
+
 fn read_loop(fds: Vec<OwnedFd>) {
     // struct input_event on 64-bit Linux: timeval (16), type (2), code (2), value (4).
-    const SIZE: usize = 24;
+    // evdev defaults to realtime; request monotonic timestamps to avoid wall-clock
+    // adjustments. Preserve the default clock when an older device rejects it.
+    let clocks: Vec<_> = fds
+        .iter()
+        .map(|fd| {
+            let clock = libc::CLOCK_MONOTONIC;
+            // SAFETY: EVIOCSCLOCKID reads one initialized clockid_t from this pointer.
+            if unsafe { libc::ioctl(fd.as_raw_fd(), 0x400445a0_u64 as libc::c_ulong, &clock) } == 0
+            {
+                clock
+            } else {
+                libc::CLOCK_REALTIME
+            }
+        })
+        .collect();
     let axes: Vec<Option<[(i32, i32); 2]>> = fds.iter().map(absolute_axes).collect();
     let mut polls: Vec<libc::pollfd> = fds
         .iter()
@@ -231,58 +322,164 @@ fn read_loop(fds: Vec<OwnedFd>) {
             revents: 0,
         })
         .collect();
-    let mut buffer = [0_u8; SIZE * 64];
+    let mut pending = ReadBuffers::new(&clocks);
     loop {
         // SAFETY: `polls` outlives the call and its length is passed with it.
-        let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, 1_000) };
+        let timeout = if pending.queues.iter().all(VecDeque::is_empty) {
+            1_000
+        } else {
+            0
+        };
+        let ready = unsafe { libc::poll(polls.as_mut_ptr(), polls.len() as _, timeout) };
         if ready < 0 {
             std::thread::sleep(Duration::from_millis(100));
             continue;
         }
-        for (poll, axes) in polls.iter_mut().zip(&axes) {
-            if poll.revents & libc::POLLIN == 0 {
+        let events = read_ready_events(&mut polls, &axes, &clocks, &mut pending);
+        if let Some(reader) = READER.get() {
+            apply_events(reader, events);
+        }
+    }
+}
+
+struct ReadBuffers {
+    queues: Vec<VecDeque<PendingEvent>>,
+    ordering_known: bool,
+}
+
+impl ReadBuffers {
+    fn new(clocks: &[libc::clockid_t]) -> Self {
+        Self {
+            queues: (0..clocks.len()).map(|_| VecDeque::new()).collect(),
+            ordering_known: clocks.len() == 1,
+        }
+    }
+}
+
+// Keep a bounded lookahead per descriptor. A capped batch retains unread heads
+// for the next pass rather than applying a later keyboard release ahead of an
+// earlier mouse edge still buffered in another descriptor.
+fn read_ready_events(
+    polls: &mut [libc::pollfd],
+    axes: &[Option<[(i32, i32); 2]>],
+    clocks: &[libc::clockid_t],
+    pending: &mut ReadBuffers,
+) -> Vec<PendingEvent> {
+    const SIZE: usize = 24;
+    const MAX_BATCH: usize = 4096;
+    let mut buffer = [0_u8; SIZE * 64];
+    let mut events = Vec::new();
+    while events.len() < MAX_BATCH {
+        for (index, poll) in polls.iter_mut().enumerate() {
+            if !pending.queues[index].is_empty() || poll.revents & libc::POLLIN == 0 {
                 continue;
             }
-            // SAFETY: reads into `buffer`, at most its length.
+            // SAFETY: buffer is writable for its entire passed length.
             let n = unsafe { libc::read(poll.fd, buffer.as_mut_ptr().cast(), buffer.len()) };
             if n <= 0 {
+                poll.revents &= !libc::POLLIN;
                 continue;
             }
             for event in buffer[..n as usize].chunks_exact(SIZE) {
-                let kind = u16::from_ne_bytes([event[16], event[17]]);
-                let code = u16::from_ne_bytes([event[18], event[19]]);
-                let value = i32::from_ne_bytes([event[20], event[21], event[22], event[23]]);
-                let Some(reader) = READER.get() else {
-                    continue;
-                };
-                let mut held = reader
-                    .held
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner);
-                match (kind, axes) {
-                    (EV_KEY, _) if value != 2 => {
-                        if value == 1 {
-                            held.keys.insert(code);
-                            reader
-                                .pressed
-                                .lock()
-                                .unwrap_or_else(std::sync::PoisonError::into_inner)
-                                .insert(code);
-                        } else {
-                            held.keys.remove(&code);
-                        }
+                let (at, time_source) = event_instant(event, clocks[index]);
+                if clocks.len() > 1 && time_source != "evdev_monotonic" {
+                    pending.ordering_known = false;
+                }
+                pending.queues[index].push_back(PendingEvent {
+                    kind: u16::from_ne_bytes(event[16..18].try_into().unwrap()),
+                    code: u16::from_ne_bytes(event[18..20].try_into().unwrap()),
+                    value: i32::from_ne_bytes(event[20..24].try_into().unwrap()),
+                    axes: axes[index],
+                    at,
+                    time_source,
+                    modifiers_known: true,
+                });
+            }
+        }
+        let next = pending
+            .queues
+            .iter()
+            .enumerate()
+            .filter_map(|(index, queue)| queue.front().map(|event| (index, event.at)))
+            .min_by_key(|&(_, at)| at)
+            .map(|(index, _)| index);
+        let Some(index) = next else {
+            break;
+        };
+        let mut event = pending.queues[index].pop_front().unwrap();
+        event.modifiers_known = pending.ordering_known;
+        events.push(event);
+    }
+    events
+}
+
+struct PendingEvent {
+    kind: u16,
+    code: u16,
+    value: i32,
+    axes: Option<[(i32, i32); 2]>,
+    at: Instant,
+    time_source: &'static str,
+    modifiers_known: bool,
+}
+
+fn apply_events(reader: &Reader, events: Vec<PendingEvent>) {
+    // read_ready_events already merges descriptor heads, retaining native order
+    // within each device. Mixed clock snapshots explicitly remain unqualified.
+    let mut held = reader
+        .held
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let mut pressed = reader
+        .pressed
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for event in events {
+        let PendingEvent {
+            kind,
+            code,
+            value,
+            axes,
+            at,
+            time_source,
+            modifiers_known,
+        } = event;
+        match (kind, axes) {
+            (EV_KEY, _) if value == 0 || value == 1 => {
+                if value == 1 {
+                    held.keys.insert(code);
+                    pressed.insert(code);
+                } else {
+                    held.keys.remove(&code);
+                }
+                if matches!(code, code::BTN_LEFT | code::BTN_RIGHT) {
+                    if held.button_events.len() == 512 {
+                        held.button_events.remove(0);
+                        held.button_events_lost = true;
+                        crate::capture::engine::runtime::apparent_log(
+                            "input button queue overflow",
+                        );
                     }
-                    (EV_ABS, Some(ranges)) if code == ABS_X || code == ABS_Y => {
-                        let (min, max) = ranges[usize::from(code)];
-                        let at = f64::from(value - min) / f64::from(max - min);
-                        let mut point = held.absolute.unwrap_or([0.5, 0.5]);
-                        point[usize::from(code)] = at.clamp(0.0, 1.0);
-                        held.absolute = Some(point);
-                    }
-                    (EV_REL, _) if code == REL_X || code == REL_Y => held.absolute = None,
-                    _ => {}
+                    let modifiers = ButtonModifiers::from_held(&held);
+                    held.button_events.push(ButtonEvent {
+                        at,
+                        time_source,
+                        button: code,
+                        pressed: value == 1,
+                        modifiers,
+                        modifiers_known,
+                    });
                 }
             }
+            (EV_ABS, Some(ranges)) if code == ABS_X || code == ABS_Y => {
+                let (min, max) = ranges[usize::from(code)];
+                let at = f64::from(value - min) / f64::from(max - min);
+                let mut point = held.absolute.unwrap_or([0.5, 0.5]);
+                point[usize::from(code)] = at.clamp(0.0, 1.0);
+                held.absolute = Some(point);
+            }
+            (EV_REL, _) if code == REL_X || code == REL_Y => held.absolute = None,
+            _ => {}
         }
     }
 }
@@ -319,6 +516,327 @@ pub fn vk_for_evdev_code(code: u16) -> Option<u16> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn reader() -> Reader {
+        Reader {
+            held: Mutex::new(Held::default()),
+            pressed: Mutex::new(HashSet::new()),
+        }
+    }
+
+    fn key(code: u16, value: i32, at: Duration) -> [u8; 24] {
+        let mut event = [0_u8; 24];
+        event[..8].copy_from_slice(&(at.as_secs() as i64).to_ne_bytes());
+        event[8..16].copy_from_slice(&(at.subsec_micros() as i64).to_ne_bytes());
+        event[16..18].copy_from_slice(&EV_KEY.to_ne_bytes());
+        event[18..20].copy_from_slice(&code.to_ne_bytes());
+        event[20..].copy_from_slice(&value.to_ne_bytes());
+        event
+    }
+
+    fn replay(descriptors: &[Vec<[u8; 24]>], clock: libc::clockid_t) -> Vec<PendingEvent> {
+        replay_batches(descriptors, &vec![clock; descriptors.len()])
+            .into_iter()
+            .flatten()
+            .collect()
+    }
+
+    fn replay_batches(
+        descriptors: &[Vec<[u8; 24]>],
+        clocks: &[libc::clockid_t],
+    ) -> Vec<Vec<PendingEvent>> {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        let pairs: Vec<_> = descriptors
+            .iter()
+            .map(|events| {
+                let (read, mut write) = UnixStream::pair().unwrap();
+                read.set_nonblocking(true).unwrap();
+                let bytes: Vec<_> = events.iter().flatten().copied().collect();
+                write.write_all(&bytes).unwrap();
+                (read, write)
+            })
+            .collect();
+        let mut polls: Vec<_> = pairs
+            .iter()
+            .map(|(read, _)| libc::pollfd {
+                fd: read.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: libc::POLLIN,
+            })
+            .collect();
+        let mut pending = ReadBuffers::new(clocks);
+        let mut batches = Vec::new();
+        loop {
+            let batch =
+                read_ready_events(&mut polls, &vec![None; pairs.len()], clocks, &mut pending);
+            if batch.is_empty() {
+                break;
+            }
+            batches.push(batch);
+        }
+        batches
+    }
+
+    #[test]
+    fn delayed_poll_retains_both_button_edges() {
+        let reader = reader();
+        let event = |code, value| key(code, value, Duration::ZERO);
+        apply_events(
+            &reader,
+            replay(&[vec![event(code::KEY_LEFTSHIFT, 1)]], libc::CLOCK_REALTIME),
+        );
+        assert!(take_held_from(&reader).shift());
+        // The physical sequence completes while the consumer is busy.
+        apply_events(
+            &reader,
+            replay(
+                &[vec![
+                    event(code::BTN_LEFT, 1),
+                    event(code::BTN_LEFT, 0),
+                    event(code::KEY_LEFTSHIFT, 0),
+                ]],
+                libc::CLOCK_REALTIME,
+            ),
+        );
+        let snapshot = take_held_from(&reader);
+        assert!(
+            !snapshot.shift(),
+            "current state correctly sees Shift released"
+        );
+        assert_eq!(
+            snapshot.button_events.len(),
+            2,
+            "both historical edges must survive the delayed poll"
+        );
+        assert!(
+            snapshot
+                .button_events
+                .iter()
+                .all(|event| event.modifiers.shift)
+        );
+        assert!(snapshot.button_events[0].pressed);
+        assert!(!snapshot.button_events[1].pressed);
+        assert!(take_held_from(&reader).button_events.is_empty());
+    }
+
+    #[test]
+    fn cross_device_batch_uses_event_time_before_descriptor_order() {
+        let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+        // SAFETY: now is writable for one timespec.
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) },
+            0
+        );
+        let base = Duration::new(now.tv_sec as u64, now.tv_nsec as u32) - Duration::from_secs(2);
+        for shift in [code::KEY_LEFTSHIFT, code::KEY_RIGHTSHIFT] {
+            let reader = reader();
+            let event = |code, value, ms| key(code, value, base + Duration::from_millis(ms));
+            // Keyboard descriptor is first, but its release happened after the mouse click.
+            let descriptors = vec![
+                vec![event(shift, 1, 0), event(shift, 0, 887)],
+                vec![event(code::BTN_LEFT, 1, 619), event(code::BTN_LEFT, 0, 755)],
+            ];
+            apply_events(&reader, replay(&descriptors, libc::CLOCK_MONOTONIC));
+            assert!(!reader.held.lock().unwrap().shift());
+            let snapshot = take_held_from(&reader);
+            assert_eq!(snapshot.button_events.len(), 2);
+            assert!(
+                snapshot
+                    .button_events
+                    .iter()
+                    .all(|event| event.modifiers.shift && event.time_source == "evdev_monotonic")
+            );
+            assert!(snapshot.button_events[0].at < snapshot.button_events[1].at);
+            assert!(snapshot.button_events[0].at.elapsed() > Duration::from_secs(1));
+        }
+    }
+
+    fn monotonic_base() -> Duration {
+        let mut now: libc::timespec = unsafe { std::mem::zeroed() };
+        // SAFETY: now is writable for one timespec.
+        assert_eq!(
+            unsafe { libc::clock_gettime(libc::CLOCK_MONOTONIC, &mut now) },
+            0
+        );
+        Duration::new(now.tv_sec as u64, now.tv_nsec as u32) - Duration::from_secs(2)
+    }
+
+    #[test]
+    fn capped_read_keeps_cross_device_lookahead_without_losing_or_reordering_edges() {
+        let base = monotonic_base();
+        let event = |code, value, ms| key(code, value, base + Duration::from_millis(ms));
+        let mut keyboard = vec![event(code::KEY_LEFTSHIFT, 1, 0)];
+        keyboard.extend((0..4100).map(|_| event(code::KEY_LEFTSHIFT, 2, 600)));
+        keyboard.push(event(code::KEY_LEFTSHIFT, 0, 887));
+        let mouse = vec![event(code::BTN_LEFT, 1, 619), event(code::BTN_LEFT, 0, 755)];
+        let batches = replay_batches(&[keyboard, mouse], &[libc::CLOCK_MONOTONIC; 2]);
+        assert_eq!(batches.iter().map(Vec::len).sum::<usize>(), 4104);
+        assert_eq!(batches[0].len(), 4096);
+        assert!(batches.iter().all(|batch| batch.len() <= 4096));
+        let reader = reader();
+        for batch in batches {
+            apply_events(&reader, batch);
+        }
+        let snapshot = take_held_from(&reader);
+        assert!(!snapshot.button_events_lost);
+        assert_eq!(snapshot.button_events.len(), 2);
+        assert!(
+            snapshot
+                .button_events
+                .iter()
+                .all(|event| event.modifiers.shift && !event.modifiers_known)
+        );
+        assert!(!reader.held.lock().unwrap().shift());
+    }
+
+    #[test]
+    fn exact_batch_boundary_does_not_report_a_loss() {
+        let events = vec![key(code::KEY_LEFTSHIFT, 2, Duration::ZERO); 4096];
+        let batches = replay_batches(&[events], &[libc::CLOCK_REALTIME]);
+        assert_eq!(batches.len(), 1);
+        assert_eq!(batches[0].len(), 4096);
+        let reader = reader();
+        for batch in batches {
+            apply_events(&reader, batch);
+        }
+        assert!(!take_held_from(&reader).button_events_lost);
+    }
+
+    #[test]
+    fn late_modifier_readiness_never_qualifies_an_earlier_button_snapshot() {
+        use std::io::Write;
+        use std::os::unix::net::UnixStream;
+        let (keyboard, mut keyboard_writer) = UnixStream::pair().unwrap();
+        let (mouse, mut mouse_writer) = UnixStream::pair().unwrap();
+        keyboard.set_nonblocking(true).unwrap();
+        mouse.set_nonblocking(true).unwrap();
+        let base = monotonic_base();
+        let event = |code, value, ms| key(code, value, base + Duration::from_millis(ms));
+        let mut polls = [&keyboard, &mouse]
+            .iter()
+            .map(|read| libc::pollfd {
+                fd: read.as_raw_fd(),
+                events: libc::POLLIN,
+                revents: libc::POLLIN,
+            })
+            .collect::<Vec<_>>();
+        // Keep both streams alive while their readiness is independently delayed.
+        let _streams = [keyboard, mouse];
+        let clocks = [libc::CLOCK_MONOTONIC; 2];
+        let mut pending = ReadBuffers::new(&clocks);
+        mouse_writer
+            .write_all(&event(code::BTN_LEFT, 1, 619))
+            .unwrap();
+        let reader = reader();
+        apply_events(
+            &reader,
+            read_ready_events(&mut polls, &[None; 2], &clocks, &mut pending),
+        );
+        let first = take_held_from(&reader);
+        assert_eq!(first.button_events.len(), 1);
+        assert!(!first.button_events[0].modifiers_known);
+        assert!(!first.button_events[0].modifiers.shift);
+        // The earlier kernel timestamp does not make this event readable sooner.
+        keyboard_writer
+            .write_all(&event(code::KEY_LEFTSHIFT, 1, 0))
+            .unwrap();
+        mouse_writer
+            .write_all(&event(code::BTN_LEFT, 0, 755))
+            .unwrap();
+        polls
+            .iter_mut()
+            .for_each(|poll| poll.revents = libc::POLLIN);
+        apply_events(
+            &reader,
+            read_ready_events(&mut polls, &[None; 2], &clocks, &mut pending),
+        );
+        let later = take_held_from(&reader);
+        assert_eq!(later.button_events.len(), 1);
+        assert!(later.button_events[0].modifiers.shift);
+        assert!(!later.button_events[0].modifiers_known);
+    }
+
+    #[test]
+    fn mixed_device_clocks_do_not_qualify_modifier_order() {
+        let base = monotonic_base();
+        let event = |code, value, ms| key(code, value, base + Duration::from_millis(ms));
+        let descriptors = vec![
+            vec![
+                event(code::KEY_LEFTSHIFT, 1, 0),
+                event(code::KEY_LEFTSHIFT, 0, 887),
+            ],
+            vec![event(code::BTN_LEFT, 1, 619), event(code::BTN_LEFT, 0, 755)],
+        ];
+        let reader = reader();
+        for batch in replay_batches(&descriptors, &[libc::CLOCK_MONOTONIC, libc::CLOCK_REALTIME]) {
+            apply_events(&reader, batch);
+        }
+        let snapshot = take_held_from(&reader);
+        assert_eq!(snapshot.button_events.len(), 2);
+        assert!(
+            snapshot
+                .button_events
+                .iter()
+                .all(|event| !event.modifiers_known && event.time_source == "observation")
+        );
+    }
+
+    #[test]
+    fn queue_overflow_is_bounded_and_reported_once() {
+        let reader = reader();
+        let now = Instant::now();
+        apply_events(
+            &reader,
+            (0..514)
+                .map(|i| PendingEvent {
+                    kind: EV_KEY,
+                    code: code::BTN_LEFT,
+                    value: i % 2,
+                    axes: None,
+                    at: now,
+                    time_source: "observation",
+                    modifiers_known: true,
+                })
+                .collect(),
+        );
+        let snapshot = take_held_from(&reader);
+        assert_eq!(snapshot.button_events.len(), 512);
+        assert!(snapshot.button_events_lost);
+        assert!(!take_held_from(&reader).button_events_lost);
+    }
+
+    #[test]
+    fn invalid_or_unavailable_event_clock_is_explicit_observation_time() {
+        let mut event = [0; 24];
+        event[..8].copy_from_slice(&i64::MAX.to_ne_bytes());
+        let (at, source) = event_instant(&event, libc::CLOCK_MONOTONIC);
+        assert_eq!(source, "observation");
+        assert!(at.elapsed() < Duration::from_secs(1));
+        event[..8].copy_from_slice(&0_i64.to_ne_bytes());
+        event[8..16].copy_from_slice(&1_000_000_i64.to_ne_bytes());
+        assert_eq!(
+            event_instant(&event, libc::CLOCK_MONOTONIC).1,
+            "observation"
+        );
+        assert_eq!(event_instant(&event, libc::CLOCK_REALTIME).1, "observation");
+        assert_eq!(event_instant(&event, -1).1, "observation");
+    }
+
+    #[test]
+    fn event_clock_conversion_retains_age_and_rejects_invalid_time() {
+        assert_eq!(
+            event_age(100, 500_000_000, 100, 250_000),
+            Some(Duration::from_millis(250))
+        );
+        assert_eq!(
+            event_age(100, 0, 99, 900_000),
+            Some(Duration::from_millis(100))
+        );
+        assert_eq!(event_age(100, 0, 101, 0), None);
+        assert_eq!(event_age(100, 0, 100, 1_000_000), None);
+        assert_eq!(event_age(100, 0, -1, 0), None);
+    }
 
     #[test]
     fn evdev_codes_map_to_virtual_keys() {
