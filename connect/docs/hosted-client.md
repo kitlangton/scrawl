@@ -102,8 +102,7 @@ cargo test --manifest-path connect/client/Cargo.toml --locked --offline -- --tes
 The root dev-dependency alone enables `test-support`: shared synthetic scenarios
 run again with the real application provider and locked writers. Root retains
 config races, exact subprocess/CLI alias and logging assertions, and the real UI
-late-login helper. The feature is absent from normal application builds. Package
-experiment constants are included in feature-map discovery. Package checks do
+late-login helper. The feature is absent from normal application builds. Package checks do
 not substitute for root adoption compilation or native/platform proof.
 
 ## Opt in on the recording computer

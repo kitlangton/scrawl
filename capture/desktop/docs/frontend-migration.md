@@ -69,4 +69,4 @@ When a task touches picker, whiteboard or annotation, include the affected coher
 
 For each slice list exact changed files, focused test commands and actual results after source discovery. Use the repository verification selector and existing Clanker build-runner rules for affected Rust builds/tests; rebuild before running the debug app. Run browser type/build/interaction checks for changed web packages, and both-platform native checks for changed desktop behaviour.
 
-Update `public/site/src/features.json` when visible capability/status changes. Verify the exact diff; preserve unrelated work. Commit, PR publication, merge and release require the applicable explicit authorization. This document has no executed native/performance acceptance evidence.
+Update the relevant owner documentation when visible capability/status changes. Verify the exact diff; preserve unrelated work. Commit, PR publication, merge and release require the applicable explicit authorization. This document has no executed native/performance acceptance evidence.

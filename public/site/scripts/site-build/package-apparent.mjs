@@ -1,6 +1,6 @@
 // Publish only the Apparent landing page and the assets it actually uses.
 // Never copy dist wholesale: it also contains Apparent's update feed, release
-// files, agent instructions, and the unlinked feature map.
+// files and agent instructions. Retired private routes remain explicitly denied.
 import { cpSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs"
 import { dirname, join, resolve, sep } from "node:path"
 import { fileURLToPath } from "node:url"

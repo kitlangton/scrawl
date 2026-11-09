@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import {readFileSync, readdirSync, mkdtempSync, rmSync, mkdirSync, writeFileSync, symlinkSync, unlinkSync} from 'node:fs';
 import {execFileSync} from 'node:child_process';
 import {YAML} from 'bun';
-import {select, changedPaths, requiresMac} from './select.ts';
+import {select, changedPaths, requiresMac, documentationOnlyPath, needsPlatform} from './select.ts';
 
 const root = new URL('../../', import.meta.url);
 const workflow = (name: string) => YAML.parse(readFileSync(new URL(`.github/workflows/${name}`, root), 'utf8')) as any;
@@ -38,23 +38,30 @@ test('main preserves active checks while PR updates supersede them', () => {
     for (const [event, expected] of [['push', false], ['pull_request', true], ['workflow_dispatch', false]]) {
       assert.equal(Function('github', `return (${expression});`)({event_name: event}), expected, `${filename}: ${event}`);
     }
-    // GitHub's default single pending slot replaces older pending runs.
     assert.equal(concurrency.queue, undefined);
-    assert.match(concurrency.group, /github.ref/);
+    assert.match(concurrency.group, filename === 'checks.yml' ? /github.sha/ : /github.ref/);
+    const group = (sha: string, pr?: number) => concurrency.group.replace(/\$\{\{(.+?)\}\}/g,
+      (_: string, expression: string) => Function('github', 'return (' + expression + ');')({
+        event_name: pr ? 'pull_request' : 'push', sha, ref: 'refs/heads/main',
+        event: {pull_request: {number: pr}},
+      }));
+    if (filename === 'checks.yml') assert.notEqual(group('code-sha'), group('docs-sha'));
+    else assert.equal(group('code-sha'), group('docs-sha'));
+    assert.equal(group('code-sha', 7), group('docs-sha', 7));
   }
 });
 
-test('platform admission keeps main full and exempts only selected ready PRs from Mac', () => {
+test('platform admission composes documentation and portable Settings selection', () => {
   const ci = workflow('checks.yml');
   const platform = workflow('verification-platform.yml');
   // Evaluate the workflow's actual boolean admission expressions against event
   // fixtures. These expressions use the common GitHub/JavaScript boolean subset.
   const admitted = (expression: string, event: string, draft: boolean, ref: string,
-    receipt = false, macos = 'true') => Function('github', 'inputs', 'needs', 'cancelled', `return (${expression});`)(
+    receipt = false, macos = 'true', platform = 'true') => Function('github', 'inputs', 'needs', 'cancelled', `return (${expression});`)(
       {event_name: event, ref, repository: 'tryapparent/apparent',
         event: {pull_request: {draft}}}, {'release_receipt': receipt},
       {contracts: {result: 'success'}, hermes: {result: 'success'},
-        select: {result: 'success', outputs: {macos}}}, () => false);
+        select: {result: 'success', outputs: {macos, platform}}}, () => false);
   for (const [name, runner] of [['linux', 'ubuntu-24.04'], ['macos', 'macos-15-intel']]) {
     const job = ci.jobs[name];
     assert.equal(job.uses, './.github/workflows/verification-platform.yml');
@@ -69,8 +76,10 @@ test('platform admission keeps main full and exempts only selected ready PRs fro
     ] as const) {
       assert.equal(admitted(job.if, event, draft, ref), expected);
       for (const selection of ['false', 'true', '']) {
-        assert.equal(admitted(job.if, event, draft, ref, false, selection),
-          expected && !(name === 'macos' && event === 'pull_request' && selection === 'false'));
+        for (const platform of ['false', 'true', '']) {
+          assert.equal(admitted(job.if, event, draft, ref, false, selection, platform),
+            expected && platform !== 'false' && !(name === 'macos' && event === 'pull_request' && selection === 'false'));
+        }
       }
       if (expected) for (const child of ['rust', 'desktop-ui']) {
         assert.equal(admitted(platform.jobs[child].if, event, draft, ref), true, child);
@@ -83,6 +92,7 @@ test('platform admission keeps main full and exempts only selected ready PRs fro
   assert.deepEqual(ci.jobs.macos.needs, ['contracts', 'hermes', 'select']);
   assert.deepEqual(ci.jobs.linux.needs, ['contracts', 'hermes', 'select']);
   assert.equal(ci.jobs.select.outputs.macos, '${{ steps.paths.outputs.macos }}');
+  assert.equal(ci.jobs.select.outputs.platform, '${{ steps.paths.outputs.platform }}');
   assert.equal(platform.on.workflow_call.inputs['release_receipt'].default, true);
   assert.equal(admitted(platform.jobs['release-ready'].if, 'workflow_dispatch', false, 'refs/heads/main', true), true);
   assert.equal(admitted(platform.jobs['release-ready'].if, 'pull_request', false, 'refs/pull/7/merge', true), false);
@@ -141,17 +151,20 @@ test('full platforms and Mac inspection share cheap prerequisites without depend
       for (const hermes of ['success', 'failure', 'cancelled', 'skipped', 'unknown', undefined]) {
         for (const select of ['success', 'failure', 'cancelled', 'skipped', 'unknown', undefined]) {
           for (const selected of ['true', 'false', 'unknown', undefined]) {
-            const needs = {contracts: {result: contracts}, hermes: {result: hermes},
-              select: {result: select, outputs: selected === undefined ? {} : {macos: selected}},
-              linux: {result: 'failure'}, macos: {result: 'failure'}};
-            const guardsPass = contracts === 'success' && hermes === 'success';
-            for (const [event, draft, allowed] of [['pull_request', false, true], ['push', false, true],
-              ['pull_request', true, false], ['workflow_run', false, false], ['workflow_dispatch', false, false]] as const) {
-              const exempt = name === 'macos' && event === 'pull_request' && select === 'success' && selected === 'false';
-              assert.equal(admitted(needs, event, draft), guardsPass && allowed && !exempt,
-                `${name}: ${event}, draft=${draft}, guards=${contracts}/${hermes}, selector=${select}, selected=${selected}`);
+            for (const platform of ['true', 'false', 'unknown', undefined]) {
+              const needs = {contracts: {result: contracts}, hermes: {result: hermes},
+                select: {result: select, outputs: {...(selected === undefined ? {} : {macos: selected}), ...(platform === undefined ? {} : {platform})}},
+                linux: {result: 'failure'}, macos: {result: 'failure'}};
+              const guardsPass = contracts === 'success' && hermes === 'success';
+              const docsExempt = select === 'success' && platform === 'false';
+              for (const [event, draft, allowed] of [['pull_request', false, true], ['push', false, true],
+                ['pull_request', true, false], ['workflow_run', false, false], ['workflow_dispatch', false, false]] as const) {
+                const exempt = name === 'macos' && event === 'pull_request' && select === 'success' && selected === 'false';
+                assert.equal(admitted(needs, event, draft), guardsPass && allowed && !exempt && !docsExempt,
+                  `${name}: ${event}, draft=${draft}, guards=${contracts}/${hermes}, selector=${select}, selected=${selected}, platform=${platform}`);
+              }
+              assert.equal(admitted(needs, 'pull_request', false, true), false, `${name}: workflow cancellation`);
             }
-            assert.equal(admitted(needs, 'pull_request', false, true), false, `${name}: workflow cancellation`);
           }
         }
       }
@@ -212,7 +225,17 @@ test('unknown history runs all checks and git deltas include deleted and renamed
     const beforeEdit = git('rev-parse', 'HEAD');
     writeFileSync(card, 'after');
     git('add', card); git('commit', '-qm', 'edit card');
-    assert.deepEqual(runSelector(beforeEdit), {public: 'false', updater: 'false', macos: 'false'});
+    assert.deepEqual(runSelector(beforeEdit), {public: 'false', updater: 'false', macos: 'false', platform: 'true'});
+    const mixedDoc = 'capture/engine/docs/mixed.md';
+    mkdirSync('capture/engine/docs', {recursive: true});
+    writeFileSync(mixedDoc, 'before');
+    git('add', mixedDoc); git('commit', '-qm', 'mixed fixture baseline');
+    const beforeMixed = git('rev-parse', 'HEAD');
+    writeFileSync(card, 'another renderer edit');
+    writeFileSync(mixedDoc, 'after');
+    git('add', card, mixedDoc); git('commit', '-qm', 'mixed renderer and docs');
+    assert.deepEqual(runSelector(beforeMixed), {public: 'false', updater: 'false', macos: 'true', platform: 'true'},
+      'filtering prose for Public must not broaden the exact Mac exemption');
     const beforeType = git('rev-parse', 'HEAD');
     unlinkSync(card); symlinkSync('retention.tsx', card);
     git('add', card); git('commit', '-qm', 'change card type');
@@ -220,6 +243,12 @@ test('unknown history runs all checks and git deltas include deleted and renamed
     const beforeDelete = git('rev-parse', 'HEAD');
     git('rm', card); git('commit', '-qm', 'remove card');
     assert.equal(runSelector(beforeDelete).macos, 'true');
+    const beforeDocs = git('rev-parse', 'HEAD');
+    mkdirSync('capture/engine/docs', {recursive: true});
+    writeFileSync('capture/engine/docs/guide.md', 'ordinary documentation');
+    git('add', 'capture/engine/docs/guide.md'); git('commit', '-qm', 'docs');
+    assert.deepEqual(runSelector(beforeDocs), {public: 'false', updater: 'false', macos: 'true', platform: 'false'});
+    assert.deepEqual(runSelector('a'.repeat(40)), {public: 'true', updater: 'true', macos: 'true', platform: 'true'});
 
   } finally {
     process.chdir(previous);
@@ -248,4 +277,24 @@ test('Mac exemption is exact, nonempty, modification-only and fails closed', () 
   assert.equal(requiresMac(null), true);
   assert.equal(requiresMac([]), true);
   assert.equal(requiresMac(allowed, null), true);
+});
+
+test('ordinary prose skips heavy CI; instructions, shipped text and unknown inputs retain coverage', () => {
+  for (const path of ['capture/desktop/docs/linux/linux.md', 'enablement/docs/continuous-delivery.md',
+    'public/site/docs/feature-grid.md', 'capture/engine/README.md', 'enablement/refactor.md']) {
+    assert.equal(documentationOnlyPath(path), true, path);
+    assert.equal(needsPlatform([path]), false, path);
+    assert.deepEqual(select([path]), {public: false, updater: false}, path);
+  }
+  for (const path of ['AGENTS.md', 'capture/AGENTS.md', 'README.md', 'capture/agent/skills/apparent/SKILL.md',
+    'hermes/skills/recordings/SKILL.md', 'capture/agent/instructions/context.md',
+    'public/site/src/copy.md', 'capture/engine/tests/fixtures/summary.md', 'unknown.md',
+    'public/site/src/docs/copy.md', 'public/site/public/assets/docs/help.md',
+    'unknown/docs/input.md', 'unknown/README.md', 'public/site/src/README.md']) {
+    assert.equal(needsPlatform([path]), true, path);
+  }
+  assert.equal(needsPlatform(null), true);
+  assert.equal(needsPlatform([]), true);
+  assert.equal(needsPlatform(['capture/engine/docs/capture.md', 'capture/engine/runtime/mod.rs']), true);
+  assert.equal(select(['public/site/docs/guide.md', 'public/site/src/main.tsx']).public, true);
 });

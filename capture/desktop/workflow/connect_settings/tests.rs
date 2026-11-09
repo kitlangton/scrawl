@@ -24,8 +24,9 @@ impl Backend for Fake {
     }
     fn health(&self, _: Allowed) -> Health { panic!("local reads must not probe") }
     fn disable(&self, _: bool) -> Result<(), SafeError> {
-        self.disables.fetch_add(1, Ordering::SeqCst);
         self.state.lock().unwrap().uploads_enabled = false;
+        // Waiters use this counter as completion, after revocation is visible.
+        self.disables.fetch_add(1, Ordering::SeqCst);
         Ok(())
     }
 }

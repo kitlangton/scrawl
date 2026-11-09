@@ -35,8 +35,10 @@ web inputs change. The updater harness runs as a reusable job on main pushes
 when its inputs change. Changes to the CI orchestrator select both consumers;
 unavailable diff history selects both rather than skipping checks. Git diffs
 include deleted and renamed source paths. There are no PR-edit or verification
-lifecycle triggers. Superseded PR/main runs coalesce within their own event/ref.
+lifecycle triggers. Superseded PR runs coalesce within their PR; main pushes use distinct commit groups so a docs-only push cannot cancel or replace pending verification for an earlier code change.
 Neither reusable consumer publishes on an automatic run.
+
+Ordinary documentation-only deltas retain cheap contracts but skip Linux/Mac platform suites and Mac Hermes inspection. The selector exempts Markdown in owner `docs/` directories, package READMEs/changelogs and the named repository reference docs. `AGENTS.md`, `SKILL.md`, other agent instructions, skill/prompt/instruction directories, test/fixture/template Markdown, the root README consumed by the ordinary site build, and unclassified Markdown remain verification inputs. Mixed changes, missing history and empty deltas retain full platform coverage. Public/updater selectors ignore only these ordinary prose paths; non-document inputs retain their previous coverage. PR selection uses the complete base-to-merge delta, including deletions and both rename sides. Manual platform workflows still verify the full tree.
 
 Every non-deletion push runs cheap contracts plus the affected owners' local
 suites, selected by `enablement/local-tests/run.ts` over the full merge-base delta.
@@ -74,8 +76,8 @@ separate; it does not control the enforced hook selection.
 
 The same workflow also calls the full Linux and Mac platform suites on main
 pushes and on non-draft PRs (opened, reopened, updated or marked ready for review).
-Main pushes preserve the active run and keep only the newest pending run in the
-same concurrency group, including Public checks. PR updates still cancel their
+Public main checks preserve the active run and keep only the newest pending run
+for that ref. The root workflow uses distinct commit groups as described above. PR updates still cancel their
 superseded active run. Manual publication retains its separate noncancelling lock.
 Full Linux and Mac verification and Mac Hermes inspection share the cheap
 contracts, Linux Hermes inspection and selector prerequisites. Once those finish,
