@@ -86,6 +86,14 @@ Plasma 5 can report successful GlobalShortcuts binding with an empty result. App
 
 ### Hyprland
 
+The sharing chooser can offer Windows even for a screen request. Apparent checks
+the returned source type before opening the stream: a reported Window source
+cannot become a Screen or Area recording. It closes that session, clears its
+restore choice and reports an error; choose the display under **Outputs** on
+the next attempt. A display source follows the selected output across workspace
+switches. Older portals that omit source-type metadata retain their existing
+behavior; their scope cannot be checked by this guard.
+
 Tried on Omarchy 4 (Hyprland 0.56, Lua config), Wayland. `linux::hyprland` binds the shortcuts at runtime with `hyprctl eval hl.bind(…)` (a hyprlang config takes `keyword bindd` instead, untested), each running `apparent shortcut record|paste`. Hyprland consumes the chord, so it doesn't also reach the app in front, and nothing needs the `input` group. The binds are described `Apparent: record` and `Apparent: paste`. A chord some other bind holds is left alone and reported as taken; a bind with Apparent's description (a permanent one in the user's config, which a config reload doesn't drop) is left in place:
 
 ```lua

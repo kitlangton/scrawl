@@ -185,6 +185,18 @@ mod display_tests {
     use super::*;
 
     #[test]
+    fn portal_source_must_match_the_requested_capture_scope() {
+        use ashpd::desktop::screencast::SourceType;
+        assert!(validate_source_type(false, Some(SourceType::Monitor)).is_ok());
+        assert!(validate_source_type(false, Some(SourceType::Window)).is_err());
+        assert!(validate_source_type(true, Some(SourceType::Monitor)).is_err());
+        assert!(validate_source_type(true, Some(SourceType::Window)).is_ok());
+        assert!(validate_source_type(false, Some(SourceType::Virtual)).is_err());
+        // Older portals omit this optional property; keep their existing path.
+        assert!(validate_source_type(false, None).is_ok());
+    }
+
+    #[test]
     fn restore_tokens_are_scoped_to_the_selected_output() {
         assert_eq!(screencast_key(Some("Virtual-1"), 2), "screencast:Virtual-1");
         assert_eq!(screencast_key(Some("HEADLESS-1"), 2), "screencast:HEADLESS-1");
@@ -383,6 +395,19 @@ fn save_token(key: &str, token: Option<&str>) {
     let _ = std::fs::write(&path, value.to_string());
 }
 
+/// Check returned scope before opening PipeWire or retaining the restore token.
+fn validate_source_type(window: bool, actual: Option<ashpd::desktop::screencast::SourceType>) -> Result<()> {
+    use ashpd::desktop::screencast::SourceType;
+    let expected = if window { SourceType::Window } else { SourceType::Monitor };
+    // SelectSources is a request, not proof of the compositor's actual selection.
+    // In particular, the Hyprland chooser can still offer a window for Monitor.
+    if let Some(actual) = actual {
+        anyhow::ensure!(actual == expected,
+            "The sharing portal selected {actual:?}, not {expected:?}. Choose the screen under Outputs in the sharing dialog and try again.");
+    }
+    Ok(())
+}
+
 /// A display (or a window, `window`) through the ScreenCast portal. The first time, the
 /// desktop asks which; the answer is remembered (a restore token), so later recordings start
 /// without asking.
@@ -425,6 +450,7 @@ fn portal_screencast(window: bool, key: &str, stopping: &AtomicBool) -> Result<(
                         let streams = proxy.start(&session, None).await?.response()?;
                         let token = streams.restore_token().map(str::to_owned);
                         let stream = streams.streams().first().context("Nothing was shared")?;
+                        validate_source_type(window, stream.source_type())?;
                         let rect = match (stream.position(), stream.size()) {
                             (Some((x, y)), Some((w, h))) => {
                                 Some([f64::from(x), f64::from(y), f64::from(w), f64::from(h)])
