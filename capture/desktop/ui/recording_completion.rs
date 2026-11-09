@@ -19,7 +19,7 @@ pub(in crate::capture::desktop) fn finalize(
     events: Vec<InteractionEvent>,
     strokes: Vec<Stroke>,
     final_whiteboard: whiteboard::Board,
-    notes_finished: Option<flume::Receiver<Result<(), String>>>,
+    notes_finished: Option<flume::Receiver<crate::capture::desktop::workflow::notes::FinishResult>>,
 ) -> (CaptureResult, u64) {
     let (screen_session, audio_recorder, window_log) = match source {
         CaptureSource::Screen {
@@ -82,7 +82,12 @@ pub(in crate::capture::desktop) fn finalize(
             if let Err(error) = receipt
                 .recv_timeout(std::time::Duration::from_secs(12))
                 .map_err(|_| "Notes finish receipt unavailable".to_owned())
-                .and_then(|r| r)
+                .and_then(|r| r.map(|outcome| match outcome {
+                    crate::capture::desktop::workflow::notes::FinishOutcome::Drained => {},
+                    crate::capture::desktop::workflow::notes::FinishOutcome::UnavailableBeforeAdmission => {
+                        apparent_log("Typed notes unavailable before admission; finalizing screen capture without notes");
+                    }
+                }))
             {
                 crate::capture::engine::bundle::recover::write(
                     &bundle_dir,

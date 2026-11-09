@@ -91,9 +91,17 @@ jobs:
       - run: npm ci --no-audit --no-fund
       - name: Prepare Electron before timed renderer tests
         run: node node_modules/electron/install.js
-      - name: Linux Electron dependencies
+      - name: Linux Electron dependencies and sandbox
         if: runner.os == 'Linux'
-        run: npx --no-install playwright install-deps chromium
+        run: |
+          npx --no-install playwright install-deps chromium
+          # The controls smoke keeps Chromium's sandbox enabled. Configure the
+          # locked Electron helper on this disposable runner, not user desktops.
+          test -f node_modules/electron/dist/chrome-sandbox
+          test ! -L node_modules/electron/dist/chrome-sandbox
+          sudo chown root:root node_modules/electron/dist/chrome-sandbox
+          sudo chmod 4755 node_modules/electron/dist/chrome-sandbox
+          test "$(stat -c '%u:%g:%a' node_modules/electron/dist/chrome-sandbox)" = 0:0:4755
       - run: npm test
       - name: Electron bridge and renderer smoke (synthetic socket, not native acceptance)
         shell: bash

@@ -529,6 +529,8 @@ fn island_content_width(
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum MenuAction {
+    #[cfg(target_os = "linux")]
+    Controls(Box<MenuAction>),
     ToggleCapture,
     ToggleMicrophone,
     ChooseTarget,
@@ -538,6 +540,15 @@ enum MenuAction {
     Settings,
     CheckForUpdates,
     Quit,
+}
+
+#[cfg(target_os = "linux")]
+fn admit_controls_action(action: MenuAction, busy: bool) -> Option<MenuAction> {
+    match action {
+        MenuAction::Controls(action) if !busy => Some(*action),
+        MenuAction::Controls(_) => None,
+        action => Some(action),
+    }
 }
 
 /// Text beside the menu bar icon while a video export runs (`None` goes back to the inbox count).
@@ -6896,11 +6907,13 @@ pub fn run_app(
                     }
                     loop_coord.read(cx).publish_capture_busy();
                     platform::poll_status_bar();
+                    #[cfg(target_os = "linux")]
+                    platform::poll_controls(loop_coord.read(cx).is_recording() || loop_coord.read(cx).is_processing() || loop_coord.read(cx).is_selecting(), !onboarding_initialized || loop_coord.read(cx).onboarding.is_some(), loop_coord.read(cx).settings.is_some(), cx);
                     crate::capture::desktop::settings::onboarding_window::poll(cx);
                     crate::capture::desktop::settings::settings_window::poll(cx);
                     #[cfg(any(target_os = "macos", target_os = "linux"))]
                     if crate::capture::desktop::workflow::launch_instance::take_open(onboarding_initialized) {
-                        loop_coord.update(cx, |coord, _| {
+                        loop_coord.update(cx, |coord, cx| {
                             if !crate::capture::desktop::workflow::launch_url::can_present(
                                 coord.is_recording(),
                                 coord.is_processing(),
@@ -6910,6 +6923,11 @@ pub fn run_app(
                             } else if let Some(session) = coord.onboarding.as_mut() {
                                 session.show();
                             } else {
+                                #[cfg(target_os = "linux")]
+                                if platform::controls_needed() {
+                                    platform::show_controls(cx);
+                                    return;
+                                }
                                 coord.open_settings(None);
                             }
                         });
@@ -6922,7 +6940,13 @@ pub fn run_app(
                     }
                     if let Some(ref rx) = menu_rx {
                         while let Ok(action) = rx.try_recv() {
+                            #[cfg(target_os = "linux")]
+                            let Some(action) = admit_controls_action(action,
+                                loop_coord.read(cx).is_recording() || loop_coord.read(cx).is_processing() ||
+                                loop_coord.read(cx).is_selecting() || loop_coord.read(cx).onboarding.is_some()) else { continue; };
                             match action {
+                                #[cfg(target_os = "linux")]
+                                MenuAction::Controls(_) => {},
                                 MenuAction::ToggleMicrophone => {
                                     let enabled = !crate::capture::engine::runtime::audio::mic::enabled();
                                     if let Err(error) = crate::shared::handoff::set_config_value_in(&crate::shared::handoff::default_config_path(), "microphoneEnabled", serde_json::json!(enabled)) {

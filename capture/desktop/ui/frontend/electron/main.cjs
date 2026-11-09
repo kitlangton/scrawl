@@ -1,4 +1,79 @@
-if(process.argv.includes('--onboarding')) { require('./onboarding.cjs'); } else {
+// Presentation only: the owning Rust process admits every command.
+function startControls() {
+  const {app, BrowserWindow, ipcMain, Menu, session, nativeTheme} = require('electron');
+  const path = require('node:path');
+  const {pathToFileURL} = require('node:url');
+  const readline = require('node:readline');
+  const followWindowTheme = require('@apparent/ui/window-theme');
+  app.setName('Apparent');
+  app.setPath('userData', path.join(app.getPath('appData'), 'apparent-controls'));
+  nativeTheme.themeSource = 'system';
+  let window;
+  let busy = false;
+  let status = null;
+  let painted = false;
+  let mounted = false;
+  let retired = false;
+  const show = () => {
+    if (!retired && painted && mounted) { window.show(); process.stdout.write('{"ready":true}\n'); }
+  };
+  process.stdin.on('end', () => { retired = true; app.quit(); });
+  process.stdout.on('error', () => { retired = true; app.quit(); });
+  readline.createInterface({input: process.stdin}).on('line', line => {
+    if (line === 'show' && window && !window.isDestroyed()) {
+      if (!retired && painted && mounted) { window.restore(); window.show(); window.focus(); }
+    } else if (line === 'busy' || line === 'idle') {
+      busy = line === 'busy';
+      if (window && !window.isDestroyed()) window.webContents.send('apparent:controls-busy', busy);
+    } else if (line.startsWith('status ')) {
+      try {
+        const value = JSON.parse(line.slice(7));
+        if (value === null || typeof value === 'string') {
+          status = value;
+          if (window && !window.isDestroyed()) window.webContents.send('apparent:controls-status', status);
+        }
+      } catch {}
+    }
+  });
+  app.whenReady().then(() => {
+    if (retired) return;
+    Menu.setApplicationMenu(null);
+    session.defaultSession.setPermissionRequestHandler((_contents, _permission, reply) => reply(false));
+    session.defaultSession.setPermissionCheckHandler(() => false);
+    window = new BrowserWindow({width: 420, height: 500, show: false,
+      title: 'Apparent', backgroundColor: followWindowTheme.backgroundColor(nativeTheme),
+      webPreferences: {preload: path.join(__dirname, 'preload.cjs'), additionalArguments: ['--controls'],
+        contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true}});
+    followWindowTheme(nativeTheme, window);
+    const page = pathToFileURL(path.join(__dirname, '../dist/src/controls/index.html')).href;
+    window.webContents.setWindowOpenHandler(() => ({action: 'deny'}));
+    window.webContents.on('will-navigate', event => event.preventDefault());
+    window.webContents.on('will-attach-webview', event => event.preventDefault());
+    ipcMain.handle('apparent:controls-mounted', (event, ...args) => {
+      if (event.sender !== window.webContents || event.senderFrame !== window.webContents.mainFrame ||
+          event.senderFrame.url !== page || args.length !== 0) throw new Error('Forbidden controls request');
+      mounted = true; show(); return {busy, status};
+    });
+    ipcMain.handle('apparent:controls-command', (event, ...args) => {
+      if (window.isDestroyed() || event.sender !== window.webContents ||
+          event.senderFrame !== window.webContents.mainFrame || event.senderFrame.url !== page ||
+          args.length !== 1 || !['record', 'choose', 'latest', 'settings'].includes(args[0])) {
+        throw new Error('Forbidden controls request');
+      }
+      if (!retired && !busy) process.stdout.write(JSON.stringify({action: args[0]}) + '\n');
+    });
+    window.webContents.on('render-process-gone', () => app.exit(1));
+    window.webContents.on('did-fail-load', () => app.exit(1));
+    window.once('ready-to-show', () => {
+      painted = true; show();
+    });
+    window.loadURL(page);
+  });
+  app.on('window-all-closed', () => app.quit());
+}
+
+if(process.argv.includes('--controls')) { startControls(); }
+else if(process.argv.includes('--onboarding')) { require('./onboarding.cjs'); } else {
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, nativeTheme } = require('electron');
 const os = require('node:os');
 let exitWithReports = code => app.exit(code);

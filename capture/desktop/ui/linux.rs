@@ -653,6 +653,98 @@ struct ApparentTray {
     dark: bool,
 }
 
+static TRAY_AVAILABLE: AtomicBool = AtomicBool::new(true);
+static CONTROLS_PENDING: AtomicBool = AtomicBool::new(false);
+
+pub(in crate::capture::desktop) fn controls_needed() -> bool {
+    !TRAY_AVAILABLE.load(Ordering::Acquire)
+}
+
+fn tray_available(available: bool) {
+    let previous = TRAY_AVAILABLE.swap(available, Ordering::AcqRel);
+    if previous && !available {
+        CONTROLS_PENDING.store(true, Ordering::Release);
+    }
+}
+
+pub(in crate::capture::desktop) fn show_controls(cx: &mut App) {
+    CONTROLS.with(|controls| {
+        if let Some(controls) = controls.borrow_mut().as_mut() {
+            controls.show(cx);
+            // A deliberate launch also satisfies a deferred automatic request.
+            // Closing this window must not reopen it when Settings later closes.
+            CONTROLS_PENDING.store(false, Ordering::Release);
+        }
+    });
+}
+
+pub(in crate::capture::desktop) fn poll_controls(busy: bool, onboarding: bool, settings: bool, cx: &mut App) {
+    if take_controls_request(&CONTROLS_PENDING, !controls_needed(), busy, onboarding, settings) {
+        crate::capture::desktop::workflow::launch_instance::request_open();
+    }
+    CONTROLS.with(|controls| {
+        if let Some(controls) = controls.borrow_mut().as_mut() { controls.poll(busy || onboarding, cx); }
+    });
+}
+
+fn take_controls_request(pending: &AtomicBool, tray: bool, busy: bool, onboarding: bool, settings: bool) -> bool {
+    // Automatic host-loss/startup presentation must not cover Settings (including
+    // About reopened after an update). Explicit launch requests stay independent.
+    !tray && !busy && !onboarding && !settings && pending.swap(false, Ordering::AcqRel)
+}
+
+fn tray_host_usable(host: bool, items: &[String], pid: u32, owner: impl Fn(&str) -> Option<u32>) -> bool {
+    host && items.iter().take(128).any(|item| {
+        let name = item.split('/').next().unwrap_or("");
+        owner(name) == Some(pid)
+    })
+}
+
+#[cfg(test)]
+mod controls_tests {
+    use super::*;
+
+    #[test]
+    fn a_host_without_our_registered_item_cannot_suppress_fallback() {
+        let ours = vec![":1.42/StatusNotifierItem".to_owned()];
+        assert!(!tray_host_usable(true, &[], 42, |_| Some(42)));
+        assert!(!tray_host_usable(true, &ours, 42, |_| Some(99)));
+        assert!(!tray_host_usable(true, &ours, 42, |_| None));
+        assert!(!tray_host_usable(false, &ours, 42, |_| Some(42)));
+        assert!(tray_host_usable(true, &ours, 42, |name| {
+            assert_eq!(name, ":1.42"); Some(42)
+        }));
+    }
+
+    #[test]
+    fn no_tray_access_waits_for_setup_and_capture_without_losing_the_request() {
+        let pending = AtomicBool::new(true);
+        assert!(!take_controls_request(&pending, false, false, true, false));
+        assert!(!take_controls_request(&pending, false, true, false, false));
+        assert!(!take_controls_request(&pending, false, true, true, false));
+        assert!(pending.load(Ordering::Acquire));
+        assert!(take_controls_request(&pending, false, false, false, false));
+        assert!(!take_controls_request(&pending, false, false, false, false));
+    }
+
+    #[test]
+    fn automatic_controls_wait_for_settings_then_present_once_after_close() {
+        let pending = AtomicBool::new(true);
+        assert!(!take_controls_request(&pending, false, false, false, true));
+        assert!(pending.load(Ordering::Acquire));
+        assert!(take_controls_request(&pending, false, false, false, false));
+        assert!(!take_controls_request(&pending, false, false, false, false));
+    }
+
+    #[test]
+    fn a_returned_tray_does_not_open_controls() {
+        let pending = AtomicBool::new(true);
+        assert!(!take_controls_request(&pending, true, false, false, false));
+        assert!(pending.load(Ordering::Acquire));
+        assert!(take_controls_request(&pending, false, false, false, false));
+    }
+}
+
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
 fn record_title() -> String {
     format!(
@@ -675,6 +767,12 @@ impl ApparentTray {
 }
 
 impl ksni::Tray for ApparentTray {
+    fn watcher_online(&self) { /* The host-property probe confirms actual availability. */ }
+
+    fn watcher_offline(&self, _reason: ksni::OfflineReason) -> bool {
+        tray_available(false);
+        true
+    }
     fn id(&self) -> String {
         "dev.kitlangton.apparent".into()
     }
@@ -789,6 +887,7 @@ impl ksni::Tray for ApparentTray {
 
 thread_local! {
     static TRAY: RefCell<Option<ksni::blocking::Handle<ApparentTray>>> = const { RefCell::new(None) };
+    static CONTROLS: RefCell<Option<super::controls::Controls>> = const { RefCell::new(None) };
 }
 
 pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receiver<MenuAction>> {
@@ -801,15 +900,14 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
         linux::shell::notify("Apparent setup: H.264 decoder missing", &warning);
     }
     let (sender, receiver) = flume::bounded(16);
-    // A second launch (`linux::ipc`) opens Settings: GNOME without the AppIndicator extension
-    // shows no tray icon, and this is how to reach Apparent there.
+    CONTROLS.with(|controls| *controls.borrow_mut() = Some(super::controls::Controls::new(sender.clone())));
+    // Both launch transports use the same onboarding/busy/presentation policy.
     let open = linux::ipc::open_requests();
-    let open_sender = sender.clone();
     let _ = std::thread::Builder::new()
         .name("apparent-open-requests".into())
         .spawn(move || {
             while open.recv().is_ok() {
-                let _ = open_sender.try_send(MenuAction::Settings);
+                crate::capture::desktop::workflow::launch_instance::request_open();
             }
         });
     linux::appearance::initialize();
@@ -820,16 +918,36 @@ pub(in crate::capture::desktop) fn install_status_bar() -> Option<flume::Receive
         inbox: 0,
         dark: linux::appearance::is_dark(),
     };
-    match tray.spawn() {
-        Ok(handle) => TRAY.with(|slot| *slot.borrow_mut() = Some(handle)),
+    // Keep the service alive across host absence so installing/enabling a host
+    // later does not require restarting Apparent.
+    match tray.assume_sni_available(true).spawn() {
+        Ok(handle) => {
+            TRAY.with(|slot| *slot.borrow_mut() = Some(handle));
+            std::thread::spawn(|| loop {
+                let available = (|| -> Option<bool> {
+                    let bus = zbus::blocking::Connection::session().ok()?;
+                    let proxy = zbus::blocking::Proxy::new(&bus, "org.kde.StatusNotifierWatcher",
+                        "/StatusNotifierWatcher", "org.kde.StatusNotifierWatcher").ok()?;
+                    let host = proxy.get_property::<bool>("IsStatusNotifierHostRegistered").ok()?;
+                    let items = proxy.get_property::<Vec<String>>("RegisteredStatusNotifierItems").ok()?;
+                    let dbus = zbus::blocking::fdo::DBusProxy::new(&bus).ok()?;
+                    Some(tray_host_usable(host, &items, std::process::id(), |name| {
+                        dbus.get_connection_unix_process_id(name.try_into().ok()?).ok()
+                    }))
+                })().unwrap_or(false);
+                tray_available(available);
+                std::thread::sleep(Duration::from_secs(5));
+            });
+        }
         Err(error) => {
+            tray_available(false);
             crate::capture::engine::runtime::apparent_log(format!(
-                "Tray icon unavailable ({error}); launch Apparent again to open Settings"
+                "Tray icon unavailable ({error}); showing Apparent controls when idle"
             ));
             linux::shell::notify(
                 "Apparent is running",
                 &format!(
-                    "Press {} to record. Your desktop shows no tray icons, so open Apparent again for Settings.",
+                    "Press {} to record. Your desktop shows no tray icons; Apparent controls open when setup is complete and capture is idle.",
                     crate::capture::desktop::settings::Shortcuts::load().record.label
                 ),
             );

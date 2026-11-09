@@ -13,6 +13,36 @@ spec.loader.exec_module(stage)
 
 
 class SigningTests(unittest.TestCase):
+    def test_controls_page_is_in_the_installed_settings_closure(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            frontend = root / "capture/desktop/ui/frontend"
+            for relative in ("electron/main.cjs", "electron/preload.cjs", "electron/settings.cjs",
+                             "dist/settings.html", "dist/onboarding.html", "dist/src/controls/index.html",
+                             "dist/src/installer/index.html", "dist/pill/index.html",
+                             "dist/assets/controls.js", "node_modules/electron/dist/electron"):
+                file = frontend / relative
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(relative)
+            for name in ("window-theme.cjs", "tokens.css"):
+                file = root / "shared/ui/src" / name
+                file.parent.mkdir(parents=True, exist_ok=True)
+                file.write_text(name)
+            destination = root / "staged"
+            script = root / "capture/desktop/scripts/packaging/stage-settings.py"
+            with patch.object(stage, "__file__", str(script)), \
+                 patch.object(stage.sys, "argv", [str(script), str(destination)]), \
+                 patch.object(stage.sys, "platform", "linux"), \
+                 patch.object(stage.subprocess, "run"):
+                stage.main()
+            self.assertEqual((destination / "app/dist/src/controls/index.html").read_text(), "dist/src/controls/index.html")
+            for relative in ("electron/main.cjs", "electron/preload.cjs", "dist/assets/controls.js",
+                             "node_modules/@apparent/ui/src/window-theme.cjs"):
+                self.assertTrue((destination / "app" / relative).is_file(), relative)
+            self.assertEqual((destination / "app/electron/installer/ui/src/installer/index.html").read_text(), "dist/src/installer/index.html")
+            self.assertEqual((destination / "app/dist/pill/index.html").read_text(), "dist/pill/index.html")
+            self.assertTrue((destination / "runtime/electron").is_file())
+
     def test_principal_executables_wait_for_nested_code(self):
         with tempfile.TemporaryDirectory() as temporary:
             runtime = Path(temporary) / "Electron.app"

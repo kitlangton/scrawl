@@ -10,7 +10,7 @@ pub(super) fn generation() -> u64 {
     NEXT.fetch_add(1, Ordering::Relaxed)
 }
 
-pub(super) fn assets() -> Option<(PathBuf, PathBuf)> {
+pub(in crate::capture::desktop) fn assets() -> Option<(PathBuf, PathBuf)> {
     let executable = std::env::current_exe().ok()?;
     let parent = executable.parent()?;
     #[cfg(target_os = "macos")]

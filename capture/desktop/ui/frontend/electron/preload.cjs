@@ -1,7 +1,22 @@
 const { contextBridge, ipcRenderer } = require('electron');
 
 // No generic invoke/send, paths, revisions or dialog options from the renderer.
-contextBridge.exposeInMainWorld('apparent', Object.freeze({
+if (process.argv.includes('--controls')) {
+  contextBridge.exposeInMainWorld('apparentControls', Object.freeze({
+    command: (action) => ipcRenderer.invoke('apparent:controls-command', action),
+    mounted: () => ipcRenderer.invoke('apparent:controls-mounted'),
+    onBusy: (listener) => {
+      const handler = (_event, busy) => listener(busy);
+      ipcRenderer.on('apparent:controls-busy', handler);
+      return () => ipcRenderer.removeListener('apparent:controls-busy', handler);
+    },
+    onStatus: (listener) => {
+      const handler = (_event, status) => listener(status);
+      ipcRenderer.on('apparent:controls-status', handler);
+      return () => ipcRenderer.removeListener('apparent:controls-status', handler);
+    },
+  }));
+} else contextBridge.exposeInMainWorld('apparent', Object.freeze({
   readMicrophoneEnabled: () => ipcRenderer.invoke('apparent:read-microphone-enabled'),
   setMicrophoneEnabled: (enabled) => ipcRenderer.invoke('apparent:set-microphone-enabled', enabled),
   readRuntimeState: () => ipcRenderer.invoke('apparent:read-runtime-state'),
