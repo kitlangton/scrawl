@@ -14,6 +14,14 @@ export type Admission = {base: string; head: string};
 const inactiveMuslPackages = ['@img/sharp-libvips-linuxmusl-x64', '@img/sharp-linuxmusl-x64',
   '@parcel/watcher-linux-x64-musl', '@tailwindcss/oxide-linux-x64-musl', 'lightningcss-linux-x64-musl'];
 export const glibcNative = (path: string) => !inactiveMuslPackages.some(name => path.includes(`/node_modules/${name}/`));
+export function loaderPaths(output: string): string[] {
+  return output.split('\n').flatMap(line => {
+    const match = line.match(/(?:=>\s+|^\s*)(\/.+?)\s+\(0x[a-f0-9]+\)\s*$/i);
+    if (match) return [match[1]];
+    if (!line.trim() || /^\s*(linux-vdso\.so\.\d+ \(0x[a-f0-9]+\)|statically linked|not a dynamic executable)\s*$/i.test(line)) return [];
+    throw Error('unrecognized or unresolved runtime loader input');
+  });
+}
 const qualifiedPaths = ['connect/service', 'shared/ui', 'shared/assets'];
 // a918e744d: complete service tests/helpers/scripts/lock and shared source/assets.
 // Test fixtures use in-memory Miniflare and synthetic loopback services. No Git
@@ -27,7 +35,7 @@ function git(cwd: string, env: NodeJS.ProcessEnv, args: string[]): string {
 
 // Content/mode/link identity permits an identical npm ci reinstall. The separate
 // stat identity detects replacement and mutate/restore races during one command.
-export function files(paths: string[], allowedRoots: string[]) {
+export function files(paths: string[], allowedRoots: string[], committed = new Map<string, {oid: string; executable: boolean}>()) {
   const content = createHash('sha256'), stability = createHash('sha256');
   const visited = new Set<string>(), native = new Set<string>();
   const inside = (path: string) => allowedRoots.some(root => path === root || (!relative(root, path).startsWith('..') && !isAbsolute(relative(root, path))));
@@ -35,6 +43,8 @@ export function files(paths: string[], allowedRoots: string[]) {
     if (visited.has(path)) return;
     visited.add(path);
     const before = lstatSync(path, {bigint: true});
+    const expected = committed.get(path);
+    if (expected && (!before.isFile() || Boolean(Number(before.mode) & 0o100) !== expected.executable)) throw Error('source type or mode differs from HEAD');
     const stamp = () => [before.dev, before.ino, before.mode, before.size, before.mtimeNs, before.ctimeNs].map(String);
     stability.update(JSON.stringify([path, stamp()]));
     content.update(JSON.stringify([path, String(before.mode)]));
@@ -47,6 +57,7 @@ export function files(paths: string[], allowedRoots: string[]) {
       for (const name of readdirSync(path).sort()) walk(join(path, name));
     } else if (before.isFile()) {
       const bytes = readFileSync(path);
+      if (expected && createHash('sha1').update(`blob ${bytes.length}\0`).update(bytes).digest('hex') !== expected.oid) throw Error('source bytes differ from HEAD');
       content.update(digest(bytes));
       if (bytes.subarray(0, 4).equals(Buffer.from([0x7f, 0x45, 0x4c, 0x46]))) native.add(path);
     } else throw Error('unqualified special file');
@@ -70,14 +81,18 @@ function admitted(cwd: string, env: NodeJS.ProcessEnv, admission: Admission) {
 export function serviceSnapshot(cwd: string, env: NodeJS.ProcessEnv, admission: Admission, argv: string[]): Snapshot {
   const main = admitted(cwd, env, admission);
   const tree = git(cwd, env, ['ls-tree', '-r', '-z', 'HEAD']);
+  const committed = new Map<string, {oid: string; executable: boolean}>();
   const tracked = tree.split('\0').filter(Boolean).map(entry => {
-    if (!/^100(644|755) blob /.test(entry)) throw Error('unqualified source type');
-    return resolve(cwd, entry.slice(entry.indexOf('\t') + 1));
+    const match = /^(100644|100755) blob ([a-f0-9]{40})\t/.exec(entry);
+    if (!match) throw Error('unqualified source type');
+    const path = resolve(cwd, entry.slice(entry.indexOf('\t') + 1));
+    committed.set(path, {oid: match[2], executable: match[1] === '100755'});
+    return path;
   });
   const service = join(cwd, 'connect/service');
   // Hash ignored package inputs as well as every tracked source. Unknown extra
   // state in this package is included; escaping links and special files fail closed.
-  const source = files([...tracked, service], [cwd]);
+  const source = files([...tracked, service], [cwd], committed);
   const node = realpathSync(process.execPath);
   const runtimePaths = new Set([node, '/usr/bin/ldd', '/etc/ld.so.cache', '/etc/os-release',
     '/etc/hosts', '/etc/resolv.conf', '/etc/nsswitch.conf', '/etc/localtime', '/proc/sys/kernel/random/boot_id',
@@ -88,11 +103,7 @@ export function serviceSnapshot(cwd: string, env: NodeJS.ProcessEnv, admission: 
     const result = spawnSync('/usr/bin/ldd', [executable], {env, encoding: 'utf8'});
     const output = result.stdout + result.stderr;
     if (result.error || (result.status !== 0 && !/not a dynamic executable|statically linked/.test(output))) throw Error('unknown runtime linkage');
-    if (/not found/.test(output)) throw Error(`missing runtime dependency for ${executable}`);
-    for (const line of output.split('\n')) {
-      const path = line.match(/(?:=>\s+|^\s*)(\/\S+)\s+\(/)?.[1];
-      if (path) runtimePaths.add(realpathSync(path));
-    }
+    for (const path of loaderPaths(output)) runtimePaths.add(realpathSync(path));
   }
   const runtime = files([...runtimePaths].map(path => realpathSync(path)), ['/']);
   const endMain = admitted(cwd, env, admission);

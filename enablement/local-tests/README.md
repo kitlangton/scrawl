@@ -22,7 +22,9 @@ overrides use the original fresh command.
 
 Qualification also requires a clean checked-out exact HEAD, no hidden index
 flags and integration with the current `origin/main` checkpoint. The runner
-hashes the entire committed tree and actual source bytes, all installed service
+hashes the entire committed tree and actual source bytes, verifies every tracked
+file against its committed blob and executable bit independently of Git's stat
+cache, and binds all installed service
 dependencies, generated build output, modes and internal symlink targets. The
 Node executable, kernel/boot, OS configuration and transitive ELF loader libraries
 of Node and installed glibc native dependencies are included. npm's inactive musl

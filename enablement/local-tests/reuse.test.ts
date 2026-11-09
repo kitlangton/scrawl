@@ -2,14 +2,14 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {createHmac} from 'node:crypto';
 import {spawnSync, execFileSync} from 'node:child_process';
-import {chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, symlinkSync, writeFileSync} from 'node:fs';
+import {chmodSync, copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync} from 'node:fs';
 import {join} from 'node:path';
 import {digest, receiptStore, reuse} from './receipt.ts';
-import {files, glibcNative, serviceEnvironment, serviceTests} from './service.ts';
+import {files, glibcNative, loaderPaths, serviceEnvironment, serviceTests} from './service.ts';
 import {root} from './run.ts';
 
 function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
-  const dir = mkdtempSync('/tmp/apparent-dev-reuse-test-');
+  const dir = realpathSync(mkdtempSync('/tmp/apparent-dev-reuse-test-'));
   const env = {...process.env};
   for (const key of Object.keys(env)) if (key.startsWith('GIT_')) delete env[key];
   env.GIT_CONFIG_GLOBAL = '/dev/null'; env.GIT_CONFIG_NOSYSTEM = '1';
@@ -83,7 +83,8 @@ test('changed and mutate-restore inputs during execution cannot publish success'
     return {key: value.key, stable: value.stable, head: 'c'.repeat(40)};
   };
   for (const restore of [false, true]) {
-    reuse(dir, snapshot, () => {writeFileSync(input, 'two'); if (restore) writeFileSync(input, 'one');}, () => {});
+    const replacement = join(dir, 'replacement'); writeFileSync(replacement, 'one');
+    reuse(dir, snapshot, () => {writeFileSync(input, 'two'); if (restore) renameSync(replacement, input);}, () => {});
     assert.equal(existsSync(join(receiptStore(dir), 'success.json')), false);
     writeFileSync(input, 'one');
   }
@@ -109,6 +110,23 @@ test('file identities include bytes, modes, link targets, inventory and dependen
   writeFileSync(input, 'mutated install'); assert.notEqual(before.key, files([linked], [dir]).key);
   rmSync(linked); symlinkSync('/etc/passwd', linked);
   assert.throws(() => files([linked], [dir]), /external symlink/);
+}));
+
+test('source blobs and modes must match HEAD even when Git stat settings conceal edits', () => fixture((dir, env) => {
+  const git = (...args: string[]) => execFileSync('git', args, {cwd: dir, env, encoding: 'utf8'}).trim();
+  git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'fixture@example.invalid');
+  git('config', 'core.trustctime', 'false'); git('config', 'core.checkStat', 'minimal'); git('config', 'core.filemode', 'false');
+  const input = join(dir, 'input'); writeFileSync(input, 'original');
+  utimesSync(input, 1_000_000_000, 1_000_000_000);
+  git('add', '.'); git('commit', '-qm', 'source');
+  const committed = new Map([[input, {oid: git('rev-parse', 'HEAD:input'), executable: false}]]);
+  files([input], [dir], committed);
+  writeFileSync(input, 'changed!'); utimesSync(input, 1_000_000_000, 1_000_000_000);
+  assert.equal(git('status', '--porcelain'), '', 'fixture reproduces the stat-cache blind spot');
+  assert.throws(() => files([input], [dir], committed), /source bytes differ from HEAD/);
+  writeFileSync(input, 'original'); chmodSync(input, 0o755);
+  assert.equal(git('status', '--porcelain'), '');
+  assert.throws(() => files([input], [dir], committed), /source type or mode differs from HEAD/);
 }));
 
 test('receipt symlinks and foreign keys never authenticate evidence', () => fixture(dir => {
@@ -138,6 +156,15 @@ test('glibc runtime closure excludes only the inactive optional musl loaders', (
     'lightningcss-linux-x64-musl/addon.node']) assert.equal(glibcNative(`/repo/node_modules/${path}`), false);
   for (const path of ['@img/sharp-linux-x64/lib/addon.node', '@parcel/watcher-linux-x64-glibc/watcher.node',
     '@cloudflare/workerd-linux-64/bin/workerd', 'unknown/addon.node', 'unknown-linux-x64-musl/addon.node']) assert.equal(glibcNative(`/repo/node_modules/${path}`), true);
+});
+
+test('every runtime loader line is understood, including library paths with spaces', () => {
+  assert.deepEqual(loaderPaths('\tlinux-vdso.so.1 (0x00000abc)\n\tlibx.so => /usr/lib/path with spaces/libx.so (0x1234)\n\t/lib64/ld-linux.so.2 (0x1234)\n'),
+    ['/usr/lib/path with spaces/libx.so', '/lib64/ld-linux.so.2']);
+  assert.deepEqual(loaderPaths('not a dynamic executable\n'), []);
+  assert.deepEqual(loaderPaths('statically linked\n'), []);
+  for (const output of ['libx.so => not found', 'unexpected loader format', 'libx.so => relative/path (0x1234)'])
+    assert.throws(() => loaderPaths(output), /unrecognized or unresolved/);
 });
 
 test('installed Git hook keeps fresh guards around ancestry-only reuse and failed changed inputs', () => fixture((dir, env) => {
