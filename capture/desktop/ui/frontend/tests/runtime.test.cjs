@@ -336,6 +336,7 @@ test('permission refresh keeps setup unfocused and avoids repeating native geome
  class Window extends EventEmitter {
   constructor(){super();window=this;this.visible=false;this.webContents=new EventEmitter();this.webContents.setWindowOpenHandler=()=>{};this.webContents.send=()=>calls.push('state');}
   removeMenu(){} loadURL(){} isDestroyed(){return false} isVisible(){return this.visible}
+  setTitle(value){this.title=value} getTitle(){return this.title}
   show(){this.visible=true;calls.push('show')} showInactive(){this.visible=true;calls.push('showInactive')} hide(){this.visible=false}
   setAlwaysOnTop(){calls.push('top')} setHasShadow(){calls.push('shadow')} setVisibleOnAllWorkspaces(){calls.push('spaces')}
   setMaximumSize(){calls.push('max')} setMinimumSize(){calls.push('min')} setSize(){calls.push('size')}

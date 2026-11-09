@@ -1590,12 +1590,15 @@ impl ApparentCoordinator {
     /// Polled while the gate holds a request: shows the permissions window once ⌥⇧ is up.
     pub(in crate::capture::desktop) fn tick_onboarding_practice(&mut self,cx:&mut Context<Self>) {
         if let Some(session) = self.onboarding.as_mut() {
+            session.refresh_account();
             session.observe_shortcut_modifiers(crate::capture::engine::runtime::modifier_flags());
         }
         if !self.onboarding.as_ref().is_some_and(|s|s.practice_active()) {return;}
         #[cfg(target_os="macos")]
         let anchor=if self.onboarding.as_ref().is_some_and(|s|s.practice_locating()) {crate::capture::desktop::ui::macos::status_bar_anchor()} else {self.native_pill.as_ref().and_then(|p|p.coach_anchor())};
-        #[cfg(not(target_os="macos"))]
+        #[cfg(target_os="linux")]
+        let anchor=crate::capture::desktop::ui::linux::coach_anchor();
+        #[cfg(not(any(target_os="macos",target_os="linux")))]
         let anchor=None;
         if let Some(session)=self.onboarding.as_mut(){session.practice_anchor(anchor);}
         let board_frame=whiteboard::frame(cx);
@@ -3392,6 +3395,12 @@ impl ApparentCoordinator {
             }
             ov
         });
+        #[cfg(target_os = "linux")]
+        self.telemetry.set_native_note_window(
+            if linux::wayland_session() && linux::hyprland::ink_fade_available() {
+                metal_overlay.as_ref().map(|overlay| overlay.window_number())
+            } else { None }
+        );
         start_metric("metal_open_ms", stage);
         let stage = Instant::now();
         self.publish_capture_busy();

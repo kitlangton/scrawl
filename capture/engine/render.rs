@@ -526,9 +526,10 @@ pub fn annotate_keyframe_marks_in_place(
     // A mark keyframe shows every mark drawn on its screen. Flags carry no ink, so a flagged
     // keyframe still shows the strokes of its moment.
     let shown = crate::capture::engine::sketch::marks_on(keyframe, marks);
-    if replay_ink {
+    // Numbered pins are semantic anchors, not the native overlay’s brief pulse.
+    // In particular a typed note uses the pre-click screen, before any pulse exists.
     for (index, stroke) in strokes.iter().enumerate() {
-        if stroke.laser {
+        if stroke.laser || (!replay_ink && stroke.pin.is_none()) {
             continue;
         }
         let belongs = shown.iter().any(|m| m.strokes.contains(&index));
@@ -560,9 +561,10 @@ pub fn annotate_keyframe_marks_in_place(
             polygon(frame, &outline, stroke.rgba());
         }
     }
-    for stroke in strokes.iter().filter(|s| s.laser) {
-        draw_laser(frame, stroke, keyframe.t);
-    }
+    if replay_ink {
+        for stroke in strokes.iter().filter(|s| s.laser) {
+            draw_laser(frame, stroke, keyframe.t);
+        }
     }
     // Phone swipes that ended just before this moment (or produced it) leave a trail.
     for event in events {
@@ -2030,6 +2032,22 @@ mod tests {
             mark_id: None,
             cursor: None,
         }
+    }
+
+    #[test]
+    fn captured_note_keeps_its_numbered_anchor_on_the_pre_editor_frame() {
+        let source = solid(320, 200, [20, 20, 20, 255]);
+        let strokes = vec![Stroke {
+            color: None, t0: 100, t1: 200, fw: 320, fh: 200,
+            on: None, pin: Some(1), laser: false, pts: vec![5000, 5000, 0],
+        }];
+        let marks = crate::capture::engine::sketch::marks_of(&strokes);
+        let mut frame_key = key(1);
+        frame_key.t = 90;
+        frame_key.mark_id = Some(marks[0].id.clone());
+        let mut captured = source.clone();
+        annotate_keyframe_marks_in_place(&mut captured, &frame_key, &strokes, &marks, &[], false);
+        assert_ne!(captured.rgba, source.rgba, "a semantic numbered anchor is required before the editor covers its screen");
     }
 
     #[test]

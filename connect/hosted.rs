@@ -51,7 +51,7 @@ impl ConfigProvider for AppConfig {
         let _ = crate::shared::handoff::open_path(uri);
     }
 }
-fn client_at(path: PathBuf) -> Client {
+pub(crate) fn client_at(path: PathBuf) -> Client {
     Client::new(Arc::new(AppConfig(path)))
 }
 

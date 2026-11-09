@@ -1,7 +1,8 @@
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 import tailwindcss from '@tailwindcss/vite';
-import { readFileSync } from 'node:fs';
+import { readFileSync, writeFileSync } from 'node:fs';
+import ts from 'typescript';
 
 // file: dependencies are snapshots. Refuse a build using stale shared controls.
 for (const file of ['button.tsx', 'tabs.tsx', 'utils.ts', 'theme.css', 'tokens.css', 'window-theme.cjs', 'status-card.tsx', 'disclosure-menu.tsx', 'status.css']) {
@@ -12,6 +13,13 @@ for (const file of ['button.tsx', 'tabs.tsx', 'utils.ts', 'theme.css', 'tokens.c
 
 export default defineConfig({
   base: './',
-  plugins: [react(), tailwindcss()],
+  plugins: [react(), tailwindcss(), {name: 'onboarding-host-policy', closeBundle() {
+    for (const name of ['presentation', 'hyprland', 'account']) {
+      const file = `electron/onboarding/${name}.ts`;
+      const result = ts.transpileModule(readFileSync(file, 'utf8'), {fileName: file,
+        compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}});
+      writeFileSync(`dist/onboarding-${name}.cjs`, result.outputText);
+    }
+  }}],
   build: { rollupOptions: { input: { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html', installer: 'src/installer/index.html' } } },
 });

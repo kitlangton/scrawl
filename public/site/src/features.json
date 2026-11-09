@@ -97,7 +97,7 @@
       "id": "typed-capture-notes",
       "group": "record",
       "name": "Shift-click typed notes",
-      "says": "Shift-click opens a compact Electron note field. Enter or Attach saves text; empty Enter keeps the pin. Escape retains an in-capture draft. A saved-note counter offers editing and deletion. Typed notes retain click-time anchors and appear alongside speech in the handoff timeline.",
+      "says": "Shift-click opens a compact Electron note field. Enter or Attach saves text; empty Enter keeps the pin. Escape retains an in-capture draft. A saved-note counter offers editing and deletion. Typed notes retain gesture anchors and appear alongside speech in the handoff timeline.",
       "status": "main",
       "added": "2026-11-02",
       "platforms": [
@@ -125,7 +125,7 @@
           "does": "Set false for intentional silent captures; applies to the next screen capture without changing the selected microphone device. Intent is retained in recovery/manifest JSON without an extra microphone marker file"
         }
       ],
-      "note": "Enabled by default. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",
+      "note": "Enabled by default. Hyprland Lua sessions use the recording overlay’s own button coordinates and modifiers; their timestamps are callback observation time. Other Linux sessions retain the existing polled input route and its position limits. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",
       "docs": [
         "capture/engine/docs/keyframes-and-text.md",
         "capture/desktop/ui/frontend/README.md"
@@ -310,7 +310,7 @@
       "status": "stable@0.3.4",
       "platforms": ["mac", "linux"],
       "shortcuts": [{ "keys": "⌥⇧S", "does": "Start or finish a capture (Alt+Shift+S on Linux)" }],
-      "note": "The shortcut can be changed in Settings; on Omarchy an active Super+Shift+Copilot binding in bindings.lua takes precedence and is shown as managed by Hyprland.",
+      "note": "The shortcut can be changed in Settings; on Omarchy an active Super+Shift+Copilot binding in bindings.lua is available by default; choosing a custom app shortcut preserves that desktop binding and saves the explicit app preference.",
       "docs": ["README.md#capture-controls", "capture/engine/docs/capture.md"]
     },
     {
@@ -1404,7 +1404,7 @@
       "id": "onboarding",
       "group": "install",
       "name": "Welcome tour",
-      "says": "Branded setup with a pen choice, permissions checklist, Record shortcut editor and guided first capture; unfinished shortcut setup resumes after a quit; completed shortcut setup does not reopen on later starts.",
+      "says": "Branded setup with optional Google account sign-in through read-only device approval, a pen choice, permissions checklist, Record shortcut editor and guided first capture; unfinished shortcut setup resumes after a quit; completed shortcut setup does not reopen on later starts.",
       "status": "main",
       "added": "2026-10-29",
       "platforms": ["mac", "linux"],
@@ -1420,7 +1420,7 @@
       "status": "main",
       "added": "2026-10-31",
       "platforms": ["mac", "linux"],
-      "note": "Enabled by default; experiments.onboardingFirstCapture=false restores optional practice. Desktop-owned Linux shortcuts must be explicitly accepted rather than edited. Existing completed users are not forced through setup again.",
+      "note": "Enabled by default; experiments.onboardingFirstCapture=false restores optional practice. The actual desktop-owned Linux chord is shown before acceptance; a custom app shortcut can be chosen without changing the permanent desktop binding. Existing completed users are not forced through setup again.",
       "config": [{ "key": "experiments.onboardingFirstCapture", "value": "false", "does": "Restore optional shortcut choice and practice on the next tour open" }],
       "docs": ["capture/desktop/docs/onboarding-and-settings.md"]
     },

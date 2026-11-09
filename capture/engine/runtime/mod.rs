@@ -609,6 +609,12 @@ pub struct SharedCaptureTelemetry {
     agent_context: AtomicBool,
     /// A ⇧-press inside the target: when, where (global points) and on which frame.
     shift_press: Mutex<Option<(u64, f64, f64, TargetFrame)>>,
+    #[cfg(target_os = "linux")]
+    native_note_window: AtomicU64,
+    #[cfg(target_os = "linux")]
+    native_note_epoch: AtomicU64,
+    #[cfg(target_os = "linux")]
+    native_note_press: Mutex<Option<((u64, f64, f64, TargetFrame), bool)>>,
 }
 
 impl SharedCaptureTelemetry {
@@ -661,6 +667,12 @@ impl SharedCaptureTelemetry {
             drag_start: Mutex::new(None),
             agent_context: AtomicBool::new(false),
             shift_press: Mutex::new(None),
+            #[cfg(target_os = "linux")]
+            native_note_window: AtomicU64::new(0),
+            #[cfg(target_os = "linux")]
+            native_note_epoch: AtomicU64::new(0),
+            #[cfg(target_os = "linux")]
+            native_note_press: Mutex::new(None),
         })
     }
 
@@ -806,6 +818,8 @@ impl SharedCaptureTelemetry {
             .shift_press
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        #[cfg(target_os = "linux")]
+        self.set_native_note_window(None);
         self.excluded_window_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -945,18 +959,58 @@ impl SharedCaptureTelemetry {
 
     /// The left button went down with only ⇧ held: a pin if it comes up as a click (`shift_up`).
     fn shift_down(&self, t_ms: u64, screen_x: f64, screen_y: f64) {
-        if self.notes_editing.load(Ordering::Acquire) || !self.contains_screen_point(screen_x, screen_y) {
-            return;
+        #[cfg(target_os = "linux")]
+        if self.native_note_window.load(Ordering::Acquire) != 0 { return; }
+        if let Some(press) = self.shift_press_at(t_ms, screen_x, screen_y) {
+            *self.shift_press.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = Some(press);
         }
-        let frame = *self
-            .target_frame
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        *self
-            .shift_press
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner) =
-            Some((t_ms, screen_x, screen_y, frame));
+    }
+
+    fn shift_press_at(&self, t_ms: u64, screen_x: f64, screen_y: f64) -> Option<(u64, f64, f64, TargetFrame)> {
+        if self.notes_editing.load(Ordering::Acquire) || !self.contains_screen_point(screen_x, screen_y) { return None; }
+        let frame = *self.target_frame.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        Some((t_ms, screen_x, screen_y, frame))
+    }
+
+    /// Runtime input-source ownership, not a setting or permission claim. The
+    /// Desktop adapter binds the actual recording overlay after it opens.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn set_native_note_window(&self, window: Option<u32>) {
+        self.native_note_epoch.fetch_add(1, Ordering::AcqRel);
+        self.native_note_window.store(window.map(u64::from).unwrap_or(0), Ordering::Release);
+        *self.native_note_press.lock().unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+    }
+
+    #[cfg(target_os = "linux")]
+    pub(crate) fn native_note_epoch(&self) -> u64 {
+        self.native_note_epoch.load(Ordering::Acquire)
+    }
+
+    /// Position and modifiers belong to this window-system event. Time is the
+    /// callback observation time; no evdev edge or later motion is paired to it.
+    #[cfg(target_os = "linux")]
+    pub(crate) fn native_note_button(&self, window: u32, epoch: u64, down: bool, point: [f64; 2], pure_shift: bool) -> bool {
+        if epoch != self.native_note_epoch() || window == 0 || self.native_note_window.load(Ordering::Acquire) != u64::from(window)
+            || !self.active.load(Ordering::Acquire) { return false; }
+        let now = self.elapsed_ms();
+        let mut pending = self.native_note_press.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+        if down {
+            *pending = None;
+            if !pure_shift { return false; }
+            if let Some(press) = self.shift_press_at(now, point[0], point[1]) {
+                let drawn = self.live_ink.lock().unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .as_ref().is_some_and(|ink| drew_before(ink, now));
+                *pending = Some((press, drawn));
+            }
+        } else {
+            let press = pending.take();
+            drop(pending);
+            if !self.notes_editing.load(Ordering::Acquire) {
+                let (press, drawn) = press.map_or((None, false), |(press, drawn)| (Some(press), drawn));
+                self.finish_shift_press(press, drawn, now, point[0], point[1]);
+            }
+        }
+        true
     }
 
     /// The button of a ⇧-press came up (with or without ⇧ still held). A ⇧-click drops the next
@@ -965,14 +1019,16 @@ impl SharedCaptureTelemetry {
     /// A ⇧-drag is left to the ink the poller is drawing. Returns whether a ⇧-press was waiting,
     /// so the release isn't also taken as a click's.
     fn shift_up(&self, t_ms: u64, screen_x: f64, screen_y: f64) -> bool {
-        let Some((t0, x0, y0, start_frame)) = self
-            .shift_press
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .take()
-        else {
-            return false;
-        };
+        #[cfg(target_os = "linux")]
+        if self.native_note_window.load(Ordering::Acquire) != 0 { return false; }
+        let press = self.shift_press.lock().unwrap_or_else(std::sync::PoisonError::into_inner).take();
+        self.finish_shift_press(press, false, t_ms, screen_x, screen_y)
+    }
+
+    fn finish_shift_press(&self, press: Option<(u64, f64, f64, TargetFrame)>, drawn_before_down: bool,
+        t_ms: u64, screen_x: f64, screen_y: f64) -> bool {
+        let Some((t0, x0, y0, start_frame)) = press else { return false; };
+        if drawn_before_down { return true; }
         let frame = *self
             .target_frame
             .lock()
@@ -1171,6 +1227,8 @@ impl SharedCaptureTelemetry {
             .shift_press
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
+        #[cfg(target_os = "linux")]
+        self.set_native_note_window(None);
         self.finish_active_laser(None);
         if let Some(ink) = self
             .live_ink
@@ -1858,6 +1916,79 @@ mod tests {
         telemetry
     }
 
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_note_survives_unlocated_poll_and_owns_only_the_note_gesture() {
+        let telemetry = session(1000.0, 1000.0);
+        telemetry.set_native_note_window(Some(7));
+        let mut prev = [false; 2];
+        poll_clicks(&telemetry, &mut prev, [true, false], (250.0, 750.0), true, |_, _| false);
+        assert!(telemetry.native_note_button(7, telemetry.native_note_epoch(), true, [250.0, 750.0], true));
+        // The unlocated consumer owns and clears only the legacy slot.
+        *telemetry.shift_press.lock().unwrap() = None;
+        assert!(telemetry.native_note_button(7, telemetry.native_note_epoch(), false, [251.0, 750.0], true));
+        poll_clicks(&telemetry, &mut prev, [false, false], (251.0, 750.0), true, |_, _| false);
+        // Ordinary clicks continue through the existing located observation path.
+        poll_clicks(&telemetry, &mut prev, [true, false], (500.0, 500.0), false, |_, _| false);
+        poll_clicks(&telemetry, &mut prev, [false, false], (500.0, 500.0), false, |_, _| false);
+        let (events, strokes) = telemetry.finish_session();
+        assert_eq!(strokes.len(), 1);
+        assert_eq!(strokes[0].pin, Some(1));
+        assert_eq!(strokes[0].normalized_points(), vec![[0.25, 0.75]]);
+        assert!(matches!(events.as_slice(), [InteractionEvent::Click { .. }]));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_note_rejects_stale_window_and_rebinding_cancels_pending_press() {
+        let telemetry = session(1000.0, 1000.0);
+        telemetry.set_native_note_window(Some(7));
+        assert!(!telemetry.native_note_button(8, telemetry.native_note_epoch(), true, [100.0, 100.0], true));
+        assert!(telemetry.native_note_button(7, telemetry.native_note_epoch(), true, [100.0, 100.0], true));
+        telemetry.set_native_note_window(Some(8));
+        assert!(!telemetry.native_note_button(7, telemetry.native_note_epoch(), false, [100.0, 100.0], true));
+        assert!(telemetry.native_note_button(8, telemetry.native_note_epoch(), false, [100.0, 100.0], true));
+        assert!(telemetry.finish_session().1.is_empty());
+        assert!(!telemetry.native_note_button(8, telemetry.native_note_epoch(), true, [100.0, 100.0], true));
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_note_rejects_a_previous_capture_callback_with_the_same_window() {
+        let telemetry = session(1000.0, 1000.0);
+        telemetry.set_native_note_window(Some(7));
+        let old = telemetry.native_note_epoch();
+        telemetry.native_note_button(7, old, true, [100.0, 100.0], true);
+        telemetry.finish_session();
+        telemetry.reset_for_session(TargetFrame { x: 0.0, y: 0.0, width: 1000.0, height: 1000.0, scale: 2.0 });
+        telemetry.set_native_note_window(Some(7));
+        assert!(!telemetry.native_note_button(7, old, true, [100.0, 100.0], true));
+        assert!(!telemetry.native_note_button(7, old, false, [100.0, 100.0], true));
+        let current = telemetry.native_note_epoch();
+        telemetry.native_note_button(7, current, true, [100.0, 100.0], true);
+        telemetry.native_note_button(7, current, false, [100.0, 100.0], true);
+        assert_eq!(telemetry.finish_session().1.len(), 1);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn native_note_keeps_drawing_rejection_after_shift_release_commits_ink() {
+        let telemetry = session(1000.0, 1000.0);
+        telemetry.set_native_note_window(Some(7));
+        // Both samples precede the observed callback without sleeping in the test.
+        *telemetry.started_at.lock().unwrap() = Instant::now() - Duration::from_secs(1);
+        *telemetry.live_ink.lock().unwrap() = Some(Stroke {
+            color: None, t0: 0, t1: 20, fw: 1000, fh: 1000, on: None,
+            pin: None, laser: false, pts: vec![0, 0, 0, SCALE / 10, 0, 20],
+        });
+        telemetry.native_note_button(7, telemetry.native_note_epoch(), true, [100.0, 100.0], true);
+        track_shift_ink(&telemetry, (100.0, 100.0), false, true);
+        telemetry.native_note_button(7, telemetry.native_note_epoch(), false, [100.0, 100.0], false);
+        let (_, strokes) = telemetry.finish_session();
+        assert_eq!(strokes.len(), 1);
+        assert!(strokes[0].pin.is_none());
+    }
 
     #[test]
     fn a_long_still_shift_press_drops_no_pin() {

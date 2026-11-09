@@ -1,5 +1,7 @@
 const {transparentBackgroundColor}=require('@apparent/ui/window-theme');
 const {parseAction}=require('./onboarding-protocol.cjs');
+const {coachDimensions,coachPosition}=require(process.versions.electron?'../dist/onboarding-presentation.cjs':'./onboarding/presentation.ts');
+const {projectAccount}=require(process.versions.electron?'../dist/onboarding-account.cjs':'./onboarding/account.ts');
 // A private, Rust-owned presentation transport. No capture commands or filesystem IPC.
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -10,7 +12,7 @@ function project(v) {
   if(v?.type!=='state'||!steps.has(v.step)||!Array.isArray(v.rows)||v.rows.length>5||typeof v.ready!=='boolean')return null;
   const rows=[];
   for(const r of v.rows){if(!r||typeof r!=='object'||!['screen-recording','microphone','accessibility','speech-recognition','camera'].includes(r.permission)||!['granted','denied','not-determined'].includes(r.status))return null;rows.push({permission:r.permission,status:r.status,required:r.required===true,reopening:r.reopening===true,relaunch:r.relaunch===true});}
-  return {tutorial:['skipped','watched','practiced'].includes(v.tutorial)?v.tutorial:null,step:v.step,ready:v.ready,fix:v.fix===true,rows,index:v.index,count:v.count,shortcut:typeof v.shortcut==='string'?v.shortcut.slice(0,80):'',shortcutEditing:v.shortcutEditing===true,shortcutChosen:v.shortcutChosen===true,shortcutTested:v.shortcutTested===true,
+  return {account:projectAccount(v.account),tutorial:['skipped','watched','practiced'].includes(v.tutorial)?v.tutorial:null,step:v.step,ready:v.ready,fix:v.fix===true,rows,index:v.index,count:v.count,shortcut:typeof v.shortcut==='string'?v.shortcut.slice(0,80):'',shortcutEditing:v.shortcutEditing===true,shortcutChosen:v.shortcutChosen===true,shortcutTested:v.shortcutTested===true,
     penPicker:v.penPicker===true,penSelected:v.penSelected===true,penError:v.penError===true,penRgb:Array.isArray(v.penRgb)&&v.penRgb.length===3&&v.penRgb.every(n=>Number.isInteger(n)&&n>=0&&n<=255)?v.penRgb:[255,59,48],
     platform:v.platform==='linux'?'linux':'macos',shortcutEditor:v.shortcutEditor&&typeof v.shortcutEditor==='object'?{recording:v.shortcutEditor.recording===true,externallyManaged:v.shortcutEditor.externallyManaged===true,error:typeof v.shortcutEditor.error==='string'?v.shortcutEditor.error.slice(0,240):null}:null,
     testInstance:v.testInstance===true,practice:phases.has(v.practice)?v.practice:null,firstCaptureRequired:v.firstCaptureRequired===true,
@@ -18,25 +20,12 @@ function project(v) {
     ...(Array.isArray(v.anchor)&&v.anchor.length===4&&v.anchor.every(Number.isFinite)?{anchor:v.anchor}:{})};
 }
 // Screen coordinates supplied by this process's typed Whiteboard window only.
-function coachDimensions(area,phase){return {width:Math.min(area.width,phase==='screen-ink'&&area.width>=720?720:380),height:Math.min(area.height??440,440)};}
 function setupDimensions(area,shortcut){return {width:Math.min(area.width,760),height:Math.min(area.height,shortcut?520:720)};}
 function nativeRectangle(rect,toDip){
   if(!rect)return rect;
   const start=toDip({x:Math.round(rect[0]),y:Math.round(rect[1])});
   const end=toDip({x:Math.round(rect[0]+rect[2]),y:Math.round(rect[1]+rect[3])});
   return [start.x,start.y,Math.max(1,end.x-start.x),Math.max(1,end.y-start.y)];
-}
-function coachPosition(area,anchor,board,phase){
-  const {width,height}=coachDimensions(area,phase),gap=24;
-  const clamp=([x,y])=>[Math.round(Math.max(area.x,Math.min(area.x+area.width-width,x))),Math.round(Math.max(area.y,Math.min(area.y+area.height-height,y)))];
-  const [x,y,w,h]=anchor||[area.x+area.width/2-150,area.y+35,300,50];
-  const candidates=[[x+w/2-width/2,y+h+gap]];
-  if(board){const [bx,by,bw,bh]=board;candidates.unshift([bx+bw+gap,by+Math.max(0,(bh-height)/2)],[bx-width-gap,by+Math.max(0,(bh-height)/2)],[bx,by+bh+gap]);}
-  if(!anchor&&!board)candidates.unshift([area.x+area.width-width-24,area.y+area.height*.38]);
-  const overlaps=([px,py],rect)=>rect&&px<rect[0]+rect[2]+8&&px+width>rect[0]-8&&py<rect[1]+rect[3]+8&&py+height>rect[1]-8;
-  const options=candidates.map(clamp);
-  const position=options.find(p=>!overlaps(p,board)&&!overlaps(p,anchor))||options[0];
-  return {x:position[0],y:position[1],arrow:Math.max(45,Math.min(width-45,x+w/2-position[0])),pointsUp:!board&&['screen','whiteboard','stop','copied','locate'].includes(phase)};
 }
 // A renderer has no useful lifetime after its Rust parent disconnects.
 // Keep the error listener installed while closing: write callbacks/errors can arrive later.
@@ -56,10 +45,11 @@ function parentChannel(output,onLost){
 module.exports={project,actions,coachDimensions,setupDimensions,nativeRectangle,coachPosition,parentChannel};
 if(!process.versions.electron) return;
 const { app, BrowserWindow, ipcMain, screen, session } = require('electron');
+const {removeCompositorBorder}=require('../dist/onboarding-hyprland.cjs');
 app.setName(process.env.APPARENT_TEST_INSTANCE==='1'?'apparent onboarding preview':'apparent onboarding');
 app.setPath('userData',path.join(app.getPath('appData'),'apparent-onboarding'));
 if(process.env.APPARENT_UI_PROFILE)app.setPath('userData',process.env.APPARENT_UI_PROFILE);
-let window,state=null,buffer='',page,lastPlacement='',lastMode=null,closing=false;
+let window,state=null,buffer='',page,lastPlacement='',lastMode=null,closing=false,borderReady=false,borderPending=false,borderAttempts=0;
 const channel=parentChannel(process.stdout,error=>{
   const expected=['EPIPE','ECONNRESET','ERR_STREAM_DESTROYED','ERR_STREAM_WRITE_AFTER_END'].includes(error?.code);
   if(!expected)console.error('Onboarding parent channel failed:',error);
@@ -74,6 +64,8 @@ app.whenReady().then(()=>{
   app.dock?.hide();session.defaultSession.setPermissionRequestHandler((_w,_p,cb)=>cb(false));
   session.defaultSession.setPermissionCheckHandler(()=>false);
   window=new BrowserWindow({width:760,height:720,show:false,frame:false,transparent:true,resizable:false,backgroundColor:transparentBackgroundColor,webPreferences:{preload:path.join(__dirname,'onboarding-preload.cjs'),contextIsolation:true,nodeIntegration:false,sandbox:true,webSecurity:true}});
+  window.setTitle(`Apparent onboarding ${process.pid}`);
+  window.on('page-title-updated',event=>event.preventDefault());
   window.removeMenu();page=pathToFileURL(path.join(__dirname,process.argv.includes('--native-onboarding')?'../dist/index.html':'../dist/onboarding.html')).href+(process.argv.includes('--native-onboarding')?'?nativeOnboarding':'');
   window.webContents.setWindowOpenHandler(()=>({action:'deny'}));window.webContents.on('will-navigate',e=>e.preventDefault());window.webContents.on('will-attach-webview',e=>e.preventDefault());
   const valid=e=>!window.isDestroyed()&&e.sender===window.webContents&&e.senderFrame===window.webContents.mainFrame&&e.senderFrame.url===page;
@@ -136,4 +128,11 @@ function present(v,activate=false){
   }
   window.webContents.send('onboarding:state',v);
   if(!window.isVisible()||activate){if(coach)window.showInactive();else window.show();}
+  if(!borderReady&&!borderPending&&borderAttempts<8){
+    borderPending=true;borderAttempts++;
+    void removeCompositorBorder(process.pid,window.getTitle()).then(()=>{borderReady=true},()=>{
+      // Older Hyprland syntax is left unchanged. A later state tick can retry
+      // mapping readiness; never change a different window as a fallback.
+    }).finally(()=>{borderPending=false});
+  }
 }
