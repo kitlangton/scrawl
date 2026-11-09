@@ -250,10 +250,16 @@ jobs:
         run: |
           # Reproduce the CI-sensitive fixtures before the full affected suites.
           if [ "${{ needs.select.outputs.root }}" = true ]; then
-            cargo test -j 3 --locked capture::desktop::settings::settings::tests::the_command_line_row_ -- --test-threads=2
-            cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact
             if [ "$RUNNER_OS" = macOS ]; then
-              cargo test -j 3 --locked connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed -- --exact
+              # libtest ORs positional filters. Compile/check freshness once for
+              # all four current cases; the later unfiltered suite still runs.
+              cargo test -j 3 --locked --timings -- --test-threads=2 \
+                capture::desktop::settings::settings::tests::the_command_line_row_ \
+                capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket \
+                connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed
+            else
+              cargo test -j 3 --locked capture::desktop::settings::settings::tests::the_command_line_row_ -- --test-threads=2
+              cargo test -j 3 --locked capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket -- --exact
             fi
           fi
       # Required app compilation precedes GUI assertions; the later full verifier
