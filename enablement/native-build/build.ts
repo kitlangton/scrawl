@@ -56,11 +56,18 @@ function selectedPath(path: string, watch: (path: string) => void) {
     const entry = join(current, part);
     if (lstatSync(entry).isSymbolicLink()) {
       if (++links > 64) throw new Error('Too many native input symlinks');
-      watch(entry);
+      const target = readlinkSync(entry);
+      // macOS's standard root /var alias is OS layout, not tool selection.
+      // Cargo follows directory watches recursively: watching it for cryptex
+      // Metal tools makes unrelated logs/caches dirty every warm build. Exempt
+      // only this exact mapping; still resolve its targets and watch any mutable
+      // aliases below it. Changing this OS layout requires a clean build.
+      const systemVar = entry === '/var' && target === 'private/var'
+        && realpathSync.native(entry) === '/private/var';
+      if (!systemVar) watch(entry);
       // For file symlinks Cargo stats the target, so an older replacement can
       // look fresh. Traversing the containing directory observes the link entry.
       if (!statSync(entry).isDirectory()) watch(dirname(entry));
-      const target = readlinkSync(entry);
       if (isAbsolute(target)) current = '/';
       // Expand before processing '..'; normalizing the whole target first can
       // erase a symlink component and resolve a different filesystem path.

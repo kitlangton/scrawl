@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, renameSync, rmSync, symlinkSync, utimesSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
@@ -19,10 +19,13 @@ function fixture(t: { after: (fn: () => void) => void }) {
   for (const [path] of source.matchAll(/'(capture\/[^']+\.(?:swift|metal)|shared\/native\/[^']+\.(?:swift|plist))'/g)) {
     put(path.slice(1, -1), path.endsWith("Info.plist'") ? '<string>dev.kitlangton.apparent.helper</string>' : 'synthetic input');
   }
-  // Redirect only the OS-owned selector path; execute the production policy and
-  // Rust adapter against a real directory symlink without touching the host.
+  // Redirect only OS-owned absolute paths; execute the production policy and
+  // Rust adapter against real symlinks without touching the host. Keep the
+  // standard /var link's relative target (private/var) unchanged.
   assert.ok(source.includes("'/var/db/xcode_select_link'"));
-  put('enablement/native-build/build.ts', source.replaceAll('/var/db/xcode_select_link', join(root, 'selector')));
+  put('enablement/native-build/build.ts', source.replaceAll('/var/db/xcode_select_link', join(root, 'selector'))
+    .replaceAll("'/var'", JSON.stringify(join(root, 'var')))
+    .replaceAll("'/private/var'", JSON.stringify(join(root, 'private/var'))));
   const developer = join(root, 'Xcode.app/Contents/Developer');
   const otherDeveloper = join(root, 'Other.app/Contents/Developer');
   for (const app of ['Xcode.app', 'Other.app']) {
@@ -362,8 +365,8 @@ for (const kind of ['developer', 'app', 'parent', 'global'] as const) {
 }
 
 function checkRetarget(t: Parameters<typeof cargoFixture>[0],
-  prepare: (f: ReturnType<typeof cargoFixture>) => { extra?: Record<string, string>; retarget: () => void }) {
-  const f = cargoFixture(t);
+  prepare: (f: ReturnType<typeof cargoFixture>) => { extra?: Record<string, string>; retarget: () => void },
+  f = cargoFixture(t)) {
   const { extra = {}, retarget } = prepare(f);
   let r = f.cargo(extra);
   assert.equal(r.status, 0, r.stderr);
@@ -371,6 +374,7 @@ function checkRetarget(t: Parameters<typeof cargoFixture>[0],
   r = f.cargo(extra);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /Fresh native-cache-fixture/);
+  assert.doesNotMatch(r.stderr, /Running `/);
   retarget();
   r = f.cargo(extra);
   assert.equal(r.status, 0, r.stderr);
@@ -379,6 +383,7 @@ function checkRetarget(t: Parameters<typeof cargoFixture>[0],
   r = f.cargo(extra);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stderr, /Fresh native-cache-fixture/);
+  assert.doesNotMatch(r.stderr, /Running `/);
   assert.equal(f.count().length, 10);
 }
 
@@ -403,6 +408,146 @@ function redirectDiscovery(f: ReturnType<typeof cargoFixture>, oldText: string, 
   assert.ok(body.includes(oldText));
   writeFileSync(path, body.replace(oldText, newText));
 }
+
+function cryptexFixture(t: Parameters<typeof cargoFixture>[0]) {
+  const f = cargoFixture(t);
+  const mount = 'run/com.apple.security.cryptexd/mnt/com.apple.MobileAsset.MetalToolchain-v27.2.47.0.fixture';
+  const bin = `private/var/${mount}/Metal.xctoolchain/usr/bin`;
+  f.put(`${bin}/metal`, 'synthetic Metal compiler');
+  f.put(`${bin}/air-lld`, 'synthetic Metal linker');
+  symlinkSync('air-lld', join(f.root, bin, 'metallib'));
+  f.put('private/var/log/unrelated', 'ordinary system activity');
+  symlinkSync('private/var', join(f.root, 'var'));
+  redirectDiscovery(f, '--find) printf', `--find) case "$2" in metal|metallib)
+    printf '%s\\n' "$FAKE_ROOT/var/${mount}/Metal.xctoolchain/usr/bin/$2"; exit;; esac; printf`);
+  return { ...f, metalBin: join(f.root, bin) };
+}
+
+test('Cargo cryptex Metal selection stays Fresh through unrelated system churn',
+  { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+    const f = cryptexFixture(t);
+    const cold = f.cargo();
+    assert.equal(cold.status, 0, cold.stderr);
+    const watches = cold.stdout.split('\n').flatMap(line => {
+      const match = line.match(/cargo:rerun-if-changed=(.*)$/);
+      return match ? [match[1]] : [];
+    });
+    t.diagnostic('System watches: ' + JSON.stringify(watches.filter(path => path.startsWith(join(f.root, 'var'))
+      || path.startsWith(join(f.root, 'private')))));
+    const warm = f.cargo();
+    assert.equal(warm.status, 0, warm.stderr);
+    assert.match(warm.stderr, /Fresh native-cache-fixture/);
+    assert.doesNotMatch(warm.stderr, /Running `/);
+    const samples = [];
+    for (let i = 0; i < 3; i++) {
+      f.put('private/var/log/unrelated', `unrelated system churn ${i}`);
+      const r = f.cargo();
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(f.count().length, 5, 'churn must not compile native outputs');
+      samples.push(r);
+      t.diagnostic(`churn ${i}: ` + r.stderr.split('\n').filter(line => /Dirty |Fresh |Running `/.test(line)).join('\n')
+        + '\n' + r.stdout.split('\n').filter(line => /native-build /.test(line)).join('\n'));
+    }
+    for (const r of samples) {
+      assert.match(r.stderr, /Fresh native-cache-fixture/);
+      assert.doesNotMatch(r.stderr, /Running `/);
+      assert.doesNotMatch(r.stdout, /native-build /);
+    }
+    assert.deepEqual(watches.filter(path => path.startsWith(join(f.root, 'var'))
+      || path.startsWith(join(f.root, 'private'))).sort(),
+      [f.metalBin, ...['metal', 'metallib', 'air-lld'].map(name => join(f.metalBin, name))].sort());
+    assert.ok(!watches.includes(join(f.root, 'selector')));
+  });
+
+for (const kind of ['metal-bytes', 'linker-bytes', 'file-alias', 'target-parent', 'transitive'] as const) {
+  test(`Cargo cryptex selection still validates ${kind} changes`,
+    { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+      const f = cryptexFixture(t);
+      checkRetarget(t, () => {
+        if (kind === 'metal-bytes' || kind === 'linker-bytes') return { retarget: () => {
+          writeFileSync(join(f.metalBin, kind === 'metal-bytes' ? 'metal' : 'air-lld'), 'changed executable bytes');
+        } };
+        if (kind === 'file-alias') {
+          const older = join(f.metalBin, 'older-air-lld');
+          writeFileSync(older, 'different linker with old mtime');
+          utimesSync(older, 1, 1);
+          return { retarget: () => {
+            rmSync(join(f.metalBin, 'metallib'));
+            symlinkSync('older-air-lld', join(f.metalBin, 'metallib'));
+          } };
+        }
+        // The tool file alias introduces a target-parent link below /var;
+        // a second directory link exercises transitive expansion there too.
+        for (const name of ['old', 'new']) {
+          const path = join(f.metalBin, name);
+          mkdirSync(path); writeFileSync(join(path, 'metal'), name + ' compiler');
+        }
+        const alias = join(f.metalBin, 'selected');
+        symlinkSync('old', alias);
+        if (kind === 'transitive') symlinkSync('selected', join(f.metalBin, 'middle'));
+        rmSync(join(f.metalBin, 'metal'));
+        symlinkSync(`${kind === 'transitive' ? 'middle' : 'selected'}/metal`, join(f.metalBin, 'metal'));
+        return { retarget: () => { rmSync(alias); symlinkSync('new', alias); } };
+      }, f);
+    });
+}
+
+test('the /var exception requires the exact root alias, target spelling and canonical destination', t => {
+  const f = cryptexFixture(t);
+  const alias = join(f.root, 'var');
+  const broadWatch = `cargo:rerun-if-changed=${alias}\n`;
+  // Alternate spelling or a mutable intermediate target stays conservative,
+  // even if it currently reaches the same files as the standard root alias.
+  symlinkSync('private/var', join(f.root, 'intermediate'));
+  for (const target of [join(f.root, 'private/var'), 'intermediate']) {
+    rmSync(alias); symlinkSync(target, alias);
+    const r = f.run();
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stdout.includes(broadWatch), target);
+  }
+  rmSync(alias); symlinkSync('private/var', alias);
+  renameSync(join(f.root, 'private/var'), join(f.root, 'private/other'));
+  symlinkSync('other', join(f.root, 'private/var'));
+  const redirected = f.run();
+  assert.equal(redirected.status, 0, redirected.stderr);
+  assert.ok(redirected.stdout.includes(broadWatch), 'noncanonical destination is not OS layout');
+  assert.ok(redirected.stdout.includes(`cargo:rerun-if-changed=${join(f.root, 'private/var')}\n`));
+
+  // A user-owned lookalike /something/var -> private/var is not exempt.
+  f.put('user/private/var/metal', 'compiler');
+  symlinkSync('private/var', join(f.root, 'user/var'));
+  redirectDiscovery(f, '"$FAKE_ROOT/bin/$2"', '"$FAKE_ROOT/user/var/metal"');
+  const lookalike = f.run();
+  assert.equal(lookalike.status, 0, lookalike.stderr);
+  assert.ok(lookalike.stdout.includes(`cargo:rerun-if-changed=${join(f.root, 'user/var')}\n`));
+});
+
+test('Cargo refuses dangling and cyclic cryptex aliases without replacing a receipt, then returns Fresh',
+  { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+    const f = cryptexFixture(t);
+    const cold = f.cargo();
+    assert.equal(cold.status, 0, cold.stderr);
+    const native = readdirSync(join(f.root, 'target/debug/build')).find(name => existsSync(join(f.root, 'target/debug/build', name, 'out/native-build.json')))!;
+    const manifest = join(f.root, 'target/debug/build', native, 'out/native-build.json');
+    const receipt = readFileSync(manifest, 'utf8');
+    for (const target of ['missing-linker', 'metallib']) {
+      rmSync(join(f.metalBin, 'metallib')); symlinkSync(target, join(f.metalBin, 'metallib'));
+      const failed = f.cargo();
+      assert.notEqual(failed.status, 0, target);
+      assert.match(failed.stderr, /Mac helper\/shader build failed/);
+      assert.equal(readFileSync(manifest, 'utf8'), receipt);
+      assert.equal(f.count().length, 5);
+      rmSync(join(f.metalBin, 'metallib')); symlinkSync('air-lld', join(f.metalBin, 'metallib'));
+      const recovered = f.cargo();
+      assert.equal(recovered.status, 0, recovered.stderr);
+      assert.match(recovered.stdout, /native-build helper: verified reuse/);
+      assert.equal(f.count().length, 5);
+      const warm = f.cargo();
+      assert.equal(warm.status, 0, warm.stderr);
+      assert.match(warm.stderr, /Fresh native-cache-fixture/);
+      assert.doesNotMatch(warm.stderr, /Running `/);
+    }
+  });
 
 test('unresolvable native aliases fail before accepting or replacing a receipt', t => {
   const f = fixture(t);
