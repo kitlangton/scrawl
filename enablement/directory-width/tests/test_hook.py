@@ -124,6 +124,75 @@ class DirectoryWidthHookTests(unittest.TestCase):
         self.assertEqual(result.returncode, 1)
         self.assertIn(b": 0 files, 11 subdirectories (limit 10 each)", result.stderr)
 
+    def test_root_allows_only_three_named_tool_directories_in_addition_to_ten_owners(self) -> None:
+        for tool in (".cargo", ".githooks", ".github"):
+            self.put(f"{tool}/entry")
+        for i in range(10):
+            self.put(f"owner-{i:02d}/entry")
+        self.stage(".cargo", ".githooks", ".github", "owner-*")
+        allowed = self.run_hook()
+        self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+        self.assertIn(b"13 total directories = 3 tool + 10 ordinary", allowed.stderr)
+        self.put(".another-tool/entry")
+        self.stage(".another-tool")
+        blocked = self.run_hook()
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn(b"14 subdirectories", blocked.stderr)
+        self.assertIn(b"only .cargo, .githooks and .github", blocked.stderr)
+
+    def test_named_tool_contents_and_nested_tool_names_remain_checked(self) -> None:
+        for directory in (".github", "owner/.cargo"):
+            for i in range(11):
+                self.put(f"{directory}/entry-{i:02d}")
+        self.stage(".github", "owner")
+        blocked = self.run_hook()
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn(b".github: 11 files", blocked.stderr)
+        self.assertIn(b"owner/.cargo: 11 files", blocked.stderr)
+
+    def test_nested_tool_directory_does_not_add_an_owner_slot(self) -> None:
+        for name in [f"part-{i}" for i in range(10)] + [".cargo"]:
+            self.put(f"owner/{name}/entry")
+        self.stage("owner")
+        blocked = self.run_hook()
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn(b"owner: 0 files, 11 subdirectories", blocked.stderr)
+
+    def test_root_named_symlink_is_a_file_and_gitlink_has_no_tool_allowance(self) -> None:
+        for i in range(10):
+            self.put(f"owner-{i}/entry")
+        (self.repo / ".cargo").symlink_to("owner-0", target_is_directory=True)
+        self.stage(".cargo", "owner-*")
+        allowed = self.run_hook()
+        self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+        self.assertIn(b"1 files; 10 total directories = 0 tool + 10 ordinary", allowed.stderr)
+        self.commit()  # Fixture-only bypass; create a real commit object for the gitlink.
+        oid = self.git("rev-parse", "HEAD").stdout.decode().strip()
+        self.git("update-index", "--add", "--cacheinfo", f"160000,{oid},.github")
+        blocked = self.run_hook()
+        self.assertEqual(blocked.returncode, 1)
+        self.assertIn(b"11 total directories = 0 tool + 11 ordinary", blocked.stderr)
+
+    def test_root_tool_allowance_uses_staged_tree_only(self) -> None:
+        for name in [f"owner-{i}" for i in range(10)] + [".cargo"]:
+            self.put(f"{name}/entry")
+        self.stage("owner-*")
+        (self.repo / ".github").symlink_to("owner-0", target_is_directory=True)
+        self.stage(".github")
+        # The unstaged real .cargo directory grants no slot. The staged symlink
+        # stays a file even when its worktree counterpart becomes a directory.
+        (self.repo / ".github").unlink()
+        self.put(".github/entry")
+        allowed = self.run_hook()
+        self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+        self.assertIn(b"1 files; 10 total directories = 0 tool + 10 ordinary", allowed.stderr)
+        self.stage(".cargo")
+        shutil.rmtree(self.repo / ".cargo")
+        (self.repo / ".cargo").symlink_to("owner-0", target_is_directory=True)
+        allowed = self.run_hook()
+        self.assertEqual(allowed.returncode, 0, allowed.stderr.decode())
+        self.assertIn(b"1 files; 11 total directories = 1 tool + 10 ordinary", allowed.stderr)
+
     def test_tracked_first_party_html_beneath_public_root_is_enforced(self) -> None:
         paths = [f"public/site/public/feature-demos/page-{i}.html" for i in range(11)]
         for path in paths:

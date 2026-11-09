@@ -8,6 +8,10 @@ import subprocess
 import sys
 
 LIMIT = 10
+# Root tool locations are fixed by Cargo, Git and GitHub. They remain visible
+# and their contents are checked normally; only these three root entries have
+# the bounded exception documented in AGENTS.md.
+ROOT_TOOL_DIRECTORIES = {b".cargo", b".githooks", b".github"}
 # Eligibility is by tracked first-party tree scope, not filename suffix. Every
 # non-excluded blob is repo-owned content for width purposes (including files
 # with extensionless or uncommon source names). Keep generated/dependency
@@ -101,7 +105,7 @@ def changed_paths(root: Path, head_exists: bool) -> list[bytes]:
     return [path for path in raw.split(b"\0") if path]
 
 
-def inspect(root: Path) -> list[tuple[bytes, int, int]]:
+def inspect(root: Path) -> tuple[list[tuple[bytes, int, int]], tuple[int, int, int] | None]:
     head_result = subprocess.run(["git", "rev-parse", "--verify", "HEAD"], cwd=root,
                                  stdout=subprocess.PIPE, stderr=subprocess.PIPE)
     head_exists = head_result.returncode == 0
@@ -109,7 +113,7 @@ def inspect(root: Path) -> list[tuple[bytes, int, int]]:
         raise RuntimeError("cannot determine HEAD: " + head_result.stderr.decode("utf-8", "replace").strip())
     staged = changed_paths(root, head_exists)
     if not staged:
-        return []
+        return [], None
 
     # write-tree reads the index candidate without changing it. HEAD is read as
     # immutable tree data; no worktree path or file bytes participate.
@@ -134,15 +138,20 @@ def inspect(root: Path) -> list[tuple[bytes, int, int]]:
         if before_children.get(directory, {}) != after_children.get(directory, {}):
             affected.add(directory)
     code_dirs = code_directories(after) | code_directories(before)
+    actual_dirs = directories(after)  # gitlinks and symlinks are not actual trees.
 
     violations = []
+    root_counts = None
     for directory in sorted(affected & code_dirs):
         direct = after_children.get(directory, {})
         files = sum(kind == "file" for kind in direct.values())
         dirs = sum(kind == "directory" for kind in direct.values())
-        if files > LIMIT or dirs > LIMIT:
+        tool_dirs = len(ROOT_TOOL_DIRECTORIES & actual_dirs) if not directory else 0
+        if not directory:
+            root_counts = (files, dirs, tool_dirs)
+        if files > LIMIT or dirs - tool_dirs > LIMIT:
             violations.append((directory, files, dirs))
-    return violations
+    return violations, root_counts
 
 
 def main() -> int:
@@ -152,17 +161,22 @@ def main() -> int:
         actual_root = Path(os.fsdecode(git(root, "rev-parse", "--show-toplevel").rstrip(b"\n"))).resolve()
         if actual_root != root.resolve():
             raise RuntimeError(f"hook root mismatch: {actual_root}")
-        violations = inspect(root)
+        violations, root_counts = inspect(root)
     except (OSError, RuntimeError, subprocess.CalledProcessError) as error:
         detail = getattr(error, "stderr", b"")
         if isinstance(detail, bytes):
             detail = detail.decode("utf-8", "replace").strip()
         print(f"pre-commit: directory-width check failed closed: {error} {detail}".rstrip(), file=sys.stderr)
         return 1
+    if root_counts is not None:
+        files, dirs, tool_dirs = root_counts
+        print(f"pre-commit: root: {files} files; {dirs} total directories = {tool_dirs} tool + {dirs - tool_dirs} ordinary (limits: 10 files, 10 ordinary directories)", file=sys.stderr)
     if violations:
         print("pre-commit: staged candidate exceeds the directory-width limit:", file=sys.stderr)
         for path, files, dirs in violations:
             print(f"  {decode_path(path)}: {files} files, {dirs} subdirectories (limit 10 each)", file=sys.stderr)
+            if not path:
+                print("    root additionally permits only .cargo, .githooks and .github as tool directories; all other entries count", file=sys.stderr)
         print("Split changes by responsibility and stage only the intended changes; this hook does not edit or stage files.", file=sys.stderr)
         return 1
     return 0
