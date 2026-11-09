@@ -50,9 +50,10 @@ test('ready PRs and main pushes execute both full platform jobs; drafts and othe
   // Evaluate the workflow's actual boolean admission expressions against event
   // fixtures. These expressions use the common GitHub/JavaScript boolean subset.
   const admitted = (expression: string, event: string, draft: boolean, ref: string,
-    receipt = false) => Function('github', 'inputs', `return (${expression});`)(
+    receipt = false) => Function('github', 'inputs', 'needs', 'cancelled', `return (${expression});`)(
       {event_name: event, ref, repository: 'tryapparent/apparent',
-        event: {pull_request: {draft}}}, {'release_receipt': receipt});
+        event: {pull_request: {draft}}}, {'release_receipt': receipt},
+      {contracts: {result: 'success'}, hermes: {result: 'success'}, select: {result: 'success'}}, () => false);
   for (const [name, runner] of [['linux', 'ubuntu-24.04'], ['macos', 'macos-15-intel']]) {
     const job = ci.jobs[name];
     assert.equal(job.uses, './.github/workflows/verification-platform.yml');
@@ -103,31 +104,48 @@ test('Public and updater retain their previous automatic input coverage', () => 
   }
 });
 
-test('every automatic Mac entrypoint waits for successful Linux verification and cheap checks', () => {
+test('full platforms and Mac inspection share cheap prerequisites without depending on either full platform', () => {
   const ci = workflow('checks.yml');
-  const ancestors = (name: string): string[] => {
-    const needs = ci.jobs[name].needs ?? [];
-    return [needs].flat().flatMap((parent: string) => [parent, ...ancestors(parent)]);
-  };
-  const macJobs = Object.entries(ci.jobs).filter(([, job]: any) => {
+  const expensive = Object.entries(ci.jobs).filter(([, job]: any) => {
     const runners = [job.with?.runner, job['runs-on'], ...Object.values(job.strategy?.matrix ?? {}).flat()];
-    return runners.some(runner => typeof runner === 'string' && runner.startsWith('macos-'));
+    return job.uses === './.github/workflows/verification-platform.yml' ||
+      runners.some(runner => typeof runner === 'string' && runner.startsWith('macos-'));
   });
-  assert.ok(macJobs.length > 0, 'must inspect the actual Mac job inventory');
-  for (const [name, job] of macJobs as [string, any][]) {
-    const prerequisites = ancestors(name);
-    for (const required of ['linux', 'contracts', 'hermes']) {
-      assert.ok(prerequisites.includes(required), `${name} must wait for ${required}`);
-    }
-    // GitHub implicitly requires success() for needs unless a status function
-    // overrides it. Failures, cancellations and skips must not allocate Macs.
-    for (const entry of [name, ...prerequisites]) {
-      assert.doesNotMatch(ci.jobs[entry].if ?? '', /\b(always|failure|cancelled)\s*\(/, entry);
-      assert.equal(ci.jobs[entry]['continue-on-error'], undefined, entry);
+  assert.deepEqual(expensive.map(([name]) => name).sort(), ['hermes-macos', 'linux', 'macos']);
+  for (const cheap of ['contracts', 'hermes', 'select']) {
+    assert.equal(ci.jobs[cheap].needs, undefined, `${cheap} must not wait for full platforms`);
+    assert.equal(ci.jobs[cheap]['continue-on-error'], undefined);
+  }
+  for (const [name, job] of expensive.sort(([a], [b]) => a.localeCompare(b)) as [string, any][]) {
+    assert.deepEqual([job.needs ?? []].flat().sort(), ['contracts', 'hermes', 'select'], name);
+    assert.equal(job['continue-on-error'], undefined, name);
+    // Evaluate the actual expression, including GitHub's implicit success()
+    // only when no explicit status function overrides it. A failed selector
+    // must retain full coverage, while failed cheap guards block allocation.
+    const admitted = (needs: any, event = 'pull_request', draft = false, cancelled = false) => {
+      const expression = job.if.replace(/^\$\{\{\s*|\s*\}\}$/g, '');
+      const explicitStatus = /\b(always|success|failure|cancelled)\s*\(/.test(expression);
+      if (!explicitStatus && job.needs.some((parent: string) => needs[parent]?.result !== 'success')) return false;
+      return Function('needs', 'github', 'cancelled', `return (${expression});`)(needs,
+        {event_name: event, event: {pull_request: {draft}}}, () => cancelled);
+    };
+    for (const contracts of ['success', 'failure', 'cancelled', 'skipped', undefined]) {
+      for (const hermes of ['success', 'failure', 'cancelled', 'skipped', undefined]) {
+        for (const select of ['success', 'failure', 'cancelled', 'skipped', undefined]) {
+          const needs = {contracts: {result: contracts}, hermes: {result: hermes},
+            select: {result: select, outputs: {}}, linux: {result: 'failure'}, macos: {result: 'failure'}};
+          const expected = contracts === 'success' && hermes === 'success';
+          for (const [event, draft, allowed] of [['pull_request', false, true], ['push', false, true],
+            ['pull_request', true, false], ['workflow_run', false, false], ['workflow_dispatch', false, false]] as const) {
+            assert.equal(admitted(needs, event, draft), expected && allowed,
+              `${name}: ${event}, draft=${draft}, guards=${contracts}/${hermes}, selector=${select}`);
+          }
+          assert.equal(admitted(needs, 'pull_request', false, true), false, `${name}: workflow cancellation`);
+        }
+      }
     }
   }
   assert.equal(ci.jobs.hermes['runs-on'], 'ubuntu-24.04');
-  assert.equal(ci.jobs.hermes.needs, undefined, 'cheap inspection must not wait for full suites');
 });
 
 test('Mac inspection preserves its checks but runs only for ready PRs and main pushes', () => {
