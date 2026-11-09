@@ -40,6 +40,23 @@ test('reads only state and strips capture identity and unexpected data', async (
   assert.deepEqual(f.requests, ['state\n']);
 });
 
+for (const [reply, code] of [
+  ['{"error":"app_busy","secret":"private"}\n', 'app_busy'],
+  ['{"error":"app_unresponsive"}\n', 'app_unresponsive'],
+  ['{"error":"private backend detail"}\n', 'invalid_response'],
+  ['not json\n', 'invalid_json'],
+  ['{}\n{}\n', 'invalid_frame'],
+  ['x'.repeat(4097), 'response_too_large'],
+  ['{"state":{"phase":"idle"}}', 'incomplete_response'],
+]) test(`runtime failure distinguishes ${code} without exposing the reply`, async t => {
+  const f = await fixture(t, reply);
+  const result = await readRuntimeState(f.home);
+  assert.equal(result.status, 'error');
+  assert.equal(result.code, code);
+  assert.deepEqual(Object.keys(result).sort(), ['code', 'message', 'status']);
+  assert.ok(!JSON.stringify(result).includes('private'));
+});
+
 test('missing GUI is disconnected and creates no config directory', async (t) => {
   const home = await fs.mkdtemp(path.join(os.tmpdir(), 'ui-'));
   t.after(() => fs.rm(home, { recursive: true, force: true }));
@@ -49,7 +66,7 @@ test('missing GUI is disconnected and creates no config directory', async (t) =>
 
 test('rejects public directories before contacting the socket', async (t) => {
   const f = await fixture(t, '{}\n', { mode: 0o755 });
-  assert.equal((await readRuntimeState(f.home)).status, 'error');
+  assert.equal((await readRuntimeState(f.home)).code, 'unsafe_endpoint');
   assert.deepEqual(f.requests, []);
 });
 
@@ -89,7 +106,7 @@ test('absolute deadline bounds an unresponsive server', { timeout: 1000 }, async
   await new Promise(setImmediate);
   assert.equal(settled, false);
   t.mock.timers.tick(1);
-  assert.equal((await result).status, 'error');
+  assert.equal((await result).code, 'request_timeout');
   await connectionClosed;
   assert.deepEqual(f.requests, ['state\n']);
 });
