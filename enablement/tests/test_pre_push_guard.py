@@ -54,6 +54,12 @@ class PrePushGuardTests(unittest.TestCase):
             path = self.repo / "enablement" / name
             path.parent.mkdir(exist_ok=True)
             path.write_text("import {test} from 'node:test'; test('fixture', () => {});\n")
+        for name in ("hermes/desktop/controller.test.ts", "hermes/desktop/plugin.test.ts",
+                     "capture/desktop/ui/frontend/src/hermes/protocol.test.ts",
+                     "capture/desktop/ui/frontend/src/hermes/mailbox.test.ts"):
+            path = self.repo / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_text("import {test} from 'node:test'; test('fixture', () => {});\n")
         for name in ("inputs.ts", "workflow-controls.ts"):
             shutil.copy2(SELECTOR.parent / "ci" / name, self.repo / "enablement/ci" / name)
         # The real verifier now runs the shared frontend color guard. Preserve

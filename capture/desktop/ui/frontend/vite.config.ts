@@ -4,6 +4,7 @@ import tailwindcss from '@tailwindcss/vite';
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import ts from 'typescript';
+import { build } from 'esbuild';
 
 // file: dependencies are snapshots. Refuse a build using stale shared controls.
 for (const file of ['button.tsx', 'tabs.tsx', 'utils.ts', 'theme.css', 'tokens.css', 'window-theme.cjs', 'status-card.tsx', 'disclosure-menu.tsx', 'status.css']) {
@@ -29,6 +30,9 @@ export default defineConfig({
       mkdirSync(reportingOutput, { recursive: true });
       writeFileSync(path.join(reportingOutput, 'reporting.cjs'), outputText);
     },
-  }],
+  }, { name: 'hermes-native-bridge', async closeBundle() {
+    await build({ entryPoints: { 'hermes-main': 'src/hermes/main.ts', 'hermes-preload': 'src/hermes/preload.ts' },
+      bundle: true, platform: 'node', format: 'cjs', external: ['electron'], outdir: 'dist', outExtension: { '.js': '.cjs' } });
+  } }],
   build: { rollupOptions: { input: { foundation: 'index.html', settings: 'settings.html', onboarding: 'onboarding.html', installer: 'src/installer/index.html' } } },
 });

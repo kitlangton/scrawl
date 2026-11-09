@@ -259,6 +259,10 @@ The cabled iPhone, OS element lookups for `agentContext` (`ax_other.rs`), Sparkl
 
 `capture/desktop/scripts/linux/appimage/appimage.sh [binary]` builds `target/appimage/Apparent-<arch>.AppImage` with linuxdeploy and its GStreamer plugin, so GStreamer, `pipewiresrc`, `ximagesrc` and the H.264 encoders come with it. The binary baseline is **Ubuntu 24.04+**. Install `libfuse2t64` to run the AppImage, or run `./Apparent-<arch>.AppImage --appimage-extract-and-run app` without FUSE.
 
+linuxdeploy also resolves the staged Electron runtime's native dependencies.
+Otherwise its system S/MIME library can require newer NSS symbols than the
+recorder's bundled NSS libraries provide, preventing the UI from starting.
+
 ### From an owned Scrawl AppImage
 
 The rename deliberately did **not** migrate Scrawl's settings, captures, credentials, model cache or OS permissions. Apparent uses different config/data paths and bundle identities; do not copy `~/.config/scrawl/config.json` or rename `.scrawl` bundles to `.apparent`. Older captures remain available by their old paths and the retained `scrawl` CLI. The old updater only accepts `Scrawl-…AppImage` and its own feed; it cannot install an Apparent image.

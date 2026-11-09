@@ -211,7 +211,7 @@ enum Command {
         #[arg(long, default_value_t = 0)]
         wait: u64,
     },
-    /// Open Apparent without recording. Only apparent://open is accepted.
+    /// Open Apparent, or review a token-bound Hermes recording request.
     #[cfg(any(target_os = "macos", target_os = "linux"))]
     Launch { url: Option<String> },
     /// Explicitly register the Linux URL handler, or inspect the desktop's selected handler.
@@ -599,6 +599,8 @@ enum CaptureCommand {
     Cancel { capture_id: String },
     /// Read this capture's result, retained only for the running GUI's lifetime.
     Inspect { capture_id: String },
+    /// Return the normal handoff reference for this exact saved capture, without copying or sending.
+    Handoff { capture_id: String },
 }
 
 /// `capture/agent/skills/apparent/SKILL.md`, the same text served from app.tryapparent.com/skill.md.
@@ -694,6 +696,9 @@ fn run_cli(cli: Cli) -> Result<()> {
         },
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Launch { url } => {
+            if let Some(token) = url.as_deref().and_then(crate::capture::desktop::workflow::launch_url::hermes_request) {
+                return crate::capture::desktop::workflow::launch_url::open_hermes(token);
+            }
             if let Some(url) = url {
                 launch_instance::request_url(&url)?;
             } else {
@@ -704,6 +709,16 @@ fn run_cli(cli: Cli) -> Result<()> {
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         Command::Capture { command } => {
             use crate::capture::desktop::workflow::agent_capture::Action;
+            if let CaptureCommand::Handoff { capture_id } = &command {
+                let result = agent_capture::execute(Some((Action::Inspect, capture_id)), false, Duration::from_secs(4));
+                ensure!(result["status"] == "saved", "Capture has no saved handoff");
+                let path = PathBuf::from(result["bundle_path"].as_str().context("Missing saved bundle")?);
+                let source = hosted::handoff_pointer(&path)
+                    .and_then(|pointer| pointer.strip_prefix("apparent inspect ").map(|id| id.trim().to_owned()))
+                    .unwrap_or_else(|| path.to_string_lossy().into_owned());
+                println!("{}", serde_json::json!({"capture_id":capture_id,"source":source}));
+                return Ok(());
+            }
             let (action, id, wait, timeout) = match command {
                 CaptureCommand::State => (None, None, false, 4),
                 CaptureCommand::Start {
@@ -730,6 +745,7 @@ fn run_cli(cli: Cli) -> Result<()> {
                 CaptureCommand::Inspect { capture_id } => {
                     (Some(Action::Inspect), Some(capture_id), false, 4)
                 }
+                CaptureCommand::Handoff { .. } => unreachable!(),
             };
             let value = agent_capture::execute(
                 action.zip(id.as_deref()),

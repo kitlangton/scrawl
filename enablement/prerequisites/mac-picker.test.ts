@@ -50,6 +50,27 @@ test('the existing CommonJS driver can load the TypeScript helper using the inst
  const source="const h=require('./enablement/prerequisites/mac-picker.ts'); if(typeof h.prepareStorageChange!=='function'||typeof h.panelScript!=='string')process.exit(1);";
  execFileSync(process.execPath,['-e',source],{stdio:'pipe'});
 });
+test('the retained native receipt preserves direct and wrapped subprocess failure details',()=>{
+ const source=readFileSync('capture/desktop/ui/frontend/tests/mac-storage-native.cjs','utf8');
+ const marker='    failure = error;\n';
+ const markerAt=source.indexOf(marker);assert.ok(markerAt>=0);
+ const start=markerAt+marker.length,end=source.indexOf('    if (page && Date.now() < deadline)',start);
+ assert.ok(end>start);
+ // Execute the actual receipt assignment without importing the native test or
+ // starting its Mac-only processes. This is diagnostic coverage, not native proof.
+ const receipt=new Function('error','report',source.slice(start,end)+'\nreturn report.error;');
+ for(const metadata of [
+  {code:null,signal:'SIGKILL',killed:true,stderr:'synthetic AX diagnostic'},
+  {code:1,signal:null,killed:false,stderr:'synthetic permission refusal'},
+ ]) {
+  const failure=Object.assign(new Error('synthetic subprocess failure'),metadata);
+  for(const error of [failure,new Error('readiness failed',{cause:failure})]) {
+   const recorded=JSON.parse(JSON.stringify(receipt(error,{})));
+   assert.equal(recorded.message,error.message);
+   assert.deepEqual(recorded.subprocess,metadata);
+  }
+ }
+});
 test('native integration retains its consent, deadlines, persistence assertions and one-shot mutation adapter',()=>{
  const source=readFileSync('capture/desktop/ui/frontend/tests/mac-storage-native.cjs','utf8');
  assert.match(source,/prepareStorageChange\(\{/);
