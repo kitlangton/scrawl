@@ -10,6 +10,7 @@ test('popup assets replace old output without shipping another runtime and refus
   await fs.mkdir(path.join(source, 'electron/notes'), { recursive: true });
   await fs.mkdir(path.join(source, 'dist'));
   await fs.writeFile(path.join(source, 'electron/notes/main.cjs'), 'notes');
+  await fs.writeFile(path.join(source, 'electron/runtime.cjs'), 'same-user reporting adapter');
   await fs.writeFile(path.join(source, 'dist/index.html'), 'renderer');
   const { stagePopupAssets } = await import('../../scripts/popup-entries.mjs');
   for (const unsafe of [source, dir, path.join(source, 'nested/output')]) {
@@ -24,6 +25,7 @@ test('popup assets replace old output without shipping another runtime and refus
   await stagePopupAssets(source, out);
   assert.equal(await fs.readFile(path.join(out, 'dist/index.html'), 'utf8'), 'renderer');
   assert.equal(await fs.readFile(path.join(out, 'electron/notes/main.cjs'), 'utf8'), 'notes');
+  assert.equal(await fs.readFile(path.join(out, 'electron/runtime.cjs'), 'utf8'), 'same-user reporting adapter');
   await assert.rejects(fs.stat(path.join(out, 'runtime')), { code: 'ENOENT' });
   const link = path.join(dir, 'link');
   await fs.symlink(source, link);
@@ -38,6 +40,7 @@ test('popup packaging requires notes and includes a present independent share en
   await assert.rejects(stagePopupEntries(root, out), { code: 'ENOENT' });
   await fs.mkdir(path.join(root, 'electron/notes'), { recursive: true });
   await fs.writeFile(path.join(root, 'electron/notes/main.cjs'), 'notes entry');
+  await fs.writeFile(path.join(root, 'electron/runtime.cjs'), 'same-user reporting adapter');
   await stagePopupEntries(root, out);
   assert.equal(await fs.readFile(path.join(out, 'electron/notes/main.cjs'), 'utf8'), 'notes entry');
   await fs.mkdir(path.join(root, 'electron/share'));

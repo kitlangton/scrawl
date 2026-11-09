@@ -156,6 +156,14 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
 
 module.exports = { readRuntimeState, captureLocation, errorReporting, captureReference, storagePreference };
 
+// Technical failures accept no error text, paths or child-process details.
+module.exports.reportException = (home, kind) => {
+  if (!['main_exception', 'main_rejection', 'renderer_gone', 'child_gone'].includes(kind)) return Promise.resolve();
+  return exchange(home, JSON.stringify({ errorReporting: 'exception', kind,
+    deadline: Number(process.hrtime.bigint() / 1000000n) + 500 }) + '\n',
+    () => undefined, 1024, 500, undefined);
+};
+
 async function publicShare(home, operation, value) {
   const request = { publicShare: operation, deadline: Number(process.hrtime.bigint()/1000000n)+3000 };
   if (operation === 'start') { request.expected = value; request.disclosed = true; }

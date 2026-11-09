@@ -63,7 +63,7 @@ function host(mode: string) {
     __dirname: path.dirname(filename),
     setTimeout: (callback: () => void) => { const timer = { callback, active: true, unref() {} }; timers.push(timer); return timer; },
     clearTimeout: (timer?: typeof timers[number]) => { if (timer) timer.active = false; },
-    process: { argv: ['electron', '.', mode, '--settings-parent'], platform: 'darwin', stdin: {}, stdout: output },
+    process: { argv: ['electron', '.', mode, '--settings-parent'], env: {}, platform: 'darwin', stdin: {}, stdout: output },
   }, { filename });
   const mounted = () => handlers.get('apparent:settings-mounted')!({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
   const expire = () => { for (const timer of timers) if (timer.active) { timer.active = false; timer.callback(); } };

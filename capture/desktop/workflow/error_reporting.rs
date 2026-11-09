@@ -12,6 +12,11 @@ const ENDPOINT: &str = "https://eu.i.posthog.com/i/v0/e/";
 const QUEUE_SIZE: usize = 16;
 static REPORTER: OnceLock<Reporter> = OnceLock::new();
 
+/// Only installed release children inherit production reporting admission.
+pub(crate) fn configure_child(command: &mut Command) {
+    command.env("APPARENT_DESKTOP_REPORTING", if REPORTER.get().is_some() && !cfg!(debug_assertions) { "1" } else { "0" });
+}
+
 /// Only reviewed, static failure categories can enter the reporting boundary.
 #[derive(Clone, Copy, Debug)]
 pub(crate) enum Failure {
@@ -22,6 +27,10 @@ pub(crate) enum Failure {
     FinalizeCapture,
     VideoExport,
     RustPanic,
+    ElectronMainException,
+    ElectronMainRejection,
+    ElectronRendererGone,
+    ElectronChildGone,
 }
 
 impl Failure {
@@ -34,6 +43,10 @@ impl Failure {
             Self::FinalizeCapture => "capture_finalization_failed",
             Self::VideoExport => "video_export_failed",
             Self::RustPanic => "rust_panic",
+            Self::ElectronMainException => "electron_main_exception",
+            Self::ElectronMainRejection => "electron_main_rejection",
+            Self::ElectronRendererGone => "electron_renderer_gone",
+            Self::ElectronChildGone => "electron_child_gone",
         }
     }
 }
@@ -181,7 +194,12 @@ impl Report {
                 "channel": env!("APPARENT_RELEASE_CHANNEL"),
                 "environment": env!("APPARENT_REPORTING_ENVIRONMENT"),
                 "component": "desktop",
-                "process": "rust",
+                "process": match self.failure {
+                    Failure::ElectronMainException | Failure::ElectronMainRejection => "electron-main",
+                    Failure::ElectronRendererGone => "electron-renderer",
+                    Failure::ElectronChildGone => "electron-child",
+                    _ => "rust",
+                },
                 "diagnostics_schema_version": 1,
                 "$os": std::env::consts::OS,
                 "architecture": std::env::consts::ARCH,
@@ -191,7 +209,7 @@ impl Report {
                 "$exception_list": [{
                     "type": if matches!(self.failure, Failure::RustPanic) { "RustPanic" } else { "DesktopOperationError" },
                     "value": code,
-                    "mechanism": { "type":"generic", "handled": !matches!(self.failure, Failure::RustPanic), "synthetic": true },
+                    "mechanism": { "type":"generic", "handled": !matches!(self.failure, Failure::RustPanic | Failure::ElectronMainException | Failure::ElectronMainRejection | Failure::ElectronRendererGone | Failure::ElectronChildGone), "synthetic": true },
                     "stacktrace": { "type":"raw", "frames":[frame] }
                 }]
             }
