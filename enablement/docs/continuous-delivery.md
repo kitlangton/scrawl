@@ -77,19 +77,23 @@ pushes and on non-draft PRs (opened, reopened, updated or marked ready for revie
 Main pushes preserve the active run and keep only the newest pending run in the
 same concurrency group, including Public checks. PR updates still cancel their
 superseded active run. Manual publication retains its separate noncancelling lock.
-Automatic Mac verification and Mac Hermes inspection wait for successful full
-Linux verification, cheap contracts and Linux Hermes inspection for the same
-candidate. Failed, cancelled or skipped prerequisites prevent Mac allocation.
-Linux verification and the cheap checks start independently. Drafts retain
+Full Linux and Mac verification and Mac Hermes inspection share the cheap
+contracts, Linux Hermes inspection and selector prerequisites. Once those finish,
+both full platforms can start in parallel; neither waits for the other's results.
+Failed, cancelled or skipped contracts or Linux Hermes inspection prevent their
+allocation. A failed or unavailable selector retains full platform coverage rather
+than silently skipping it; cancelled workflows do not allocate these jobs. All
+applicable platform/native acceptance and publication gates remain required.
+Drafts retain
 inexpensive Linux checks; converting a PR back to draft cancels its
 superseded full run. Each update tests GitHub's proposed merge commit, with
 read-only permissions and no release receipt. These jobs appear directly on the
 PR, so their actual completion is visible without a status reporter or manual
 dispatch. Existing separate manual runs do not substitute for this integrated
 candidate. Publication remains manual and retains its existing admission policy.
-This is a dependency gate, not a global concurrency limit or priority queue.
-Removing these Mac `needs` dependencies restores parallel platform scheduling;
-manual platform diagnostics remain independent.
+This is a cheap admission barrier, not a global concurrency limit or priority queue.
+Restoring a full `linux` prerequisite on the Mac jobs reinstates the former serial
+platform scheduling. Manual platform diagnostics remain independent.
 
 `Linux verification` and `Mac verification` remain manual diagnostic entrypoints,
 each coalescing superseded runs within its own platform. Both call the same reusable
@@ -439,11 +443,12 @@ Ready PRs whose complete base-to-merge delta modifies only the five reviewed
 Settings renderer cards (`storage.tsx`, `retention.tsx`,
 `connect-settings.tsx`, `error-reporting.tsx`, `reference.tsx` in
 `capture/desktop/ui/frontend/src/`) use the existing full Linux verification
-without allocating the Mac platform workflow. When selected, that workflow still
-waits for successful Linux verification, cheap contracts, Linux Hermes inspection
-and selection. Mac Hermes inspection retains its independent Linux-first
-admission. Linux still runs the real Electron
-build and smoke suites. Main pushes, manual Mac verification and Mac publication
+without allocating the Mac platform workflow. Both full platforms share the cheap
+contracts, Linux Hermes inspection and selector barrier, then can run in parallel.
+Only successful contracts and Linux Hermes inspection are allocation guards;
+failed/unavailable selection or a missing output conservatively requires Mac.
+Mac Hermes inspection retains its ordinary admission. Linux still runs the real
+Electron build and smoke suites. Main pushes, manual Mac verification and Mac publication
 retain full Mac evidence. This is a PR iteration exemption, not native acceptance
 or evidence that Linux proves Mac window behavior.
 

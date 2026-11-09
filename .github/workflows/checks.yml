@@ -19,18 +19,22 @@ jobs:
   # PR checkout is GitHub's proposed merge, so these checks cover integration.
   # Draft updates retain cheap feedback without allocating full platform suites.
   linux:
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+    needs: [contracts, hermes, select]
+    if: >-
+      !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
+      (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false))
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: ubuntu-24.04
       release_receipt: false
 
   macos:
-    # Keep scarce Mac runners free until this candidate passes Linux and cheap checks.
-    needs: [linux, contracts, hermes, select]
-    # Only reviewed Settings renderer-only PR deltas can use Linux evidence.
-    # Main retains Mac verification after all prerequisites succeed.
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.select.outputs.macos != 'false')
+    # Share the cheap admission barrier; neither full platform waits for the other.
+    needs: [contracts, hermes, select]
+    if: >-
+      !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
+      (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
+      (needs.select.result != 'success' || needs.select.outputs.macos != 'false')))
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: macos-15-intel
@@ -86,8 +90,10 @@ jobs:
         run: python -m unittest discover -s hermes/tests -v
 
   hermes-macos:
-    needs: [linux, contracts, hermes]
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+    needs: [contracts, hermes, select]
+    if: >-
+      !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
+      (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false))
     name: Hermes inspection (macos-15-intel)
     runs-on: macos-15-intel
     timeout-minutes: 5

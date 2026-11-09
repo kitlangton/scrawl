@@ -32,7 +32,7 @@ test('execution-sensitive changes, ambiguous YAML and changed alias consumers re
     safe.replace('actions/checkout@v4', 'actions/checkout@v3'),
     safe.replace('bun enablement/ci/select.ts', 'echo skip'),
     safe.replace('release_receipt: false', 'release_receipt: true'),
-    safe.replace('needs: [linux, contracts, hermes]', 'needs: [contracts]'),
+    safe.replace(/needs: \[[^\n]+\]/, 'needs: []'),
     safe.replace('branches: [main]', 'branches: [other]'),
     safe.replace('jobs:', 'env:\n  CARGO_BUILD_JOBS: 1\n\njobs:'),
     safe.replace('concurrency:', 'concurrency: &policy'),
@@ -46,7 +46,10 @@ test('execution-sensitive changes, ambiguous YAML and changed alias consumers re
     '---\n' + safe,
     safe.replace('permissions:', 'permissions: ['),
     safe.replace('      - uses: actions/checkout@v4', '      # changed execution-region comment\n      - uses: actions/checkout@v4'),
-  ]) assert.equal(concurrencyOnly(original, after), false, after);
+  ]) {
+    assert.notEqual(after, safe, 'each negative fixture must actually change the workflow');
+    assert.equal(concurrencyOnly(original, after), false, after);
+  }
   const alias = original.replace('  group: repository', '  group: &execution repository')
     .replace('jobs:', 'env:\n  BUILD_INPUT: *execution\njobs:');
   assert.equal(concurrencyOnly(alias, update(alias)), false);
