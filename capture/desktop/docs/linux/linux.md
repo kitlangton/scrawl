@@ -176,6 +176,28 @@ Sources: [ScreenCast portal interface](https://flatpak.github.io/xdg-desktop-por
 
 ## Movies, transcription, the rest
 
+### Local languages
+
+Apparent’s downloaded `parakeet-unified-en-0.6b-Q8_0.gguf` supports English
+only. Both the pause worker and whole-WAV recovery currently request `en`.
+`appleLocale` does not change Linux recognition; it controls Apple Speech on
+macOS only. Reused Hex model files may advertise different capabilities, but
+Apparent currently still requests English; their presence is not verified
+non-English support.
+
+For another language, explicitly configure a **local** `transcribeCommand`
+with that recognizer’s model and language arguments, then select **Command**
+in Recording Settings. The command must implement Apparent’s versioned JSON
+transcript contract; ordinary text output is not sufficient. Apparent does not
+supply a language argument to the command or install its model. Inspect
+`transcriber` and `transcribeCommand` in `~/.config/apparent/config.json`.
+Change them while idle: finalization reads the engine and command again, so an
+edit during recording can affect that recording. See the
+[command contract](../../../engine/docs/keyframes-and-text.md#transcription-captureengineruntimeaudiotranscriptiontranscribers-sharedhexrs-captureengineruntimeaudiotranscriptioncommand_transcriberrs).
+If Command or Hex fails, the existing fallback is local Parakeet, whose default
+model is English-only. This is unsupported-language guidance, not a claim of
+verified non-English Linux transcription or automatic model/provider selection.
+
 - **Movies:** GStreamer (`linux::media`): the source above, `videorate` to 30 fps, the first encoder installed of `x264enc`, `openh264enc` and VA-API's, `mp4mux`. Candidate frames come off a `tee` through an `appsink`; `Recorder::finish` drains it, but a stalled candidate branch must not make Apparent delete an MP4 whose file sink has already reported EOS. An unfinished encoder or mux still fails after the eight-second deadline. Compositors send frames only when the screen changes, so the last frame is reused until a new one comes. A standalone build without a usable encoder refuses to start a screen capture and names the host package to install (Arch/Omarchy: `sudo pacman -S gst-plugins-ugly`; Debian/Ubuntu: `sudo apt install gstreamer1.0-plugins-ugly`; Fedora: `sudo dnf install gstreamer1-plugins-ugly`). The preflight encodes a tiny synthetic movie once per process, so a registered but unusable hardware encoder cannot pass. A broken AppImage instead asks for a fresh AppImage: host packages cannot repair its bundled plugins. Apparent never installs packages automatically. Failed movies after recording begins still retain candidates.
 - **H.264 decoder:** Apparent checks its own GStreamer registry at launch and in Settings › Recording. If no usable H.264 decoder factory exists, it warns with the host distribution's installation command (Arch/Omarchy: `sudo pacman -S gst-libav`; Debian/Ubuntu: `sudo apt install gstreamer1.0-libav`; Fedora: `sudo dnf install gstreamer1-plugin-libav`). Apparent never runs the command. A capture whose MP4 decode fails keeps the **whole** smaller candidate frames in `frames/` and `contact-sheet.png` rather than cropping around an idle cursor; these are already the full candidate images, so there is no duplicate `frames-full/`. It writes an `Image quality:` explanation in `summary.md`; the Linux GUI also notifies. Successful full-quality decode still uses normal autocrop and preserves `frames-full/` when cropped. A decoder factory does not guarantee that a particular stream can be decoded, so the packaging check actually decodes a small H.264 MP4 inside the AppImage.
 - **Transcription:** Parakeet through `transcribe.cpp` (`speech.rs`). Local recordings transcribe completed speech during recording by default after 700 ms of quiet, with a three-second minimum chunk and 200 ms margins. Stop processes the remaining saved audio; any pause-worker failure falls back to whole-WAV transcription. Hex and command selections do not use the pause worker. See [pause transcription](../../../engine/docs/keyframes-and-text.md#linux-pause-transcription-srcpause_transcribers-srcspeechrs). Apparent downloads the model once at launch through `speech_model::ensure` (731 MB with `curl` or `wget`, pinned Hugging Face revision, checked against its SHA-256, into `~/.local/share/apparent/models`) unless Hex already has one; Settings › Recording shows its progress. A capture made before it lands says so in `summary.md` and is marked `.transcript-pending`, and is transcribed again in place when the download finishes.
