@@ -107,6 +107,37 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
+    def test_cd_policy_contracts(self):
+        result = subprocess.run(['node', '--experimental-strip-types', '--test',
+                                 str(Path(gate.__file__).parent / 'ci/release-admission.test.ts')],
+                                capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_cd_api_discovery_and_current_attempt_policy(self):
+        run = dict(self.runs['linux'], path='.github/workflows/checks.yml')
+        names = ['contracts', 'select', 'Hermes inspection (ubuntu-24.04)', 'Hermes inspection (macos-15-intel)']
+        for platform in self.runs:
+            names.extend(name.replace('verify /', platform + ' /')
+                         for name in gate.REQUIRED[platform] if 'Release verification' not in name)
+        jobs = [dict(name=name, status='completed', conclusion='success') for name in names]
+        def fetch(path):
+            if '/workflows/checks.yml/' in path:
+                return dict(total_count=1, workflow_runs=[run])
+            if '/runs/42' in path:
+                if '/jobs?' in path:
+                    self.assertIn('/attempts/2/', path)
+                    return dict(total_count=len(jobs), jobs=jobs)
+                return run
+            return self.fetch(path)
+        self.assertEqual(gate.admit(self.repo, self.sha, fetch=fetch, platform='macos'), self.sha)
+        for job in jobs:
+            if job['name'].startswith('macos /'):
+                job['conclusion'] = 'skipped'
+        self.runs['macos']['conclusion'] = 'failure'
+        with self.assertRaises(ValueError):
+            gate.admit(self.repo, self.sha, fetch=fetch, platform='macos')
+        self.assertEqual(gate.admit(self.repo, self.sha, fetch=fetch), self.sha)
+
     def test_manual_feature_checks_preserve_publication_boundary(self):
         root = Path(__file__).resolve().parents[2]
         workflow = (root / '.github/workflows/verification-platform.yml').read_text()

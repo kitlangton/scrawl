@@ -20,7 +20,7 @@ test('missing Settings renderer stays hidden and exits for native fallback', { t
     await fs.rm(fixture, { recursive: true, force: true });
   });
   await fs.cp(path.join(frontend, 'electron'), path.join(fixture, 'electron'), { recursive: true });
-  await fs.cp(path.join(frontend, 'dist'), path.join(fixture, 'dist'), { recursive: true });
+  await fs.cp(path.join(frontend, 'dist'), path.join(fixture, 'dist'), { recursive: true, dereference: true });
   await fs.symlink(path.join(frontend, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
   await fs.writeFile(path.join(fixture, 'package.json'), JSON.stringify({ main: 'electron/main.cjs' }));
   const html = await fs.readFile(path.join(fixture, 'dist/settings.html'), 'utf8');
@@ -54,7 +54,7 @@ test(`mounted Settings becomes visible without ${world}-world animation callback
     await fs.rm(fixture, { recursive: true, force: true });
   });
   await fs.cp(path.join(frontend, 'electron'), path.join(fixture, 'electron'), { recursive: true });
-  await fs.cp(path.join(frontend, 'dist'), path.join(fixture, 'dist'), { recursive: true });
+  await fs.cp(path.join(frontend, 'dist'), path.join(fixture, 'dist'), { recursive: true, dereference: true });
   await fs.symlink(path.join(frontend, 'node_modules'), path.join(fixture, 'node_modules'), 'dir');
   await fs.writeFile(path.join(fixture, 'package.json'), JSON.stringify({ main: 'electron/main.cjs' }));
   const paused = 'globalThis.requestAnimationFrame = () => 1; globalThis.cancelAnimationFrame = () => {};';

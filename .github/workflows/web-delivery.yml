@@ -28,6 +28,9 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
       - id: gate
         env:
           GH_TOKEN: ${{ github.token }}

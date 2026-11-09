@@ -491,3 +491,10 @@ navigation and failure acceptance verifies its replacement and all consumers.
 Run the focused renderer/bridge check with
 `xvfb-run -a node --experimental-strip-types --test tests/about/smoke.ts`
 on Linux after building. This synthetic parent-state test is not native update proof.
+
+## Recording pill
+
+The installed basic pill uses the shared React controls with a bounded Rust-authoritative
+bridge; Settings and onboarding routing remain independent. See
+[the pill contract](../electron_pill/README.md) for lifecycle, fallback and acceptance.
+Build includes the pill host and page; `npm run test:pill` runs synthetic Electron checks.
