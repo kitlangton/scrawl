@@ -503,9 +503,10 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     report.passed = true;
   } catch (error) {
     failure = error;
+    const subprocess = error.cause ?? error;
     report.error = { message: error.message, stack: error.stack,
-      subprocess: error.cause && { code: error.cause.code, signal: error.cause.signal,
-        killed: error.cause.killed, stderr: error.cause.stderr } };
+      subprocess: { code: subprocess.code, signal: subprocess.signal,
+        killed: subprocess.killed, stderr: subprocess.stderr } };
     if (page && Date.now() < deadline) {
       try {
         report.errorReportingFailure = {

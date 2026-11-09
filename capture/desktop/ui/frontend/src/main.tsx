@@ -10,6 +10,7 @@ import { CaptureReference } from './reference';
 import './style.css';
 import { CaptureNotes } from './notes';
 import { RecordingMicrophone } from './notes/microphone';
+import { HermesRecording } from './hermes';
 
 // Visual fixtures only. These do not model or control real recording state.
 const examples = [
@@ -89,4 +90,4 @@ function App() {
   );
 }
 
-createRoot(document.getElementById('root')!).render(<StrictMode>{location.hash.startsWith('#notes-') ? <CaptureNotes /> : <App />}</StrictMode>);
+createRoot(document.getElementById('root')!).render(<StrictMode>{new URLSearchParams(location.search).get('surface') === 'hermes' ? <HermesRecording /> : location.hash.startsWith('#notes-') ? <CaptureNotes /> : <App />}</StrictMode>);

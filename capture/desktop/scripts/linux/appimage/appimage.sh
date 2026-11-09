@@ -48,6 +48,7 @@ node "$root/capture/desktop/ui/frontend/scripts/package-notes.mjs" "$appdir/usr/
 LDAI_OUTPUT="Apparent-$arch.AppImage" linuxdeploy \
   --appdir "$appdir" \
   --executable "$binary" \
+  --deploy-deps-only "$appdir/usr/share/apparent/settings/runtime" \
   "${libraries[@]}" \
   --executable "$(command -v wl-copy)" \
   --executable "$(command -v wl-paste)" \

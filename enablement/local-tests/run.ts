@@ -66,7 +66,11 @@ export function commands(selected: Owner[], base: string, head: string, platform
   const tools = selected.includes('capture-tools') ? captureToolTests() : [];
   result.push(...tools.filter(command => !command.env?.APPARENT_BIN));
   if (selected.includes('tooling')) add(['python3', '-m', 'unittest', 'discover', '-s', 'enablement/directory-width/tests', '-p', 'test_*.py']);
-  if (selected.includes('hermes')) add(['python3', '-m', 'unittest', 'discover', '-s', 'hermes/tests', '-p', 'test_*.py']);
+  if (selected.includes('hermes')) {
+    add(['python3', '-m', 'unittest', 'discover', '-s', 'hermes/tests', '-p', 'test_*.py']);
+    add(['node', '--experimental-strip-types', '--test', 'hermes/desktop/controller.test.ts', 'hermes/desktop/plugin.test.ts',
+      'capture/desktop/ui/frontend/src/hermes/protocol.test.ts', 'capture/desktop/ui/frontend/src/hermes/mailbox.test.ts']);
+  }
   if (selected.includes('capture') || selected.includes('engine')) {
     // Reuse the authoritative conservative Rust verifier, including TMPDIR and jobs.
     // For mixed inputs it broadens to root + staged Engine rather than omit tests.

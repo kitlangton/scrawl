@@ -408,7 +408,7 @@ changes this split.
 
 Connect Rust/client security, filesystem, credential and staging tests remain on
 both platforms, as do Desktop tests, actual Electron integration, packaging and
-Mac native assertions when Mac verification is selected (see Portable Settings PR
+Mac native assertions when Mac verification is selected (see Bounded Linux PR
 verification below). Both platform jobs depend on the successful Linux `select`
 prerequisite; portable failures prevent their allocation. This is once per
 platform caller, not reuse of another workflow's results. Reverting the explicit
@@ -439,25 +439,67 @@ manual triggers. Exact-head verification, independent review, native acceptance
 and publication admission remain required; inspect their workflow evidence
 directly. The retired status is no longer required by branch protection.
 
-## Portable Settings PR verification
+## Bounded Linux PR verification
 
-Ready PRs whose complete base-to-merge delta modifies only the five reviewed
-Settings renderer cards (`storage.tsx`, `retention.tsx`,
-`connect-settings.tsx`, `error-reporting.tsx`, `reference.tsx` in
-`capture/desktop/ui/frontend/src/`) use the existing full Linux verification
-without allocating the Mac platform workflow. Both full platforms share the cheap
-contracts, Linux Hermes inspection and selector barrier, then can run in parallel.
-Only successful contracts and Linux Hermes inspection are allocation guards;
-failed/unavailable selection or a missing output conservatively requires Mac.
-Mac Hermes inspection retains its ordinary admission. Linux still runs the real
-Electron build and smoke suites. Main pushes, manual Mac verification and Mac publication
-retain full Mac evidence. This is a PR iteration exemption, not native acceptance
-or evidence that Linux proves Mac window behavior.
+Ready PRs whose complete delta modifies only the five reviewed Settings renderer cards
+(`storage.tsx`, `retention.tsx`, `connect-settings.tsx`, `error-reporting.tsx`,
+`reference.tsx` in `capture/desktop/ui/frontend/src/`), the audited Linux portal source
+`capture/desktop/linux/capture/portal.rs`, and its guide
+`capture/desktop/docs/linux/linux.md` use existing full Linux verification without
+allocating the Mac platform workflow. There is no directory-wide Linux or Rust-extension
+exemption. Other ordinary prose mixed with source does not broaden this exact allowlist.
 
-The exact allowlist lives in `enablement/ci/select.ts`. Empty/unknown deltas,
-additions, deletions, type changes, renames and every other input require Mac verification.
-Shell/preload/bridge contracts, styles, onboarding, notes, shared UI, dependencies,
-native code, packaging and CI changes are outside this exemption. New files are
-not implicitly admitted. Changed native behavior still needs its platform proof.
-Restore unconditional ready-PR Mac admission in `checks.yml` to roll back;
-do not broaden the allowlist without reviewing the new platform boundary.
+The portal is reached through `capture/desktop/mod.rs`'s Linux cfg, then `linux/mod.rs` and
+`linux/capture/mod.rs`. Its media, shortcut and paste consumers are inside Linux modules or
+Engine's Linux adapter. Mac compilation and packaging do not consume this source or guide;
+tracked-file changes affect only the ordinary build revision label on Mac, as with the
+existing Settings exemption. This policy grants no native acceptance to a product change.
+
+Main retired the feature catalogue, its Rust scanner, Public rendering and guide-heading
+audit in #1115. The selector preserves that retirement and has no metadata-content
+exemption. Reintroduced catalogue paths and other unknown metadata retain Mac and applicable
+Public verification. Portal plus guide now selects `platform=true, macos=false,
+public=false, updater=false`: the guide has no remaining Public build consumer. A guide-only
+change follows the existing ordinary-prose policy.
+
+Public's agent-document builder reads `README.md`, the Apparent Agent `SKILL.md`,
+`capture/agent/docs/usage.md`, `capture/desktop/docs/guides/recording.md` and
+`capture/engine/docs/guides/processing.md`. These bodies retain Public and full platform
+verification rather than the prose exception. This is a build dependency even though the
+Pages package excludes generated agent documents; linked targets are not all body inputs.
+The consumer-bound regression requires review when this literal input set changes.
+
+Hosted selection consumes `inputs.ts`'s shared committed path facts and requires agreement
+with raw Git status and mode facts. It reads the complete current base-to-proposed-merge
+delta, including earlier unverified commits and both rename sides. Empty, missing, shallow
+or divergent history retains platform coverage. The local concurrency-control exception
+never exempts hosted Mac verification.
+
+Only regular, non-executable modifications enter the portal/Settings Mac exemption.
+Additions, deletions, renames, symlinks, type or executable-mode changes and every
+unreviewed source, shared/native-Mac/ABI, build/toolchain/lockfile, packaging or CI input
+retain Mac. Deterministic per-input reasons explain each decision.
+
+The separately landed prose exception accepts ordinary documentation modifications,
+additions, deletions and both rename sides only when committed Git facts prove regular
+non-executable files. Unsupported prose modes or types conservatively select all consumers
+and both platforms. Instructions, skills/prompts, shipped Markdown and unknown paths retain
+their existing coverage. All other Public/updater input sets are unchanged.
+
+Only successful selection with explicit `macos=false` exempts a ready PR's Mac platform
+caller; successful `platform=false` retains main's ordinary-docs exception for all expensive
+entrypoints. Failed, skipped, missing or unknown selection facts cannot silently exempt
+required jobs. Status-function guards explicitly require contracts and Linux Hermes success
+and reject workflow cancellation. Neither full platform depends on the other's result;
+applicable results remain required for acceptance.
+
+Linux retains its full command inventory, including independent clients, portable contracts
+and actual Electron suites. Mac Hermes retains ordinary admission for source changes. Main
+source changes, manual full-tree verification, Mac publication, exact-head/current-base
+review, privacy/cleanup and independent native/client/release admission remain required
+under the existing policy. Selector errors still fail Continuous delivery.
+
+Restore unconditional ready-PR Mac admission to roll back the source exemption; do not
+broaden it without reviewing the new platform boundary. Selector tests establish selection,
+not measured queue/runtime savings. Qualify subsequent real runs by their actual selected
+and executed job inventory.

@@ -25,6 +25,9 @@ fn take_open_when_ready(pending: &AtomicBool, onboarding_initialized: bool) -> b
 }
 
 pub fn request_url(url: &str) -> Result<()> {
+    if let Some(token) = super::launch_url::hermes_request(url) {
+        return super::launch_url::open_hermes(token);
+    }
     ensure!(
         crate::capture::desktop::workflow::launch_url::valid(url),
         "unsupported Apparent launch URL"
