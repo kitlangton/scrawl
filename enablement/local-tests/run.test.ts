@@ -1,10 +1,9 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync } from 'node:fs';
-import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { select, owners, changedPaths, captureToolTests, commands, contractTests, execute, root } from './run.ts';
+import { select, selection, owners, changedPaths, captureToolTests, commands, contractTests, execute, root } from './run.ts';
 
 test('owner selection retains consumers and unrelated packages stay out', () => {
   assert.deepEqual(select(['enablement/local-tests/run.ts']), ['tooling']);
@@ -54,7 +53,7 @@ test('package gates execute complete canonical suites including browser and Elec
 });
 
 function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
-  const dir = mkdtempSync(join(tmpdir(), 'hook-'));
+  const dir = mkdtempSync('/tmp/apparent-dev-local-hook-');
   const env = { ...process.env };
   // cwd cannot isolate Git fixtures from a real push's GIT_DIR / index.
   // The imported production helpers spawn with process.env too; isolate that
@@ -69,6 +68,37 @@ function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test('committed concurrency-only workflow edits select contracts rather than product suites', () => fixture((dir, env) => {
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', args, { cwd: dir, env, encoding: 'utf8' });
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'test@example.invalid');
+  mkdirSync(join(dir, '.github/workflows'), {recursive: true});
+  const path = '.github/workflows/checks.yml';
+  const before = readFileSync(join(root, path), 'utf8');
+  writeFileSync(join(dir, path), before);
+  git('add', '.'); git('commit', '-qm', 'base'); const base = git('rev-parse', 'HEAD');
+  writeFileSync(join(dir, path), before.replace(/  cancel-in-progress: .*/, '  cancel-in-progress: false'));
+  git('add', '.'); git('commit', '-qm', 'concurrency');
+  const result = selection(base, 'HEAD', dir);
+  assert.deepEqual(result.workflowControls, [path]);
+  assert.deepEqual(result.selected, ['tooling']);
+  assert.deepEqual(commands(result.selected, base, 'HEAD').map(command => command.argv), [
+    ['python3', 'enablement/verification.py', '--base', base, '--head', 'HEAD', '--pr'],
+    ['python3', '-m', 'unittest', 'discover', '-s', 'enablement/directory-width/tests', '-p', 'test_*.py'],
+  ]);
+  assert.deepEqual(selection(base, 'HEAD', dir, true).selected, [...owners]);
+  // A later safe workflow/docs commit cannot mask an earlier build change.
+  writeFileSync(join(dir, 'Cargo.lock'), 'changed build graph');
+  git('add', '.'); git('commit', '-qm', 'build input');
+  writeFileSync(join(dir, 'README.md'), 'later docs');
+  git('add', '.'); git('commit', '-qm', 'docs');
+  assert.deepEqual(selection(base, 'HEAD', dir).selected, [...owners]);
+  assert.deepEqual(selection('unavailable', 'HEAD', dir).selected, [...owners]);
+  assert.deepEqual(selection('HEAD', 'HEAD', dir).selected, [...owners]);
+}));
 
 test('real Git delta includes earlier commits and both sides of cross-owner rename/deletion', () => fixture((dir, env) => {
   const git = (...args: string[]) => {
@@ -153,6 +183,7 @@ test('actual feature push runs selected package tests and rejects their failure'
   };
   mkdirSync(join(dir, 'enablement/local-tests'), { recursive: true });
   copyFileSync(join(root, 'enablement/local-tests/run.ts'), join(dir, 'enablement/local-tests/run.ts'));
+  copyInputHelpers(dir);
   mkdirSync(join(dir, 'public/site'), { recursive: true });
   writeFileSync(join(dir, 'public/site/app.ts'), 'base');
   git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'test@example.invalid');
@@ -176,3 +207,70 @@ test('actual feature push runs selected package tests and rejects their failure'
   assert.doesNotMatch(readFileSync(log, 'utf8'), /cargo|npm/);
   const failed = push('7'); assert.notEqual(failed.status, 0); assert.match(failed.stderr, /push rejected/);
 }));
+
+test('installed hook proves control-only selection, mandatory commands, failure and protected-ref fallback', () => fixture((dir, env) => {
+  const git = (...args: string[]) => {
+    const result = spawnSync('git', args, {cwd: dir, env, encoding: 'utf8'});
+    assert.equal(result.status, 0, result.stderr); return result.stdout.trim();
+  };
+  git('init', '-q'); git('config', 'user.name', 'Fixture'); git('config', 'user.email', 'test@example.invalid');
+  mkdirSync(join(dir, 'enablement/local-tests'), {recursive: true});
+  copyFileSync(join(root, 'enablement/local-tests/run.ts'), join(dir, 'enablement/local-tests/run.ts'));
+  copyInputHelpers(dir);
+  mkdirSync(join(dir, '.github/workflows'), {recursive: true});
+  const path = '.github/workflows/checks.yml';
+  const before = readFileSync(join(root, path), 'utf8').replace(/  cancel-in-progress: .*/, '  cancel-in-progress: true');
+  writeFileSync(join(dir, path), before);
+  git('add', '.'); git('commit', '-qm', 'base'); const base = git('rev-parse', 'HEAD');
+  git('update-ref', 'refs/remotes/origin/main', base);
+  writeFileSync(join(dir, path), before.replace('cancel-in-progress: true', 'cancel-in-progress: false'));
+  git('add', '.'); git('commit', '-qm', 'control'); const head = git('rev-parse', 'HEAD');
+  const bare = join(dir, '.git/remote.git'); git('init', '--bare', '-q', bare);
+  git('remote', 'add', 'origin', bare);
+  const hooks = join(dir, '.git/hooks');
+  copyFileSync(join(root, '.githooks/pre-push'), join(hooks, 'pre-push'));
+  git('config', 'core.hooksPath', hooks);
+  const bin = join(dir, '.git/bin'); mkdirSync(bin);
+  const log = join(dir, '.git/commands');
+  const bun = spawnSync('which', ['bun'], {env, encoding: 'utf8'}).stdout.trim();
+  // Keep the hook, Git history and YAML proof real. Observe downstream command
+  // boundaries without recursively executing this same test through --pr.
+  for (const tool of ['node', 'bun', 'python3']) {
+    const forward = tool === 'node' ? `exec '${process.execPath}' "$@"\n`
+      : tool === 'bun' ? `case "$1" in */workflow-controls.ts) exec '${bun}' "$@";; esac\n` : '';
+    const observe = `printf '%s\\n' '${tool}'" $*" >> "$COMMAND_LOG"\n`;
+    writeFileSync(join(bin, tool), `#!/bin/sh\n${forward}${observe}case "$*" in *--pr*) exit "${'${FAIL_CONTRACT:-0}'}";; esac\n`, {mode: 0o755});
+  }
+  const config = readFileSync(join(dir, '.git/config'), 'utf8');
+  const index = readFileSync(join(dir, '.git/index'));
+  const push = (ref: string, fail = '0') => spawnSync('git', ['push', 'origin', `HEAD:${ref}`], {
+    cwd: dir, env: {...env, PATH: `${bin}:${env.PATH}`, COMMAND_LOG: log, FAIL_CONTRACT: fail}, encoding: 'utf8',
+  });
+  const passed = push('refs/heads/feature'); assert.equal(passed.status, 0, passed.stderr);
+  assert.match(passed.stdout, /"workflowControls":\[".github\/workflows\/checks.yml"\]/);
+  assert.match(passed.stdout, /"selected":\["tooling"\]/);
+  assert.equal(git('--git-dir', bare, 'rev-parse', 'refs/heads/feature'), head);
+  const invoked = readFileSync(log, 'utf8');
+  assert.match(invoked, new RegExp(`python3 enablement/verification.py --base ${base} --head ${head} --pr`));
+  assert.match(invoked, /python3 -m unittest discover -s enablement\/directory-width\/tests/);
+  assert.doesNotMatch(invoked, /cargo|npm|site-build|--run/);
+  const failed = push('refs/heads/failed', '7'); assert.notEqual(failed.status, 0);
+  assert.match(failed.stderr, /Local test command failed \(7\).*--pr/);
+  assert.match(failed.stderr, /push rejected/);
+  assert.notEqual(spawnSync('git', ['--git-dir', bare, 'rev-parse', '--verify', 'refs/heads/failed'], {env}).status, 0);
+  // Fail the first contract to observe full selection without running products.
+  for (const ref of ['refs/heads/main', 'refs/tags/preview-fixture']) {
+    const protectedPush = push(ref, '7'); assert.notEqual(protectedPush.status, 0);
+    assert.match(protectedPush.stdout, /"workflowControls":\[\]/);
+    const result = JSON.parse(protectedPush.stdout.trim());
+    assert.deepEqual(result.selected, [...owners]);
+  }
+  assert.equal(readFileSync(join(dir, '.git/config'), 'utf8'), config);
+  assert.deepEqual(readFileSync(join(dir, '.git/index')), index);
+}));
+
+function copyInputHelpers(dir: string) {
+  mkdirSync(join(dir, 'enablement/ci'), {recursive: true});
+  for (const name of ['inputs.ts', 'workflow-controls.ts'])
+    copyFileSync(join(root, 'enablement/ci', name), join(dir, 'enablement/ci', name));
+}

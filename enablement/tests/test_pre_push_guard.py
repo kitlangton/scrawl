@@ -52,6 +52,8 @@ class PrePushGuardTests(unittest.TestCase):
             path = self.repo / "enablement" / name
             path.parent.mkdir(exist_ok=True)
             path.write_text("import {test} from 'node:test'; test('fixture', () => {});\n")
+        for name in ("inputs.ts", "workflow-controls.ts"):
+            shutil.copy2(SELECTOR.parent / "ci" / name, self.repo / "enablement/ci" / name)
         # The real verifier now runs the shared frontend color guard. Preserve
         # its actual dependency closure in this disposable hook repository.
         theme = self.repo / "shared/ui/scripts"

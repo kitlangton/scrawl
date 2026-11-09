@@ -6,6 +6,17 @@ refs=$(cat)
 [ -n "$refs" ] || exit 0
 
 head=$(git rev-parse --verify HEAD) || exit 1
+# The control-only exception is for feature branches, never main or tag pushes.
+conservative_workflows=''
+while read -r local_ref local_oid remote_ref remote_oid; do
+    case "$remote_ref" in
+        refs/heads/main) conservative_workflows='--conservative-workflows' ;;
+        refs/heads/*) ;;
+        *) conservative_workflows='--conservative-workflows' ;;
+    esac
+done <<EOF
+$refs
+EOF
 printf '%s\n' "$refs" | while read -r local_ref local_oid remote_ref remote_oid; do
     [ -n "$local_ref" ] && [ -n "$local_oid" ] &&
         [ -n "$remote_ref" ] && [ -n "$remote_oid" ] || exit 1
@@ -37,7 +48,7 @@ fi
 # Missing main/history deliberately selects broad verification.
 base=$(git merge-base "$head" refs/remotes/origin/main 2>/dev/null || printf 'unknown')
 echo "pre-push: selecting verification for $base..$head" >&2
-if ! node --experimental-strip-types enablement/local-tests/run.ts --base "$base" --head "$head" --run; then
+if ! node --experimental-strip-types enablement/local-tests/run.ts --base "$base" --head "$head" $conservative_workflows --run; then
     echo "pre-push: verification failed; push rejected" >&2
     exit 1
 fi

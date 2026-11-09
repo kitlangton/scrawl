@@ -3,19 +3,21 @@ import { spawnSync } from 'node:child_process';
 import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import {changedPaths as inputPaths, workflowControlPaths} from '../ci/inputs.ts';
 
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const owners = ['capture', 'engine', 'desktop', 'capture-tools', 'client', 'web', 'service', 'public', 'hermes', 'tooling'] as const;
 type Owner = typeof owners[number];
 export type Command = { argv: string[]; cwd: string; env?: Record<string, string> };
 
-export function select(paths: string[], known = true): Owner[] {
+export function select(paths: string[], known = true, workflowControls: string[] = []): Owner[] {
   const selected = new Set<Owner>();
   const add = (...values: Owner[]) => values.forEach(value => selected.add(value));
   if (!known || !paths.length) add(...owners);
   for (const path of paths) {
     if (['README.md', 'AGENTS.md', 'CONTEXT.md', 'enablement/refactor.md'].includes(path)) continue;
-    if (path.startsWith('enablement/') || path.startsWith('.githooks/')) add('tooling');
+    if (known && workflowControls.includes(path)) add('tooling');
+    else if (path.startsWith('enablement/') || path.startsWith('.githooks/')) add('tooling');
     else if (path.startsWith('hermes/')) add('hermes');
     else if (path.startsWith('connect/web/')) add('web', 'public');
     else if (path.startsWith('connect/client/')) add('client', 'capture');
@@ -34,10 +36,14 @@ export function select(paths: string[], known = true): Owner[] {
 }
 
 export function changedPaths(base: string, head: string, cwd = root): string[] {
-  // No rename collapsing: deleted old paths and new destinations both select owners.
-  const result = spawnSync('git', ['diff', '--no-renames', '--name-only', '-z', base, head, '--'], { cwd, encoding: 'utf8' });
-  if (result.error || result.status !== 0) throw Error('Changed-file history unavailable');
-  return result.stdout.split('\0').filter(Boolean);
+  return inputPaths(base, head, cwd);
+}
+
+export function selection(base: string, head: string, cwd = root, conservativeWorkflows = false) {
+  let paths: string[] = [], historyKnown = true;
+  try { paths = changedPaths(base, head, cwd); } catch { historyKnown = false; }
+  const workflowControls = historyKnown && !conservativeWorkflows ? workflowControlPaths(base, head, paths, cwd) : [];
+  return {paths, historyKnown, workflowControls, selected: select(paths, historyKnown, workflowControls)};
 }
 
 export function captureToolTests(cwd = root): Command[] {
@@ -130,10 +136,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const value = (flag: string) => args[args.indexOf(flag) + 1];
   if (!args.includes('--base') || !args.includes('--head')) throw Error('--base and --head are required');
   const base = value('--base'), head = value('--head');
-  let paths: string[] = [], known = true;
-  try { paths = changedPaths(base, head); } catch { known = false; }
-  const selected = select(paths, known);
-  const plan = commands(selected, base, head);
-  console.log(JSON.stringify({ paths, historyKnown: known, selected, commands: plan }));
+  const result = selection(base, head, root, args.includes('--conservative-workflows'));
+  const plan = commands(result.selected, base, head);
+  console.log(JSON.stringify({ ...result, commands: plan }));
   if (args.includes('--run')) execute(plan);
 }

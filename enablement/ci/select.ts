@@ -1,6 +1,6 @@
-import {execFileSync} from 'node:child_process';
 import {appendFileSync} from 'node:fs';
 import {pathToFileURL} from 'node:url';
+import {changedPaths as inputPaths} from './inputs.ts';
 
 // Keep the previous automatic Public/updater input sets. Changes to this
 // orchestration also exercise both consumers before they land.
@@ -21,9 +21,7 @@ export function select(paths: string[] | null): {public: boolean; updater: boole
 export function changedPaths(base: string, head: string): string[] | null {
   if (!/^[a-f0-9]{40}$/.test(base) || /^0+$/.test(base) || !/^[a-f0-9]{40}$/.test(head)) return null;
   try {
-    // No rename folding: moving a file out of an owner must still select it.
-    return execFileSync('git', ['diff', '--no-renames', '--name-only', '-z', base, head, '--'],
-      {encoding: 'utf8', maxBuffer: 16 * 1024 * 1024}).split('\0').filter(Boolean);
+    return inputPaths(base, head, process.cwd());
   } catch {
     // Missing history cannot suppress checks.
     return null;
