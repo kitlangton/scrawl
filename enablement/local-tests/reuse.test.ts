@@ -98,6 +98,43 @@ test('changed and mutate-restore inputs during execution cannot publish success'
   assert.ok(ran);
 }));
 
+test('a contended failure invalidates prior success and later fresh success can recover', () => fixture(dir => {
+  const snapshot = () => ({key: 'same', stable: 'same', head: 'e'.repeat(40)});
+  const store = receiptStore(dir);
+  reuse(dir, snapshot, () => {}, () => {});
+  mkdirSync(join(store, 'lock'), {mode: 0o700});
+  assert.throws(() => reuse(dir, snapshot, () => {throw Error('contended failure');}, () => {}), /contended failure/);
+  rmSync(join(store, 'lock'), {recursive: true});
+  assert.throws(() => reuse(dir, snapshot, () => {throw Error('fresh failure');}, () => {}), /fresh failure/);
+  let calls = 0;
+  reuse(dir, snapshot, () => {calls++;}, () => {});
+  reuse(dir, snapshot, () => {calls++;}, () => {});
+  assert.equal(calls, 1, 'a subsequent exclusive success restores reuse');
+}));
+
+test('a contended failure prevents the lock holder from republishing success', () => fixture(dir => {
+  const snapshot = () => ({key: 'same', stable: 'same', head: 'f'.repeat(40)});
+  reuse(dir, snapshot, () => {
+    assert.throws(() => reuse(dir, snapshot, () => {throw Error('concurrent failure');}, () => {}), /concurrent failure/);
+  }, () => {});
+  assert.equal(existsSync(join(receiptStore(dir), 'success.json')), false);
+  let calls = 0;
+  reuse(dir, snapshot, () => {calls++;}, () => {});
+  assert.equal(calls, 1);
+}));
+
+test('a contended failure during lookup prevents reuse', () => fixture(dir => {
+  const value = {key: 'same', stable: 'same', head: 'f'.repeat(40)};
+  reuse(dir, () => value, () => {}, () => {});
+  let snapshots = 0, calls = 0;
+  reuse(dir, () => {
+    if (++snapshots === 2) assert.throws(() => reuse(dir, () => value,
+      () => {throw Error('concurrent lookup failure');}, () => {}), /concurrent lookup failure/);
+    return value;
+  }, () => {calls++;}, () => {});
+  assert.equal(calls, 1);
+}));
+
 test('file identities include bytes, modes, link targets, inventory and dependency reinstall', () => fixture(dir => {
   const input = join(dir, 'dependency'); writeFileSync(input, 'same');
   const first = files([input], [dir]);

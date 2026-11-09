@@ -39,9 +39,12 @@ Evidence lives in an automatically discovered, private worktree-specific
 argument can supply a receipt. One latest success expires after six hours and is
 sealed with a random private local key. Ownership, modes, file types, links and
 the seal are verified. An exclusive lock prevents cooperating writers from
-sharing an in-flight receipt. Contention and interrupted locks run fresh. A
-failed command removes the prior receipt before execution and never publishes
-success. Atomic replacement follows successful execution and unchanged inputs.
+sharing an in-flight receipt. Contention runs fresh, marks the concurrent command
+and changes the evidence generation both before and after it runs. Readers and
+publishers reject concurrent markers and changed generations, including a failure
+that overlaps an exclusive writer. Interrupted markers or locks run fresh until
+the disposable job is removed. A failed command invalidates prior evidence and
+never publishes success. Atomic replacement follows successful execution and unchanged inputs.
 Cleanup or storage failure loses only the optimization. Removing this job resets
 the evidence. This trusts the local OS account that can already edit the hook
 and its code. It does not authenticate evidence against a malicious same-account
