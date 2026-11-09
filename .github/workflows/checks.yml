@@ -33,7 +33,8 @@ jobs:
     needs: [contracts, hermes, select]
     if: >-
       !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
-      (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false))
+      (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
+      (needs.select.result != 'success' || needs.select.outputs.macos != 'false')))
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: macos-15-intel
@@ -43,6 +44,7 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
     outputs:
+      macos: ${{ steps.paths.outputs.macos }}
       public: ${{ steps.paths.outputs.public }}
       updater: ${{ steps.paths.outputs.updater }}
     steps:

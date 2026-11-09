@@ -6,9 +6,11 @@ const root = fileURLToPath(new URL('../../', import.meta.url));
 const options = (cwd: string) => ({cwd, encoding: 'utf8' as const, maxBuffer: 16 * 1024 * 1024});
 export const controlWorkflows = ['.github/workflows/checks.yml', '.github/workflows/stream-public.yml'];
 
-export function changedPaths(base: string, head: string, cwd = root): string[] {
+export function changedPaths(base: string, head: string, cwd = root, nonModificationsOnly = false): string[] {
   // Both sides of moves/deletions count; never compare only the latest commit.
-  return execFileSync('git', ['diff', '--no-renames', '--name-only', '-z', base, head, '--'], options(cwd))
+  // The optional factual filter retains every status except ordinary edits.
+  // Existing local/hosted callers keep the complete path inventory by default.
+  return execFileSync('git', ['diff', '--no-renames', '--name-only', '-z', ...(nonModificationsOnly ? ['--diff-filter=ACDRTUXB'] : []), base, head, '--'], options(cwd))
     .split('\0').filter(Boolean);
 }
 
