@@ -33,6 +33,8 @@ jobs:
   macos:
     # Share the cheap admission barrier; neither full platform waits for the other.
     needs: [contracts, hermes, select]
+    # Only a successful explicit false can exempt a reviewed ready-PR delta.
+    # Failed/unknown selection keeps Mac coverage after the cheap guards pass.
     if: >-
       !cancelled() && needs.contracts.result == 'success' && needs.hermes.result == 'success' &&
       (github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false &&
