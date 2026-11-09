@@ -340,7 +340,7 @@ jobs:
           }
           trap cleanup EXIT
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online --execution platform
+          python3 enablement/verification.py --base "$BASE" --run --online --execution platform --overlap-root-build
       - name: Retain completed Mac dependency seeds after full verification
         if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
         # Swatinem's post action reads this variable. Arm it only after all

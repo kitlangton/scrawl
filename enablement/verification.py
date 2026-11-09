@@ -251,7 +251,7 @@ def observed_run(command, timing_label=None, **kwargs):
                 pass
 
 
-def run_checks(selection, offline=True, execution="full"):
+def run_checks(selection, offline=True, execution="full", overlap_root_build=False):
     """Explicit CI split; ordinary local callers retain the complete inventory."""
     if execution not in ("full", "portable", "platform"):
         raise ValueError(f"Unknown execution scope: {execution}")
@@ -275,17 +275,29 @@ def run_checks(selection, offline=True, execution="full"):
     dependency_mode = "--offline" if offline else "--locked"
     timings = ["--timings"] if os.environ.get("APPARENT_TIMING_FILE") else []
     if native and selection["root"]:
-        observed_run(cargo + ["build", "-j", jobs, dependency_mode] + timings, cwd=ROOT, check=True)
-        if selection.get("focused"):
-            for test_filter in selection["focused"]:
-                result = observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, test_filter,
-                                                "--", "--test-threads=2"], cwd=ROOT,
-                                        stdout=subprocess.PIPE, text=True, check=True)
-                print(result.stdout, flush=True)
-                if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
-                    raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
+        # Only CI opts in. Cargo releases its compilation lock before its
+        # build-finished event; two harness threads then overlap one app worker.
+        overlap = overlap_root_build and jobs.isdigit() and int(jobs) >= 3 and not selection.get("focused")
+        if overlap:
+            commands = {
+                "test": cargo + ["test", "-j", jobs, dependency_mode, *timings,
+                                 "--message-format=json-render-diagnostics", "--", "--test-threads=2"],
+                "build": cargo + ["build", "-j", "1", dependency_mode] + timings,
+            }
+            subprocess.run(["node", "--experimental-strip-types", str(ROOT / "enablement/ci/root.ts"),
+                            json.dumps(commands)], cwd=ROOT, check=True)
         else:
-            observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, "--", "--test-threads=2"], cwd=ROOT, check=True)
+            observed_run(cargo + ["build", "-j", jobs, dependency_mode] + timings, cwd=ROOT, check=True)
+            if selection.get("focused"):
+                for test_filter in selection["focused"]:
+                    result = observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, test_filter,
+                                                    "--", "--test-threads=2"], cwd=ROOT,
+                                            stdout=subprocess.PIPE, text=True, check=True)
+                    print(result.stdout, flush=True)
+                    if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
+                        raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
+            else:
+                observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, "--", "--test-threads=2"], cwd=ROOT, check=True)
     if native and selection["engine"]:
         for command in ("build", "test"):
             args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + timings
@@ -312,6 +324,8 @@ def main():
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
     parser.add_argument("--execution", choices=("full", "portable", "platform"), default="full",
                         help="Explicit CI routing; local default runs portable and platform checks")
+    parser.add_argument("--overlap-root-build", action="store_true",
+                        help="CI: overlap two root test threads with one required app-build worker")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if args.preflight:
@@ -327,7 +341,8 @@ def main():
     if args.pr:
         run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online, execution=args.execution)
+        run_checks(selection, offline=not args.online, execution=args.execution,
+                   overlap_root_build=args.overlap_root_build)
 
 
 if __name__ == "__main__":
