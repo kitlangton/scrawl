@@ -77,6 +77,24 @@ async function initialRuntimeRead({ now, budget, observe, pause, refresh, connec
   return {initial, refreshed};
 }
 
+// Native window creation and Playwright renderer attachment are separate facts.
+// Failure-only, read-only projection: never use these observations to admit a
+// window after firstWindow's original deadline, or inspect page/user content.
+function bootstrapFailure({ app, BrowserWindow }) {
+  return {
+    pid: process.pid, at: Date.now(), ready: app.isReady(),
+    events: (globalThis.__apparentStorageWindowProbe ?? []).slice(0, 8),
+    windowCount: BrowserWindow.getAllWindows().length,
+    windows: BrowserWindow.getAllWindows().slice(0, 2).map(window => {
+      const contents = window.webContents;
+      const destroyed = contents.isDestroyed();
+      return { id: window.id, visible: window.isVisible(), contentsDestroyed: destroyed,
+        ...(!destroyed ? { loadingMainFrame: contents.isLoadingMainFrame(),
+          crashed: contents.isCrashed(), rendererPid: contents.getOSProcessId() } : {}) };
+    }),
+  };
+}
+
 async function within(promise, ms, label) {
   let timer;
   try {
@@ -303,7 +321,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     application = await electron.launch({ args: [root], env, timeout: budget(15000) });
     electronChild = application.process();
     const launchedAt = Date.now();
-    report.electronBootstrap = { pid: electronChild.pid, stderrTail: '' };
+    report.electronBootstrap = { pid: electronChild.pid, launchedAt, stderrTail: '' };
     electronChild.stderr?.on('data', chunk => {
       report.electronBootstrap.stderrTail = (report.electronBootstrap.stderrTail + chunk.toString()).slice(-8192);
     });
@@ -314,6 +332,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     // launch() attaches to the main process before app.whenReady() creates a window.
     // Start the existing window deadline before diagnostics; observation must not
     // buy extra startup time or turn cleanup's exit into a bootstrap failure.
+    report.electronBootstrap.firstWindowStartedAt = Date.now();
     const firstWindow = application.firstWindow({ timeout: budget() });
     const bootstrap = within(application.evaluate(({ app, BrowserWindow }) => {
       const events = [];
@@ -330,12 +349,12 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     try {
       page = await firstWindow;
     } catch (error) {
+      report.electronBootstrap.firstWindowFailedAt = Date.now();
+      report.electronBootstrap.attachedWindowsAtFailure = application.windows().length;
       await bootstrap;
       try {
-        report.electronBootstrap.failure = await within(application.evaluate(({ app, BrowserWindow }) => ({
-          pid: process.pid, ready: app.isReady(), events: globalThis.__apparentStorageWindowProbe ?? [],
-          windows: BrowserWindow.getAllWindows().map(window => ({ id: window.id, visible: window.isVisible() })),
-        })), budget(1500), 'Failed Electron bootstrap observation');
+        report.electronBootstrap.failure = await within(application.evaluate(bootstrapFailure),
+          budget(1500), 'Failed Electron bootstrap observation');
       } catch (diagnosticError) { report.electronBootstrap.failureObservationError = diagnosticError.message; }
       throw error;
     }
