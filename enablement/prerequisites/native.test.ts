@@ -20,7 +20,7 @@ function fixture(t: any) {
   const electron = put('capture/desktop/ui/frontend/node_modules/electron/bin', 'synthetic executable');
   chmodSync(electron, 0o700);
   put('capture/desktop/ui/frontend/node_modules/electron/index.js', 'module.exports = __dirname + "/bin"');
-  for (const file of ['tests/reference-native.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/runtime.cjs']) {
+  for (const file of ['tests/reference-native.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/runtime.cjs', 'electron/storage-policy.cjs']) {
     put('capture/desktop/ui/frontend/' + file);
   }
   return { root, put, electron };
@@ -33,6 +33,11 @@ test('ready Linux inputs resolve the installed executable without launching it',
 test('missing Electron download fails before tests can run', t => {
   const f = fixture(t);
   rmSync(f.electron);
+  assert.throws(() => checkNativeInputs(f.root, 'linux'), /ENOENT/);
+});
+test('missing generated Storage policy fails before Cargo', t => {
+  const f = fixture(t);
+  rmSync(resolve(f.root, 'capture/desktop/ui/frontend/electron/storage-policy.cjs'));
   assert.throws(() => checkNativeInputs(f.root, 'linux'), /ENOENT/);
 });
 test('installer/setup failure propagates through Electron resolution', t => {
@@ -53,9 +58,10 @@ test('workflow installs and checks prerequisites before every Cargo command, pre
   const workflow = readFileSync('.github/workflows/verification-platform.yml', 'utf8');
   const rust = workflow.split('\n  rust:')[1].split('\n  release-ready:')[0];
   const firstCargo = rust.indexOf('cargo ');
-  for (const marker of ['--preflight', 'npm --prefix capture/desktop/ui/frontend ci', 'node_modules/electron/install.js', 'enablement/prerequisites/native.ts']) {
+  for (const marker of ['--preflight', 'npm --prefix capture/desktop/ui/frontend ci', 'node_modules/electron/install.js', 'scripts/build-storage-policy.ts', 'enablement/prerequisites/native.ts']) {
     assert.ok(rust.indexOf(marker) >= 0 && rust.indexOf(marker) < firstCargo, marker);
   }
+  assert.ok(rust.indexOf('scripts/build-storage-policy.ts') < rust.indexOf('enablement/prerequisites/native.ts'));
   assert.equal((rust.match(/npm --prefix capture\/desktop\/ui\/frontend ci/g) || []).length, 1);
   assert.match(rust, /timeout-minutes: 5/);
   assert.match(rust, /_electron_rust_roundtrip -- --ignored --nocapture/);

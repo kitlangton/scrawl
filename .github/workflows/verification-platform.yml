@@ -249,6 +249,7 @@ jobs:
         run: |
           npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
           node capture/desktop/ui/frontend/node_modules/electron/install.js
+          (cd capture/desktop/ui/frontend && node --experimental-strip-types scripts/build-storage-policy.ts)
           node --experimental-strip-types enablement/prerequisites/native.ts
           # Later clean packaging installs must use the archive prepared here.
           printf 'electron_config_cache=%s\n' "$electron_config_cache" >> "$GITHUB_ENV"
