@@ -5,12 +5,12 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const actions = new Set(['continue','back','later','close','change-shortcut','grant:screen-recording','grant:microphone','grant:accessibility','grant:speech-recognition','grant:camera','practice-paste','practice-locate','practice-pasted','practice-finish','pen:coral','pen:purple','pen:blue','pen:green']);
 const steps = new Set(['welcome','how-it-works','permissions','shortcut','try-it','done']);
-const phases = new Set(['start','screen','whiteboard','board-ink','screen-ink','stop','preparing','copied','paste','locate','complete','retry','copy-failed']);
+const phases = new Set(['start','screen','whiteboard','board-ink','screen-ink','note','stop','preparing','copied','paste','locate','complete','retry','copy-failed']);
 function project(v) {
   if(v?.type!=='state'||!steps.has(v.step)||!Array.isArray(v.rows)||v.rows.length>5||typeof v.ready!=='boolean')return null;
   const rows=[];
   for(const r of v.rows){if(!r||typeof r!=='object'||!['screen-recording','microphone','accessibility','speech-recognition','camera'].includes(r.permission)||!['granted','denied','not-determined'].includes(r.status))return null;rows.push({permission:r.permission,status:r.status,required:r.required===true,reopening:r.reopening===true,relaunch:r.relaunch===true});}
-  return {step:v.step,ready:v.ready,fix:v.fix===true,rows,index:v.index,count:v.count,shortcut:typeof v.shortcut==='string'?v.shortcut.slice(0,80):'',shortcutEditing:v.shortcutEditing===true,shortcutChosen:v.shortcutChosen===true,
+  return {tutorial:['skipped','watched','practiced'].includes(v.tutorial)?v.tutorial:null,step:v.step,ready:v.ready,fix:v.fix===true,rows,index:v.index,count:v.count,shortcut:typeof v.shortcut==='string'?v.shortcut.slice(0,80):'',shortcutEditing:v.shortcutEditing===true,shortcutChosen:v.shortcutChosen===true,shortcutTested:v.shortcutTested===true,
     penPicker:v.penPicker===true,penSelected:v.penSelected===true,penError:v.penError===true,penRgb:Array.isArray(v.penRgb)&&v.penRgb.length===3&&v.penRgb.every(n=>Number.isInteger(n)&&n>=0&&n<=255)?v.penRgb:[255,59,48],
     platform:v.platform==='linux'?'linux':'macos',shortcutEditor:v.shortcutEditor&&typeof v.shortcutEditor==='object'?{recording:v.shortcutEditor.recording===true,externallyManaged:v.shortcutEditor.externallyManaged===true,error:typeof v.shortcutEditor.error==='string'?v.shortcutEditor.error.slice(0,240):null}:null,
     testInstance:v.testInstance===true,practice:phases.has(v.practice)?v.practice:null,firstCaptureRequired:v.firstCaptureRequired===true,
@@ -18,8 +18,16 @@ function project(v) {
     ...(Array.isArray(v.anchor)&&v.anchor.length===4&&v.anchor.every(Number.isFinite)?{anchor:v.anchor}:{})};
 }
 // Screen coordinates supplied by this process's typed Whiteboard window only.
+function coachDimensions(area,phase){return {width:Math.min(area.width,phase==='screen-ink'&&area.width>=720?720:380),height:Math.min(area.height??440,440)};}
+function setupDimensions(area,shortcut){return {width:Math.min(area.width,760),height:Math.min(area.height,shortcut?520:720)};}
+function nativeRectangle(rect,toDip){
+  if(!rect)return rect;
+  const start=toDip({x:Math.round(rect[0]),y:Math.round(rect[1])});
+  const end=toDip({x:Math.round(rect[0]+rect[2]),y:Math.round(rect[1]+rect[3])});
+  return [start.x,start.y,Math.max(1,end.x-start.x),Math.max(1,end.y-start.y)];
+}
 function coachPosition(area,anchor,board,phase){
-  const width=380,height=440,gap=24;
+  const {width,height}=coachDimensions(area,phase),gap=24;
   const clamp=([x,y])=>[Math.round(Math.max(area.x,Math.min(area.x+area.width-width,x))),Math.round(Math.max(area.y,Math.min(area.y+area.height-height,y)))];
   const [x,y,w,h]=anchor||[area.x+area.width/2-150,area.y+35,300,50];
   const candidates=[[x+w/2-width/2,y+h+gap]];
@@ -45,7 +53,7 @@ function parentChannel(output,onLost){
     close(){connected=false},
   };
 }
-module.exports={project,actions,coachPosition,parentChannel};
+module.exports={project,actions,coachDimensions,setupDimensions,nativeRectangle,coachPosition,parentChannel};
 if(!process.versions.electron) return;
 const { app, BrowserWindow, ipcMain, screen, session } = require('electron');
 app.setName(process.env.APPARENT_TEST_INSTANCE==='1'?'apparent onboarding preview':'apparent onboarding');
@@ -96,20 +104,25 @@ app.whenReady().then(()=>{
 });
 function present(v,activate=false){
   if(closing||!window||window.isDestroyed())return;
-  const coach=v.step==='try-it';
-  const width=coach?380:760,height=coach?440:720;
-  if(lastMode!==coach){
+  // Linux adapters report X11 pixels; Electron places windows in logical DIP.
+  // macOS adapter coordinates are already points.
+  if(process.platform==='linux')v={...v,anchor:nativeRectangle(v.anchor,p=>screen.screenToDipPoint(p)),practiceBoard:nativeRectangle(v.practiceBoard,p=>screen.screenToDipPoint(p))};
+  const coach=v.step==='try-it'&&v.practice!==null&&v.practice!=='start';
+  const focal=v.practiceBoard||v.anchor;
+  const target=focal?screen.getDisplayMatching({x:Math.round(focal[0]),y:Math.round(focal[1]),width:Math.max(1,Math.round(focal[2])),height:Math.max(1,Math.round(focal[3]))}):screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
+  const area=target.workArea;
+  const shortcut=v.step==='shortcut'||(v.step==='try-it'&&!coach);
+  const {width,height}=coach?coachDimensions(area,v.practice):setupDimensions(area,shortcut);
+  const mode=`${coach}:${width}:${height}`;
+  if(lastMode!==mode){
     window.setAlwaysOnTop(coach,'floating');
     window.setHasShadow(!coach); // The coach card paints its own shaped shadow, not a rectangular window shadow.
     // X11 fixed-size constraints must change together, only when the mode changes.
     window.setMaximumSize(0,0);window.setMinimumSize(width,height);window.setMaximumSize(width,height);
     window.setSize(width,height,false);
     window.setVisibleOnAllWorkspaces(coach,{visibleOnFullScreen:coach});
-    lastMode=coach;lastPlacement='';
+    lastMode=mode;lastPlacement='';
   }
-  const focal=v.practiceBoard||v.anchor;
-  const target=focal?screen.getDisplayMatching({x:Math.round(focal[0]),y:Math.round(focal[1]),width:Math.max(1,Math.round(focal[2])),height:Math.max(1,Math.round(focal[3]))}):screen.getDisplayNearestPoint(screen.getCursorScreenPoint());
-  const area=target.workArea;
   if(coach){
     const placement=coachPosition(area,v.anchor,v.practiceBoard,v.practice);
     // Reposition on stage/target changes; leave a user's manual adjustment alone between ticks.
@@ -118,8 +131,8 @@ function present(v,activate=false){
     const actual=window.getBounds();
     v={...v,coachArrow:placement.arrow,coachPointsUp:placement.pointsUp&&actual.x===placement.x&&actual.y===placement.y};
   } else {
-    const key=JSON.stringify(['setup',area]);
-    if(key!==lastPlacement){window.setPosition(area.x+Math.max(0,Math.round((area.width-760)/2)),area.y+Math.max(0,Math.round((area.height-720)/2)),false);lastPlacement=key;}
+    const key=JSON.stringify(['setup',height,area]);
+    if(key!==lastPlacement){window.setPosition(area.x+Math.max(0,Math.round((area.width-width)/2)),area.y+Math.max(0,Math.round((area.height-height)/2)),false);lastPlacement=key;}
   }
   window.webContents.send('onboarding:state',v);
   if(!window.isVisible()||activate){if(coach)window.showInactive();else window.show();}

@@ -80,9 +80,9 @@ follows PostHog's Rust wire contract. Connect logging is unchanged.
 
 Rust decides what shows (`Flow`, `launch_plan`, `Gate`, tested) and stores progress under `"onboarding"` in `~/.config/apparent/config.json`, including the tour's current step (`resume`), so any quit (macOS's "Quit & Reopen" too) picks up there; the SwiftUI window in `apparent-helper onboarding` only renders the state it's sent and reports buttons (`grant:<permission>` for a row).
 
-Tour: Welcome → HowItWorks → Permissions (one checklist of three required rows, Screen Recording first, then Microphone and Accessibility; any order works) → Shortcut → TryIt → Done. Shortcut shows the effective Record keys. Continue moves on without editing; Change shortcut starts the Record recorder in the same onboarding page, using Settings' validation, save, cancel and reset behavior. Leaving the page cancels an unfinished recording and resumes hotkeys. On Omarchy, a Hyprland-owned shortcut cannot be replaced by Apparent; the inline page explains that ownership. Camera (iPhone) is never in the tour: its first use opens `Flow::fix(vec![Camera])`, the same screen with one row.
+Tour: Welcome → Permissions (one checklist of three required rows, Screen Recording first, then Microphone and Accessibility; any order works) → Shortcut → TryIt → Done. The default first-capture shortcut page starts with no selection and uses Settings' validation/save/cancel behavior. A saved combination must pass a non-recording press-and-release trial. The pen picker goes directly to permissions or shortcut choice; the demonstration page is removed. An explicit replay from Settings clears only tour milestones, requiring shortcut selection and its non-recording trial again; ordinary quit/relaunch resumes unfinished shortcut setup, but never re-enrols a user whose shortcut setup is complete. The Electron tour then advances automatically to **Go again.** The next shortcut starts the real guided capture. The native fallback retains its Continue action. The explicit optional-practice opt-out retains the legacy advance behavior. Leaving the page cancels an unfinished recording and resumes hotkeys. On Omarchy, a Hyprland-owned shortcut cannot be replaced by Apparent; the inline page explains that ownership. Camera (iPhone) is never in the tour: its first use opens `Flow::fix(vec![Camera])`, the same screen with one row.
 
-HowItWorks is a silent 11 s loop (`capture/desktop/native/OnboardingDemo.swift`): a pretend checkout page whose Pay button runs out of its window, ⌥⇧S opening the pill, subtitles for what the person says, a ⇧ mark around the bug, a click, ⌥⇧S to Copied, the frame lifting off as a one-frame contact sheet with its `1` chip, ⌥⇧V into an agent chat, and the fix. Everything on the stage is a function of one clock (`DemoScript`), so any moment renders the same. Holding ⇧ over the stage pauses the loop and draws a mark in the window (nothing is recorded or asked for). The button under it reads Skip until the loop has played through or a mark was drawn, then Continue; the helper reports `skip`, `watched` and `practiced`, and `Flow` keeps the furthest outcome in `Progress::tutorial` (`"tutorial"`), so a resumed tour keeps Continue. Reduced motion shows four still frames with captions. `apparent-helper onboarding --render DIR --demo-frames 30` writes one loop as PNGs for a video.
+The legacy `how-it-works` value remains readable in saved config, but routes past the removed page in both Electron and native fallback. Back navigation and step counts exclude it.
 
 Input Monitoring is never asked for or read (macOS wants a relaunch after it; the enum variant stays only so 0.3.x configs load, and `input_monitoring_is_never_requested` greps the sources): clicks come from an `NSEvent` global mouse monitor (no permission), ⇧ and held modifiers from `CGEventSourceFlagsState` (no permission), keys from an active `kCGEventTapOptionDefault` tap (Accessibility), which the HID poller makes or stops every 500 ms as `AXIsProcessTrusted` changes (`check_key_tap`; live, no relaunch). Never poll key codes (`CGEventSourceKeyState`) or make a listen-only tap.
 
@@ -107,9 +107,9 @@ First-capture onboarding is enabled by default. Set
 or reopen the tour. The opt-out restores optional shortcut choice and practice.
 Existing users who already finished setup are not forced through it again.
 
-On Shortcut, explicitly confirm the current Record combination or enter a valid
-combination in the inline recorder before continuing. Invalid, cancelled or reset
-choices alone do not count; confirm the default after resetting.
+On Shortcut, choose a valid combination in the inline recorder and test it once
+before continuing. There is no preselected default or accept-current action.
+Invalid or cancelled choices and an untested saved combination cannot advance.
 A verified desktop-owned Linux binding instead offers **Use desktop shortcut**;
 Apparent cannot rewrite that compositor setting. The next page asks the user to
 try giving feedback on onboarding: start with the chosen shortcut, talk and point,
@@ -117,11 +117,11 @@ then press it again to finish. This is a local practice capture, not feedback se
 to the team. Menu-started captures and cancelled or failed attempts do not finish
 the tour. A successful bundle completion advances to Done.
 
-Closing or choosing Try later is allowed, but leaves the first-capture setup
-unfinished so it resumes on the next launch. `onboarding.shortcutChosen` and
-`onboarding.firstCaptureCompleted` persist those milestones beside `resume`;
-`seen` becomes true only after a successful practice capture. The default flow
-and permission-repair windows retain their existing behavior.
+Closing or choosing Try later before a successful shortcut trial leaves setup
+unfinished, so it resumes on the next launch. `onboarding.shortcutChosen` and
+`onboarding.shortcutTestedFor` persist shortcut setup; success marks `seen` and
+clears `resume` immediately. `onboarding.firstCaptureCompleted` separately tracks
+the guided capture lesson. Permission-repair windows retain their existing behavior.
 
 ## Settings (`capture/desktop/settings/settings.rs`, `capture/desktop/native/Settings.swift`)
 
@@ -299,7 +299,12 @@ adapter; macOS keeps an installed `apparent-helper onboarding --permissions-only
 process alive for AVFoundation/Speech consent and permission guidance panels.
 That mode never creates the onboarding window, admits only fixed permission
 identifiers/actions, closes granted guides, and cleans up guides on pipe closure.
-The Electron pipe carries presentation only. Native fallback remains available;
+The Electron pipe carries presentation only. Linux onboarding explicitly uses
+X11, matching GPUI and the notes/ink surfaces after the app clears
+`WAYLAND_DISPLAY`; Electron must not auto-select an unavailable Wayland socket.
+Native X11 anchor/board pixels are converted to Electron DIP, and setup/coach
+windows fit the logical work area, including a scaled small display.
+Native fallback remains available;
 its presentation can be removed only after Mac permission/media and isolated
 Linux acceptance. On Linux, onboarding and Storage share the Electron display-backend
 launcher: when GPUI hides `WAYLAND_DISPLAY`, Electron receives
@@ -321,3 +326,92 @@ quality; installed platform acceptance remains required. `penColor` accepts
 `coral`, `purple`, `blue` or `green`, loads at app startup and applies immediately
 when saved in setup. Legacy strokes without a color retain red. Config writes
 preserve unrelated keys. See [candidate admission and proof](onboarding-release-candidate.md).
+
+### Compact practice illustrations
+
+The shared Electron coach shows finite four-second key/gesture illustrations on
+start/retry (the saved Record shortcut), screen drawing (Shift and drag), and
+copied/paste (Command V on Mac, Ctrl V on Linux). The inline strip is about
+68–74 points tall; secondary actions share a wrapping row to avoid excess blank
+space in the existing 380×440 coach window. Replay uses the canonical shared
+Button and restarts presentation only. Illustrations send no keys, draw no ink
+and advance no Rust milestones. Polling does not restart them; changing practice
+stage does. Reduced motion shows static keys/gesture and hides Replay.
+
+Routing and native fallback remain available. The illustrations carry no
+config/data migration and must not be treated as native acceptance. Browser
+video uses synthetic onboarding state; actual Electron checks cover layout,
+saved platform keys, finite playback, replay isolation and reduced motion. New
+installed Mac/Linux acceptance is still required before publishing these illustrations.
+
+The control illustrations additionally cover Screen → Whiteboard, Finish →
+Copied and the Apparent menu → Open Latest Capture. The real Rust capture phase
+selects the coach; replay/illustrated clicks are local presentation only. Screen
+selection can show only Screen, then the recording-stage coach demonstrates the
+Whiteboard control. The location example opens its menu below the icon with an
+arrow to the matching entry and uses neutral theme roles rather than wallpaper
+tint. These remain finite, replayable and static under reduced motion.
+
+### Required shortcut choice and trial
+
+The default first-capture tour offers no preselected Record combination and no
+accept-current shortcut action. Save a valid combination in the existing editor,
+then press and release that combination once. Rust consumes the normal shortcut
+release as a trial: no capture, picker, microphone admission or clipboard handoff
+starts. Continue remains disabled until the trial succeeds. Changing the saved
+combination invalidates the trial. `onboarding.shortcutTestedFor` stores the exact
+effective label for restart checks; a mismatched binding returns to the trial.
+Completed users retain completion, and a desktop-managed Linux binding keeps its
+existing explicit acceptance path before the same trial.
+
+Early setup shortcut presses show setup rather than ordinary recording. The same
+setup policy guards menu, picker, agent and iPhone starts; Camera permission
+checks and finishing an active capture retain their existing behavior. Closing
+an unfinished tour leaves its progress intact; a shortcut reopens it first.
+After the trial, Electron automatically shows Go again in the setup window;
+the native fallback retains Continue. The next shortcut starts the real local
+guided recording, and later presses retain normal finishing.
+The explicit first-capture opt-out retains optional legacy behavior.
+
+During screen drawing, the existing transparent Electron coach widens to 720 px
+when space permits to show the approved trackpad helper beside the main guide.
+Narrow displays keep the same helper inline with scrolling; enlarged text remains
+reachable. It shares the existing window and disappears with the drawing phase.
+Rust owns the phase; the illustration/hint never sends keys or changes progress.
+Native fallback routing remains available until installed acceptance; disabling
+the Electron route is the existing rollback. Real platform shortcut/permission/focus
+and packaged acceptance remain separate from renderer and state-machine tests.
+
+### First-capture text note lesson
+
+After whiteboard drawing, the whiteboard closes and the existing Electron coach
+shows **Add a note.** before the separate screen-drawing lesson:
+“Hold Shift and click a spot.”
+Its compact Shift-click illustration is presentation only, with Replay and a
+reduced-motion still. The trackpad helper appears only in the following screen-drawing lesson.
+Linux opens Whiteboard directly from its recording controls; its guide and
+illustration reflect that button rather than the Mac Screen menu. The existing
+notes editor remains the only place to enter real text; the coach
+never takes keyboard focus or submits a note. On Hyprland, the native adapter
+reconciles X11 keyboard focus after compositor placement for the same current
+owned editor request. Linux note positions convert native pixels to Electron DIP
+and placement converts back, so scaled editors retain their complete controls.
+Rust advances to screen drawing only after
+the current capture's notes session reports a nonempty durable save. Opening the
+editor, keeping a draft, dismissing, empty Enter or a failed write cannot satisfy
+this lesson. Screen marks made before the saved-note transition cannot satisfy
+the later screen-drawing prompt. An early finish still teaches paste/location, but cannot complete
+required practice without drawing and attaching a note. Completed users are not
+re-enrolled. Existing default Electron coaching and native fallback routing are
+unchanged; rollback/remove this lesson together with its durable-save check and
+illustration, rather than rendering a competing surface. Installed Mac/Linux acceptance
+must verify Whiteboard drawing → close Whiteboard → Shift-click → real editor →
+Attach/Enter → screen drawing → Finish, focus restoration,
+and bundle `notes.json`/semantic output. Renderer simulation is not native proof.
+
+The Electron first-capture start state keeps “Go again.” and the saved shortcut in
+the setup window, shortened to 520 pixels with the keys centered in its content. It becomes the floating coach only after capture selection
+begins; the next shortcut still uses the existing native recording path. Returning
+to the start state restores the setup window. Native fallback routing is unchanged.
+
+The removed demonstration has no Electron renderer/assets. Both Electron and native fallback skip its legacy step through the authoritative Rust route; rollback requires reverting that route together with presentation changes.

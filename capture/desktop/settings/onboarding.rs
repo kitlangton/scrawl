@@ -200,6 +200,8 @@ pub enum Input {
     ChangeShortcut,
     /// A shortcut was explicitly chosen and successfully saved, or accepted from the desktop.
     ShortcutChosen,
+    /// A trial press began; confirmation waits for the normal key-release path.
+    ShortcutTrialStarted,
     /// The global shortcut requested a capture (not the menu or a timed CLI recording).
     ShortcutTriggered,
     /// The window was closed.
@@ -286,6 +288,7 @@ pub struct View {
     pub shortcut_editing: bool,
     pub first_capture_required: bool,
     pub shortcut_chosen: bool,
+    pub shortcut_tested: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -310,26 +313,34 @@ pub struct Flow {
     shortcut_editing: bool,
     first_capture_required: bool,
     shortcut_chosen: bool,
+    shortcut_tested: bool,
     first_capture_completed: bool,
     shortcut_pending: bool,
     practice_recording: bool,
-    skip_intro: bool,
 }
 
+/// The recording shortcut stays in setup until the user reaches guided practice.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ShortcutPolicy { Record, Block, Trial }
+
 impl Flow {
-    /// The shared pen picker is followed directly by permissions or shortcut setup.
-    fn with_intro_skipped(mut self, skipped: bool) -> Self {
-        self.skip_intro=skipped && self.mode==Mode::Tour;
-        if self.skip_intro && self.step==Step::HowItWorks { self.step=self.forward_from(self.step); }
-        self
+    pub(crate) fn shortcut_policy(&self) -> ShortcutPolicy {
+        if self.mode != Mode::Tour || !self.first_capture_required || self.step.position() >= Step::TryIt.position() {
+            ShortcutPolicy::Record
+        } else if self.step == Step::Shortcut && self.shortcut_chosen && !self.shortcut_editing {
+            ShortcutPolicy::Trial
+        } else {
+            ShortcutPolicy::Block
+        }
     }
     /// Opt into the first-capture onboarding experiment, restoring durable milestones.
-    pub fn with_first_capture(mut self, required: bool, chosen: bool, completed: bool) -> Self {
+    pub fn with_first_capture(mut self, required: bool, chosen: bool, tested: bool, completed: bool) -> Self {
         self.first_capture_required = required && self.mode == Mode::Tour;
         self.shortcut_chosen = chosen;
+        self.shortcut_tested = chosen && (tested || completed);
         self.first_capture_completed = chosen && completed;
         if self.first_capture_required && self.step.position() >= Step::Shortcut.position() {
-            self.step = if !chosen {
+            self.step = if !chosen || !self.shortcut_tested {
                 Step::Shortcut
             } else if self.first_capture_completed {
                 Step::Done
@@ -381,10 +392,10 @@ impl Flow {
             shortcut_editing: false,
             first_capture_required: false,
             shortcut_chosen: false,
+            shortcut_tested: false,
             first_capture_completed: false,
             shortcut_pending: false,
             practice_recording: false,
-            skip_intro: false,
         }
     }
 
@@ -431,12 +442,23 @@ impl Flow {
             Input::ShortcutChosen => {
                 if self.mode == Mode::Tour && self.step == Step::Shortcut {
                     self.shortcut_chosen = true;
+                    self.shortcut_tested = false;
+                    self.shortcut_editing = false;
+                }
+                Effect::None
+            }
+            Input::ShortcutTrialStarted => {
+                if self.shortcut_policy() == ShortcutPolicy::Trial {
+                    self.shortcut_tested = false;
                 }
                 Effect::None
             }
             Input::ShortcutTriggered => {
+                if self.shortcut_policy() == ShortcutPolicy::Trial {
+                    self.shortcut_tested = true;
+                }
                 self.shortcut_pending = self.step == Step::TryIt
-                    && (!self.first_capture_required || self.shortcut_chosen);
+                    && (!self.first_capture_required || (self.shortcut_chosen && self.shortcut_tested));
                 Effect::None
             }
             Input::Continue => self.primary(),
@@ -537,6 +559,7 @@ impl Flow {
             shortcut_editing: self.step == Step::Shortcut && self.shortcut_editing,
             first_capture_required: self.first_capture_required,
             shortcut_chosen: self.shortcut_chosen,
+            shortcut_tested: self.shortcut_tested,
         }
     }
 
@@ -583,9 +606,9 @@ impl Flow {
         self.needed().all(|p| self.usable(p))
     }
 
-    /// A step the tour passes: the permissions screen once everything on it works.
+    /// Skip the removed demonstration and already-usable permissions.
     fn passes(&self, step: Step) -> bool {
-        (step == Step::HowItWorks && self.skip_intro) || (step == Step::Permissions && self.done())
+        step == Step::HowItWorks || (step == Step::Permissions && self.done())
     }
 
     fn forward_from(&self, mut step: Step) -> Step {
@@ -621,7 +644,7 @@ impl Flow {
 
     fn primary(&mut self) -> Effect {
         match self.step {
-            Step::Shortcut if self.first_capture_required && !self.shortcut_chosen => Effect::None,
+            Step::Shortcut if self.first_capture_required && (!self.shortcut_chosen || !self.shortcut_tested || self.shortcut_editing) => Effect::None,
             Step::TryIt if self.first_capture_required => Effect::None,
             Step::TryIt | Step::Done => Effect::Close,
             Step::Permissions if !self.done() => Effect::None,
@@ -773,6 +796,9 @@ impl Gate {
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Progress {
+    /// Version of the setup journey whose resume point this belongs to.
+    #[serde(default)]
+    pub tour_revision: u32,
     /// The tour finished (or was dismissed in the legacy flow); it won't open by itself again.
     #[serde(default)]
     pub seen: bool,
@@ -795,18 +821,65 @@ pub struct Progress {
     /// Explicitly saved Record shortcut (or accepted desktop-owned shortcut) in the tour.
     #[serde(default)]
     pub shortcut_chosen: bool,
+    /// Effective Record combination whose real press-and-release passed the trial.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub shortcut_tested_for: Option<String>,
     /// A shortcut-started practice recording produced a completed local capture.
     #[serde(default)]
     pub first_capture_completed: bool,
 }
 
 impl Progress {
-    /// Closing is allowed, but an experimental tour resumes until its capture succeeds.
+    fn tested_shortcut(&self, label: &str) -> bool {
+        self.shortcut_chosen && self.shortcut_tested_for.as_deref() == Some(label)
+    }
+    /// Old unfinished tours restart once at Welcome. Permission relaunches within
+    /// this revision continue where they left off; completed users are not re-enrolled.
+    pub fn prepare_current_tour(&mut self) -> bool {
+        const CURRENT_TOUR: u32 = 1;
+        // Earlier previews tied setup completion to every guided-capture lesson.
+        // A saved successful shortcut trial already completed setup; do not
+        // re-enrol that user merely because they closed the optional coaching.
+        if self.tour_revision <= CURRENT_TOUR && !self.seen
+            && matches!(self.resume, Some(Step::Shortcut | Step::TryIt))
+            && self.shortcut_chosen && self.shortcut_tested_for.is_some()
+        {
+            self.seen = true;
+            self.resume = None;
+            self.tour_revision = CURRENT_TOUR;
+            return true;
+        }
+        if self.tour_revision >= CURRENT_TOUR { return false; }
+        self.tour_revision = CURRENT_TOUR;
+        if !self.seen {
+            self.resume = Some(Step::Welcome);
+            self.tutorial = None;
+            self.shortcut_chosen = false;
+            self.shortcut_tested_for = None;
+            self.first_capture_completed = false;
+        }
+        true
+    }
+
+    /// Start the Settings replay from the beginning while retaining permission history,
+    /// relaunch throttling and the user's actual shortcut/pen/configuration choices.
+    pub fn reset_for_replay(&mut self) {
+        self.seen = false;
+        self.resume = Some(Step::Welcome);
+        self.tutorial = None;
+        self.shortcut_chosen = false;
+        self.shortcut_tested_for = None;
+        self.first_capture_completed = false;
+    }
+
+    /// Shortcut setup and the guided capture lesson have separate completion.
     pub fn leave(&mut self, flow: &Flow) {
         if flow.mode == Mode::Fix {
             return;
         }
-        self.seen = !flow.first_capture_required || flow.first_capture_completed;
+        self.seen = self.seen || !flow.first_capture_required || flow.first_capture_completed
+            || (flow.shortcut_chosen && flow.shortcut_tested && !flow.shortcut_editing
+                && matches!(flow.step, Step::Shortcut | Step::TryIt | Step::Done));
         self.resume = if self.seen { None } else { flow.resume_point() };
     }
     pub fn load() -> Self {
@@ -1012,9 +1085,11 @@ pub struct Session {
     last_view: String,
     shortcut_label: String,
     shortcut_state: Option<serde_json::Value>,
+    shortcut_choice_down: bool,
     saved_resume: Option<Step>,
     saved_tutorial: Option<Tutorial>,
     saved_shortcut_chosen: bool,
+    saved_shortcut_tested_for: Option<String>,
     saved_first_capture_completed: bool,
     clock: std::time::Instant,
     practice: Option<super::practice::Practice>,
@@ -1044,9 +1119,11 @@ impl Session {
             last_view: String::new(),
             shortcut_label: String::new(),
             shortcut_state: None,
+            shortcut_choice_down: false,
             saved_resume: None,
             saved_tutorial: None,
             saved_shortcut_chosen: false,
+            saved_shortcut_tested_for: None,
             saved_first_capture_completed: false,
             clock: std::time::Instant::now(),
             practice: None,
@@ -1121,10 +1198,10 @@ impl Session {
             flow: flow
                 .with_auto_relaunch(allowed)
                 .with_tutorial(progress.tutorial)
-                .with_intro_skipped(shell)
                 .with_first_capture(
                     crate::shared::handoff::experiment("onboardingFirstCapture"),
                     progress.shortcut_chosen,
+                    progress.tested_shortcut(shortcut),
                     progress.first_capture_completed,
                 ),
             transport,
@@ -1135,9 +1212,11 @@ impl Session {
             last_view: String::new(),
             shortcut_label: String::new(),
             shortcut_state: None,
+            shortcut_choice_down: true,
             saved_resume: None,
             saved_tutorial: progress.tutorial,
             saved_shortcut_chosen: progress.shortcut_chosen,
+            saved_shortcut_tested_for: progress.shortcut_tested_for,
             saved_first_capture_completed: progress.first_capture_completed,
             clock: std::time::Instant::now(),
             practice: shell.then(super::practice::Practice::default),
@@ -1312,6 +1391,7 @@ impl Session {
     /// Feeds the flow and carries out what the window can do itself. Returns what needs the
     /// app: `Close` or `Relaunch`.
     pub fn input(&mut self, input: Input) -> Effect {
+        if matches!(&input, Input::ShortcutChosen) { self.shortcut_choice_down = true; }
         if self.practice.is_some() && self.flow.step()==Step::TryIt && !self.fallback_pending {
             match &input {
                 Input::CaptureSelecting => self.practice.as_mut().unwrap().selecting(),
@@ -1449,11 +1529,19 @@ impl Session {
 
     /// Keep every step's displayed Record keys in sync with the active shortcut.
     pub fn shortcut_changed(&mut self, label: &str) {
+        if !self.shortcut_label.is_empty() && self.shortcut_label != label
+            && self.flow.mode == Mode::Tour && !self.flow.practice_recording && !self.flow.first_capture_completed
+        {
+            self.flow.shortcut_tested = false;
+            self.shortcut_choice_down = true;
+            if self.flow.step == Step::TryIt { self.flow.step = Step::Shortcut; }
+        }
         self.shortcut_label = label.to_owned();
         self.send(&serde_json::json!({"type": "shortcut", "label": label}));
     }
 
     pub fn shortcut_editor(&mut self, editor: &crate::capture::desktop::settings::ShortcutView) {
+        if !editor.recording { self.flow.shortcut_editing = false; }
         let message = serde_json::json!({"type": "shortcut-editor", "shortcut": editor});
         self.shortcut_state = Some(message.clone());
         self.editor = Some(editor.clone());
@@ -1463,6 +1551,24 @@ impl Session {
 
     pub(crate) fn local_practice(&self) -> bool {
         self.flow.local_practice()
+    }
+
+    pub(crate) fn shortcut_policy(&self) -> ShortcutPolicy {
+        let policy = self.flow.shortcut_policy();
+        if self.shortcut_choice_down && policy == ShortcutPolicy::Trial { ShortcutPolicy::Block } else { policy }
+    }
+    pub(crate) fn shortcut_selection_released(&mut self, released: bool) {
+        if released { self.shortcut_choice_down = false; }
+    }
+
+    /// Both adapters return only modifiers, but macOS uses CGEventFlags and
+    /// Linux uses Carbon shortcut bits. Zero means released on either platform.
+    pub(crate) fn observe_shortcut_modifiers(&mut self, flags: u64) {
+        self.shortcut_selection_released(flags == 0);
+    }
+    pub(crate) fn allows_capture_start(&self) -> bool {
+        !self.flow.first_capture_required || self.flow.step == Step::Done
+            || (self.flow.step == Step::TryIt && self.flow.local_practice())
     }
 
     pub(crate) fn choosing_shortcut(&self) -> bool {
@@ -1478,6 +1584,11 @@ impl Session {
         }
         self.sync();
     }
+    pub fn practice_note_saved(&mut self, saved: bool) {
+        if self.flow.step()==Step::TryIt {
+            if let Some(practice)=self.practice.as_mut() {practice.observe_note(saved);}
+        }
+    }
     pub fn practice_anchor(&mut self,anchor:Option<[f32;4]>) {self.anchor=anchor;}
     pub fn practice_board(&mut self, frame: Option<[f32;4]>) {
         self.practice_board=frame;
@@ -1485,7 +1596,7 @@ impl Session {
     }
     pub fn practice_active(&self)->bool {self.practice.is_some() && self.flow.step()==Step::TryIt}
     pub fn practice_locating(&self)->bool {self.practice.as_ref().is_some_and(|p|p.stage==super::practice::Stage::Locate)}
-    pub fn practice_screen_stage(&self)->bool {self.practice.as_ref().is_some_and(|p|p.stage==super::practice::Stage::ScreenInk)}
+    pub fn practice_desktop_stage(&self)->bool {self.practice.as_ref().is_some_and(|p|matches!(p.stage,super::practice::Stage::Note|super::practice::Stage::ScreenInk))}
     pub fn practice_whiteboard(&mut self) {if let Some(p)=self.practice.as_mut(){p.whiteboard();}self.sync();}
     pub fn practice_saved_bundle(&mut self, path: &Path) { if self.practice_active() { self.practice_bundle=Some(path.to_owned()); } }
     pub fn practice_opened_bundle(&mut self, path: &Path) { if self.practice_bundle.as_deref()==Some(path) {self.practice_latest();} }
@@ -1528,23 +1639,33 @@ impl Session {
         let resume = self.flow.resume_point();
         let tutorial = self.flow.tutorial();
         let new_resume = resume.is_some() && resume != self.saved_resume;
+        let tested_for = self.flow.shortcut_tested.then(|| self.shortcut_label.clone());
         let milestones_changed = self.flow.mode == Mode::Tour
             && (self.saved_shortcut_chosen != self.flow.shortcut_chosen
+                || self.saved_shortcut_tested_for != tested_for
                 || self.saved_first_capture_completed != self.flow.first_capture_completed);
         if new_resume || tutorial != self.saved_tutorial || milestones_changed {
             let mut progress = Progress::load();
             if new_resume {
                 progress.resume = resume;
             }
+            // Persist when the successful trial advances, not only when a
+            // window closes: force-quit/relaunch must not repeat Go again.
+            if self.flow.mode == Mode::Tour { progress.leave(&self.flow); }
             progress.tutorial = tutorial;
             if self.flow.mode == Mode::Tour {
                 progress.shortcut_chosen = self.flow.shortcut_chosen;
+                progress.shortcut_tested_for = tested_for.clone();
                 progress.first_capture_completed = self.flow.first_capture_completed;
             }
-            progress.save();
+            if let Err(error) = progress.save_to(&crate::shared::handoff::default_config_path()) {
+                crate::capture::engine::runtime::apparent_log(&format!("onboarding: progress save failed: {error}"));
+                return;
+            }
             self.saved_resume = resume.or(self.saved_resume);
             self.saved_tutorial = tutorial;
             self.saved_shortcut_chosen = self.flow.shortcut_chosen;
+            self.saved_shortcut_tested_for = tested_for;
             self.saved_first_capture_completed = self.flow.first_capture_completed;
         }
     }
@@ -1719,26 +1840,22 @@ pub fn relaunch() {
 #[cfg(test)]
 mod tests {
     fn coached_session()->Session {
-        let mut session=Session::for_test(Flow::tour(Step::TryIt,Some(grants(&Permission::REQUIRED))).with_first_capture(true,true,false));
+        let mut session=Session::for_test(Flow::tour(Step::TryIt,Some(grants(&Permission::REQUIRED))).with_first_capture(true, true, true, false));
         session.practice=Some(super::super::practice::Practice::default());session
     }
     #[test]
-    fn shared_pen_setup_skips_retired_intro_in_both_directions_and_on_resume() {
-        let mut flow=Flow::tour(Step::Welcome,Some(grants(&[]))).with_intro_skipped(true);
-        flow.on(Input::Continue);assert_eq!(flow.step(),Step::Permissions);
-        flow.on(Input::Back);assert_eq!(flow.step(),Step::Welcome);
-        let resumed=Flow::tour(Step::HowItWorks,Some(grants(&[]))).with_intro_skipped(true);
-        assert_eq!(resumed.step(),Step::Permissions);
-        let mut ready=Flow::tour(Step::Welcome,Some(grants(&Permission::REQUIRED))).with_intro_skipped(true);
-        ready.on(Input::Continue);assert_eq!(ready.step(),Step::Shortcut);
-        ready.on(Input::Back);assert_eq!(ready.step(),Step::Welcome);
-        assert!(!ready.view().fix);
-        for skipped in [false,true] {
-            let resumed=Flow::tour(Step::Permissions,Some(grants(&Permission::REQUIRED))).with_intro_skipped(skipped);
-            assert_eq!(resumed.step(),Step::Permissions,"a ready resumed permission page stays visible");
-            let repair=Flow::fix(Permission::REQUIRED.to_vec(),Some(grants(&Permission::REQUIRED))).with_intro_skipped(skipped);
-            assert_eq!(repair.step(),Step::Permissions);assert!(repair.view().fix);
+    fn shared_tour_skips_removed_demo_forward_back_and_on_legacy_resume() {
+        for ready in [false, true] {
+            let current = if ready { grants(&Permission::REQUIRED) } else { grants(&[]) };
+            let mut flow = Flow::tour(Step::Welcome, Some(current.clone()));
+            flow.on(Input::Continue);
+            assert_eq!(flow.step(), if ready { Step::Shortcut } else { Step::Permissions });
+            flow.on(Input::Back);
+            assert_eq!(flow.step(), Step::Welcome);
+            let resumed = Flow::tour(Step::HowItWorks, Some(current));
+            assert_eq!(resumed.step(), if ready { Step::Shortcut } else { Step::Permissions });
         }
+        assert_eq!(Flow::fix(Permission::REQUIRED.to_vec(), None).step(), Step::Permissions);
     }
 
     #[test]
@@ -1788,6 +1905,22 @@ mod tests {
     }
 
     #[test]
+    fn annotation_separates_the_drawing_lessons_and_closes_the_board_first() {
+        use super::super::practice::Stage;
+        let mut s=coached_session();s.input(Input::ShortcutTriggered);s.input(Input::CaptureStarted);
+        s.practice_whiteboard();assert!(!s.practice_desktop_stage());
+        s.observe_practice(true,0,false,None);
+        assert_eq!(s.practice.as_ref().unwrap().stage,Stage::Note);
+        assert!(s.practice_desktop_stage(),"coordinator must close its board before Shift-clicking the user's screen");
+        s.observe_practice(false,1,false,None);assert_eq!(s.practice.as_ref().unwrap().stage,Stage::Note);
+        s.practice_note_saved(true);s.observe_practice(false,1,false,None);
+        assert_eq!(s.practice.as_ref().unwrap().stage,Stage::ScreenInk);assert!(s.practice_desktop_stage());
+        s.observe_practice(false,1,false,None);assert_eq!(s.practice.as_ref().unwrap().stage,Stage::ScreenInk);
+        s.observe_practice(false,2,false,None);assert_eq!(s.practice.as_ref().unwrap().stage,Stage::Stop);
+        assert!(!s.practice_desktop_stage());
+    }
+
+    #[test]
     fn locate_requires_the_current_practice_bundle() {
         let mut s = coached_session();
         let first = Path::new("/synthetic/first.apparent");
@@ -1796,7 +1929,8 @@ mod tests {
         s.input(Input::CaptureStarted);
         s.practice_whiteboard();
         s.observe_practice(true, 0, false, None);
-        s.observe_practice(true, 1, true, Some(true));
+        s.practice_note_saved(true);s.observe_practice(false, 0, false, None);
+        s.observe_practice(false, 1, true, Some(true));
         s.practice_saved_bundle(first);
         s.input(Input::CaptureEnded { completed: true });
         s.action("practice-paste");
@@ -1812,7 +1946,8 @@ mod tests {
         assert!(s.practice_bundle.is_none());
         s.practice_whiteboard();
         s.observe_practice(true, 0, false, None);
-        s.observe_practice(true, 1, true, Some(true));
+        s.practice_note_saved(true);s.observe_practice(false, 0, false, None);
+        s.observe_practice(false, 1, true, Some(true));
         s.practice_saved_bundle(other);
         s.input(Input::CaptureEnded { completed: true });
         s.action("practice-paste");
@@ -1837,7 +1972,7 @@ mod tests {
     fn menu_bar_lesson_remains_after_paste_and_requires_opening_own_capture() {
         let mut s=coached_session();
         s.input(Input::ShortcutTriggered);s.input(Input::CaptureStarted);
-        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.observe_practice(true,1,true,Some(true));
+        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.practice_note_saved(true);s.observe_practice(false,0,false,None);s.observe_practice(false,1,true,Some(true));
         s.input(Input::CaptureEnded{completed:true});
         assert!(!s.practice_locating());
         s.action("practice-paste");assert!(!s.practice_locating());
@@ -1849,8 +1984,8 @@ mod tests {
     #[test]
     fn coaching_finishes_after_completion_pill_dismissal() {
         let mut s=coached_session();s.input(Input::ShortcutTriggered);s.input(Input::CaptureStarted);
-        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.observe_practice(true,1,false,None);
-        s.observe_practice(false,0,true,Some(true));s.input(Input::CaptureEnded{completed:true});
+        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.practice_note_saved(true);
+        s.observe_practice(false,0,false,None);s.observe_practice(false,1,false,None);s.observe_practice(false,0,true,Some(true));s.input(Input::CaptureEnded{completed:true});
         assert!(!s.flow.practice_recording);assert!(!s.flow.hidden);
         s.input(Input::CaptureEnded{completed:false}); // normal 25-second pill dismissal
         s.action("practice-paste");s.action("practice-pasted");s.practice_latest();
@@ -1861,25 +1996,34 @@ mod tests {
         let mut s=coached_session();s.input(Input::ShortcutTriggered);s.input(Input::CaptureStarted);
         s.observe_practice(false,0,true,Some(true));s.input(Input::CaptureEnded{completed:true});
         s.input(Input::CaptureStarted); // menu start, without ShortcutTriggered
-        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.observe_practice(true,1,true,Some(true));
+        s.practice_whiteboard();s.observe_practice(true,0,false,None);s.practice_note_saved(true);s.observe_practice(false,0,false,None);s.observe_practice(false,1,true,Some(true));
         s.input(Input::CaptureEnded{completed:true});s.action("practice-paste");s.action("practice-pasted");s.practice_latest();
         assert_eq!(s.action("practice-finish"),Effect::None);assert!(!s.flow.first_capture_completed);
     }
     #[test]
-    fn first_capture_close_resumes_until_success_without_trapping_the_user() {
+    fn completed_shortcut_setup_does_not_reopen_for_an_unfinished_capture_lesson() {
         let mut progress = Progress::default();
         let mut flow = Flow::tour(Step::Shortcut, Some(grants(&Permission::REQUIRED)))
-            .with_first_capture(true, false, false);
+            .with_first_capture(true, false, false, false);
         assert_eq!(flow.on(Input::Closed), Effect::Close);
         progress.leave(&flow);
         assert!(!progress.seen);
         assert_eq!(progress.resume, Some(Step::Shortcut));
         flow.on(Input::ShortcutChosen);
+        flow.on(Input::ShortcutTrialStarted);
+        assert!(!flow.view().shortcut_tested);
+        flow.on(Input::ShortcutTriggered);
+        progress.leave(&flow);
+        assert!(progress.seen, "quitting immediately after the trial must not repeat setup");
+        assert_eq!(progress.resume, None);
+        assert!(launch_plan(&progress, &grants(&Permission::REQUIRED)).is_none());
         flow.on(Input::Continue);
         assert_eq!(flow.on(Input::Later), Effect::Close);
         progress.leave(&flow);
-        assert!(!progress.seen);
-        assert_eq!(progress.resume, Some(Step::TryIt));
+        assert!(progress.seen);
+        assert_eq!(progress.resume, None);
+        assert!(!progress.first_capture_completed);
+        assert!(launch_plan(&progress, &grants(&Permission::REQUIRED)).is_none());
         flow.on(Input::ShortcutTriggered);
         flow.on(Input::CaptureStarted);
         flow.on(Input::CaptureEnded { completed: true });
@@ -1891,17 +2035,17 @@ mod tests {
     #[test]
     fn first_capture_resume_rechecks_milestones_and_preserves_legacy_and_repairs() {
         let ready = Some(grants(&Permission::REQUIRED));
-        let missing = Flow::tour(Step::TryIt, ready.clone()).with_first_capture(true, false, false);
+        let missing = Flow::tour(Step::TryIt, ready.clone()).with_first_capture(true, false, false, false);
         assert_eq!(missing.step(), Step::Shortcut);
-        let unfinished = Flow::tour(Step::Done, ready.clone()).with_first_capture(true, true, false);
+        let unfinished = Flow::tour(Step::Done, ready.clone()).with_first_capture(true, true, true, false);
         assert_eq!(unfinished.step(), Step::TryIt);
-        let completed = Flow::tour(Step::TryIt, ready.clone()).with_first_capture(true, true, true);
+        let completed = Flow::tour(Step::TryIt, ready.clone()).with_first_capture(true, true, true, true);
         assert_eq!(completed.step(), Step::Done);
-        let legacy = Flow::tour(Step::Shortcut, ready.clone()).with_first_capture(false, false, false);
+        let legacy = Flow::tour(Step::Shortcut, ready.clone()).with_first_capture(false, false, false, false);
         let mut progress = Progress::default();
         progress.leave(&legacy);
         assert!(progress.seen, "the default flow still allows dismissal");
-        let repair = Flow::fix(Permission::REQUIRED.to_vec(), ready).with_first_capture(true, false, false);
+        let repair = Flow::fix(Permission::REQUIRED.to_vec(), ready).with_first_capture(true, false, false, false);
         assert!(!repair.view().first_capture_required);
         let before = progress.clone();
         progress.leave(&repair);
@@ -1911,21 +2055,68 @@ mod tests {
     #[test]
     fn first_capture_requires_explicit_shortcut_choice() {
         let mut flow = Flow::tour(Step::Shortcut, Some(grants(&Permission::REQUIRED)))
-            .with_first_capture(true, false, false);
+            .with_first_capture(true, false, false, false);
         assert_eq!(flow.on(Input::Continue), Effect::None);
         assert_eq!(flow.step(), Step::Shortcut, "an existing shortcut is not a choice");
         flow.on(Input::ChangeShortcut);
         flow.on(Input::Continue);
         assert_eq!(flow.step(), Step::Shortcut, "opening the recorder is not a saved choice");
         flow.on(Input::ShortcutChosen);
+        flow.on(Input::ShortcutTrialStarted);
+        assert!(!flow.view().shortcut_tested);
+        flow.on(Input::ShortcutTriggered);
         flow.on(Input::Continue);
         assert_eq!(flow.step(), Step::TryIt);
     }
 
     #[test]
+    fn shortcut_trial_is_not_a_capture_and_changing_keys_requires_a_new_trial() {
+        let mut flow=Flow::tour(Step::Shortcut,Some(grants(&Permission::REQUIRED)))
+            .with_first_capture(true,false,false,false);
+        assert_eq!(flow.shortcut_policy(),ShortcutPolicy::Block);
+        flow.on(Input::ShortcutTriggered);
+        assert!(!flow.view().shortcut_tested);
+        flow.on(Input::ShortcutChosen);
+        assert_eq!(flow.shortcut_policy(),ShortcutPolicy::Trial);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(),Step::Shortcut);
+        flow.on(Input::ShortcutTrialStarted);
+        assert!(!flow.view().shortcut_tested);
+        flow.on(Input::ShortcutTriggered);
+        assert!(flow.view().shortcut_tested);
+        assert_eq!(flow.step(),Step::Shortcut);
+        assert!(!flow.local_practice(),"trial must not acquire recording/handoff state");
+        flow.on(Input::ChangeShortcut);
+        assert_eq!(flow.shortcut_policy(),ShortcutPolicy::Block);
+        flow.on(Input::ShortcutChosen);
+        assert!(!flow.view().shortcut_tested,"saving different keys invalidates the trial");
+        flow.on(Input::ShortcutTriggered);
+        flow.on(Input::Continue);
+        assert_eq!(flow.step(),Step::TryIt);
+        assert_eq!(flow.shortcut_policy(),ShortcutPolicy::Record);
+        assert!(!flow.local_practice(),"entering practice is not starting a capture");
+        flow.on(Input::ShortcutTriggered);
+        assert!(flow.local_practice(),"the next press owns the real guided capture");
+    }
+
+    #[test]
+    fn resumed_untried_shortcut_returns_to_its_trial_and_early_pages_block_capture() {
+        for step in [Step::Welcome,Step::HowItWorks,Step::Permissions] {
+            let flow=Flow::tour(step,None).with_first_capture(true,false,false,false);
+            assert_eq!(flow.shortcut_policy(),ShortcutPolicy::Block);
+        }
+        let untried=Flow::tour(Step::TryIt,None).with_first_capture(true,true,false,false);
+        assert_eq!(untried.step(),Step::Shortcut);
+        let tested=Flow::tour(Step::TryIt,None).with_first_capture(true,true,true,false);
+        assert_eq!(tested.step(),Step::TryIt);
+        let completed=Flow::tour(Step::TryIt,None).with_first_capture(true,true,false,true);
+        assert_eq!(completed.step(),Step::Done,"completed legacy users remain complete");
+    }
+
+    #[test]
     fn first_capture_requires_shortcut_start_and_successful_finish() {
         let mut flow = Flow::tour(Step::TryIt, Some(grants(&Permission::REQUIRED)))
-            .with_first_capture(true, true, false);
+            .with_first_capture(true, true, true, false);
         assert_eq!(flow.on(Input::Continue), Effect::None, "Try it cannot finish the tour");
         flow.on(Input::CaptureEnded { completed: true });
         assert_eq!(flow.step(), Step::TryIt, "a stale completion cannot count");
@@ -1980,7 +2171,7 @@ mod tests {
     #[test]
     fn shortcut_step_edits_inline_and_continue_leaves_the_editor() {
         let mut flow = Flow::tour(Step::Welcome, Some(grants(&[])));
-        assert_eq!(flow.view().count, 5);
+        assert_eq!(flow.view().count, 4);
         flow.on(Input::Continue);
         flow.on(Input::Continue);
         flow.on(Input::Grants {
@@ -2006,9 +2197,7 @@ mod tests {
     #[test]
     fn the_tour_has_a_shortcut_screen_with_every_permission_on_one() {
         let mut flow = Flow::tour(Step::Welcome, Some(grants(&[])));
-        assert_eq!(flow.view().count, 5);
-        assert_eq!(flow.on(Input::Continue), Effect::None);
-        assert_eq!(flow.step(), Step::HowItWorks);
+        assert_eq!(flow.view().count, 4);
         assert_eq!(flow.on(Input::Continue), Effect::None);
         assert_eq!(flow.step(), Step::Permissions);
         assert_eq!(rows(&flow), Permission::REQUIRED);
@@ -2020,7 +2209,7 @@ mod tests {
         assert_eq!(flow.on(Input::Continue), Effect::None);
         assert_eq!(flow.step(), Step::Permissions);
         assert_eq!(flow.on(Input::Back), Effect::None);
-        assert_eq!(flow.step(), Step::HowItWorks);
+        assert_eq!(flow.step(), Step::Welcome);
     }
 
     #[test]
@@ -2070,45 +2259,7 @@ mod tests {
     }
 
     #[test]
-    fn the_demo_can_be_skipped_and_adds_no_screen() {
-        let mut flow = Flow::tour(Step::HowItWorks, Some(grants(&[])));
-        assert_eq!(flow.view().count, 5);
-        assert_eq!(flow.view().tutorial, None);
-        // Skip goes straight on, like Continue, and is remembered.
-        assert_eq!(flow.on(Input::Skip), Effect::None);
-        assert_eq!(flow.step(), Step::Permissions);
-        assert_eq!(flow.tutorial(), Some(Tutorial::Skipped));
-        // Skip, Watched and Practiced mean nothing on another screen.
-        assert_eq!(flow.on(Input::Skip), Effect::None);
-        assert_eq!(flow.on(Input::Practiced), Effect::None);
-        assert_eq!(flow.step(), Step::Permissions);
-        assert_eq!(flow.tutorial(), Some(Tutorial::Skipped));
-        // Back to it and watched through: the button reads Continue from then on.
-        flow.on(Input::Back);
-        assert_eq!(flow.step(), Step::HowItWorks);
-        flow.on(Input::Watched);
-        assert_eq!(flow.view().tutorial, Some(Tutorial::Watched));
-        assert_eq!(flow.step(), Step::HowItWorks, "watching doesn't move on");
-        // A mark drawn on the demo wins over watching, and watching again doesn't undo it.
-        flow.on(Input::Practiced);
-        flow.on(Input::Watched);
-        assert_eq!(flow.tutorial(), Some(Tutorial::Practiced));
-        // Skip after watching moves on without forgetting the mark.
-        flow.on(Input::Skip);
-        assert_eq!(flow.step(), Step::Permissions);
-        assert_eq!(flow.tutorial(), Some(Tutorial::Practiced));
-        // With every permission on, Skip passes the permissions screen too.
-        let mut flow = Flow::tour(Step::HowItWorks, Some(grants(&ALL)));
-        flow.on(Input::Skip);
-        assert_eq!(flow.step(), Step::Shortcut);
-        // A fix never shows the demo.
-        let mut fix = Flow::fix(Permission::REQUIRED.to_vec(), Some(grants(&[])));
-        assert_eq!(fix.on(Input::Skip), Effect::None);
-        assert_eq!(fix.tutorial(), None);
-    }
-
-    #[test]
-    fn the_demo_outcome_comes_back_after_a_quit() {
+    fn removed_demo_resume_keeps_legacy_config_readable() {
         let progress = Progress {
             resume: Some(Step::HowItWorks),
             tutorial: Some(Tutorial::Watched),
@@ -2117,7 +2268,7 @@ mod tests {
         let flow = launch_plan(&progress, &grants(&[]))
             .expect("the tour")
             .with_tutorial(progress.tutorial);
-        assert_eq!(flow.step(), Step::HowItWorks);
+        assert_eq!(flow.step(), Step::Permissions);
         assert_eq!(flow.view().tutorial, Some(Tutorial::Watched));
         // The view carries it to the helper as kebab-case, or null before anything happened.
         let json = serde_json::to_value(flow.view()).unwrap();
@@ -2218,7 +2369,7 @@ mod tests {
         flow.on(Input::Back);
         assert_eq!(flow.step(), Step::Shortcut);
         flow.on(Input::Back);
-        assert_eq!(flow.step(), Step::HowItWorks);
+        assert_eq!(flow.step(), Step::Welcome);
     }
 
     #[test]
@@ -2235,13 +2386,13 @@ mod tests {
     #[test]
     fn granted_permissions_pass_the_screen_and_leave_the_dots() {
         let all = grants(&ALL);
-        let mut flow = Flow::tour(Step::HowItWorks, Some(all.clone()));
-        assert_eq!(flow.view().count, 4);
+        let mut flow = Flow::tour(Step::Welcome, Some(all.clone()));
+        assert_eq!(flow.view().count, 3);
         flow.on(Input::Continue);
         assert_eq!(flow.step(), Step::Shortcut);
         flow.on(Input::Continue);
         assert_eq!(flow.step(), Step::TryIt);
-        assert_eq!(flow.view().index, 3);
+        assert_eq!(flow.view().index, 2);
         // A tour resumed past the screen goes back to it while something is missing.
         let some = grants(&[Microphone]);
         assert_eq!(
@@ -2417,6 +2568,134 @@ mod tests {
     }
 
     #[test]
+    fn legacy_unfinished_tour_restarts_once_without_losing_grants() {
+        let mut progress = Progress { resume: Some(Step::Permissions),
+            granted: Permission::REQUIRED.into_iter().collect(), ..Progress::default() };
+        let granted = progress.granted.clone();
+        assert!(progress.prepare_current_tour());
+        assert_eq!(progress.resume, Some(Step::Welcome));
+        assert_eq!(progress.granted, granted);
+        assert_eq!(launch_plan(&progress, &grants(&Permission::REQUIRED)).unwrap().step(), Step::Welcome);
+        progress.relaunching(Some(Step::Permissions), 123);
+        assert!(!progress.prepare_current_tour());
+        assert_eq!(progress.resume, Some(Step::Permissions));
+    }
+
+    #[test]
+    fn completed_and_newer_tours_are_not_restarted_by_migration() {
+        let mut finished = Progress { seen: true, ..Progress::default() };
+        assert!(finished.prepare_current_tour());
+        assert!(finished.seen);
+        assert!(launch_plan(&finished, &grants(&Permission::REQUIRED)).is_none());
+        let mut future = Progress { tour_revision: 2, resume: Some(Step::Shortcut), ..Progress::default() };
+        assert!(!future.prepare_current_tour());
+        assert_eq!(future.resume, Some(Step::Shortcut));
+    }
+
+    #[test]
+    fn previous_preview_trial_is_migrated_once_without_claiming_capture_completion() {
+        let dir = std::env::temp_dir().join(format!("aot-restart-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        #[cfg(unix)] {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"penColor":"green","unrelated":42}"#).unwrap();
+        let mut progress = Progress { tour_revision: 1, seen: false, resume: Some(Step::TryIt),
+            shortcut_chosen: true, shortcut_tested_for: Some("⌥S".into()),
+            granted: Permission::REQUIRED.into_iter().collect(), ..Progress::default() };
+        assert!(progress.prepare_current_tour());
+        progress.save_to(&path).unwrap();
+        let mut restored = Progress::load_from(&path);
+        assert!(restored.seen);
+        assert!(!restored.first_capture_completed);
+        assert_eq!(restored.resume, None);
+        assert!(!restored.prepare_current_tour());
+        assert!(launch_plan(&restored, &grants(&Permission::REQUIRED)).is_none());
+        assert_eq!(launch_plan(&restored, &grants(&[])).unwrap().mode(), Mode::Fix);
+        let config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(config["penColor"], "green");
+        assert_eq!(config["unrelated"], 42);
+        restored.reset_for_replay();
+        assert!(!restored.prepare_current_tour());
+        assert_eq!(launch_plan(&restored, &grants(&Permission::REQUIRED)).unwrap().step(), Step::Welcome);
+        let mut native_trial = Progress { tour_revision: 1, resume: Some(Step::Shortcut),
+            shortcut_chosen: true, shortcut_tested_for: Some("⌥S".into()), ..Progress::default() };
+        assert!(native_trial.prepare_current_tour());
+        assert!(native_trial.seen);
+        let mut untested = Progress { tour_revision: 1, resume: Some(Step::TryIt), shortcut_chosen: true, ..Progress::default() };
+        assert!(!untested.prepare_current_tour());
+        assert!(!untested.seen);
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn replay_resets_only_tour_progress_and_config_writer_preserves_other_values() {
+        let mut progress = Progress {
+            tour_revision: 1,
+            seen: true,
+            resume: None,
+            granted: BTreeSet::from([Permission::ScreenRecording, Permission::Accessibility]),
+            relaunched_at: Some(123),
+            reopen_fix: true,
+            tutorial: Some(Tutorial::Practiced),
+            shortcut_chosen: true,
+            shortcut_tested_for: Some("⌥⇧R".into()),
+            first_capture_completed: true,
+        };
+        progress.reset_for_replay();
+        assert!(!progress.seen);
+        assert_eq!(progress.resume, Some(Step::Welcome));
+        assert_eq!(progress.tutorial, None);
+        assert!(!progress.shortcut_chosen);
+        assert_eq!(progress.shortcut_tested_for, None);
+        assert!(!progress.first_capture_completed);
+        assert_eq!(progress.granted, BTreeSet::from([Permission::ScreenRecording, Permission::Accessibility]));
+        assert_eq!(progress.relaunched_at, Some(123));
+        assert!(progress.reopen_fix);
+
+        let ready = Some(grants(&Permission::REQUIRED));
+        let mut replay = Flow::tour(progress.resume.unwrap(), ready).with_first_capture(
+            true,
+            progress.shortcut_chosen,
+            progress.tested_shortcut("⌥⇧R"),
+            progress.first_capture_completed,
+        );
+        assert_eq!(replay.step(), Step::Welcome);
+        replay.on(Input::Continue);
+        assert_eq!(replay.step(), Step::Shortcut);
+        assert!(!replay.view().shortcut_chosen);
+        replay.on(Input::ShortcutChosen);
+        replay.on(Input::ShortcutTrialStarted);
+        assert!(!replay.view().shortcut_tested);
+        assert!(!replay.local_practice(), "the trial cannot start a capture");
+        replay.on(Input::ShortcutTriggered);
+        assert!(replay.view().shortcut_tested);
+        assert_eq!(replay.step(), Step::Shortcut, "trial success still needs Continue");
+        replay.on(Input::Continue);
+        assert_eq!(replay.step(), Step::TryIt);
+
+        let dir = std::env::temp_dir().join(format!("apparent-onboarding-replay-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir(&dir).unwrap();
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
+        }
+        let path = dir.join("config.json");
+        std::fs::write(&path, r#"{"unrelated":{"keep":true},"penColor":"green","onboarding":{"seen":true}}"#).unwrap();
+        progress.save_to(&path).unwrap();
+        let config: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(config["unrelated"]["keep"], true);
+        assert_eq!(config["penColor"], "green");
+        assert_eq!(config["onboarding"]["resume"], "welcome");
+        assert_eq!(config["onboarding"]["granted"], serde_json::json!(["screen-recording", "accessibility"]));
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
+    #[test]
     fn a_tour_quit_midway_resumes_where_it_was() {
         let mut flow = Flow::tour(Step::Welcome, Some(grants(&[])));
         assert_eq!(flow.resume_point(), Some(Step::Welcome));
@@ -2563,6 +2842,7 @@ mod tests {
         std::fs::write(&path, r#"{"agentHost":"studio","autocrop":false}"#).unwrap();
         assert_eq!(Progress::load_from(&path), Progress::default());
         let progress = Progress {
+            tour_revision: 0,
             seen: true,
             resume: Some(Step::Permissions),
             granted: [Microphone].into_iter().collect(),
@@ -2570,10 +2850,14 @@ mod tests {
             reopen_fix: true,
             tutorial: Some(Tutorial::Practiced),
             shortcut_chosen: true,
+            shortcut_tested_for: Some("⌥⇧S".into()),
             first_capture_completed: true,
         };
         progress.save_to(&path).unwrap();
-        assert_eq!(Progress::load_from(&path), progress);
+        let restored = Progress::load_from(&path);
+        assert_eq!(restored, progress);
+        assert!(restored.tested_shortcut("⌥⇧S"));
+        assert!(!restored.tested_shortcut("⌃⌥K"), "a saved trial is tied to its actual combination");
         let config: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
         assert_eq!(config["agentHost"], "studio");
@@ -2582,6 +2866,7 @@ mod tests {
         assert_eq!(config["onboarding"]["relaunchedAt"], 1_792_000_000_000_u64);
         assert_eq!(config["onboarding"]["reopenFix"], true);
         assert_eq!(config["onboarding"]["tutorial"], "practiced");
+        assert_eq!(config["onboarding"]["shortcutTestedFor"], "⌥⇧S");
         // A resume point saved by 0.3.2's one-permission-per-step tour still loads.
         std::fs::write(
             &path,
@@ -2714,7 +2999,7 @@ mod local_practice_tests {
     #[test]
     fn optional_practice_stays_local_with_or_without_explicit_shortcut_choice() {
         for chosen in [false, true] {
-            let mut flow = Flow::tour(Step::TryIt, None).with_first_capture(false, chosen, false);
+            let mut flow = Flow::tour(Step::TryIt, None).with_first_capture(false, chosen, chosen, false);
             assert!(!flow.local_practice());
             flow.on(Input::ShortcutTriggered);
             assert!(flow.local_practice(), "opting out must not enable practice uploads");
@@ -2728,7 +3013,7 @@ mod local_practice_tests {
 
     #[test]
     fn practice_policy_follows_shortcut_attempt_and_survives_processing() {
-        let mut flow = Flow::tour(Step::TryIt, None).with_first_capture(true, true, false);
+        let mut flow = Flow::tour(Step::TryIt, None).with_first_capture(true, true, true, false);
         assert!(!flow.local_practice());
         flow.on(Input::ShortcutTriggered);
         assert!(flow.local_practice());
@@ -2758,7 +3043,7 @@ mod adapter_regressions {
     }
     #[test]
     fn back_from_permissions_cancels_guides_without_claiming_a_grant() {
-        let mut flow=Flow::tour(Step::Permissions,None).with_intro_skipped(true);
+        let mut flow=Flow::tour(Step::Permissions,None);
         assert!(permission_guide_messages(&flow.view()).is_empty());
         flow.on(Input::Back);
         assert_eq!(flow.step(),Step::Welcome);
@@ -2786,7 +3071,7 @@ mod adapter_regressions {
 
     #[test]
     fn coached_capture_completion_reveals_a_pending_native_fallback() {
-        let mut flow=Flow::tour(Step::TryIt,None).with_first_capture(true,true,false);
+        let mut flow=Flow::tour(Step::TryIt,None).with_first_capture(true, true, true, false);
         flow.on(Input::ShortcutTriggered);flow.on(Input::CaptureStarted);
         let mut session=Session::for_test(flow);
         session.practice=Some(super::super::practice::Practice::default());
@@ -2863,6 +3148,26 @@ fn shortcut_native_projection_fails_closed() {
     assert!(!shortcut_reservation_projection(b"false\n"));
     for bytes in [b"true".as_slice(), b"", b"null", b"{}", b"false true", b"{\"reserved\":false}"] {
         assert!(shortcut_reservation_projection(bytes));
+    }
+}
+
+#[test]
+fn shortcut_selection_waits_for_release_with_either_platforms_modifier_bits() {
+    // Carbon (Linux) and CGEventFlags (macOS), including every individual modifier.
+    for flags in [0x100, 0x200, 0x800, 0x1000, 1 << 17, 1 << 18, 1 << 19, 1 << 20] {
+        let mut session = Session::for_test(
+            Flow::tour(Step::Shortcut, None).with_first_capture(true, false, false, false),
+        );
+        session.input(Input::ShortcutChosen);
+        session.observe_shortcut_modifiers(flags);
+        assert_eq!(session.shortcut_policy(), ShortcutPolicy::Block,
+            "held modifier {flags:#x} must not admit the trial");
+        session.observe_shortcut_modifiers(0);
+        assert_eq!(session.shortcut_policy(), ShortcutPolicy::Trial);
+        session.input(Input::ShortcutTrialStarted);
+        assert!(!session.flow.view().shortcut_tested);
+        session.input(Input::ShortcutTriggered);
+        assert!(session.flow.view().shortcut_tested);
     }
 }
 

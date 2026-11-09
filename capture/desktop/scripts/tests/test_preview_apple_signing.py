@@ -34,6 +34,7 @@ case "$1" in
   */package-notes.mjs) mkdir -p "$2/dist"; printf synthetic > "$2/dist/index.html" ;;
   *) exit 1 ;;
 esac''',
+            "lipo": 'printf "arm64\\n"',
             "plutil": 'exit 0',
             "codesign": '''printf 'codesign %s\\n' "$*" >> "$TRACE"
 if [ "$1" = -dv ]; then
@@ -45,7 +46,13 @@ if [ "$1" = create ]; then eval "out=\\${$#}"; printf dmg > "$out"; fi''',
             "ditto": '''printf 'ditto %s\\n' "$*" >> "$TRACE"
 if [ "$1" = -c ]; then eval "out=\\${$#}"; printf zip > "$out"; else cp -R "$1" "$2"; fi''',
             "xcrun": '''printf 'xcrun %s\\n' "$*" >> "$TRACE"
-if [ "$1" = notarytool ] && [ "${REJECT_NOTARY:-0}" = 1 ]; then exit 1; fi''',
+if [ "$1" = notarytool ] && [ "${REJECT_NOTARY:-0}" = 1 ]; then exit 1; fi
+if [ "$1" = swiftc ]; then
+  while [ "$#" -gt 0 ]; do
+    if [ "$1" = -o ]; then shift; printf 'fixture native launcher' > "$1"; chmod +x "$1"; fi
+    shift
+  done
+fi''',
             "spctl": 'printf "spctl %s\\n" "$*" >> "$TRACE"',
         }
         for name, body in tools.items():
@@ -90,6 +97,12 @@ if [ "$1" = notarytool ] && [ "${REJECT_NOTARY:-0}" = 1 ]; then exit 1; fi''',
             self.assertNotIn("--sign - ", trace)
             app_staple = trace.index("stapler staple " + str(root / "dist/Apparent Preview.app"))
             self.assertLess(app_staple, trace.index("hdiutil create"))
+            installer = root / "dist/Install Apparent.app"
+            installer_staple = trace.index("stapler staple " + str(installer))
+            self.assertLess(app_staple, installer_staple)
+            self.assertLess(installer_staple, trace.index("hdiutil create"))
+            self.assertIn("--identifier dev.simonvanlaak.apparent.preview.installer " + str(installer), trace)
+            self.assertIn("codesign --verify --deep --strict " + str(installer), trace)
             self.assertIn("stapler validate", trace)
             self.assertIn("spctl --assess", trace)
             self.assertLess(trace.index("stapler staple " + str(root / "dist/Apparent-Preview")),

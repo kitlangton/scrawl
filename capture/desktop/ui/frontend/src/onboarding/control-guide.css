@@ -1,0 +1,57 @@
+.native-control { position: relative; margin: 8px 0; padding: 8px 48px 8px 8px; background: var(--apparent-stock); border: 1px solid var(--apparent-border); }
+/* Reference labels share the SVG design-space scale; the real instruction uses rem. */
+.native-control-motion svg { display: block; width: 100%; height: 64px; overflow: visible; font: 400 16px/1.5 var(--font-sans); }
+.native-control[data-kind=locate] .native-control-motion svg { height: 120px; }
+.native-control .native-control-replay { position: absolute; right: 0; top: 50%; transform: translateY(-50%); min-height: 44px; min-width: 44px; padding: 0; color: var(--apparent-carbon); font-size: 24px; }
+.control-pill, .control-menu-surface { fill: var(--apparent-surface); stroke: var(--apparent-input); stroke-width: 1; }
+.control-screen text, .control-board text, .control-menu text { fill: var(--apparent-foreground); }
+.control-highlight, .control-finish-button, .control-menu-target, .control-copied circle { fill: var(--apparent-lilac); }
+.control-board, .control-copied { animation: control-appear 4s steps(1,end) both; }
+.control-screen, .control-before-finish { animation: control-disappear 4s steps(1,end) both; }
+.control-recording-pill { fill: var(--apparent-carbon); }
+.control-before-finish text, .control-copied text { fill: var(--apparent-paper); }
+.control-before-finish text:last-child, .control-board text:nth-child(4), .control-menu-target-label { fill: var(--apparent-carbon); }
+.control-record-dot { fill: var(--apparent-pen-coral); }
+.control-copied path { fill: none; stroke: var(--apparent-carbon); stroke-width: 2; }
+.control-menu { animation: control-menu-open 4s steps(1,end) both; }
+.control-menu-separator { fill: none; stroke: var(--apparent-input); stroke-width: .7; }
+.control-menu-target { animation: control-menu-target 4s steps(1,end) both; }
+.control-menu .control-menu-target-label { fill: var(--apparent-carbon); }
+.control-menu-arrow { fill: none; stroke: var(--apparent-signal); stroke-width: 2; }
+.control-pointer path { fill: var(--apparent-paper); stroke: var(--apparent-carbon); stroke-width: 1.4; stroke-linejoin: round; }
+.control-pointer { animation: control-board-pointer 4s ease-in-out both; }
+.control-click { fill: none; stroke: var(--apparent-signal); stroke-width: 2; opacity: 0; transform-box: fill-box; transform-origin: center; animation: control-click-first 4s linear both; }
+.control-click-two { animation-name: control-click-second; }
+.native-control[data-kind=finish] .control-pointer { animation-name: control-finish-pointer; }
+.native-control[data-kind=locate] .control-pointer { animation-name: control-menu-pointer; }
+.native-control[data-screen-only=true] .control-board, .native-control[data-screen-only=true] .control-click-two { display: none; }
+.native-control[data-screen-only=true] .control-screen { animation: none; }
+.native-control[data-screen-only=true] .control-pointer { animation-name: control-screen-pointer; }
+.native-control[data-direct-whiteboard=true] .control-screen, .native-control[data-direct-whiteboard=true] .control-click-one { display: none; }
+.native-control[data-direct-whiteboard=true] .control-board { animation: none; opacity: 1; }
+.native-control[data-direct-whiteboard=true] .control-pointer { animation-name: control-direct-board-pointer; }
+@keyframes control-direct-board-pointer { 0%,8% { transform: translate(130px,62px); } 32%,100% { transform: translate(179px,37px); } }
+@keyframes control-appear { 0% { opacity: 0; } 43%,100% { opacity: 1; } }
+@keyframes control-disappear { 0% { opacity: 1; } 43%,100% { opacity: 0; } }
+@keyframes control-menu-open { 0% { opacity: 0; } 40%,100% { opacity: 1; } }
+@keyframes control-menu-target { 0% { opacity: 0; } 65%,100% { opacity: 1; } }
+@keyframes control-board-pointer { 0%,8% { transform: translate(130px,62px); } 25%,42% { transform: translate(233px,37px); } 68%,100% { transform: translate(179px,37px); } }
+@keyframes control-screen-pointer { 0%,8% { transform: translate(130px,62px); } 25%,100% { transform: translate(233px,37px); } }
+@keyframes control-finish-pointer { 0%,8% { transform: translate(190px,65px); opacity: 1; } 28%,42% { transform: translate(276px,40px); opacity: 1; } 58%,100% { transform: translate(276px,40px); opacity: 0; } }
+@keyframes control-menu-pointer { 0%,8% { transform: translate(120px,30px); } 25%,43% { transform: translate(40px,13px); } 68%,100% { transform: translate(166px,124px); } }
+@keyframes control-click-first { 0%,28%,42%,100% { opacity: 0; transform: scale(.6); } 31% { opacity: 1; transform: scale(.6); } 41% { opacity: 0; transform: scale(1.4); } }
+@keyframes control-click-second { 0%,70%,84%,100% { opacity: 0; transform: scale(.6); } 73% { opacity: 1; transform: scale(.6); } 83% { opacity: 0; transform: scale(1.4); } }
+@media (prefers-reduced-motion: reduce) {
+  .native-control-motion *, .native-control-motion .control-click { animation: none; }
+  .control-screen, .control-before-finish, .control-click { display: none; }
+  .control-board, .control-copied, .control-menu, .control-menu-target { opacity: 1; }
+  .control-pointer { display: none; }
+  .native-control[data-screen-only=true] .control-screen { display: block; }
+  .native-control .native-control-replay { display: none; }
+  .native-control { padding-right: 8px; }
+}
+
+.control-screen text:nth-child(5) { fill: var(--apparent-carbon); }
+.control-menu .control-menu-target-label { animation: control-target-text 4s steps(1,end) both; }
+@keyframes control-target-text { 0% { fill: var(--apparent-foreground); } 65%,100% { fill: var(--apparent-carbon); } }
+@media (prefers-reduced-motion: reduce) { .control-menu .control-menu-target-label { animation: none; fill: var(--apparent-carbon); } }

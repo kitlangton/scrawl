@@ -7,7 +7,7 @@ use serde::Deserialize;
 use std::io::{BufRead, BufReader, Write};
 use std::path::Path;
 use std::process::{Command, Stdio};
-use std::sync::{Arc, atomic::Ordering};
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 #[derive(Clone, Debug, Deserialize)]
 #[serde(tag = "action", rename_all = "camelCase", deny_unknown_fields)]
@@ -64,6 +64,7 @@ pub struct Session {
     sender: flume::Sender<Message>,
     stopping: Arc<std::sync::atomic::AtomicBool>,
     finishing: bool,
+    saved_note: Arc<AtomicBool>,
     badge_position: Option<[i32; 4]>,
 }
 
@@ -96,6 +97,13 @@ impl Drop for Profile {
             }
         }
     }
+}
+
+fn save_with_receipt(store: &mut Store, pin: u32, text: String, receipt: &AtomicBool) -> Result<()> {
+    let nonempty = !text.trim().is_empty();
+    store.save(pin, text)?;
+    if nonempty { receipt.store(true, Ordering::Release); }
+    Ok(())
 }
 
 impl Session {
@@ -168,6 +176,8 @@ impl Session {
         let mut store = Store::new(directory);
         let stopping = Arc::new(std::sync::atomic::AtomicBool::new(false));
         let stopped = Arc::clone(&stopping);
+        let saved_note = Arc::new(AtomicBool::new(false));
+        let saved_receipt = Arc::clone(&saved_note);
         std::thread::spawn(move || {
             let mut current = None;
             let mut focus = 0;
@@ -264,7 +274,7 @@ impl Session {
                             }
                             CommandMessage::Save { pin, text } => {
                                 ensure!(current == Some(pin), "Stale note");
-                                store.save(pin, text)?;
+                                save_with_receipt(&mut store, pin, text, &saved_receipt)?;
                                 mode = "badge";
                             }
                             CommandMessage::Delete { pin } => {
@@ -399,9 +409,18 @@ impl Session {
             sender,
             stopping,
             finishing: false,
+            saved_note,
             badge_position: None,
         })
     }
+    pub fn saved_note_receipt(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.saved_note)
+    }
+
+    pub fn has_saved_note(&self) -> bool {
+        self.saved_note.load(Ordering::Acquire)
+    }
+
     pub fn outside(&self) {
         let _ = self.sender.try_send(Message::Action(CommandMessage::Outside));
     }
@@ -516,5 +535,30 @@ mod transport_tests {
         child.wait().unwrap();
         assert!(result.is_err());
         assert!(start.elapsed() < std::time::Duration::from_secs(2));
+    }
+}
+
+#[cfg(test)] mod onboarding_receipt_tests {
+    use super::*;
+    #[test] fn only_a_nonempty_durable_save_satisfies_the_lesson() {
+        let dir=std::env::temp_dir().join(format!("annotation-lesson-{}",crate::shared::ids::make_bundle_id()));
+        std::fs::create_dir(&dir).unwrap();
+        let receipt=AtomicBool::new(false);let mut store=Store::new(&dir);
+        store.open(1,100,0.5,0.5).unwrap();store.draft(1,"A draft".into()).unwrap();
+        assert!(!receipt.load(Ordering::Acquire));
+        save_with_receipt(&mut store,1,"  ".into(),&receipt).unwrap();
+        assert!(!receipt.load(Ordering::Acquire));
+        save_with_receipt(&mut store,1,"Move this button".into(),&receipt).unwrap();
+        assert!(receipt.load(Ordering::Acquire));
+        assert_eq!(crate::capture::engine::runtime::recording::notes::read(&dir).unwrap()[0].text,"Move this button");
+        std::fs::remove_file(dir.join("notes.json")).unwrap();std::fs::remove_dir(&dir).unwrap();
+    }
+    #[test] fn failed_write_does_not_satisfy_the_lesson() {
+        let dir=std::env::temp_dir().join(format!("missing-annotation-lesson-{}",crate::shared::ids::make_bundle_id()));
+        let receipt=AtomicBool::new(false);let mut store=Store::new(&dir);
+        store.open(1,100,0.5,0.5).unwrap();
+        assert!(save_with_receipt(&mut store,1,"Keep this draft".into(),&receipt).is_err());
+        assert!(!receipt.load(Ordering::Acquire));
+        assert!(store.notes().is_empty());assert_eq!(store.drafts()[0].text,"Keep this draft");
     }
 }

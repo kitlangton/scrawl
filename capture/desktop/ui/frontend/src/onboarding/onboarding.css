@@ -63,9 +63,11 @@ html.native-onboarding-shell body { background: transparent !important; margin: 
 .native-permissions small { display: block; font-size: 1rem; margin-top: 8px; }
 .native-granted { font-size: 1.125rem; color: var(--apparent-success); background: var(--apparent-paper); padding: 8px; }
 .native-shortcut { display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 24px; margin: 48px 0; }
-.native-shortcut kbd { font-family: inherit; padding: 16px 24px; background: var(--apparent-secondary); font-size: 1.125rem; font-weight: 500; color: var(--apparent-secondary-foreground); }
+.native-setup[data-shortcut-state=true] section { display: flex; flex-direction: column; }
+.native-setup[data-shortcut-state=true] .native-shortcut { flex: 1; margin: 0; }
+.native-shortcut kbd { font-family: inherit; display: grid; place-items: center; min-width: 120px; min-height: 100px; max-width: 100%; overflow-wrap: anywhere; text-align: center; padding: 20px 28px; background: var(--apparent-secondary); font-size: 2.5rem; font-weight: 500; color: var(--apparent-secondary-foreground); }
 .native-shortcut [role=group] { max-width: 100%; }
-.native-coach { position: absolute; top: 56px; left: 24px; right: 24px; background: var(--apparent-surface); border: 1px solid var(--apparent-border); border-radius: 24px 24px 24px 6px; padding: 24px; box-shadow: 0 1px 3px var(--apparent-shadow), 0 12px 30px var(--apparent-shadow); }
+.native-coach { position: absolute; top: 56px; left: 24px; right: 24px; max-width: 332px; background: var(--apparent-surface); border: 1px solid var(--apparent-border); border-radius: 24px 24px 24px 6px; padding: 24px; box-shadow: 0 1px 3px var(--apparent-shadow), 0 12px 30px var(--apparent-shadow); }
 /* Keep the frog outside the scroll area, including at 200% text size. */
 .native-coach-content { max-height: calc(100vh - 136px); overflow: auto; overflow-wrap: anywhere; }
 .native-coach > img { position: absolute; top: -43px; left: -5px; width: 80px; height: 55px; object-fit: contain; pointer-events: none; animation: native-guide-hop .42s cubic-bezier(.2,.7,.3,1); }
@@ -112,3 +114,24 @@ html.native-onboarding-shell body { background: transparent !important; margin: 
 
 /* Keep the passive build label clear of setup footer actions; coach gutters stay transparent. */
 html.native-onboarding-shell:has(.native-setup) .apparent-build-identity { top: 19px; bottom: auto; right: 64px; }
+
+.native-coach:is(:has(.native-gesture),:has(.native-control)) { padding: 16px; }
+/* 56px top + 34px card frame + 22px bottom clearance in the fixed coach window. */
+.native-coach:is(:has(.native-gesture),:has(.native-control)) .native-coach-content { max-height: calc(100vh - 112px); }
+.native-coach:is(:has(.native-gesture),:has(.native-control)) h1 { margin: 8px 0; }
+.native-coach:is(:has(.native-gesture),:has(.native-control)) p { margin-bottom: 8px; }
+.native-coach:is(:has(.native-gesture),:has(.native-control)) .native-later { margin-top: 0; }
+
+.native-coach-actions { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.native-coach-actions .native-later { margin-top: 0; }
+
+/* The companion shares the existing transparent coach window; no extra focusable window. */
+.native-trackpad-helper { padding: 16px; margin: 16px 0; border: 1px solid var(--apparent-border); border-radius: 18px 18px 18px 5px; background: var(--apparent-surface); color: var(--apparent-foreground); font: 400 1.125rem/1.5 var(--font-sans); }
+.native-trackpad-helper strong { display: block; margin-bottom: 8px; font-weight: 700; text-wrap: balance; }
+.native-trackpad-helper p { margin: 0; text-wrap: balance; }
+@media (min-width: 700px) {
+  .native-coach[data-paired=true] { right: auto; width: 332px; }
+  body > #root > .native-trackpad-helper { position: absolute; left: 388px; top: 164px; width: 308px; margin: 0; box-shadow: 0 6px 16px var(--apparent-shadow); }
+  body > #root > .native-trackpad-helper .native-trackpad-helper-content { max-height: calc(100vh - 222px); overflow: auto; }
+  body > #root > .native-trackpad-helper:before { content: ''; position: absolute; left: -7px; top: calc(50% - 6px); width: 12px; height: 12px; transform: rotate(45deg); background: var(--apparent-surface); border-left: 1px solid var(--apparent-border); border-bottom: 1px solid var(--apparent-border); }
+}

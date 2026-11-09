@@ -238,7 +238,7 @@ test('closing public-share window rejects late start receipt and never delivers'
 
 {
 const {test}=require('node:test');const assert=require('node:assert/strict');const {parseAction,lines}=require('../electron/onboarding-protocol.cjs');
-test('bounded action contract',()=>{assert.deepEqual(parseAction('use-current-shortcut'),{action:'use-current-shortcut'});assert.deepEqual(parseAction('grant:microphone'),{action:'grant',permission:'microphone'});for(const value of ['start-capture','grant:other',null,{},['continue']])assert.throws(()=>parseAction(value));const value={action:'shortcut',kind:'record',keyCode:15,modifiers:6144,key:'r',reserved:false};assert.deepEqual(parseAction(value),value);for(const changed of [{extra:true},{keyCode:'15'},{reserved:true},{modifiers:1},{kind:'other'}])assert.throws(()=>parseAction({...value,...changed}))});
+test('bounded action contract',()=>{assert.throws(()=>parseAction('use-current-shortcut'));assert.deepEqual(parseAction('grant:microphone'),{action:'grant',permission:'microphone'});for(const value of ['start-capture','grant:other',null,{},['continue']])assert.throws(()=>parseAction(value));const value={action:'shortcut',kind:'record',keyCode:15,modifiers:6144,key:'r',reserved:false};assert.deepEqual(parseAction(value),value);for(const changed of [{extra:true},{keyCode:'15'},{reserved:true},{modifiers:1},{kind:'other'}])assert.throws(()=>parseAction({...value,...changed}))});
 test('stdin accepts fragmented lines and rejects oversized individual lines',()=>{const received=[];const feed=lines(v=>received.push(v));feed('{"type":');feed('"state"}\ninvalid\n{"type":"show"}\n');assert.equal(received.length,2);assert.throws(()=>feed('x'.repeat(65537)));const many=lines(()=>{});many('{}\n'.repeat(30000))});
 
 }
@@ -282,7 +282,7 @@ test('stdin accepts fragmented lines and rejects oversized individual lines',()=
 }
 
 test('onboarding coach avoids its board and pill on offset displays, preserves identity', () => {
-  const { coachPosition, project } = require('../electron/onboarding.cjs');
+  const { coachPosition, coachDimensions, project } = require('../electron/onboarding.cjs');
   for (const area of [{x:0,y:25,width:1440,height:875},{x:-1920,y:40,width:1920,height:1040}]) {
     const board=[area.x+260,area.y+160,760,590], anchor=[area.x+500,area.y+15,320,50];
     const p=coachPosition(area,anchor,board,'board-ink');
@@ -290,10 +290,28 @@ test('onboarding coach avoids its board and pill on offset displays, preserves i
     for(const [x,y,w,h] of [board,anchor]) assert.ok(p.x+380<=x || p.x>=x+w || p.y+440<=y || p.y>=y+h);
     assert.equal(p.pointsUp,false);
   }
+  assert.deepEqual(coachDimensions({width:1440},'screen-ink'),{width:720,height:440});
+  assert.deepEqual(coachDimensions({width:640},'screen-ink'),{width:380,height:440});
+  const pair=coachPosition({x:-1440,y:25,width:1440,height:875},null,null,'screen-ink');
+  assert.ok(pair.x>=-1440 && pair.x+720<=0);
   const state={type:'state',step:'try-it',rows:[],ready:true,testInstance:true,practiceBoard:[0,0,700,600]};
   assert.equal(project(state).testInstance,true);
   assert.deepEqual(project(state).practiceBoard,[0,0,700,600]);
   assert.equal(project({...state,practiceBoard:[0,0,-1,600]}).practiceBoard,undefined);
+});
+
+test('onboarding fits a small logical work area and converts native X11 geometry', () => {
+  const {coachDimensions, setupDimensions, nativeRectangle, coachPosition} = require('../electron/onboarding.cjs');
+  const area={x:-640,y:20,width:640,height:380};
+  for(const shortcut of [true,false]) assert.deepEqual(setupDimensions(area,shortcut),{width:640,height:380});
+  assert.deepEqual(coachDimensions(area,'screen-ink'),{width:380,height:380});
+  const anchor=nativeRectangle([-800,40,320,50],p=>({x:p.x/2,y:p.y/2}));
+  assert.deepEqual(anchor,[-400,20,160,25]);
+  const board=nativeRectangle([-1280,120,400,320],p=>({x:p.x/2,y:p.y/2}));
+  const position=coachPosition(area,anchor,board,'board-ink');
+  assert.ok(position.x>=area.x && position.x+380<=area.x+area.width);
+  assert.ok(position.y>=area.y && position.y+380<=area.y+area.height);
+  assert.equal(nativeRectangle(undefined,p=>p),undefined);
 });
 
 test('onboarding output failure retires the channel once and preserves its error', async () => {

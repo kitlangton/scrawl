@@ -137,6 +137,46 @@ if [[ "$NOTARIZE" == true ]]; then
   spctl --assess --type execute --verbose=2 "$app"
 fi
 
+# A separately signed launcher uses the shared React installer and the payload's
+# already signed Electron runtime. Sparkle ZIP below still contains only the app.
+installer="$dist/Install Apparent.app"
+rm -rf "$installer"
+mkdir -p "$installer/Contents/MacOS" "$installer/Contents/Resources" "$installer/Contents/SharedSupport"
+cp capture/desktop/assets/Apparent.icns "$installer/Contents/Resources/Apparent.icns"
+installer_arch="$(lipo -archs "$app/Contents/MacOS/apparent")"
+case "$installer_arch" in arm64|x86_64) ;; *) echo 'Installer needs a single supported Mac architecture' >&2; exit 1 ;; esac
+xcrun swiftc -O -parse-as-library -target "$installer_arch-apple-macos15.0" capture/desktop/native/installer/Installer.swift -o "$installer/Contents/MacOS/Installer"
+ditto "$app" "$installer/Contents/SharedSupport/Apparent Preview.app"
+ditto "$app/Contents/Resources/settings/app" "$installer/Contents/Resources/installer-ui"
+python3 - "$installer" "$VERSION" "$BUILD_NUMBER" <<'PYINSTALLER'
+import json, pathlib, plistlib, sys
+app = pathlib.Path(sys.argv[1])
+(app / 'Contents/Info.plist').write_bytes(plistlib.dumps({
+    'CFBundleIdentifier': 'dev.simonvanlaak.apparent.preview.installer',
+    'CFBundleName': 'Install Apparent', 'CFBundleDisplayName': 'Install Apparent',
+    'CFBundleExecutable': 'Installer', 'CFBundlePackageType': 'APPL', 'CFBundleIconFile': 'Apparent',
+    'CFBundleShortVersionString': sys.argv[2], 'CFBundleVersion': sys.argv[3],
+    'LSMinimumSystemVersion': '15.0', 'NSHighResolutionCapable': True,
+}))
+(app / 'Contents/Resources/installer-ui/package.json').write_text(json.dumps({
+    'name': 'apparent-installer', 'version': '0.0.0', 'main': 'electron/installer/main.cjs',
+}) + '\n')
+PYINSTALLER
+"${SIGN[@]}" --identifier dev.simonvanlaak.apparent.preview.installer "$installer"
+codesign --verify --deep --strict "$installer"
+if [[ "$NOTARIZE" == true ]]; then
+  installer_notary="$dist/installer-notary.zip"
+  ditto -c -k --sequesterRsrc --keepParent "$installer" "$installer_notary"
+  xcrun notarytool submit "$installer_notary" --key "$APPARENT_APPLE_SIGNING_DIR/notary.p8" \
+    --key-id "$APPARENT_NOTARY_KEY_ID" --issuer "$APPARENT_NOTARY_ISSUER" --wait --timeout 30m
+  rm -f "$installer_notary"
+  xcrun stapler staple "$installer"
+  xcrun stapler validate "$installer"
+  spctl --assess --type execute --verbose=2 "$installer"
+fi
+ditto "$installer" "$staging/Install Apparent.app"
+printf '%s\n' 'Double-click Install Apparent to install with the frog, or drag Apparent Preview to Applications in Finder.' \
+  'Opening the downloaded disk image does not automatically run the installer.' > "$staging/Start here.txt"
 cp -R "$app" "$staging/Apparent Preview.app"
 ln -s /Applications "$staging/Applications"
 rm -f "$dist/$name" "$dist/$name.sha256"

@@ -186,6 +186,11 @@ jobs:
       - name: Install the Metal toolchain
         if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - name: Verify Mac installer replacement transactions
+        if: runner.os == 'macOS' && needs.select.outputs.root == 'true'
+        run: |
+          xcrun swiftc -D INSTALLER_TEST -parse-as-library capture/desktop/native/installer/Installer.swift capture/desktop/native/installer/InstallerTests.swift -o "$RUNNER_TEMP/installer-transaction-tests"
+          "$RUNNER_TEMP/installer-transaction-tests"
       - uses: dtolnay/rust-toolchain@stable
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:

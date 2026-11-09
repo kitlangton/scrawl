@@ -129,7 +129,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.ok(remaining > 0, 'Native Storage overall deadline exceeded');
     return Math.min(cap, remaining);
   };
-  let home, backend, application, electronChild, page, logHandle, failure;
+  let home, backend, application, electronChild, page, logHandle, failure, pendingNativeChange;
   const sleep = () => new Promise(resolve => setTimeout(resolve, 150));
   const poll = async (fn, label, cap = 8000) => {
     const tick = performance.now();
@@ -253,8 +253,44 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     await startRust();
     application = await electron.launch({ args: [root], env, timeout: budget(15000) });
     electronChild = application.process();
+    const launchedAt = Date.now();
+    report.electronBootstrap = { pid: electronChild.pid, stderrTail: '' };
+    electronChild.stderr?.on('data', chunk => {
+      report.electronBootstrap.stderrTail = (report.electronBootstrap.stderrTail + chunk.toString()).slice(-8192);
+    });
+    electronChild.once('exit', (code, signal) => {
+      report.electronBootstrap.exit = { code, signal, elapsedMs: Date.now() - launchedAt,
+        duringCleanup: report.electronBootstrap.cleanupStartedMs !== undefined };
+    });
     // launch() attaches to the main process before app.whenReady() creates a window.
-    page = await application.firstWindow({ timeout: budget() });
+    // Start the existing window deadline before diagnostics; observation must not
+    // buy extra startup time or turn cleanup's exit into a bootstrap failure.
+    const firstWindow = application.firstWindow({ timeout: budget() });
+    const bootstrap = within(application.evaluate(({ app, BrowserWindow }) => {
+      const events = [];
+      globalThis.__apparentStorageWindowProbe = events;
+      app.once('ready', () => events.push({ kind: 'ready', at: Date.now() }));
+      app.on('browser-window-created', (_, window) => {
+        if (events.length < 8) events.push({ kind: 'window', id: window.id, at: Date.now() });
+      });
+      return { pid: process.pid, ready: app.isReady(), windows: BrowserWindow.getAllWindows().map(window => window.id) };
+    }), budget(1500), 'Electron bootstrap observation').then(value => {
+      assert.equal(value.pid, electronChild.pid);
+      report.electronBootstrap.initial = value;
+    }).catch(error => { report.electronBootstrap.observationError = error.message; });
+    try {
+      page = await firstWindow;
+    } catch (error) {
+      await bootstrap;
+      try {
+        report.electronBootstrap.failure = await within(application.evaluate(({ app, BrowserWindow }) => ({
+          pid: process.pid, ready: app.isReady(), events: globalThis.__apparentStorageWindowProbe ?? [],
+          windows: BrowserWindow.getAllWindows().map(window => ({ id: window.id, visible: window.isVisible() })),
+        })), budget(1500), 'Failed Electron bootstrap observation');
+      } catch (diagnosticError) { report.electronBootstrap.failureObservationError = diagnosticError.message; }
+      throw error;
+    }
+    await bootstrap;
     report.electron = await within(application.evaluate(({ app, BrowserWindow }) => ({
       pid: process.pid, version: process.versions.electron, platform: process.platform,
       home: process.env.HOME, userData: app.getPath('userData'),
@@ -270,6 +306,16 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const rendererErrors = [];
     page.on('pageerror', error => rendererErrors.push(error.message));
     await page.getByText('Connected · idle', { exact: true }).waitFor({ timeout: budget(10000) });
+    // CDP readiness does not establish that System Events can inspect this
+    // native app. Check the exact owned window before any control mutation;
+    // otherwise the first AX request can stall with an uninspectable modal open.
+    // Only read-only readiness is polled, within the existing overall deadline.
+    report.nativeWindowReadiness = await poll(async () => {
+      const observed = await panel('diagnose');
+      assert.match(observed, /^depth=0;role=AXWindow;title=Apparent — UI foundation;/);
+      assert.ok(!observed.includes('\ndepth=1;'), 'Owned native window already has a sheet');
+      return observed;
+    }, 'Owned Electron AX window readiness');
     const reporting = page.getByRole('region', { name: 'Send technical error reports', exact: true });
     const reportingToggle = reporting.getByRole('checkbox', { name: 'Send technical error reports', exact: true });
     // Preserve the actual IPC result and rendered state if initial readback fails.
@@ -319,6 +365,20 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const locationStatus = card.locator(':scope > [role="status"]');
     const change = card.getByRole('button', { name: 'Change…', exact: true });
     const reset = card.getByRole('button', { name: 'Reset', exact: true });
+    const startNativeChange = () => {
+      assert.equal(pendingNativeChange, undefined, 'A native Change is already pending');
+      // AppKit can hold the input acknowledgement while its modal sheet is
+      // open. Start one real click, operate the observed picker, then consume
+      // that same click. Observe rejection immediately without retrying it.
+      pendingNativeChange = change.click({ timeout: budget(30000) }).then(
+        () => ({ ok: true }), error => ({ ok: false, error }));
+    };
+    const settleNativeChange = async () => {
+      assert.ok(pendingNativeChange, 'No native Change was dispatched');
+      const result = await pendingNativeChange;
+      pendingNativeChange = undefined;
+      if (!result.ok) throw result.error;
+    };
     const assertFiles = async (savedPath) => {
       const raw = JSON.parse(await fs.readFile(config, 'utf8'));
       if (savedPath === null) assert.equal(Object.hasOwn(raw, 'capturesDir'), false);
@@ -354,7 +414,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     };
     const prepared = await prepareStorageChange({
       storageIdle: waitStorageIdle,
-      change: () => change.click({ timeout: budget() }),
+      change: async () => { startNativeChange(); },
       picker: () => poll(() => panel('inspect'), 'Native Change picker readiness'),
       openGo: () => panel('open-go'),
       goSheet: () => poll(() => panel('inspect-go'), 'Owned Go to Folder readiness'),
@@ -374,6 +434,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       } catch (error) { report.nativePickerScreenshotUnavailable = error.message; }
     }
     await panel('choose');
+    await settleNativeChange();
     const changed = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, selected);
@@ -389,9 +450,10 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const beforeCancel = await fs.readFile(config);
     const beforeCancelStat = await fs.stat(config, { bigint: true });
     await waitStorageIdle();
-    await change.click({ timeout: budget() });
+    startNativeChange();
     report.nativeBeforeCancel = await poll(() => panel('inspect'), 'Reopened native picker');
     await panel('cancel');
+    await settleNativeChange();
     await expect(change).toBeEnabled({ timeout: budget() });
     assert.deepEqual(await fs.readFile(config), beforeCancel, 'Cancel changed config bytes');
     const afterCancelStat = await fs.stat(config, { bigint: true });
@@ -399,13 +461,32 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     assert.equal(afterCancelStat.mtimeNs, beforeCancelStat.mtimeNs, 'Cancel rewrote config');
     // Cancel remounts Retention, which reads policy and then scans usage on
     // Rust's single Storage worker. Wait for that real receipt before the
-    // fixture's direct socket probe and one Reset; do not retry mutations.
+    // fixture's direct socket probe and Reset; never retry an unknown outcome.
     await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
       .toBeEnabled({ timeout: budget() });
     report.cancel = { ...await snapshot(), files: await assertFiles(selected),
       bytesUnchanged: true, inodeUnchanged: true, mtimeUnchanged: true };
     assert.deepEqual(report.cancel.location, report.change.location);
     await reset.click({ timeout: budget() });
+    // The single Rust Settings worker can explicitly refuse admission. That
+    // response guarantees this Reset did not run; exercise the visible Refresh
+    // recovery once. Never repeat a timeout, unknown outcome or other error.
+    const busyMessage = 'Another location request is still running. Refresh when it finishes.';
+    const resetOutcome = await poll(async () => {
+      const text = await locationStatus.innerText({ timeout: budget() });
+      if (text.includes(busyMessage)) return 'busy';
+      assert.ok(text.includes(report.before.location.storage.displayPath), 'Waiting for Reset result');
+      return 'reset';
+    }, 'Rendered Reset result');
+    if (resetOutcome === 'busy') {
+      assert.deepEqual(await fs.readFile(config), beforeCancel, 'Unadmitted Reset changed config');
+      report.resetBusyRecovery = { response: 'app_busy', unchangedConfig: true, refreshes: 1, retries: 1 };
+      await card.getByRole('button', { name: 'Refresh location', exact: true }).click({ timeout: budget() });
+      await locationStatus.getByText(report.change.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
+      await expect(card.getByRole('button', { name: 'Refresh usage', exact: true }))
+        .toBeEnabled({ timeout: budget() });
+      await reset.click({ timeout: budget() });
+    }
     const resetRead = await poll(async () => {
       const next = await snapshot();
       assert.equal(next.location.storage.savedPath, null);
@@ -454,6 +535,7 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       }
     }
   } finally {
+    if (report.electronBootstrap) report.electronBootstrap.cleanupStartedMs = Date.now();
     if (application) {
       try { await within(application.close(), 3000, 'Electron close'); }
       catch (error) { report.cleanup.electronCloseError = error.message; }
@@ -461,6 +543,12 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     for (const [label, child, group] of [['electron', electronChild, false], ['rust', backend, true]]) {
       try { report.cleanup[label] = await stopOwned(child, label, group); }
       catch (error) { report.cleanup[label] = { error: error.message }; failure ??= error; report.passed = false; }
+    }
+    if (pendingNativeChange) {
+      try {
+        const result = await within(pendingNativeChange, 2000, 'Retired native Change');
+        report.cleanup.pendingNativeChange = result.ok ? 'completed' : 'rejected after retirement';
+      } catch (error) { report.cleanup.pendingNativeChange = error.message; failure ??= error; report.passed = false; }
     }
     if (logHandle) await logHandle.close();
     // Keep failed fixtures and evidence. A successful run removes only its own HOME.

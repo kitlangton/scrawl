@@ -1013,7 +1013,19 @@ fn pin_note_surface(id: u32, pid: u32, index: usize) {
         };
         let visible = x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen());
         let result = if visible { linux::hyprland::place_note(id, pid, rect, focus) } else { Ok(()) };
-        if visible && result.is_ok() { raise_note_surfaces(); } else { failures += 1; }
+        if visible && result.is_ok() {
+            raise_note_surfaces();
+            // Hyprland's focus dispatch can clear XWayland's keyboard focus
+            // after the initial placement. Reconcile the same live request,
+            // never a closed editor or a replacement capture's surface.
+            let state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.pid == pid && state.slots[index].id == id
+                && state.slots[index].generation == generation && state.slots[index].focus
+                && x11::window_info(id as isize).is_some_and(|w| w.pid == pid && w.on_screen())
+            {
+                x11::focus(id);
+            }
+        } else { failures += 1; }
         let retry = {
             let mut state = NOTE_SURFACES.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
             if state.pid != pid || state.slots[index].id != id { return; }
