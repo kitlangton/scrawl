@@ -44,8 +44,7 @@ function command(args: string[], capture = false, program = 'xcrun'): string {
 function regular(path: string) {
   try { return lstatSync(path).isFile(); } catch { return false; }
 }
-function watch(path: string) { console.log(`cargo:rerun-if-changed=${path}`); }
-function selectedPath(path: string) {
+function selectedPath(path: string, watch: (path: string) => void) {
   if (!path) throw new Error('Empty native input path');
   const canonical = realpathSync.native(path);
   const pending = (isAbsolute(path) ? path : `${process.cwd()}/${path}`).split('/');
@@ -84,6 +83,11 @@ function developerDirectory(selection: string) {
 export function buildNative(root: string, output: string, architecture: string) {
   root = realpathSync(root);
   output = realpathSync(output);
+  const watched = new Set<string>();
+  const watch = (path: string) => {
+    if (!watched.has(path)) console.log(`cargo:rerun-if-changed=${path}`);
+    watched.add(path);
+  };
   const arch = architecture === 'aarch64' ? 'arm64' : architecture;
   if (!['arm64', 'x86_64'].includes(arch)) throw new Error('Unsupported Mac target architecture');
   const previewId = process.env.APPARENT_HELPER_BUNDLE_ID;
@@ -96,12 +100,12 @@ export function buildNative(root: string, output: string, architecture: string) 
 
   // Discover the actual selected tools/SDK before looking at any receipt. Neither
   // Cargo's root revision nor a cache file is evidence of compatible native inputs.
-  const developer = selectedPath(developerDirectory(command(['-p'], true, 'xcode-select')));
+  const developer = selectedPath(developerDirectory(command(['-p'], true, 'xcode-select')), watch);
   const explicit = process.env.DEVELOPER_DIR;
   let explicitSelection = false;
   if (explicit) {
     const path = developerDirectory(explicit);
-    const canonical = selectedPath(path);
+    const canonical = selectedPath(path, watch);
     explicitSelection = isAbsolute(explicit) && path === developer && canonical === developer;
   }
   // Cargo follows directory symlinks recursively. Restrict the fast path to an
@@ -112,7 +116,7 @@ export function buildNative(root: string, output: string, architecture: string) 
     watch(explicit.replace(/\/+$/, '') || '/');
   }
   if (!explicitSelection && existsSync('/var/db/xcode_select_link')) watch('/var/db/xcode_select_link');
-  const sdk = selectedPath(command(['--sdk', 'macosx', '--show-sdk-path'], true));
+  const sdk = selectedPath(command(['--sdk', 'macosx', '--show-sdk-path'], true), watch);
   const identity: unknown[] = [root, output, arch, digest(script), developer,
     command(['--sdk', 'macosx', '--show-sdk-version'], true),
     command(['--sdk', 'macosx', '--show-sdk-build-version'], true), sdk,
@@ -123,7 +127,7 @@ export function buildNative(root: string, output: string, architecture: string) 
     if (regular(path)) { watch(path); identity.push([path, digest(path)]); }
   }
   for (const tool of ['swiftc', 'metal', 'metallib']) {
-    const path = selectedPath(command(tool === 'swiftc' ? ['--find', tool] : ['--sdk', 'macosx', '--find', tool], true));
+    const path = selectedPath(command(tool === 'swiftc' ? ['--find', tool] : ['--sdk', 'macosx', '--find', tool], true), watch);
     watch(path);
     // metallib has no portable version flag; its exact executable bytes bind it.
     identity.push([tool, path, digest(path), tool === 'metallib' ? null
@@ -131,7 +135,7 @@ export function buildNative(root: string, output: string, architecture: string) 
   }
   // Swift's driver invokes a frontend and the platform linker separately.
   for (const tool of ['swift-frontend', 'clang', 'ld']) {
-    const path = selectedPath(command(['--find', tool], true));
+    const path = selectedPath(command(['--find', tool], true), watch);
     watch(path);
     identity.push([tool, path, digest(path)]);
   }

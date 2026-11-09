@@ -184,6 +184,8 @@ test('only a validated explicit developer selection omits the recursive global w
   const aliased = f.run('x86_64', { DEVELOPER_DIR: alias });
   assert.equal(aliased.status, 0, aliased.stderr);
   assert.ok(aliased.stdout.includes(`cargo:rerun-if-changed=${alias}`), 'mutable aliases retain a conservative watch on their unresolved path');
+  const watches = aliased.stdout.split('\n').filter(line => line.startsWith('cargo:rerun-if-changed='));
+  assert.equal(watches.length, new Set(watches).size, 'shared alias components emit only one Cargo watch per invocation');
   // A successful but mismatched discovery must not authorize dropping the watch.
   f.put('bin/xcode-select', `#!/bin/sh\nprintf '%s\\n' "$FAKE_ROOT/Other.app/Contents/Developer"\n`);
   const r = f.run();
