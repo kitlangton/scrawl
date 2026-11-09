@@ -12,11 +12,10 @@ const storage = 'Native Mac Storage and error-reporting controls against the ins
 const copy = 'Native GPUI Copy capture ID against the same installed App';
 const reference = 'Native Electron selected-reference control against the installed Rust App';
 const macBridge = 'Early Mac Electron to Rust Settings integration (not native GUI proof)';
-const client = 'Verify the independent Connect client package';
 const full = 'Execute the same changed-tree checks (not GUI acceptance)';
 const cache = 'Retain completed Mac dependency seeds after full verification';
 const linuxBridge = 'Actual Electron to Rust Settings integration (not native GUI proof)';
-const relevant = [preflight, packaging, storage, copy, reference, macBridge, client, full, cache, linuxBridge];
+const relevant = [preflight, packaging, storage, copy, reference, macBridge, full, cache, linuxBridge];
 const markers = [...rust.matchAll(/^      - name: (.+)$/gm)];
 const steps = markers.map((match, i) => {
   const body = rust.slice(match.index!, markers[i + 1]?.index ?? rust.length);
@@ -90,7 +89,7 @@ test('packaging failure cannot enter GUI assertions, ordinary suites or publish 
   assert.deepEqual(result.executed, [preflight, packaging]);
   assert.doesNotMatch(result.env, /CACHE_ON_FAILURE=true/);
 });
-test('native failure arrives before client/full suites without arming incomplete dependency seeds', t => {
+test('native failure arrives before full suites without arming incomplete dependency seeds', t => {
   const result = execute(t, 'macOS', 'native-storage-assertions');
   assert.equal(result.status, 31);
   assert.deepEqual(result.executed, [preflight, packaging, storage]);
@@ -99,7 +98,7 @@ test('native failure arrives before client/full suites without arming incomplete
 test('Linux retains its required full-build-before-bridge order and never admits Mac GUI operations', t => {
   const result = execute(t, 'Linux');
   assert.equal(result.status, 0, result.stderr);
-  assert.deepEqual(result.executed, [preflight, client, full, linuxBridge]);
+  assert.deepEqual(result.executed, [preflight, full, linuxBridge]);
   assert.doesNotMatch(result.trace, /native-(storage|copy|reference)-assertions|command.ts packaging/);
 });
 test('Engine-only selections do not launch the application or native controls', t => {

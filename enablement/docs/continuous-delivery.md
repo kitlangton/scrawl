@@ -24,9 +24,9 @@ Linux release and website/Connect delivery have no automatic or scheduled trigge
 Review compatibility with the currently deployed service before publishing this
 older client/server source.
 
-## Repository checks
+## Continuous delivery
 
-`Repository checks` runs automatically on PRs targeting main and main pushes.
+`Continuous delivery` runs automatically on PRs targeting main and main pushes.
 It is the only automatic workflow: one run per PR open/reopen/commit update
 against main, and one per push to main. It validates the theme, selector,
 push-hook, publication-admission contracts and workflow syntax with read-only
