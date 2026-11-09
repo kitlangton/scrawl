@@ -201,7 +201,13 @@ test('npm lifecycle options from environment and each configuration file refuse 
   const user = join(dir, 'user.npmrc'), global = join(dir, 'global.npmrc'), project = join(dir, '.npmrc');
   Object.assign(env, {npm_config_userconfig: user, npm_config_globalconfig: global, npm_config_cache: join(dir, 'cache')});
   writeFileSync(user, ''); writeFileSync(global, ''); writeFileSync(project, '');
-  const source = join(root, 'connect/service/test/sharing/share-view.test.mjs');
+  // Cheap contracts run before package installation/build. Keep the real loader
+  // reproduction independent of service dependencies and generated assets.
+  const source = join(dir, 'loader.test.ts');
+  writeFileSync(source, `import {test} from 'node:test';
+    import assert from 'node:assert/strict';
+    const value: number = 42;
+    test('typed loader input executes', () => assert.equal(value, 42));\n`);
   writeFileSync(join(dir, 'package.json'), JSON.stringify({name: 'npm-config-fixture', private: true,
     scripts: {test: `node --test ${JSON.stringify(source)}`}}));
   const initial = npmConfiguration(dir, env);
@@ -217,7 +223,7 @@ test('npm lifecycle options from environment and each configuration file refuse 
   }
   const direct = spawnSync(process.execPath, ['--no-global-search-paths', '--test', source], {cwd: dir, env, encoding: 'utf8'});
   assert.equal(direct.status, 0, direct.stderr);
-  assert.match(direct.stdout, /# pass 9/);
+  assert.match(direct.stdout, /# pass 1/);
   for (const [key, value] of [['script-shell', '/bin/false'], ['ignore-scripts', 'true'], ['global', 'true'], ['workspaces', 'true']]) {
     writeFileSync(user, `${key}=${value}\n`);
     assert.throws(() => npmConfiguration(dir, env), /unsupported npm lifecycle|Command failed/);
