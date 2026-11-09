@@ -1,8 +1,8 @@
 /** Build policy for the existing Mac helper/shaders; Cargo retains native execution. */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, writeFileSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const helperSources = [
@@ -35,10 +35,10 @@ function digest(path: string) {
 }
 type Receipt = { input: string; outputs: Record<string, string> };
 
-function command(args: string[], capture = false): string {
-  const result = spawnSync('xcrun', args, { encoding: 'utf8', stdio: capture ? 'pipe' : 'inherit' });
+function command(args: string[], capture = false, program = 'xcrun'): string {
+  const result = spawnSync(program, args, { encoding: 'utf8', stdio: capture ? 'pipe' : 'inherit' });
   if (result.error) throw result.error;
-  if (result.status !== 0) throw new Error(`xcrun ${args[0]} failed (${result.signal ?? result.status})${capture ? ': ' + result.stderr : ''}`);
+  if (result.status !== 0) throw new Error(`${program} ${args[0]} failed (${result.signal ?? result.status})${capture ? ': ' + result.stderr : ''}`);
   return (result.stdout ?? '').trim();
 }
 function regular(path: string) {
@@ -61,11 +61,26 @@ export function buildNative(root: string, output: string, architecture: string) 
 
   // Discover the actual selected tools/SDK before looking at any receipt. Neither
   // Cargo's root revision nor a cache file is evidence of compatible native inputs.
+  const developer = realpathSync(command(['-p'], true, 'xcode-select'));
+  const explicit = process.env.DEVELOPER_DIR;
+  const explicitSelection = explicit && isAbsolute(explicit) && [explicit, join(explicit, 'Contents/Developer')].some(path => {
+    try { return statSync(path).isDirectory() && realpathSync(path) === developer; } catch { return false; }
+  });
+  // Cargo follows directory symlinks recursively. Only a validated explicit
+  // selection makes the global selector irrelevant. Keep the conservative watch
+  // for unset/empty/relative/mismatched overrides; xcode-select/xcrun still decide
+  // whether those forms are usable. Accept both app roots and Developer paths.
+  if (!explicitSelection && existsSync('/var/db/xcode_select_link')) watch('/var/db/xcode_select_link');
   const sdk = command(['--sdk', 'macosx', '--show-sdk-path'], true);
-  const identity: unknown[] = [root, output, arch, digest(script),
+  const identity: unknown[] = [root, output, arch, digest(script), developer,
     command(['--sdk', 'macosx', '--show-sdk-version'], true),
     command(['--sdk', 'macosx', '--show-sdk-build-version'], true), sdk,
     environmentInputs.map(key => [key, process.env[key] ?? null])];
+  // Bound Xcode installation updates to its metadata instead of its whole tree.
+  for (const name of ['Info.plist', 'version.plist']) {
+    const path = resolve(developer, '..', name);
+    if (regular(path)) { watch(path); identity.push([path, digest(path)]); }
+  }
   for (const tool of ['swiftc', 'metal', 'metallib']) {
     const path = realpathSync(command(tool === 'swiftc' ? ['--find', tool] : ['--sdk', 'macosx', '--find', tool], true));
     watch(path);
@@ -82,7 +97,6 @@ export function buildNative(root: string, output: string, architecture: string) 
   const settings = ['SDKSettings.json', 'SDKSettings.plist'].map(name => join(sdk, name)).filter(regular);
   if (!settings.length) throw new Error('Selected SDK has no settings identity');
   for (const path of settings) { watch(path); identity.push([path, digest(path)]); }
-  if (existsSync('/var/db/xcode_select_link')) watch('/var/db/xcode_select_link');
 
   const manifest = join(output, 'native-build.json');
   let previous: Record<string, Receipt> = {};

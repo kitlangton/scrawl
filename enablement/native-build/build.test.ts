@@ -1,14 +1,14 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
+import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, readdirSync, realpathSync, rmSync, symlinkSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { tmpdir } from 'node:os';
 
 const repository = resolve(import.meta.dirname, '../..');
 const production = join(repository, 'enablement/native-build/build.ts');
 function fixture(t: { after: (fn: () => void) => void }) {
-  const root = mkdtempSync(join(tmpdir(), 'apparent-dev-native-build-'));
+  const root = realpathSync(mkdtempSync(join(tmpdir(), 'apparent-dev-native-build-')));
   t.after(() => rmSync(root, { recursive: true, force: true }));
   function put(path: string, body: string) {
     mkdirSync(join(root, path, '..'), { recursive: true });
@@ -19,17 +19,38 @@ function fixture(t: { after: (fn: () => void) => void }) {
   for (const [path] of source.matchAll(/'(capture\/[^']+\.(?:swift|metal)|shared\/native\/[^']+\.(?:swift|plist))'/g)) {
     put(path.slice(1, -1), path.endsWith("Info.plist'") ? '<string>dev.kitlangton.apparent.helper</string>' : 'synthetic input');
   }
-  put('enablement/native-build/build.ts', source);
+  // Redirect only the OS-owned selector path; execute the production policy and
+  // Rust adapter against a real directory symlink without touching the host.
+  assert.ok(source.includes("'/var/db/xcode_select_link'"));
+  put('enablement/native-build/build.ts', source.replaceAll('/var/db/xcode_select_link', join(root, 'selector')));
+  const developer = join(root, 'Xcode.app/Contents/Developer');
+  const otherDeveloper = join(root, 'Other.app/Contents/Developer');
+  for (const app of ['Xcode.app', 'Other.app']) {
+    put(`${app}/Contents/Developer/unrelated/data`, 'unrelated Xcode content');
+    put(`${app}/Contents/Info.plist`, 'Xcode metadata');
+    put(`${app}/Contents/version.plist`, 'Xcode version');
+  }
+  symlinkSync(developer, join(root, 'selector'));
+  put('bin/xcode-select', `#!/bin/sh
+set -eu
+test "$1" = -p
+selected=\${DEVELOPER_DIR:-$FAKE_ROOT/selector}
+if [ -d "$selected/Contents/Developer" ]; then selected="$selected/Contents/Developer"; fi
+cd "$selected" || exit 1
+pwd -P
+`);
+  chmodSync(join(root, 'bin/xcode-select'), 0o700);
   put('sdk/SDKSettings.json', '{"Version":"26"}');
-  put('bin/compiler', 'synthetic compiler identity');
+  for (const tool of ['swiftc', 'metal', 'metallib', 'swift-frontend', 'clang', 'ld']) put(`bin/${tool}`, `synthetic ${tool} identity`);
   put('bin/xcrun', `#!/bin/sh
 set -eu
+"$FAKE_ROOT/bin/xcode-select" -p >/dev/null
 if [ "$1" = --sdk ]; then shift 2; fi
 case "$1" in
   --show-sdk-path) printf '%s\\n' "$FAKE_ROOT/sdk"; exit ;;
   --show-sdk-version) echo 26.0; exit ;;
   --show-sdk-build-version) echo 26A; exit ;;
-  --find) printf '%s\\n' "$FAKE_ROOT/bin/compiler"; exit ;;
+  --find) printf '%s\\n' "$FAKE_ROOT/bin/$2"; exit ;;
 esac
 tool=$1; shift
 if [ "$1" = --version ]; then echo "$tool version 1"; exit; fi
@@ -51,11 +72,17 @@ if [ "$tool" = swiftc ]; then cp "$arg" "$FAKE_ROOT/helper-plist"; fi
   const out = join(root, 'target/debug/build/native/out');
   mkdirSync(out, { recursive: true });
   const env = { ...process.env, PATH: join(root, 'bin') + ':' + process.env.PATH,
-    FAKE_ROOT: root, FAIL_TOOL: '', APPARENT_HELPER_BUNDLE_ID: undefined, APPARENT_PREVIEW_BUILD: undefined };
+    FAKE_ROOT: root, FAIL_TOOL: '', DEVELOPER_DIR: developer, SDKROOT: undefined, TOOLCHAINS: undefined,
+    APPARENT_HELPER_BUNDLE_ID: undefined, APPARENT_PREVIEW_BUILD: undefined };
   const run = (arch = 'x86_64', extra = {}) => spawnSync(process.execPath,
-    ['--experimental-strip-types', production, root, out, arch], { env: { ...env, ...extra }, encoding: 'utf8' });
+    ['--experimental-strip-types', join(root, 'enablement/native-build/build.ts'), root, out, arch],
+    { cwd: root, env: { ...env, ...extra }, encoding: 'utf8' });
   const count = () => existsSync(join(root, 'invocations')) ? readFileSync(join(root, 'invocations'), 'utf8').trim().split('\n') : [];
-  return { root, out, env, put, run, count };
+  const select = (path: string) => {
+    rmSync(join(root, 'selector'));
+    symlinkSync(path, join(root, 'selector'));
+  };
+  return { root, out, developer, otherDeveloper, env, put, run, count, select };
 }
 
 test('native outputs: cold build, verified reuse, restaging and per-artifact invalidation', t => {
@@ -90,7 +117,7 @@ test('SDK, exact tool bytes, target and preview identity cannot reuse incompatib
   f.put('sdk/SDKSettings.json', '{"Version":"26.1"}');
   assert.equal(f.run().status, 0);
   assert.equal(f.count().length, 10);
-  f.put('bin/compiler', 'new compiler bytes, same reported version');
+  f.put('bin/swiftc', 'new compiler bytes, same reported version');
   assert.equal(f.run().status, 0);
   assert.equal(f.count().length, 15);
   assert.equal(f.run('aarch64').status, 0);
@@ -134,19 +161,63 @@ test('cached helper mode and destination symlinks do not bypass executable valid
   assert.equal(readFileSync(join(f.root, 'unrelated'), 'utf8'), 'preserve');
 });
 
+test('only a validated explicit developer selection omits the recursive global watch', t => {
+  const f = fixture(t);
+  const globalWatch = `cargo:rerun-if-changed=${join(f.root, 'selector')}`;
+  symlinkSync(f.developer, join(f.root, 'developer-alias'));
+  for (const explicit of [f.developer, join(f.root, 'Xcode.app'), join(f.root, 'developer-alias')]) {
+    const r = f.run('x86_64', { DEVELOPER_DIR: explicit });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(!r.stdout.includes(globalWatch), 'explicit selection must not watch the global Xcode tree');
+    for (const name of ['Info.plist', 'version.plist']) {
+      assert.ok(r.stdout.includes(`cargo:rerun-if-changed=${resolve(f.developer, '..', name)}`));
+    }
+  }
+  for (const explicit of [undefined, '', 'Xcode.app/Contents/Developer']) {
+    const r = f.run('x86_64', { DEVELOPER_DIR: explicit });
+    assert.equal(r.status, 0, r.stderr);
+    assert.ok(r.stdout.includes(globalWatch), 'unset/empty/relative selection keeps the conservative watch');
+  }
+  // A successful but mismatched discovery must not authorize dropping the watch.
+  f.put('bin/xcode-select', `#!/bin/sh\nprintf '%s\\n' "$FAKE_ROOT/Other.app/Contents/Developer"\n`);
+  const r = f.run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.ok(r.stdout.includes(globalWatch));
+});
+
+test('invalid developer discovery fails without publishing or replacing a success receipt', t => {
+  const f = fixture(t);
+  const missing = { DEVELOPER_DIR: join(f.root, 'missing') };
+  assert.notEqual(f.run('x86_64', missing).status, 0);
+  assert.ok(!existsSync(join(f.out, 'native-build.json')));
+  assert.equal(f.count().length, 0);
+  assert.equal(f.run().status, 0);
+  const receipt = readFileSync(join(f.out, 'native-build.json'), 'utf8');
+  assert.notEqual(f.run('x86_64', missing).status, 0);
+  assert.equal(readFileSync(join(f.out, 'native-build.json'), 'utf8'), receipt);
+  assert.equal(f.count().length, 5);
+  assert.equal(f.run().status, 0);
+  assert.equal(f.count().length, 5);
+});
+
+function cargoFixture(t: { after: (fn: () => void) => void }) {
+  const f = fixture(t);
+  const source = readFileSync(join(repository, 'build.rs'), 'utf8');
+  const start = source.indexOf('fn compile_mac_native() {');
+  assert.ok(start > 0);
+  f.put('build.rs', 'use std::path::PathBuf;\nuse std::process::Command;\nfn main() { println!("cargo:rerun-if-changed=metadata"); compile_mac_native(); }\n' + source.slice(start));
+  f.put('metadata', 'first revision');
+  f.put('src/main.rs', 'fn main() {}');
+  f.put('Cargo.toml', '[package]\nname="native-cache-fixture"\nversion="0.1.0"\nedition="2024"\n');
+  const cargo = (extra = {}) => spawnSync('cargo', ['build', '--offline', '-vv'], {
+    cwd: f.root, env: { ...f.env, CARGO_TARGET_DIR: join(f.root, 'target'), RUSTC_WRAPPER: '',
+      CARGO_ENCODED_RUSTFLAGS: '', RUSTFLAGS: '', TMPDIR: f.root, ...extra }, encoding: 'utf8', timeout: 60000 });
+  return { ...f, cargo };
+}
+
 test('the production Cargo adapter remains fresh on no-op and reuses native outputs after a metadata-only rerun',
   { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
-    const f = fixture(t);
-    const source = readFileSync(join(repository, 'build.rs'), 'utf8');
-    const start = source.indexOf('fn compile_mac_native() {');
-    assert.ok(start > 0);
-    f.put('build.rs', 'use std::path::PathBuf;\nuse std::process::Command;\nfn main() { println!("cargo:rerun-if-changed=metadata"); compile_mac_native(); }\n' + source.slice(start));
-    f.put('metadata', 'first revision');
-    f.put('src/main.rs', 'fn main() {}');
-    f.put('Cargo.toml', '[package]\nname="native-cache-fixture"\nversion="0.1.0"\nedition="2024"\n');
-    const cargo = () => spawnSync('cargo', ['build', '--offline', '-vv'], {
-      cwd: f.root, env: { ...f.env, CARGO_TARGET_DIR: join(f.root, 'target'), RUSTC_WRAPPER: '',
-        CARGO_ENCODED_RUSTFLAGS: '', RUSTFLAGS: '', TMPDIR: f.root }, encoding: 'utf8', timeout: 60000 });
+    const f = cargoFixture(t), { cargo } = f;
     let r = cargo();
     assert.equal(r.status, 0, r.stderr);
     assert.equal(f.count().length, 5);
@@ -163,4 +234,66 @@ test('the production Cargo adapter remains fresh on no-op and reuses native outp
     assert.equal(r.status, 0, r.stderr);
     assert.match(r.stderr, /Fresh native-cache-fixture/);
     assert.equal(f.count().length, 5);
+  });
+
+test('Cargo with explicit selection ignores unrelated Xcode descendants but schedules selected native identity changes',
+  { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+    const f = cargoFixture(t);
+    function build(fresh: boolean, extra = {}) {
+      const r = f.cargo(extra);
+      assert.equal(r.status, 0, r.stderr);
+      if (fresh) assert.match(r.stderr, /Fresh native-cache-fixture/);
+      else assert.match(r.stdout, /native-build helper: compiling/);
+    }
+    build(false); build(true);
+    f.put('Xcode.app/Contents/Developer/unrelated/data', 'irrelevant descendant edit');
+    build(true);
+    f.select(f.otherDeveloper);
+    build(true);
+    assert.equal(f.count().length, 5);
+    let builds = 1;
+    for (const path of ['Xcode.app/Contents/Info.plist', 'Xcode.app/Contents/version.plist',
+      'bin/swiftc', 'bin/metal', 'bin/metallib', 'bin/swift-frontend', 'bin/clang', 'bin/ld', 'sdk/SDKSettings.json']) {
+      f.put(path, 'changed identity bytes');
+      build(false); build(true);
+      assert.equal(f.count().length, ++builds * 5, path);
+    }
+    for (const extra of [{ TOOLCHAINS: 'alternate' }, { SDKROOT: join(f.root, 'sdk') }, { DEVELOPER_DIR: f.otherDeveloper }]) {
+      build(false, extra); build(true, extra);
+      assert.equal(f.count().length, ++builds * 5);
+    }
+  });
+
+test('Cargo without an explicit override tracks global selection and preserves reuse and failure semantics',
+  { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+    const f = cargoFixture(t);
+    const cargo = (extra = {}) => f.cargo({ DEVELOPER_DIR: undefined, ...extra });
+    let r = cargo();
+    assert.equal(r.status, 0, r.stderr);
+    r = cargo();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /Fresh native-cache-fixture/);
+    f.put('Xcode.app/Contents/Developer/unrelated/data', 'global descendant edit');
+    r = cargo();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /native-build helper: verified reuse/);
+    assert.equal(f.count().length, 5);
+    f.select(f.otherDeveloper);
+    r = cargo();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stdout, /native-build helper: compiling/);
+    assert.equal(f.count().length, 10);
+    r = cargo();
+    assert.equal(r.status, 0, r.stderr);
+    assert.match(r.stderr, /Fresh native-cache-fixture/);
+    const native = readdirSync(join(f.root, 'target/debug/build')).find(name => existsSync(join(f.root, 'target/debug/build', name, 'out/native-build.json')))!;
+    const manifest = join(f.root, 'target/debug/build', native, 'out/native-build.json');
+    const receipt = readFileSync(manifest, 'utf8');
+    r = cargo({ DEVELOPER_DIR: join(f.root, 'missing') });
+    assert.notEqual(r.status, 0);
+    assert.equal(readFileSync(manifest, 'utf8'), receipt);
+    assert.equal(f.count().length, 10);
+    r = cargo();
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(f.count().length, 10);
   });
