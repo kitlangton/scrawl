@@ -73,6 +73,15 @@ print(json.dumps(reply))
 
 
 class SyntheticRecipe(smoke.Recipe):
+    def prepare(self):
+        # The synthetic guest has an explicit process snapshot. Restore the real
+        # host census before transport execution and owned-process cleanup.
+        iterdir = Path.iterdir
+        def guest_entries(path):
+            return iter(self.guest_processes) if path == Path('/proc') else iterdir(path)
+        with patch.object(Path, 'iterdir', guest_entries):
+            return super().prepare()
+
     def launch(self, argv, log):
         if '--scene' in argv:
             # Only the scene producer is replaced. CLI calls use actual subprocesses,
@@ -210,13 +219,6 @@ class TransportTests(unittest.TestCase):
             guest_process = root / '123'
             guest_process.mkdir()
             (guest_process / 'comm').write_text('apparent\n')
-            actual_iterdir = Path.iterdir
-            def guest_entries(path):
-                # This harmless transport fixture has its own synthetic desktop;
-                # unrelated host test processes are not processes in that guest.
-                if path == Path('/proc'):
-                    return iter([guest_process] if existing_process else [])
-                return actual_iterdir(path)
             systemctl.write_text('#!/bin/sh\nprintf "DISPLAY=:synthetic\\nXDG_RUNTIME_DIR=' + str(runtime) +
                                  '\\nXAUTHORITY=' + str(authority) + '\\n"\n')
             systemctl.chmod(0o700)
@@ -233,8 +235,10 @@ class TransportTests(unittest.TestCase):
                 env['PEER_PENDING'] = '1'
             if no_decoder:
                 env['PEER_NO_DECODER'] = '1'
-            with patch.dict(os.environ, env, clear=True), patch.object(smoke.Path, 'iterdir', guest_entries):
+            with patch.dict(os.environ, env, clear=True):
                 recipe = SyntheticRecipe(out, binary, 1)
+                recipe.guest_processes = [guest_process] if existing_process else []
+                cleanup_census = Path.iterdir
                 try:
                     if existing_process:
                         with self.assertRaisesRegex(smoke.Failure, 'existing product process'):
@@ -251,7 +255,10 @@ class TransportTests(unittest.TestCase):
                     else:
                         recipe.run()
                 finally:
-                    recipe.cleanup()
+                    try:
+                        self.assertIs(Path.iterdir, cleanup_census, 'prepare must restore the real cleanup census')
+                    finally:
+                        recipe.cleanup()
             self.assertEqual(recipe.env['XAUTHORITY'], str(authority))
             report = json.loads((out / 'capture-smoke-report.json').read_text())
             self.assertEqual(report['gates']['owned_process_cleanup'], 'PASS', report)
