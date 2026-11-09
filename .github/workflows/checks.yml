@@ -82,6 +82,34 @@ jobs:
         run: python -m pip install 'Pillow>=10.2,<13'
       - name: Verify recording inspection and evidence boundaries
         run: python -m unittest discover -s hermes/tests -v
+      # Temporary PR1092-only diagnosis in this already allocated Mac job.
+      # Remove before the final ready/full verification; this grants no pass.
+      - uses: actions/setup-node@v4
+        if: matrix.os == 'macos-15-intel' && github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.number == 1092
+        with:
+          node-version: '22.23.0'
+      - name: Prepare locked Electron for bounded picker diagnosis
+        if: matrix.os == 'macos-15-intel' && github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.number == 1092
+        env:
+          ELECTRON_SKIP_BINARY_DOWNLOAD: '1'
+          electron_config_cache: ${{ runner.temp }}/electron-downloads
+        run: |
+          npm ci --ignore-scripts --prefix capture/desktop/ui/frontend
+          env -u ELECTRON_SKIP_BINARY_DOWNLOAD node capture/desktop/ui/frontend/node_modules/electron/install.js
+          npm run build --prefix capture/desktop/ui/frontend
+      - name: Observe owned native picker AX checkpoints
+        if: matrix.os == 'macos-15-intel' && github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.number == 1092
+        timeout-minutes: 2
+        env:
+          APPARENT_PICKER_PROBE_CI: '1'
+        run: node --experimental-strip-types enablement/prerequisites/mac-picker-probe.ts
+      - uses: actions/upload-artifact@v4
+        if: always() && matrix.os == 'macos-15-intel' && github.event_name == 'pull_request' && github.event.pull_request.draft && github.event.pull_request.number == 1092
+        with:
+          name: mac-picker-probe
+          path: ${{ runner.temp }}/mac-picker-probe/*
+          if-no-files-found: error
+          retention-days: 3
   contracts:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
