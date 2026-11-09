@@ -16,7 +16,8 @@ WORKFLOWS = {
 }
 REQUIRED = {
     platform: {'verify / select', f'verify / desktop-ui ({runner})',
-               f'verify / rust ({runner})', 'verify / Release verification'}
+               f'verify / rust ({runner})', f'verify / connect-client ({runner})',
+               'verify / Release verification'}
     for platform, runner in [('linux', 'ubuntu-24.04'), ('macos', 'macos-15-intel')]
 }
 

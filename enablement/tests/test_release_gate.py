@@ -150,7 +150,8 @@ class AdmissionTests(unittest.TestCase):
         workflow = Path(__file__).resolve().parents[2] / gate.WORKFLOWS['macos']
         self.assertIn('runner: macos-15-intel', workflow.read_text())
         names = ['verify / select', 'verify / desktop-ui (macos-15-intel)',
-                 'verify / rust (macos-15-intel)', 'verify / Release verification']
+                 'verify / rust (macos-15-intel)', 'verify / connect-client (macos-15-intel)',
+                 'verify / Release verification']
         self.jobs['macos'] = [dict(name=name, status='completed', conclusion='success')
                               for name in names]
         self.assertEqual(self.admit('macos'), self.sha)
