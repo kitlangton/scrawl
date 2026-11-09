@@ -53,6 +53,17 @@ share URLs or user paths. Each event gets a random identity; person profiles and
 geolocation are disabled. No session replay/usage tracking. The receiving service
 still sees the connection's IP address; transport is not anonymous.
 
+Reports also carry the full compiled `commit_sha`, `build_modified`,
+`package_version`, `release_version`, `channel`, `environment`, `component`,
+`process` and `diagnostics_schema_version`. Packaging supplies public labels through
+`APPARENT_RELEASE_VERSION`, `APPARENT_RELEASE_CHANNEL` (`stable`, `preview` or
+`development`) and `APPARENT_REPORTING_ENVIRONMENT` (`production`, `synthetic` or
+`development`). Mac preview packaging uses the app's preview version; Linux uses
+the release tag or `linux-main-v2-<full SHA>`. Verify-only Linux packaging is
+synthetic. Without packaging metadata, release is `unknown` and channel/environment
+are `development`; the Cargo package version is not substituted for a release.
+These values are frozen at compilation, never read from a user's runtime environment.
+
 Coverage: desktop recording storage/audio/screen/phone startup, capture finalization,
 video export and Rust panics after startup. This is a synthetic call-site frame,
 **not a full unwound stack or native crash dump**. Segfaults, forced exits,
@@ -290,7 +301,11 @@ That mode never creates the onboarding window, admits only fixed permission
 identifiers/actions, closes granted guides, and cleans up guides on pipe closure.
 The Electron pipe carries presentation only. Native fallback remains available;
 its presentation can be removed only after Mac permission/media and isolated
-Linux acceptance. Packaged assets route this workflow to Electron; missing assets, spawn failure
+Linux acceptance. On Linux, onboarding and Storage share the Electron display-backend
+launcher: when GPUI hides `WAYLAND_DISPLAY`, Electron receives
+`--ozone-platform=x11` before its application path. An explicitly retained
+Wayland display is left to Electron. About → Welcome tour and first launch use
+the same route. Packaged assets route this workflow to Electron; missing assets, spawn failure
 or a renderer crash restore the native presentation. During capture, construction
 of a crashed presentation’s native replacement waits until capture ends. The
 first-capture opt-out changes the workflow requirements; it does not select a

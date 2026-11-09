@@ -129,6 +129,69 @@ fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
     setup();
     test_support::hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite();
 }
+
+#[test]
+fn hosted_inspect_command_subprocess() {
+    if let Err(error) = crate::composition::cli::hosted_inspect_command_subprocess() {
+        eprintln!("Error: {error:?}");
+        panic!("inspect command failed");
+    }
+}
+
+fn inspect_manifest() -> Value {
+    serde_json::json!({
+        "version": 1, "id": "synthetic-inspect", "createdAtMs": 0, "durationMs": 4000,
+        "target": {"mode": "display", "displayId": 1,
+                   "frame": {"x": 0.0, "y": 0.0, "width": 32.0, "height": 32.0, "scale": 1.0}},
+        "transcript": {"source": "synthetic", "text": "Synthetic inspect transcript", "segments": []},
+        "strokes": [], "marks": [], "events": [],
+        "keyframes": [{"index": 1, "t": 0, "reason": "initial",
+                      "file": "frames/frame-01.png", "event": "", "said": "Synthetic inspect transcript"}],
+        "contactSheet": "contact-sheet.png", "video": "recording.mov", "audio": "audio.wav"
+    })
+}
+
+fn inspect_subprocess(config: &Path, cwd: &Path, args: &[&str]) -> std::process::Output {
+    // Manual acceptance can run the same scenarios against the rebuilt executable.
+    let mut command = if let Some(binary) = std::env::var_os("APPARENT_TEST_INSPECT_BINARY") {
+        let mut command = std::process::Command::new(binary);
+        command.args(args);
+        command
+    } else {
+        let mut command = std::process::Command::new(std::env::current_exe().unwrap());
+        command.args(["--exact",
+            "connect::hosted::hosted_tests::hosted_inspect_command_subprocess",
+            "--nocapture", "--quiet"])
+            .env("APPARENT_TEST_INSPECT_ARGS",
+                 serde_json::to_string(&[vec!["apparent"], args.to_vec()].concat()).unwrap());
+        command
+    };
+    let mut output = command.current_dir(cwd)
+        .env("APPARENT_CONFIG", config)
+        .env("APPARENT_CAPTURES_DIR", config.parent().unwrap().join("captures"))
+        .env_remove("APPARENT_BENCH_START")
+        .output().unwrap();
+    let stdout = String::from_utf8_lossy(&output.stdout).into_owned();
+    if let Some((_, body)) = stdout.split_once("APPARENT_INSPECT_OUTPUT_BEGIN\n") {
+        if let Some((body, _)) = body.split_once("APPARENT_INSPECT_OUTPUT_END\n") {
+            output.stdout = body.as_bytes().to_vec();
+        }
+    }
+    output
+}
+
+#[test]
+fn hosted_inspect_pending_download_summary_and_local_options() {
+    setup();
+    test_support::inspect_cli_scenario(&inspect_manifest(), inspect_subprocess);
+}
+
+#[test]
+fn hosted_inspect_authorization_and_integrity_failures_publish_nothing() {
+    setup();
+    test_support::inspect_cli_failure_scenario(&inspect_manifest(), inspect_subprocess);
+}
+
 #[test]
 fn hosted_disable_logout_and_quota_preserve_local() {
     setup();

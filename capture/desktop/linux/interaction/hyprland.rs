@@ -57,9 +57,14 @@ fn instance_dir() -> Option<PathBuf> {
 /// One request on Hyprland's command socket, as `hyprctl` sends it (`eval …`, `keyword …`,
 /// `j/binds`).
 fn request(command: &str) -> Result<String> {
+    request_with_timeout(command, Duration::from_secs(5))
+}
+
+fn request_with_timeout(command: &str, timeout: Duration) -> Result<String> {
     let dir = instance_dir().context("Not a Hyprland session")?;
     let mut stream = UnixStream::connect(dir.join(".socket.sock")).context("Hyprland socket")?;
-    stream.set_read_timeout(Some(Duration::from_secs(5)))?;
+    stream.set_read_timeout(Some(timeout))?;
+    stream.set_write_timeout(Some(timeout))?;
     stream.write_all(command.as_bytes())?;
     let mut reply = String::new();
     stream.read_to_string(&mut reply)?;
@@ -408,6 +413,73 @@ pub fn pill_title(xid: u32) -> String {
 
 pub fn note_title(xid: u32) -> String { format!("Apparent notes {xid:x}") }
 
+fn ink_session() -> u64 {
+    static SESSION: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+    *SESSION.get_or_init(|| std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH).unwrap_or_default().as_nanos() as u64)
+}
+
+pub fn ink_title(xid: u32, lifetime: u64, take: bool) -> String {
+    format!("Apparent Ink {} {} {xid:x} {lifetime} {}", std::process::id(), ink_session(), if take { "Draw" } else { "Fade" })
+}
+
+pub fn ink_fade_available() -> bool {
+    matches!(*SYNTAX.lock().unwrap_or_else(std::sync::PoisonError::into_inner), Some(Syntax::Lua))
+}
+
+fn ink_rule_key() -> String {
+    format!("apparent_ink_{}_{}", std::process::id(), ink_session())
+}
+
+/// A pre-map rule, not set_prop: Lua dispatchers silently ignore unmapped
+/// windows. The one owned runtime rule is reused across captures. Generation
+/// guards prevent a delayed registration/cleanup from changing a successor.
+pub fn prepare_ink_rule(xid: u32, lifetime: u64) -> Result<()> {
+    let key = ink_rule_key();
+    let title = ink_title(xid, lifetime, false);
+    let command = format!(
+        "eval local r = _G['{key}']; \
+         if not r or r.generation < {lifetime} then \
+           local rule = hl.window_rule({{ name = '{key}', match = {{ class = '^Apparent$', title = '^{title}$' }}, no_focus = true }}); \
+           r = {{ generation = {lifetime}, closed = false, rule = rule }}; _G['{key}'] = r; \
+         end; assert(r.generation == {lifetime} and not r.closed and r.rule:is_enabled(), 'Ink rule unavailable')"
+    );
+    ink_rule_request(&command)
+}
+
+pub fn disable_ink_rule(lifetime: u64) -> Result<()> {
+    let key = ink_rule_key();
+    let command = format!(
+        "eval local r = _G['{key}']; \
+         if not r or r.generation <= {lifetime} then \
+           if r and r.rule then r.rule:set_enabled(false); assert(not r.rule:is_enabled(), 'Ink rule still enabled') end; \
+           _G['{key}'] = {{ generation = {lifetime}, closed = true, rule = r and r.rule }}; \
+         end"
+    );
+    ink_rule_request(&command)
+}
+
+fn ink_rule_request(command: &str) -> Result<()> {
+    let reply = request_with_timeout(command, Duration::from_millis(200))?;
+    anyhow::ensure!(reply.trim() == "ok", "Hyprland ink: {}", reply.trim());
+    Ok(())
+}
+
+/// Read metadata only: Lua's window dispatcher cannot mutate unmapped windows.
+pub fn ink_title_ready(xid: u32, lifetime: u64, take: bool) -> Result<bool> {
+    let title = ink_title(xid, lifetime, take);
+    let pid = std::process::id();
+    let command = format!(
+        "eval local m = hl.get_windows({{ title = '{title}', mapped = false }}); \
+         assert(#m > 0, 'APPARENT_INK_NOT_READY'); \
+         assert(#m == 1 and m[1].pid == {pid} and m[1].class == 'Apparent' and m[1].xwayland, 'Ink identity changed')"
+    );
+    let reply = request_with_timeout(&command, Duration::from_millis(200))?;
+    if reply.contains("APPARENT_INK_NOT_READY") { return Ok(false); }
+    anyhow::ensure!(reply.trim() == "ok", "Hyprland ink: {}", reply.trim());
+    Ok(true)
+}
+
 /// Override-redirect windows can be visible to X11 but absent from Hyprland's
 /// scene when the output has a nonzero origin. Keep these owned toolbars managed.
 pub fn managed_note_windows() -> bool { matches!(syntax(), Ok(Syntax::Lua)) }
@@ -693,6 +765,7 @@ pub fn watch_reloads(reloaded: impl Fn() + Send + 'static) -> Result<()> {
         .spawn(move || {
             for line in BufReader::new(stream).lines().map_while(Result::ok) {
                 if line.starts_with("configreloaded>>") {
+                    super::overlay::compositor_reloaded();
                     reloaded();
                 }
             }

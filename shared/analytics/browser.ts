@@ -97,7 +97,9 @@ export function startAnalytics(config: AnalyticsConfig) {
     try { const domain = new URL(document.referrer).hostname.replace(/^www\./, ""); if (domain !== location.hostname) source = domain.endsWith(".google.com") || domain === "google.com" ? "google" : [...SOURCES].find(s => domain === s + ".com" || domain === s + ".org") || "other" } catch { /* No referrer. */ }
     if (params.has("utm_source")) source = SOURCES.has(params.get("utm_source") || "") ? params.get("utm_source")! : "other"
     const medium = MEDIUMS.has(params.get("utm_medium") || "") ? params.get("utm_medium")! : "unspecified"
-    send("$pageview", {page: route, acquisition_source: source, acquisition_medium: medium}); lastPage = route
+    // PostHog Web Analytics requires its standard URL properties. Build these
+    // from the approved route, never the raw URL (which can contain secrets).
+    send("$pageview", {$current_url: location.origin + route, $pathname: route, $host: location.host, page: route, acquisition_source: source, acquisition_medium: medium}); lastPage = route
   }
   const host = document.createElement("aside")
   host.setAttribute("aria-label", "Analytics preferences")

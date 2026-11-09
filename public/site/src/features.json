@@ -135,7 +135,7 @@
       "id": "desktop-error-reporting",
       "group": "settings",
       "name": "Technical error reports",
-      "says": "A small General setting controls default-on, content-free desktop failure reports. Requires a packaged EU PostHog project token. Reports contain a static failure category, app build, OS/architecture and source call site, not recordings, logs or raw error text. No session replay or persistent user identity.",
+      "says": "A small General setting controls default-on, content-free desktop failure reports. Requires a packaged EU PostHog project token. Reports contain a static failure category, full compiled commit, release/build and environment, OS/architecture and source call site, not recordings, logs or raw error text. No session replay or persistent user identity.",
       "status": "main",
       "added": "2026-11-02",
       "platforms": ["mac", "linux"],
@@ -175,7 +175,7 @@
       "id": "hosted-sync",
       "group": "delivery",
       "name": "Connect complete-bundle handoff",
-      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text starts with fetch and inspect commands plus a one-line CLI installation fallback, with timestamped words and marks last. Hosted prompts omit local paths and repeated login instructions; unavailable hosted admission keeps local inspection instructions. A separate read login retrieves and validates the complete bundle; failures preserve the local original.",
+      "says": "Explicit upload login queues new GUI captures without waiting for the network. Clipboard text starts with apparent inspect <id>, which fetches the complete bundle to ./<id>.apparent, waits up to 120 seconds for readiness, and prints the existing summary. A one-line CLI installation fallback precedes the timestamped words and marks. Hosted prompts omit local paths and repeated login instructions; unavailable hosted admission keeps local inspection instructions. A separate read login retrieves and validates the complete bundle; failures preserve the local original. Existing output is never overwritten; explicit fetch retains custom destination and wait options.",
       "status": "experiment:hostedSync",
       "added": "2026-10-30",
       "platforms": ["mac", "linux"],
@@ -401,10 +401,10 @@
       "id": "shift-ink",
       "group": "record",
       "name": "Draw with ⇧",
-      "says": "Hold ⇧ and move to draw red ink over any app; it fades after release and is redrawn on the keyframes.",
-      "status": "stable@0.3.4",
+      "says": "Hold ⇧ and move to draw red ink over any app; saved marks retain their semantic geometry and images preserve recorded ink.",
+      "status": "main",
       "platforms": ["mac", "linux"],
-      "note": "On Wayland the Linux preview needs the input group for ink outside its own windows.",
+      "note": "On Wayland the Linux preview needs input-device access for ink outside its own windows. macOS and Hyprland 0.56.2 Lua keep live ink fading after release; KDE Wayland hides it immediately to preserve native-app clicks. Unsupported or failed Hyprland fade policy falls back to hiding. Fresh Hyprland and KDE Wayland screen/area bundles identify captured movie ink to prevent replay; KDE still images reconstruct saved marks. Older bundles retain legacy replay.",
       "shortcuts": [{ "keys": "⇧ + move", "does": "Draw" }],
       "docs": ["README.md#capture-controls"]
     },
@@ -886,6 +886,7 @@
       "group": "agent",
       "name": "Parakeet on device",
       "says": "Transcribes with Hex's Parakeet model, or downloads Apparent's own copy (730 MB) at first launch.",
+      "note": "Apparent's default Unified English model supports English only. Linux pause and whole-WAV recognition request en; appleLocale does not control them. Other languages require an explicitly configured recognizer command; Command/Hex failure falls back to local Parakeet. Non-English Linux runtime acceptance remains open in #1056.",
       "status": "stable@0.3.6",
       "platforms": ["linux"],
       "docs": ["capture/desktop/docs/linux/linux.md"]
@@ -944,12 +945,12 @@
       "id": "smart-routing",
       "group": "delivery",
       "name": "Legacy smart routing (disabled)",
-      "says": "The old routing settings remain readable; the smartRouting experiment no longer sends captures.",
+      "says": "Legacy routing configuration is preserved; the retired smart-routing implementation has been removed.",
       "status": "main",
       "platforms": ["mac"],
       "added": "2026-10-19",
       "config": [{ "key": "routing", "value": "{\"apps\": {…}, \"servers\": {…}}", "does": "Ignored by capture delivery" }],
-      "docs": ["shared/docs/routing.md"]
+      "docs": ["capture/engine/docs/iphone-and-routing.md"]
     },
     {
       "id": "delivery-retries",
@@ -1366,7 +1367,7 @@
     },
     {
       "id": "linux-appimage-updates",
-      "note": "Stable discovery filters published versioned desktop releases by CPU architecture, excluding component artifacts and previews. No compatible stable release is a successful no-update result; network and integrity failures remain errors.",
+      "note": "Stable discovery filters published versioned desktop releases by CPU architecture, excluding component artifacts and previews. Main selects canonical linux-main-v2 releases and excludes legacy compatibility bridges; both channels bound release discovery. Signed exact-tree compatibility releases let legacy Main updaters reach the corrected build. No compatible stable release is a successful no-update result; network and integrity failures remain errors.",
       "group": "install",
       "name": "Linux AppImage update channels",
       "says": "Installed AppImages check at launch and hourly, and stage verified updates for the next launch. Both channels use explicitly published desktop releases; failed checks preserve the installed image. Settings and CLI offer Stable or Main, manual check results and live version status. Update now waits until capture is idle.",
@@ -1407,7 +1408,7 @@
       "status": "main",
       "added": "2026-10-29",
       "platforms": ["mac", "linux"],
-      "note": "Release-baseline candidate; installed Mac audio, focus, packaging and workflow acceptance remain required. Pen color persists and is carried into saved ink and export.",
+      "note": "Release-baseline candidate; installed Mac audio, focus, packaging and workflow acceptance remain required. Pen color persists and is carried into saved ink and export. Linux packaged onboarding follows the parent X11/XWayland backend instead of falling back solely because the session is Wayland.",
       "config": [{ "key": "penColor", "value": "coral|purple|blue|green", "does": "Saved drawing pigment; read at app startup or changed immediately by onboarding" }, { "key": "onboarding", "value": "{…}", "does": "Tour progress; delete it to replay the tour" }],
       "docs": ["README.md#welcome-and-permissions", "capture/desktop/docs/onboarding-and-settings.md"]
     },

@@ -40,6 +40,7 @@ class PreviewReleaseTest(unittest.TestCase):
                 "r = Path(sys.argv[1]) / 'runtime/Electron.app/Contents/MacOS/Electron'\nr.parent.mkdir(parents=True)\nr.write_text('synthetic shared runtime')\n")
             (root / "bin/cargo").write_text(
                 '#!/bin/sh\nmkdir -p target/release\n'
+                'printf "%s\\n" "$APPARENT_RELEASE_VERSION" "$APPARENT_RELEASE_CHANNEL" "$APPARENT_REPORTING_ENVIRONMENT" > target/reporting-identity\n'
                 'printf "test" > target/release/apparent\n'
                 'printf "test" > target/release/apparent-helper\n'
             )
@@ -66,6 +67,8 @@ class PreviewReleaseTest(unittest.TestCase):
             result = subprocess.run(["bash", str(root / "capture/desktop/scripts/packaging/build-mac-preview.sh")],
                                     env=env, capture_output=True, text=True)
             self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((root / "target/reporting-identity").read_text().splitlines(),
+                             ["0.123.2", "preview", "production"])
             info = plistlib.loads((root / "dist/Apparent Preview.app/Contents/Info.plist").read_bytes())
             self.assertEqual(info["CFBundleIdentifier"], "dev.simonvanlaak.apparent.preview")
             self.assertEqual(info["CFBundleShortVersionString"], "0.123.2")
@@ -124,12 +127,11 @@ class PreviewReleaseTest(unittest.TestCase):
         self.assertEqual(hashlib.sha256((ROOT / "capture/desktop/assets/menubar-icon@2x.png").read_bytes()).hexdigest(),
                          "4714f8ebbe8dd7816c7f7ab07ad98daa61fb4eee5fc3ed900af8f012b452dc07")
 
-    def test_helper_embedded_identity_follows_preview_identity(self):
+    def test_packager_requests_isolated_preview_helper_identity(self):
         script = (ROOT / "capture/desktop/scripts/packaging/build-mac-preview.sh").read_text()
-        build = (ROOT / "build.rs").read_text()
         self.assertIn("APPARENT_HELPER_BUNDLE_ID=dev.simonvanlaak.apparent.preview.helper", script)
-        self.assertIn('rerun-if-env-changed=APPARENT_HELPER_BUNDLE_ID', build)
-        self.assertIn('env::var("APPARENT_HELPER_BUNDLE_ID")', build)
+        # Embedded plist bytes, switching identities and cache invalidation are
+        # exercised through the TypeScript build owner in native-build/build.test.ts.
 
     def test_preview_cannot_replace_production_cli_or_login_item(self):
         script = (ROOT / "capture/desktop/scripts/packaging/build-mac-preview.sh").read_text()

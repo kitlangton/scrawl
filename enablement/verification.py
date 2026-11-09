@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Conservative changed-tree verification shared by pre-push and Actions.
 
-Feature pushes and repository CI run contract checks. Full platform verification
-and publication remain manual-only.
+Repository CI runs contract checks. Pre-push owner selection is TypeScript in
+local-tests/run.ts. Ready PRs and main run full platform CI; publication stays manual.
 Explicit local --run retains conservative changed-tree checks.
 Both sides of renames/deletions are included. Missing history broadens checks.
 """
@@ -14,8 +14,8 @@ import stat
 import sys
 from pathlib import Path
 import subprocess
-import signal
-import selectors
+import time
+from datetime import datetime, timezone
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -198,189 +198,120 @@ def check_temp_environment():
 
 def run_pr_checks():
     subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    for pattern in ("test_*push*.py", "test_verification.py", "test_release_gate.py",
-                    "test_temp_preflight.py", "test_owner_lanes.py"):
-        subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                        "-p", pattern], cwd=ROOT, check=True)
+    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                    "-p", "test_*.py"], cwd=ROOT, check=True)
+    subprocess.run(["node", "--experimental-strip-types", "enablement/local-tests/run.ts", "--contracts"],
+                   cwd=ROOT, check=True)
 
 
-def overlap_cargo_test_and_build(test_command, build_command):
-    """Run the ordinary app build as soon as Cargo reports test compilation done."""
-    test_process = build_process = None
-    cancelled = None
-    def _signal(signum, _frame):
-        nonlocal cancelled
-        cancelled = 128 + signum
-    previous = {sig: signal.signal(sig, _signal)
-                for sig in (signal.SIGTERM, signal.SIGHUP, signal.SIGINT)}
-    test_status = build_status = None
-    saw_success = False
-    selector = None
-    buffer = b""
-    stream_open = False
+def observed_compile(command, **kwargs):
+    return observed_run(command, timing_label="rust-test-compilation", **kwargs)
+
+
+def observed_run(command, timing_label=None, **kwargs):
+    """Synthetic timing only; never changes command selection or acceptance."""
+    if command[:3] == ["python3", "-m", "unittest"]:
+        # Time the contract suite here, not its nested disposable verifiers.
+        # Those fixtures must retain their ordinary command inventory and must
+        # not append synthetic observations to the real job's timing artifact.
+        child_env = dict(kwargs.get("env", os.environ))
+        child_env.pop("APPARENT_TIMING_FILE", None)
+        kwargs["env"] = child_env
+    is_cargo = command[0] == "cargo" or command[:4] == ["taskpolicy", "-c", "utility", "cargo"]
+    label = ("rust-build" if is_cargo and "build" in command else
+             "rust-test-execution" if is_cargo and "test" in command else
+             "contract-checks" if command[0] == "python3" else "browser-checks")
+    label = timing_label or label
+    if timing_label is None and is_cargo and "test" in command and os.environ.get("APPARENT_TIMING_FILE"):
+        # Compile the identical test selection first; execution still uses Cargo
+        # and retains every original filter/harness argument.
+        compile_command = command[:command.index("--")] if "--" in command else list(command)
+        compile_command += ["--no-run"]
+        observed_compile(compile_command, **{key: value for key, value in kwargs.items()
+                                          if key not in ("stdout", "text")})
+    started = datetime.now(timezone.utc).isoformat()
+    tick = time.monotonic()
+    status = None
     try:
-        test_process = subprocess.Popen(test_command, cwd=ROOT, stdout=subprocess.PIPE,
-                                        stderr=None, bufsize=0, start_new_session=True)
-        if cancelled is not None:
-            raise SystemExit(cancelled)
-        os.set_blocking(test_process.stdout.fileno(), False)
-        selector = selectors.DefaultSelector()
-        selector.register(test_process.stdout, selectors.EVENT_READ)
-        stream_open = True
-        while stream_open or test_process.poll() is None or (build_process is not None and build_process.poll() is None):
-            if cancelled is not None:
-                raise SystemExit(cancelled)
-            # Poll both processes while waiting for output: test stdout may be
-            # quiet during a long compile and must not hide an early build error.
-            for process, name in ((test_process, "test"), (build_process, "build")):
-                if process is not None and process.poll() is not None:
-                    status = process.returncode
-                    if name == "test": test_status = status
-                    else: build_status = status
-                    if status:
-                        # Preserve diagnostics already available without waiting
-                        # for a potentially quiet test pipe.
-                        if buffer:
-                            print(buffer.decode(errors="replace"), end="", flush=True)
-                            buffer = b""
-                        try:
-                            while True:
-                                tail = os.read(test_process.stdout.fileno(), 65536)
-                                if not tail: break
-                                print(tail.decode(errors="replace"), end="", flush=True)
-                        except BlockingIOError:
-                            pass
-                        raise subprocess.CalledProcessError(status, process.args)
-            ready = selector.select(timeout=0.05)
-            # Cargo descendants can inherit stdout; do not await their EOF.
-            if not ready and stream_open and test_process.poll() is not None:
-                selector.unregister(test_process.stdout)
-                stream_open = False
-                if buffer:
-                    print(buffer.decode(errors="replace"), end="", flush=True)
-                    buffer = b""
-            for key, _ in ready:
-                chunk = os.read(key.fileobj.fileno(), 65536)
-                if not chunk:
-                    selector.unregister(key.fileobj)
-                    stream_open = False
-                    if buffer:
-                        print(buffer.decode(errors="replace"), end="", flush=True)
-                        buffer = b""
-                    continue
-                buffer += chunk
-                lines = buffer.split(b"\n")
-                buffer = lines.pop()
-                for raw_line in lines:
-                    line = raw_line.decode(errors="replace") + "\n"
-                    if not line.strip():
-                        print(line, end="", flush=True)
-                        continue
-                    try:
-                        event = json.loads(line)
-                    except json.JSONDecodeError:
-                        print(line, end="", flush=True)
-                        continue
-                    if not isinstance(event, dict) or "reason" not in event:
-                        print(line, end="", flush=True)
-                        continue
-                    if event.get("reason") == "compiler-message":
-                        rendered = event.get("message", {}).get("rendered")
-                        if rendered:
-                            print(rendered, end="", flush=True)
-                    elif event.get("reason") == "build-finished":
-                        if event.get("success") is not True:
-                            raise RuntimeError("Cargo test build-finished event reported failure")
-                        if not saw_success:
-                            saw_success = True
-                            print("Root test compilation complete; starting required app build alongside test execution",
-                                  flush=True)
-                            build_process = subprocess.Popen(build_command, cwd=ROOT,
-                                                             stdout=None, stderr=None,
-                                                             start_new_session=True)
-                            if cancelled is not None:
-                                raise SystemExit(cancelled)
-                    elif event.get("reason") not in ("compiler-artifact", "build-script-executed"):
-                        print(line, end="", flush=True)
-        if test_status is None:
-            test_status = test_process.wait()
-        if not saw_success:
-            raise RuntimeError("Cargo test did not report build-finished success")
-        if build_process is None:
-            raise RuntimeError("Cargo app build was not started")
-        build_status = build_process.wait()
-        if build_status:
-            raise subprocess.CalledProcessError(build_status, build_process.args)
-        if test_status:
-            raise subprocess.CalledProcessError(test_status, test_process.args)
-        print("Root test harness and required app build both succeeded", flush=True)
+        result = subprocess.run(command, **kwargs)
+        status = result.returncode
+        return result
+    except subprocess.CalledProcessError as error:
+        status = error.returncode
+        raise
     finally:
-        if selector is not None:
-            selector.close()
-        for process in (test_process, build_process):
-            if process is not None:
-                try:
-                    os.killpg(process.pid, signal.SIGKILL)
-                except ProcessLookupError:
-                    pass
-                process.wait()
-        if test_process is not None and test_process.stdout is not None:
-            test_process.stdout.close()
-        for sig, handler in previous.items():
-            signal.signal(sig, handler)
+        output = os.environ.get("APPARENT_TIMING_FILE")
+        if output:
+            try:
+                with open(output, "a") as stream:
+                    stream.write(json.dumps({"schema": 1, "label": label,
+                        "started": started, "elapsed_ms": round((time.monotonic() - tick) * 1000),
+                        "code": status, "sha": os.environ.get("GITHUB_SHA")}) + "\n")
+            except OSError:
+                pass
 
 
-def run_checks(selection, offline=True, overlap_root_build=False):
-    if selection["root"] or selection["engine"]:
+def run_checks(selection, offline=True, execution="full", overlap_root_build=False):
+    """Explicit CI split; ordinary local callers retain the complete inventory."""
+    if execution not in ("full", "portable", "platform"):
+        raise ValueError(f"Unknown execution scope: {execution}")
+    portable = execution != "platform"
+    native = execution != "portable"
+    if native and (selection["root"] or selection["engine"]):
         check_temp_environment()
-    subprocess.run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                    "-p", "test_*push*.py"], cwd=ROOT, check=True)
-    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                    "-p", "test_verification.py"], cwd=ROOT, check=True)
-    subprocess.run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                    "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
+    if portable:
+        observed_run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
+        observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                        "-p", "test_verification.py"], cwd=ROOT, check=True)
+    if native:
+        observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                        "-p", "test_*push*.py"], cwd=ROOT, check=True)
+        observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                        "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
     cargo = ["cargo"]
-    if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
+    if native and subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
     jobs = os.environ.get("T3_BUILD_JOBS", "3")
-    overlap_root_build = overlap_root_build and int(jobs) >= 3
     dependency_mode = "--offline" if offline else "--locked"
-    if selection["root"]:
-        if not overlap_root_build or selection.get("focused"):
-            subprocess.run(cargo + ["build", "-j", jobs, dependency_mode], cwd=ROOT, check=True)
-        if selection.get("focused"):
-            for test_filter in selection["focused"]:
-                result = subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, test_filter,
-                                                "--", "--test-threads=2"], cwd=ROOT,
-                                        stdout=subprocess.PIPE, text=True, check=True)
-                print(result.stdout, flush=True)
-                if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
-                    raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
+    timings = ["--timings"] if os.environ.get("APPARENT_TIMING_FILE") else []
+    if native and selection["root"]:
+        # Only CI opts in. Cargo releases its compilation lock before its
+        # build-finished event; two harness threads then overlap one app worker.
+        overlap = overlap_root_build and jobs.isdigit() and int(jobs) >= 3 and not selection.get("focused")
+        if overlap:
+            commands = {
+                "test": cargo + ["test", "-j", jobs, dependency_mode, *timings,
+                                 "--message-format=json-render-diagnostics", "--", "--test-threads=2"],
+                "build": cargo + ["build", "-j", "1", dependency_mode] + timings,
+            }
+            subprocess.run(["node", "--experimental-strip-types", str(ROOT / "enablement/ci/root.ts"),
+                            json.dumps(commands)], cwd=ROOT, check=True)
         else:
-            if overlap_root_build:
-                # Two harness threads plus one compiler worker keep aggregate
-                # concurrency within the existing three-worker baseline.
-                overlap_cargo_test_and_build(
-                    cargo + ["test", "-j", jobs, dependency_mode,
-                             "--message-format=json-render-diagnostics", "--", "--test-threads=2"],
-                    cargo + ["build", "-j", "1", dependency_mode])
+            observed_run(cargo + ["build", "-j", jobs, dependency_mode] + timings, cwd=ROOT, check=True)
+            if selection.get("focused"):
+                for test_filter in selection["focused"]:
+                    result = observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, test_filter,
+                                                    "--", "--test-threads=2"], cwd=ROOT,
+                                            stdout=subprocess.PIPE, text=True, check=True)
+                    print(result.stdout, flush=True)
+                    if not any(int(n) > 0 for n in re.findall(r"test result: ok\. (\d+) passed", result.stdout)):
+                        raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
             else:
-                subprocess.run(cargo + ["test", "-j", jobs, dependency_mode, "--", "--test-threads=2"], cwd=ROOT, check=True)
-    if selection["engine"]:
+                observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, "--", "--test-threads=2"], cwd=ROOT, check=True)
+    if native and selection["engine"]:
         for command in ("build", "test"):
-            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode]
+            args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + timings
             if command == "test":
                 args += ["--", "--test-threads=2"]
-            subprocess.run(args, cwd=ROOT, check=True)
-    if selection.get("browser"):
+            observed_run(args, cwd=ROOT, check=True)
+    if portable and selection.get("browser"):
         # Use the existing package fixtures, including the separate loopback
         # build. Do not substitute a production artifact with synthetic config.
         browser = ROOT / "connect/web"
         for command in (["bun", "install", "--frozen-lockfile"], ["bun", "run", "build"],
                         ["node", "--test", "test/artifact.test.mjs", "test/closure.test.mjs", "test/routes.test.mjs"],
                         ["node", "scripts/test-browser.mjs"]):
-            subprocess.run(command, cwd=browser, check=True)
+            observed_run(command, cwd=browser, check=True)
 
 
 def main():
@@ -391,8 +322,10 @@ def main():
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
+    parser.add_argument("--execution", choices=("full", "portable", "platform"), default="full",
+                        help="Explicit CI routing; local default runs portable and platform checks")
     parser.add_argument("--overlap-root-build", action="store_true",
-                        help="Start required app build after root test compilation; require both successes")
+                        help="CI: overlap two root test threads with one required app-build worker")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if args.preflight:
@@ -408,7 +341,8 @@ def main():
     if args.pr:
         run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online, overlap_root_build=args.overlap_root_build)
+        run_checks(selection, offline=not args.online, execution=args.execution,
+                   overlap_root_build=args.overlap_root_build)
 
 
 if __name__ == "__main__":

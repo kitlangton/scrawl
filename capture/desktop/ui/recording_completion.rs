@@ -95,6 +95,7 @@ pub(in crate::capture::desktop) fn finalize(
                             .and_then(|p| p.file_name())
                             .map(|p| p.to_string_lossy().into_owned()),
                         video_offset_ms: recording.video_offset_ms,
+                        video_ink: recording.video_ink,
                         strokes,
                         events,
                         interaction_telemetry: None,

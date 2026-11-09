@@ -1622,6 +1622,9 @@ impl SettingsWindow {
             .child(header(theme, "Transcription"))
             .child(group(theme, rows))
             .child(caption(theme, &note, false))
+            .when(LINUX, |pane| pane.child(caption(theme,
+                "Local language: English with Apparent’s default Parakeet model. appleLocale applies only to Apple Speech on Mac. For another language, configure a local transcribeCommand and select Command; its model and language come from your command. If Command or Hex fails, this recording falls back to local Parakeet, whose default model is English-only.",
+                false)))
             .when_some(encoder_warning, |pane, warning| {
                 pane.child(caption(theme, &warning, true))
             })

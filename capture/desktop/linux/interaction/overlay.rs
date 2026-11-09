@@ -9,8 +9,8 @@
 //! (read from the input devices, `super::input`) the overlay takes the pointer itself
 //! (`take_pointer`): the ink follows it, and clicks land on the overlay rather than the app.
 
-use std::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use gpui::{
     Bounds, Context, WindowBackgroundAppearance, WindowBounds, WindowKind, WindowOptions, point,
@@ -18,15 +18,208 @@ use gpui::{
 };
 
 use super::x11;
-use crate::capture::engine::runtime::SharedCaptureTelemetry;
 use crate::capture::desktop::ink_view::{OverlayView, Placement};
+use crate::capture::engine::runtime::SharedCaptureTelemetry;
 
 /// The open overlay's window, for `take_pointer`.
 static OVERLAY: AtomicU32 = AtomicU32::new(0);
 static HIDE_BETWEEN_STROKES: AtomicBool = AtomicBool::new(false);
 static POINTER_TAKEN: AtomicBool = AtomicBool::new(false);
+static NEXT_LIFETIME: AtomicU64 = AtomicU64::new(1);
 /// The input poller and the UI tick both change this window's mapping and input shape.
-static OVERLAY_STATE: Mutex<()> = Mutex::new(());
+#[derive(Default)]
+struct OverlayState {
+    generation: u64,
+    lifetime: u64,
+    compositor_fade: bool,
+    faulted: bool,
+    pending: bool,
+    failed_request: bool,
+    rule_ready: bool,
+}
+
+impl OverlayState {
+    fn acknowledge(
+        &mut self,
+        lifetime: u64,
+        generation: u64,
+        success: bool,
+        take: bool,
+    ) -> Option<bool> {
+        if self.lifetime != lifetime {
+            return None;
+        }
+        if !success {
+            self.faulted = true;
+            self.failed_request = true;
+            self.generation = self.generation.wrapping_add(1);
+            return Some(false);
+        }
+        if self.generation == generation && (!self.faulted || take) {
+            self.failed_request = false;
+            Some(true)
+        } else {
+            None
+        }
+    }
+}
+
+static OVERLAY_STATE: Mutex<OverlayState> = Mutex::new(OverlayState {
+    generation: 0,
+    lifetime: 0,
+    compositor_fade: false,
+    faulted: false,
+    pending: false,
+    failed_request: false,
+    rule_ready: false,
+});
+
+/// Intended pointer capture, not proof of mapping or acquisition. Coordinates
+/// must come from fresh events on this exact window after this generation.
+pub fn pointer_request() -> Option<(u32, u64)> {
+    let state = OVERLAY_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let id = OVERLAY.load(Ordering::Acquire);
+    (id != 0 && POINTER_TAKEN.load(Ordering::Acquire) && !state.failed_request)
+        .then_some((id, state.generation))
+}
+
+enum InkWork {
+    Current,
+    Cleanup(u64),
+}
+
+fn ink_worker() -> Option<&'static flume::Sender<InkWork>> {
+    static WORKER: OnceLock<Option<flume::Sender<InkWork>>> = OnceLock::new();
+    WORKER
+        .get_or_init(|| {
+            let (tx, rx) = flume::unbounded();
+            std::thread::Builder::new()
+                .name("ink-compositor".into())
+                .spawn(move || {
+                    'requests: while let Ok(work) = rx.recv() {
+                        if let InkWork::Cleanup(lifetime) = work {
+                            if let Err(error) = super::hyprland::disable_ink_rule(lifetime) {
+                                crate::capture::engine::runtime::apparent_log(format!(
+                                    "Ink runtime rule cleanup failed: {error:#}"
+                                ));
+                            }
+                            continue;
+                        }
+                        let (id, lifetime, generation, needs_rule) = {
+                            let mut state = OVERLAY_STATE
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if !state.pending || !state.compositor_fade {
+                                continue;
+                            }
+                            state.pending = false;
+                            let take = POINTER_TAKEN.load(Ordering::Acquire);
+                            if state.faulted && !take {
+                                continue;
+                            }
+                            (
+                                OVERLAY.load(Ordering::Acquire),
+                                state.lifetime,
+                                state.generation,
+                                !state.rule_ready && !state.faulted,
+                            )
+                        };
+                        if id == 0 {
+                            continue;
+                        }
+                        let mut result = if needs_rule {
+                            super::hyprland::prepare_ink_rule(id, lifetime)
+                        } else {
+                            Ok(())
+                        };
+                        let take = {
+                            let mut state = OVERLAY_STATE
+                                .lock()
+                                .unwrap_or_else(std::sync::PoisonError::into_inner);
+                            if OVERLAY.load(Ordering::Acquire) != id || state.lifetime != lifetime {
+                                continue;
+                            }
+                            if result.is_ok() && needs_rule {
+                                state.rule_ready = true;
+                            }
+                            if state.generation != generation && result.is_ok() {
+                                continue;
+                            }
+                            let take = POINTER_TAKEN.load(Ordering::Acquire);
+                            if result.is_ok() {
+                                x11::accept_pointer(id);
+                                x11::set_title(id, &super::hyprland::ink_title(id, lifetime, take));
+                            }
+                            take
+                        };
+                        if result.is_ok() {
+                            result = Err(anyhow::anyhow!("Ink title did not become ready"));
+                            for _ in 0..20 {
+                                {
+                                    let state = OVERLAY_STATE
+                                        .lock()
+                                        .unwrap_or_else(std::sync::PoisonError::into_inner);
+                                    if state.lifetime != lifetime || state.generation != generation
+                                    {
+                                        continue 'requests;
+                                    }
+                                }
+                                match super::hyprland::ink_title_ready(id, lifetime, take) {
+                                    Ok(true) => {
+                                        result = Ok(());
+                                        break;
+                                    }
+                                    Ok(false) => {
+                                        std::thread::sleep(std::time::Duration::from_millis(5))
+                                    }
+                                    Err(error) => {
+                                        result = Err(error);
+                                        break;
+                                    }
+                                }
+                            }
+                        }
+                        let mut state = OVERLAY_STATE
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        if OVERLAY.load(Ordering::Acquire) != id {
+                            continue;
+                        }
+                        let take_now = POINTER_TAKEN.load(Ordering::Acquire);
+                        if let Some(visible) =
+                            state.acknowledge(lifetime, generation, result.is_ok(), take_now)
+                        {
+                            x11::set_visible(id, visible);
+                        }
+                        if let Err(error) = result {
+                            crate::capture::engine::runtime::apparent_log(format!(
+                                "Ink fade unavailable; released overlay stays hidden: {error:#}"
+                            ));
+                        }
+                    }
+                })
+                .ok()?;
+            Some(tx)
+        })
+        .as_ref()
+}
+
+/// At most one current-state request is queued, alongside lifetime cleanup.
+fn reconcile_ink(state: &mut OverlayState) {
+    if !state.pending {
+        state.pending = ink_worker().is_some_and(|worker| worker.send(InkWork::Current).is_ok());
+        if !state.pending {
+            state.faulted = true;
+            state.failed_request = true;
+            state.generation = state.generation.wrapping_add(1);
+            crate::capture::engine::runtime::apparent_log(
+                "Ink compositor worker unavailable; live overlay stays hidden",
+            );
+        }
+    }
+}
 
 /// The overlay for one display. Dropping it closes the window.
 pub struct InkOverlay {
@@ -58,8 +251,11 @@ impl InkOverlay {
         // clicks to the focused app when a full-screen notification window sits above them.
         // Keep it mapped only while drawing, so the sharing dialog, the pill and the app
         // underneath stay usable. The bundle still contains the complete ink.
-        let hide_between_strokes =
-            hide_between_strokes(super::super::kde(), super::super::hyprland(), super::super::wayland_session());
+        let hide_between_strokes = hide_between_strokes(
+            super::super::kde(),
+            super::super::hyprland(),
+            super::super::wayland_session(),
+        );
         let handle = cx
             .open_window(
                 WindowOptions {
@@ -83,9 +279,15 @@ impl InkOverlay {
             .ok()
             .flatten()
             .ok_or("The overlay has no X11 window")?;
+        let compositor_fade = super::super::hyprland() && super::hyprland::ink_fade_available();
+        let lifetime = NEXT_LIFETIME.fetch_add(1, Ordering::Relaxed);
+        if compositor_fade {
+            x11::set_title(id, &super::hyprland::ink_title(id, lifetime, true));
+            x11::set_class(id);
+        }
         x11::float(id, rect);
         // KWin rebuilds the input region when a managed window becomes override-redirect.
-        let _state = OVERLAY_STATE
+        let mut state = OVERLAY_STATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         x11::set_click_through(id, true);
@@ -95,6 +297,16 @@ impl InkOverlay {
             x11::set_visible(id, false);
         }
         OVERLAY.store(id, Ordering::Release);
+        state.generation = state.generation.wrapping_add(1);
+        state.lifetime = lifetime;
+        state.compositor_fade = compositor_fade;
+        state.faulted = false;
+        state.pending = false;
+        state.rule_ready = false;
+        state.failed_request = false;
+        if compositor_fade {
+            reconcile_ink(&mut state);
+        }
         Ok(Self { id, placement })
     }
 
@@ -117,7 +329,7 @@ impl InkOverlay {
         let Some(monitor) = super::super::monitor_at(x + w / 2.0, y + h / 2.0) else {
             return false;
         };
-        let _state = OVERLAY_STATE
+        let mut state = OVERLAY_STATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         {
@@ -133,7 +345,15 @@ impl InkOverlay {
                 scale: monitor.scale as f32,
             };
         }
-        x11::place(self.id, monitor.rect);
+        if state.compositor_fade {
+            x11::place_unmapped(self.id, monitor.rect);
+            state.generation = state.generation.wrapping_add(1);
+            state.failed_request = false;
+            reconcile_ink(&mut state);
+        } else {
+            state.generation = state.generation.wrapping_add(1);
+            x11::place(self.id, monitor.rect);
+        }
         // Hyprland remaps moved override-redirect windows. Restore the same input shape and
         // visibility they had before the move; an idle overlay must not swallow pill clicks.
         let taken = POINTER_TAKEN.load(Ordering::Acquire);
@@ -147,7 +367,7 @@ impl InkOverlay {
 
 impl Drop for InkOverlay {
     fn drop(&mut self) {
-        let _state = OVERLAY_STATE
+        let mut state = OVERLAY_STATE
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
         if OVERLAY
@@ -155,6 +375,15 @@ impl Drop for InkOverlay {
             .is_ok()
         {
             POINTER_TAKEN.store(false, Ordering::Release);
+            state.generation = state.generation.wrapping_add(1);
+            if state.compositor_fade {
+                x11::set_visible(self.id, false);
+                if let Some(worker) = ink_worker() {
+                    let _ = worker.send(InkWork::Cleanup(state.lifetime));
+                }
+            }
+            state.compositor_fade = false;
+            state.lifetime = 0;
         }
         x11::request_close(self.id);
     }
@@ -163,17 +392,45 @@ impl Drop for InkOverlay {
 /// Lets the overlay take the pointer (`true`), so XWayland reports where it is, or lets every
 /// click through again.
 pub fn take_pointer(take: bool) {
-    let _state = OVERLAY_STATE
+    let mut state = OVERLAY_STATE
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     let id = OVERLAY.load(Ordering::Acquire);
     if id != 0 {
+        state.generation = state.generation.wrapping_add(1);
+        state.failed_request = false;
+        if state.compositor_fade {
+            // Release input locally before waiting for the compositor. Both
+            // press and release remain unmapped until their policy is accepted.
+            x11::set_visible(id, false);
+        }
         POINTER_TAKEN.store(take, Ordering::Release);
         x11::set_click_through(id, !take);
-        if HIDE_BETWEEN_STROKES.load(Ordering::Acquire) {
+        if state.compositor_fade {
+            reconcile_ink(&mut state);
+        } else if HIDE_BETWEEN_STROKES.load(Ordering::Acquire) {
             x11::set_visible(id, take);
         }
     }
+}
+
+/// A Lua config reload discards runtime rules. Hide first, then establish a new
+/// policy lifetime so old IPC replies cannot expose this surface unprotected.
+pub fn compositor_reloaded() {
+    let mut state = OVERLAY_STATE
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let id = OVERLAY.load(Ordering::Acquire);
+    if id == 0 || !state.compositor_fade {
+        return;
+    }
+    x11::set_visible(id, false);
+    state.generation = state.generation.wrapping_add(1);
+    state.lifetime = NEXT_LIFETIME.fetch_add(1, Ordering::Relaxed);
+    state.rule_ready = false;
+    state.faulted = false;
+    state.failed_request = false;
+    reconcile_ink(&mut state);
 }
 
 fn visible_after_move(hide_between_strokes: bool, pointer_taken: bool) -> bool {
@@ -186,6 +443,46 @@ fn hide_between_strokes(kde: bool, hyprland: bool, wayland: bool) -> bool {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn delayed_compositor_ack_cannot_remap_a_new_shift_transition() {
+        let mut state = super::OverlayState {
+            lifetime: 1,
+            generation: 2,
+            ..Default::default()
+        };
+        assert_eq!(state.acknowledge(1, 1, true, true), None);
+        assert_eq!(
+            state.acknowledge(1, state.generation, true, true),
+            Some(true)
+        );
+        state.generation = 3;
+        assert_eq!(state.acknowledge(1, 2, true, false), None);
+        assert_eq!(state.acknowledge(1, 2, true, true), None);
+    }
+
+    #[test]
+    fn unknown_compositor_mutation_disables_released_remaps_until_reopen() {
+        let mut state = super::OverlayState {
+            lifetime: 1,
+            generation: 2,
+            ..Default::default()
+        };
+        assert_eq!(state.acknowledge(1, 1, false, false), Some(false));
+        assert_eq!(state.generation, 3);
+        assert!(state.failed_request);
+        assert_eq!(state.acknowledge(1, 3, true, false), None);
+        assert_eq!(state.acknowledge(1, 3, true, true), Some(true));
+        assert!(!state.failed_request);
+        state = super::OverlayState {
+            lifetime: 2,
+            generation: 4,
+            ..Default::default()
+        };
+        assert_eq!(state.acknowledge(1, 2, false, false), None);
+        assert!(!state.faulted);
+        assert_eq!(state.acknowledge(2, 4, true, false), Some(true));
+    }
+
     #[test]
     fn picker_overlay_stays_unmapped_when_carried_into_recording() {
         // The picker creates the same overlay before telemetry.active becomes true.

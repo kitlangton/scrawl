@@ -122,7 +122,7 @@ pub fn plan(bundle: &ApparentBundle, video_px: (u32, u32), layers: Layers) -> In
     };
     let vt = |t: u64| t.saturating_sub(offset);
 
-    if layers.ink {
+    if layers.ink && crate::shared::model::VideoInk::replay_video(bundle.video_ink) {
         // A mark's strokes fade together, after the last of them.
         let mut group_end: Vec<u64> = bundle.strokes.iter().map(|s| s.t1).collect();
         for mark in &bundle.marks {
@@ -358,6 +358,42 @@ mod tests {
         (0..30)
             .map(|i| (3_000 + i * 100, 4_000 + (i * 37) % 900, i * 20))
             .collect()
+    }
+
+    #[test]
+    fn captured_video_ink_is_not_replayed_but_clicks_and_semantics_survive() {
+        use crate::shared::model::VideoInk;
+        let mut b = bundle();
+        let ink = stroke(2_000, &drawn());
+        let mut pin = stroke(3_000, &[(5000, 5000, 0)]);
+        pin.pin = Some(1);
+        let mut laser = stroke(4_000, &drawn());
+        laser.laser = true;
+        b.strokes = vec![ink, pin, laser];
+        b.events = vec![InteractionEvent::Click { t: 5_000, x: 0.3, y: 0.4, button: Some("left".into()), label: None, role: None }];
+        let semantic = b.strokes.clone();
+        let layers = Layers { ink: true, clicks: true };
+        let legacy = plan(&b, (1280, 720), layers);
+        assert!(!legacy.strokes.is_empty() && !legacy.pins.is_empty() && !legacy.lasers.is_empty());
+        assert!(serde_json::to_value(&b).unwrap().get("videoInk").is_none());
+        b.video_ink = Some(VideoInk::Captured);
+        let encoded = serde_json::to_value(&b).unwrap();
+        assert_eq!(encoded["videoInk"], "captured");
+        let reloaded: ApparentBundle = serde_json::from_value(encoded).unwrap();
+        let captured = plan(&reloaded, (1280, 720), layers);
+        assert!(captured.strokes.is_empty() && captured.pins.is_empty() && captured.lasers.is_empty());
+        assert_eq!(captured.ripples, legacy.ripples);
+        assert_eq!(reloaded.strokes, semantic);
+        assert!(!VideoInk::replay(b.video_ink));
+        b.video_ink = Some(VideoInk::CapturedVideo);
+        let encoded = serde_json::to_value(&b).unwrap();
+        assert_eq!(encoded["videoInk"], "capturedVideo");
+        let reloaded: ApparentBundle = serde_json::from_value(encoded).unwrap();
+        assert_eq!(plan(&reloaded, (1280, 720), layers), captured);
+        assert_eq!(reloaded.strokes, semantic);
+        assert!(VideoInk::replay(reloaded.video_ink), "KWin still images retain semantic ink replay");
+        b.video_ink = Some(VideoInk::Excluded);
+        assert_eq!(plan(&b, (1280, 720), layers), legacy);
     }
 
     #[test]

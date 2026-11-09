@@ -27,13 +27,61 @@ older client/server source.
 ## Repository checks
 
 `Repository checks` runs automatically on PRs targeting main and main pushes.
-It validates the theme, selector, push-hook, publication-admission contracts and
-workflow syntax with read-only permissions. Feature pushes run the inexpensive
-contracts locally; they do not rebuild the application.
+It is the only automatic workflow: one run per PR open/reopen/commit update
+against main, and one per push to main. It validates the theme, selector,
+push-hook, publication-admission contracts and workflow syntax with read-only
+permissions. Public web verification runs as a reusable job when Public/shared
+web inputs change. The updater harness runs as a reusable job on main pushes
+when its inputs change. Changes to the CI orchestrator select both consumers;
+unavailable diff history selects both rather than skipping checks. Git diffs
+include deleted and renamed source paths. There are no PR-edit or verification
+lifecycle triggers. Superseded PR/main runs coalesce within their own event/ref.
+Neither reusable consumer publishes on an automatic run.
+
+Every non-deletion push runs cheap contracts plus the affected owners' local
+suites, selected by `enablement/local-tests/run.ts` over the full merge-base delta.
+Native-prerequisite, timing, CI routing and local-selector regressions run in the
+cheap contracts in CI and locally. Failed selected commands reject the push.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
-`Linux verification` and `Mac verification` are manual diagnostic entrypoints,
+Preview selection without executing tests:
+`node --experimental-strip-types enablement/local-tests/run.ts --base origin/main --head HEAD`.
+The hook supplies the merge-base; both rename sides and deletions are included.
+Unknown/shared/root-build inputs, missing history and empty deltas select all
+owners. Root documentation alone runs contracts. Tooling changes additionally
+run directory-width tests; Hermes changes run its inspection suite. Public runs
+its standalone verifier. Connect web runs its full package suite and Public
+composition; client changes also run root integration; service changes include
+client, browser, Public and root consumers. Desktop frontend changes run npm tests,
+synthetic Electron smokes (Xvfb on Linux) and conservative root verification.
+Capture script changes also load every tracked Python contract file explicitly
+under Desktop/Agent scripts, including nested packaging and hyphenated Linux tests;
+these run before expensive suites except the CLI integration, which follows the
+root rebuild and receives its exact executable through `APPARENT_BIN`. New enablement test filenames are discovered
+automatically. Other capture changes retain the broad Rust/Engine verifier. Shared UI
+also selects Desktop, service and root integration. Package manifests/lockfiles
+select the entire owner, with locked installs and ordinary build prerequisites.
+Missing tools/packages fail rather than silently skip. Use Node 22.23+ and Bun
+1.3.10 for CI routing and selected web/Public packages. Run hook-backed pushes once through
+`t3-build` on Clanker.
+
+This is owner-level selection, not inferred per-file test coverage. It runs the
+canonical automated local suites; platform-only/ignored native scenarios, release
+and publication checks still require their existing explicit procedures. A Linux
+hook cannot certify macOS behavior. The advisory owner-lane report below remains
+separate; it does not control the enforced hook selection.
+
+The same workflow also calls the full Linux and Mac platform suites on main
+pushes and on non-draft PRs (opened, reopened, updated or marked ready for review).
+Drafts retain inexpensive checks; converting a PR back to draft cancels its
+superseded full run. Each update tests GitHub's proposed merge commit, with
+read-only permissions and no release receipt. These jobs appear directly on the
+PR, so their actual completion is visible without a status reporter or manual
+dispatch. Existing separate manual runs do not substitute for this integrated
+candidate. Publication remains manual and retains its existing admission policy.
+
+`Linux verification` and `Mac verification` remain manual diagnostic entrypoints,
 each coalescing superseded runs within its own platform. Both call the same reusable
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
@@ -197,9 +245,9 @@ Supply a short absolute, user-owned mode-0700 temporary root. Ancestors must be
 root/current-user owned and not group/world writable, except root-owned sticky
 ancestors supported by the Engine. Symlinks are rejected without following them.
 The check diagnoses rather than replaces `TMPDIR`, repairs permissions or deletes
-anything. For an isolated run, create a fresh directory with
-`tempfile.TemporaryDirectory(prefix='.av-', dir=Path.home())`, explicitly pass it
-as child `TMPDIR`, and keep its context alive until all foreground checks exit.
+anything. For an isolated run on Clanker, create a private per-job
+`/tmp/apparent-dev-<job>-<run>/` directory, explicitly pass it as child `TMPDIR`,
+and keep its context alive until all foreground checks exit.
 Retain ownership/cleanup receipts outside that tree for long-running work.
 
 The pathname budget models ordinary `agent_capture` socket fixtures: Linux
@@ -211,8 +259,13 @@ must check their own longer HOME-derived socket paths. Keep hostile/sticky and
 symlink production tests enabled; a friendly preflight environment does not
 replace those assertions.
 
-The CI workflow has separate setup and focused Cargo steps before this verifier;
-those steps are not covered by this verifier entry-point guard. Feature pushes
+The platform workflow checks a private temporary root before its first Cargo
+command. Its Rust/native job also performs the locked frontend install, explicit
+Electron download/resolution and executable/input readiness check before compiling,
+with a five-minute setup deadline. Download archives are cached by OS, architecture
+and frontend lockfile; installed modules and test results are never restored.
+Cold downloads remain required on a cache miss. These prerequisites do not replace
+any Electron/Rust or native GUI assertion. Feature pushes
 and PR CI run its regression tests as part of the cheap contracts; they do not
 require a Rust test environment when no Rust suite is selected. Before any native
 allocation, inspect the exact candidate and real scenario entry point offline:
@@ -280,11 +333,91 @@ other worktrees are untouched. Existing worktrees acquire the hook when they
 integrate this change; frozen evidence checkouts need not be updated. Local hook
 checks do not replace current-main integration and review before merge.
 
-Root platform verification uses `--overlap-root-build`: Cargo must report
-successful test compilation before the required real app build starts. The
-compiled harness runs with two test threads alongside one build worker; both
-must succeed before any bridge/native step runs. Allocations below three
-workers and focused filters retain sequential build/test execution. The helper
-owns both process groups, reaps them on failure/cancellation and preserves Cargo
-diagnostics. This changes scheduling only; full platform tests and release
-receipts remain required.
+## Verification timing diagnostics
+
+Mac verification pins Rust 1.99.1 and checks the disposable Intel hosted runner's
+compiler inventory before dependency-cache restore. Only the known unused 1.98.0
+stable toolchain may be removed; unknown identities fail before mutation. Keep all
+three workspace paths in the Rust cache even if client execution moves jobs:
+Actions cache versions include paths as well as the visible key. Compiler,
+environment and manifest invalidation remain Swatinem defaults. Mac dependency
+caches may save after later native failures on main and feature branches under
+Actions' normal branch isolation. Saving after failure is armed only once the
+changed-tree compilation and tests succeed, avoiding immutable partial seeds
+after compiler/setup failures. Caches never admit verification or publication.
+
+The existing unoptimized-root observation (Mac run 42505355940) restored a 748 MiB
+fallback cache in about 34 seconds and compiled root tests in 3m20s. Main already
+has that profile; this change claims no profile or compatible-hit speedup.
+Pinning prevents future compiler drift, and failure saves can avoid repeated cold
+dependency compilation after a failed run. Those savings are projected, not a
+measured walltime reduction; successful exact-key hits already skip cache saves.
+No main-only save restriction is used, so isolated feature branches can seed caches.
+
+After native prerequisites pass, the prepared Electron download-cache path is
+exported to subsequent job steps. Clean packaging installs reuse that archive
+while retaining the ordinary installer and its checksum/version checks.
+
+Platform Rust jobs retain seven-day observation-only JSONL spans and Cargo HTML
+compiler timings. Spans report elapsed active command time, never CPU time or
+billed savings. Runner queue time is separate: use Actions job queued/started
+timestamps; it is not included in command spans. No queue estimate is inferred
+from workflow walltime. The exact candidate SHA accompanies spans.
+
+The verifier times contracts, application build, test compilation and test
+execution separately. With timing enabled, an identical Cargo test selection is
+compiled with --no-run first; the original Cargo test command then executes in
+full, including its normal incremental compiler check. Compiler HTML describes
+compilation rather than harness execution. Packaging, bridge integration, native
+assertions and native Storage socket/control readiness have named spans.
+Readiness spans can overlap the enclosing native assertion span; do not sum them.
+
+Missing/endless spans mean incomplete observation, never successful acceptance.
+Started commands retain their start record if interrupted; TERM/INT/HUP are
+forwarded and exit status is preserved. Artifact upload is guarded by the timing
+step outcome, runs after failures, and missing diagnostics only warn. Diagnostics
+record no arguments, environment dump, transcript or application data. Existing
+native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
+
+## Portable verification routing
+
+Each platform caller runs portable contracts and the independent Connect web
+artifact/Chromium fixtures in its existing Linux `select` job. Its success is
+a prerequisite of both platform jobs. `--execution portable` runs the theme,
+selector contracts and selected Connect web fixtures; `--execution platform`
+retains push/credential/staging and temporary-filesystem contracts, root and staged Engine Rust suites.
+The ordinary local verifier defaults to `full`, preserving both inventories,
+full-delta selection and unknown-input fallback. No environment variable silently
+changes this split.
+
+Connect Rust/client security, filesystem, credential and staging tests remain on
+both platforms, as do Desktop tests, actual Electron integration, packaging and
+Mac native assertions. Both platform jobs depend on the successful Linux `select`
+prerequisite; portable failures prevent their allocation. This is once per
+platform caller, not reuse of another workflow's results. Reverting the explicit
+routing and workflow
+placement restores the previous duplicate execution.
+
+The supplied six-hour cohort reports Mac changed-tree median 10:16 (n=32) and
+successful whole-run median 21:50 (n=19); these are mixed profiles/cache states.
+Only the portable fraction plus browser setup is projected to leave Mac runner
+time. No measured whole-run savings or queue reduction is established by local
+routing tests. Linux selection now takes longer before native jobs become
+eligible; candidate timings must assess that latency tradeoff separately.
+The disposable Mac Storage fixture waits for real Storage/Retention read receipts
+before its single Change click. Its TypeScript CI driver separates the owned
+Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
+operation. The initial picker and nested Go sheet are distinct readiness phases;
+no mutation, keyboard shortcut or preference write is retried. Existing exact
+PID/window/sheet/control checks, Choose/Cancel/Reset assertions, native consent,
+process cleanup and test deadlines remain required. This is test orchestration,
+not a change to installed Desktop routing or application persistence policy.
+
+## PR verification evidence
+
+The automatic verification status reporter and its `Verification complete` commit
+status have been removed to eliminate repeated GitHub API reconciliation.
+Linux, Mac and Public verification workflows remain available under their existing
+manual triggers. Exact-head verification, independent review, native acceptance
+and publication admission remain required; inspect their workflow evidence
+directly. The retired status is no longer required by branch protection.
