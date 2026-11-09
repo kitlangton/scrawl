@@ -12,10 +12,10 @@ on:
 permissions:
   contents: read
 
-# Checks may coalesce. Manual publication has its own noncancelling lock.
+# Main checks preserve active runs. PR checks may coalesce; publication has its own lock.
 concurrency:
   group: public-${{ github.event_name == 'workflow_dispatch' && 'production' || github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name != 'workflow_dispatch' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   verify:

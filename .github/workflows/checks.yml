@@ -10,9 +10,10 @@ on:
 permissions:
   contents: read
 
+# Main preserves the active run and replaces only pending runs; PR updates supersede active checks.
 concurrency:
   group: repository-checks-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
   # PR checkout is GitHub's proposed merge, so these checks cover integration.

@@ -74,6 +74,9 @@ separate; it does not control the enforced hook selection.
 
 The same workflow also calls the full Linux and Mac platform suites on main
 pushes and on non-draft PRs (opened, reopened, updated or marked ready for review).
+Main pushes preserve the active run and keep only the newest pending run in the
+same concurrency group, including Public checks. PR updates still cancel their
+superseded active run. Manual publication retains its separate noncancelling lock.
 Automatic Mac verification and Mac Hermes inspection wait for successful full
 Linux verification, cheap contracts and Linux Hermes inspection for the same
 candidate. Failed, cancelled or skipped prerequisites prevent Mac allocation.
