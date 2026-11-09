@@ -16,6 +16,11 @@ const full = 'Execute the same changed-tree checks (not GUI acceptance)';
 const cache = 'Retain completed Mac dependency seeds after full verification';
 const linuxBridge = 'Actual Electron to Rust Settings integration (not native GUI proof)';
 const relevant = [preflight, packaging, storage, copy, reference, macBridge, full, cache, linuxBridge];
+const earlyFilters = [
+  'capture::desktop::settings::settings::tests::the_command_line_row_',
+  'capture::desktop::workflow::agent_capture::tests::competing_launches_cannot_remove_the_winning_control_socket',
+  'connect::hosted::hosted_tests::hosted_security_darwin_acl_grants_fail_closed',
+];
 const markers = [...rust.matchAll(/^      - name: (.+)$/gm)];
 const steps = markers.map((match, i) => {
   const body = rust.slice(match.index!, markers[i + 1]?.index ?? rust.length);
@@ -76,12 +81,20 @@ test('security fixtures and required packaging precede serial native checks; ful
   const result = execute(t);
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.executed, relevant.filter(name => name !== linuxBridge));
-  assert.match(result.trace, /hosted_security_darwin_acl_grants_fail_closed -- --exact/);
+  const early = result.trace.split('\n').filter(line => line.startsWith(preflight + '|'));
+  assert.equal(early.length, 1, 'Mac fixtures should share one Cargo freshness/build check');
+  assert.equal(early[0], preflight + '|test -j 3 --locked --timings -- --test-threads=2 ' + earlyFilters.join(' '));
   assert.match(result.trace, /verification\.py --base [a-f0-9]+ --run --online --execution platform/);
   assert.match(result.env, /CACHE_ON_FAILURE=true/);
   for (const name of [storage, copy, reference]) {
     assert.equal(steps.find(step => step.name === name)!.body.includes('continue-on-error'), false);
   }
+});
+test('early Cargo failure prevents packaging, native assertions and cache completion', t => {
+  const result = execute(t, 'macOS', 'test -j 3');
+  assert.equal(result.status, 31);
+  assert.deepEqual(result.executed, [preflight]);
+  assert.doesNotMatch(result.env, /CACHE_ON_FAILURE=true/);
 });
 test('packaging failure cannot enter GUI assertions, ordinary suites or publish partial failure seeds', t => {
   const result = execute(t, 'macOS', 'command.ts packaging ');
@@ -99,7 +112,47 @@ test('Linux retains its required full-build-before-bridge order and never admits
   const result = execute(t, 'Linux');
   assert.equal(result.status, 0, result.stderr);
   assert.deepEqual(result.executed, [preflight, full, linuxBridge]);
+  assert.deepEqual(result.trace.split('\n').filter(line => line.startsWith(preflight + '|')), [
+    preflight + '|test -j 3 --locked ' + earlyFilters[0] + ' -- --test-threads=2',
+    preflight + '|test -j 3 --locked ' + earlyFilters[1] + ' -- --exact',
+  ]);
   assert.doesNotMatch(result.trace, /native-(storage|copy|reference)-assertions|command.ts packaging/);
+});
+
+// Explicit opt-in: cheap contracts must not need Rust or compile the app.
+// Run through t3-build on Clanker. This uses real Cargo/libtest with the actual
+// workflow shell, a cold target and no dependencies/native helpers.
+const cargoFixture = process.env.APPARENT_EARLY_CARGO_FIXTURE === '1' ? test : test.skip;
+cargoFixture('real Cargo ORs every early Mac filter and propagates each assertion failure', t => {
+  const directory = mkdtempSync('/tmp/apparent-dev-early-cargo-');
+  t.after(() => rmSync(directory, {recursive: true, force: true}));
+  const names = [earlyFilters[0] + 'abbreviates_only_paths_inside_home',
+    earlyFilters[0] + 'installs_uninstalls_and_says_why_not', ...earlyFilters.slice(1)].sort();
+  // Merge common namespaces so libtest sees the actual fully qualified names.
+  const tree: any = {};
+  for (const name of names) {
+    const parts = name.split('::'); const leaf = parts.pop()!;
+    let branch = tree;
+    for (const part of parts) branch = branch[part] ??= {};
+    branch[leaf] = `#[test] fn ${leaf}() { assert_ne!(std::env::var("EARLY_FAIL").unwrap_or_default(), "${name}"); }`;
+  }
+  const render = (branch: any): string => Object.entries(branch).map(([key, value]) =>
+    typeof value === 'string' ? value : `mod ${key} { ${render(value)} }`).join('\n');
+  writeFileSync(join(directory, 'Cargo.toml'), '[package]\nname="early-fixture"\nversion="0.0.0"\nedition="2024"\n[lib]\npath="lib.rs"\n');
+  writeFileSync(join(directory, 'Cargo.lock'), 'version = 4\n[[package]]\nname="early-fixture"\nversion="0.0.0"\n');
+  writeFileSync(join(directory, 'lib.rs'), render(tree) + '\n#[test] fn unselected() { panic!("unselected test ran"); }\n');
+  const shell = steps.find(step => step.name === preflight)!.run!
+    .replaceAll('${{ needs.select.outputs.root }}', 'true');
+  for (const failure of ['', ...names]) {
+    const result = spawnSync('bash', ['-e', '-c', shell], {cwd: directory, encoding: 'utf8', timeout: 30_000,
+      env: {...process.env, RUNNER_OS: 'macOS', EARLY_FAIL: failure, CARGO_TARGET_DIR: join(directory, 'target'),
+        CARGO_NET_OFFLINE: 'true', RUSTC_WRAPPER: ''}});
+    assert.equal(result.status, failure ? 101 : 0, result.stdout + result.stderr);
+    const executed = [...result.stdout.matchAll(/^test (\S+) \.\.\. (?:ok|FAILED)$/gm)].map(match => match[1]).sort();
+    assert.deepEqual(executed, names, result.stdout);
+    if (failure) assert.match(result.stdout, /test result: FAILED\. 3 passed; 1 failed;/);
+    else assert.match(result.stdout, /test result: ok\. 4 passed; 0 failed;/);
+  }
 });
 test('Engine-only selections do not launch the application or native controls', t => {
   const result = execute(t, 'macOS', '', 'false');
