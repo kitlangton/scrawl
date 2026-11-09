@@ -2,6 +2,8 @@
 pub(super) mod desktop_completion;
 #[cfg(any(target_os = "linux", target_os = "macos"))]
 pub(super) mod electron_pill;
+#[cfg(target_os = "linux")]
+pub(super) mod controls;
 pub(super) mod lab;
 #[cfg(target_os = "linux")]
 pub(super) mod linux;

@@ -1,5 +1,7 @@
 //! The notes-only Electron surface. Its private pipe exposes no shell or filesystem commands.
 pub(crate) mod audio;
+mod lifecycle;
+pub use lifecycle::{FinishOutcome, FinishResult};
 use crate::capture::engine::runtime::recording::notes::Store;
 use crate::capture::engine::runtime::{LiveOverlayEvent, SharedCaptureTelemetry};
 use anyhow::{Context, Result, ensure};
@@ -58,7 +60,8 @@ enum Message {
     Action(CommandMessage),
     Stop,
     BadgePosition([i32; 4]),
-    Finish(flume::Sender<std::result::Result<(), String>>),
+    Finish,
+    ChildEof,
 }
 pub struct Session {
     sender: flume::Sender<Message>,
@@ -66,6 +69,7 @@ pub struct Session {
     finishing: bool,
     saved_note: Arc<AtomicBool>,
     badge_position: Option<[i32; 4]>,
+    lifecycle: Arc<std::sync::Mutex<lifecycle::Lifecycle>>,
 }
 
 // Chromium can still write its profile during Electron's `quit` event. Rust owns
@@ -153,16 +157,29 @@ impl Session {
         crate::capture::desktop::platform::register_note_surfaces(note_pid);
         let output = child.stdout.take().unwrap();
         let (sender, receiver) = flume::bounded(64);
+        let lifecycle = Arc::new(std::sync::Mutex::new(lifecycle::Lifecycle::default()));
+        let reader_lifecycle = Arc::clone(&lifecycle);
         let reader = sender.clone();
         std::thread::spawn(move || {
             let mut stream = BufReader::new(output);
             loop {
                 let mut line = Vec::new();
                 match std::io::Read::take(&mut stream, 65_537).read_until(b'\n', &mut line) {
-                    Ok(0) | Err(_) => break,
+                    Ok(0) => { let _ = reader.send(Message::ChildEof); return; }
+                    Err(_) => break,
                     Ok(_) if line.len() > 65_536 || !line.ends_with(b"\n") => break,
                     _ => {
-                        if let Ok(action) = serde_json::from_slice(&line) {
+                        if let Ok(action) = serde_json::from_slice::<CommandMessage>(&line) {
+                            {
+                                let mut admission = reader_lifecycle.lock().unwrap();
+                                match &action {
+                                    CommandMessage::Ready => admission.observed_ready(),
+                                    CommandMessage::Draft { .. } | CommandMessage::Save { .. } |
+                                    CommandMessage::Delete { .. } | CommandMessage::Edit { .. } |
+                                    CommandMessage::List => admission.observed_note_request(),
+                                    _ => {},
+                                }
+                            }
                             if reader.send(Message::Action(action)).is_err() {
                                 break;
                             }
@@ -179,6 +196,7 @@ impl Session {
         let stopped = Arc::clone(&stopping);
         let saved_note = Arc::new(AtomicBool::new(false));
         let saved_receipt = Arc::clone(&saved_note);
+        let actor_lifecycle = Arc::clone(&lifecycle);
         std::thread::spawn(move || {
             let mut current = None;
             let mut focus = 0;
@@ -187,11 +205,13 @@ impl Session {
             let mut mode = "badge";
             let mut ready = false;
             let mut own_windows = Vec::new();
-            let mut completion: Option<flume::Sender<std::result::Result<(), String>>> = None;
+            let mut finish_requested = false;
+            let mut child_eof = false;
             let mut finish_deadline = None;
             let mut drained = false;
             let mut badge_position = None;
             let mut failed_writes = std::collections::BTreeSet::new();
+            let mut transport_failed = false;
             #[cfg(target_os = "linux")]
             let mut stack_checked_at = std::time::Instant::now();
             loop {
@@ -215,6 +235,7 @@ impl Session {
                     }
                     Err(_) => break,
                 };
+                if matches!(message, Message::ChildEof) { child_eof = true; break; }
                 if stopped.load(Ordering::Acquire)
                     || matches!(message, Message::Stop)
                     || finish_deadline.is_some_and(|d| std::time::Instant::now() >= d)
@@ -227,12 +248,13 @@ impl Session {
                     ) => Some(*pin),
                     _ => None,
                 };
+                let finish_write = matches!(&message, Message::Finish);
                 let result: Result<()> = (|| {
                     match message {
-                        Message::Stop => return Ok(()),
+                        Message::Stop | Message::ChildEof => return Ok(()),
                         Message::BadgePosition(point) => badge_position = Some(point),
-                        Message::Finish(reply) => {
-                            completion = Some(reply);
+                        Message::Finish => {
+                            finish_requested = true;
                             finish_deadline =
                                 Some(std::time::Instant::now() + std::time::Duration::from_secs(6));
                             write_message(
@@ -253,7 +275,7 @@ impl Session {
                         Message::Action(action) => match action {
                             CommandMessage::Ready => ready = true,
                             CommandMessage::Finished => {
-                                ensure!(completion.is_some(), "Unexpected finish receipt");
+                                validate_finish_receipt(finish_requested)?;
                                 drained = true;
                             }
                             CommandMessage::Outside => {
@@ -308,7 +330,7 @@ impl Session {
                                         && rect[3] <= 8192,
                                     "Invalid notes surface"
                                 );
-                                if completion.is_none()
+                                if !finish_requested
                                     && (mode != "badge" || own_windows.first() != Some(&id))
                                 {
                                     #[cfg(target_os = "linux")]
@@ -340,6 +362,8 @@ impl Session {
                     }
                     Ok(())
                 })();
+                actor_lifecycle.lock().unwrap().observed_actor_result(result.is_err(), ready);
+                if finish_write && result.is_err() { transport_failed = true; }
                 if let Some(pin) = write_pin {
                     if result.is_ok() {
                         failed_writes.remove(&pin);
@@ -364,10 +388,12 @@ impl Session {
                     )
                     .is_err()
                     {
+                        transport_failed = true;
                         break;
                     }
                 }
             }
+            actor_lifecycle.lock().unwrap().seal();
             if !stopped.load(Ordering::Acquire) && !drained {
                 let _ = telemetry
                     .ui_sender
@@ -379,6 +405,7 @@ impl Session {
             while child.try_wait().ok().flatten().is_none() && std::time::Instant::now() < cutoff {
                 std::thread::sleep(std::time::Duration::from_millis(20));
             }
+            let exited_before_termination = child.try_wait().ok().flatten().is_some();
             let _ = child.kill();
             let _ = child.wait();
             drop(profile);
@@ -398,13 +425,8 @@ impl Session {
                 Ordering::AcqRel,
                 Ordering::Acquire,
             );
-            if let Some(reply) = completion {
-                let _ = reply.send(if drained && failed_writes.is_empty() {
-                    Ok(())
-                } else {
-                    Err("Notes did not finish saving; recording assets were retained.".into())
-                });
-            }
+            actor_lifecycle.lock().unwrap().complete(drained, !failed_writes.is_empty() || transport_failed,
+                child_eof && exited_before_termination && !stopped.load(Ordering::Acquire));
         });
         Ok(Self {
             sender,
@@ -412,6 +434,7 @@ impl Session {
             finishing: false,
             saved_note,
             badge_position: None,
+            lifecycle,
         })
     }
     pub fn saved_note_receipt(&self) -> Arc<AtomicBool> {
@@ -435,19 +458,20 @@ impl Session {
         }
     }
 
-    pub fn finish(mut self) -> flume::Receiver<std::result::Result<(), String>> {
-        let (reply, result) = flume::bounded(1);
+    pub fn finish(mut self) -> flume::Receiver<FinishResult> {
+        let result = self.lifecycle.lock().unwrap().finish();
         self.finishing = true;
         let sender = self.sender.clone();
         // A full draft queue must not block the GUI thread. The child barrier orders
         // accepted renderer commands before Finished on the same private stdout pipe.
         std::thread::spawn(move || {
-            let _ = sender.send(Message::Finish(reply));
+            let _ = sender.send(Message::Finish);
         });
         result
     }
     pub fn open(&self, anchor: Anchor) {
-        let _ = self.sender.try_send(Message::Open(anchor));
+        let mut admission = self.lifecycle.lock().unwrap();
+        if admission.admit_open() { let _ = self.sender.try_send(Message::Open(anchor)); }
     }
 }
 impl Drop for Session {
@@ -457,6 +481,47 @@ impl Drop for Session {
         }
         self.stopping.store(true, Ordering::Release);
         let _ = self.sender.try_send(Message::Stop);
+    }
+}
+
+fn validate_finish_receipt(finish_requested: bool) -> Result<()> {
+    ensure!(finish_requested, "Unexpected finish receipt");
+    Ok(())
+}
+
+#[cfg(test)]
+mod startup_protocol_tests {
+    use super::*;
+    #[test]
+    fn unexpected_finished_then_clean_exit_cannot_become_unavailable() {
+        let action: CommandMessage = serde_json::from_slice(br#"{"action":"finished"}"#).unwrap();
+        assert!(matches!(action, CommandMessage::Finished));
+        let result = validate_finish_receipt(false);
+        assert!(result.is_err());
+        for reader_ahead in [false, true] {
+        let mut state = lifecycle::Lifecycle::default();
+        // The reader can observe Ready ahead of the actor; actor ordering still wins.
+        if reader_ahead { state.observed_ready(); }
+        state.observed_actor_result(result.is_err(), false);
+        // Both late Finish and Finish already waiting must retain a real failure.
+        let waiting = state.finish();
+        state.complete(false, false, true);
+        assert!(waiting.recv().unwrap().is_err());
+        assert!(state.finish().recv().unwrap().is_err());
+        // Neither a subsequent valid message nor a drain may erase the violation.
+        state.observed_actor_result(false, false);
+        state.observed_ready();
+        state.complete(true, false, true);
+        assert!(state.finish().recv().unwrap().is_err());
+        }
+    }
+    #[test]
+    fn an_expected_finish_receipt_preserves_normal_drain() {
+        let mut state = lifecycle::Lifecycle::default();
+        state.observed_ready();
+        state.observed_actor_result(validate_finish_receipt(true).is_err(), true);
+        state.complete(true, false, false);
+        assert_eq!(state.finish().recv().unwrap(), Ok(FinishOutcome::Drained));
     }
 }
 
