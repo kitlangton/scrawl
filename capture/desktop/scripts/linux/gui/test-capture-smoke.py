@@ -191,7 +191,7 @@ class CleanupTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
-    def exercise(self, fail=False, pending=False, no_decoder=False):
+    def exercise(self, fail=False, pending=False, no_decoder=False, existing_process=False):
         # Keep paths short, as required by the real Unix control socket contract.
         with tempfile.TemporaryDirectory(prefix='cs-', dir=os.environ.get('TMPDIR')) as directory:
             root = Path(directory)
@@ -207,6 +207,16 @@ class TransportTests(unittest.TestCase):
             systemctl = tools / 'systemctl'
             authority = runtime / 'xauthority'
             authority.write_text('synthetic session authority')
+            guest_process = root / '123'
+            guest_process.mkdir()
+            (guest_process / 'comm').write_text('apparent\n')
+            actual_iterdir = Path.iterdir
+            def guest_entries(path):
+                # This harmless transport fixture has its own synthetic desktop;
+                # unrelated host test processes are not processes in that guest.
+                if path == Path('/proc'):
+                    return iter([guest_process] if existing_process else [])
+                return actual_iterdir(path)
             systemctl.write_text('#!/bin/sh\nprintf "DISPLAY=:synthetic\\nXDG_RUNTIME_DIR=' + str(runtime) +
                                  '\\nXAUTHORITY=' + str(authority) + '\\n"\n')
             systemctl.chmod(0o700)
@@ -223,10 +233,13 @@ class TransportTests(unittest.TestCase):
                 env['PEER_PENDING'] = '1'
             if no_decoder:
                 env['PEER_NO_DECODER'] = '1'
-            with patch.dict(os.environ, env, clear=True):
+            with patch.dict(os.environ, env, clear=True), patch.object(smoke.Path, 'iterdir', guest_entries):
                 recipe = SyntheticRecipe(out, binary, 1)
                 try:
-                    if no_decoder:
+                    if existing_process:
+                        with self.assertRaisesRegex(smoke.Failure, 'existing product process'):
+                            recipe.run()
+                    elif no_decoder:
                         with self.assertRaisesRegex(smoke.Failure, 'H.264 decoder'):
                             recipe.run()
                     elif pending:
@@ -242,6 +255,12 @@ class TransportTests(unittest.TestCase):
             self.assertEqual(recipe.env['XAUTHORITY'], str(authority))
             report = json.loads((out / 'capture-smoke-report.json').read_text())
             self.assertEqual(report['gates']['owned_process_cleanup'], 'PASS', report)
+            if existing_process:
+                self.assertEqual(report['requests'], [])
+                self.assertFalse((out / 'scene.json').exists())
+                self.assertEqual(report['gates']['gui_ready'], 'UNRUN')
+                self.assertEqual(report['gates']['h264_decoder'], 'UNRUN')
+                return
             self.assertFalse((out / '.config/apparent/agent-control/capture.sock').exists())
             self.assertFalse((out / '.config/apparent/launch/open.sock').exists())
             self.assertEqual(report['gates']['selected_target_pixels'], 'UNRUN')
@@ -279,6 +298,9 @@ class TransportTests(unittest.TestCase):
 
     def test_whole_recipe_with_real_harmless_transport(self):
         self.exercise()
+
+    def test_existing_guest_product_stops_before_decoder_scene_or_capture(self):
+        self.exercise(existing_process=True)
 
     def test_missing_decoder_stops_before_scene_gui_or_capture(self):
         self.exercise(no_decoder=True)
