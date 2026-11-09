@@ -100,7 +100,7 @@ export function contractTests(cwd = root): Command[] {
   if (!prerequisites.length) throw Error('Native prerequisite contract inventory is empty');
   return [
     { argv: ['node', '--experimental-strip-types', '--test', 'enablement/local-tests/run.test.ts',
-      ...prerequisites, 'enablement/timing/command.test.ts'], cwd: '.' },
+      ...prerequisites, 'enablement/timing/command.test.ts', 'enablement/timing/mac-cache.test.ts'], cwd: '.' },
     { argv: ['bun', 'test', 'enablement/ci/'], cwd: '.' },
   ];
 }

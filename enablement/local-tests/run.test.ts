@@ -29,7 +29,7 @@ test('prerequisite, CI routing, selector and timing regressions are mandatory ev
   const plan = commands([], 'base', 'head');
   const args = [...plan, ...contractTests()].flatMap(command => command.argv);
   for (const path of ['enablement/prerequisites/native.test.ts',
-    'enablement/timing/command.test.ts', 'enablement/local-tests/run.test.ts']) {
+    'enablement/timing/command.test.ts', 'enablement/timing/mac-cache.test.ts', 'enablement/local-tests/run.test.ts']) {
     assert.ok(args.includes(path), path);
   }
   assert.ok(args.includes('--pr'));
