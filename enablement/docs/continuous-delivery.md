@@ -402,7 +402,8 @@ changes this split.
 
 Connect Rust/client security, filesystem, credential and staging tests remain on
 both platforms, as do Desktop tests, actual Electron integration, packaging and
-Mac native assertions. Both platform jobs depend on the successful Linux `select`
+Mac native assertions when Mac verification is selected (see Portable Settings PR
+verification below). Both platform jobs depend on the successful Linux `select`
 prerequisite; portable failures prevent their allocation. This is once per
 platform caller, not reuse of another workflow's results. Reverting the explicit
 routing and workflow
@@ -431,3 +432,25 @@ Linux, Mac and Public verification workflows remain available under their existi
 manual triggers. Exact-head verification, independent review, native acceptance
 and publication admission remain required; inspect their workflow evidence
 directly. The retired status is no longer required by branch protection.
+
+## Portable Settings PR verification
+
+Ready PRs whose complete base-to-merge delta modifies only the five reviewed
+Settings renderer cards (`storage.tsx`, `retention.tsx`,
+`connect-settings.tsx`, `error-reporting.tsx`, `reference.tsx` in
+`capture/desktop/ui/frontend/src/`) use the existing full Linux verification
+without allocating the Mac platform workflow. When selected, that workflow still
+waits for successful Linux verification, cheap contracts, Linux Hermes inspection
+and selection. Mac Hermes inspection retains its independent Linux-first
+admission. Linux still runs the real Electron
+build and smoke suites. Main pushes, manual Mac verification and Mac publication
+retain full Mac evidence. This is a PR iteration exemption, not native acceptance
+or evidence that Linux proves Mac window behavior.
+
+The exact allowlist lives in `enablement/ci/select.ts`. Empty/unknown deltas,
+additions, deletions, type changes, renames and every other input require Mac verification.
+Shell/preload/bridge contracts, styles, onboarding, notes, shared UI, dependencies,
+native code, packaging and CI changes are outside this exemption. New files are
+not implicitly admitted. Changed native behavior still needs its platform proof.
+Restore unconditional ready-PR Mac admission in `checks.yml` to roll back;
+do not broaden the allowlist without reviewing the new platform boundary.

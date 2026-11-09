@@ -27,8 +27,10 @@ jobs:
 
   macos:
     # Keep scarce Mac runners free until this candidate passes Linux and cheap checks.
-    needs: [linux, contracts, hermes]
-    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
+    needs: [linux, contracts, hermes, select]
+    # Only reviewed Settings renderer-only PR deltas can use Linux evidence.
+    # Main retains Mac verification after all prerequisites succeed.
+    if: github.event_name == 'push' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false && needs.select.outputs.macos != 'false')
     uses: ./.github/workflows/verification-platform.yml
     with:
       runner: macos-15-intel
@@ -38,6 +40,7 @@ jobs:
     if: github.event_name == 'pull_request' || github.event_name == 'push'
     runs-on: ubuntu-24.04
     outputs:
+      macos: ${{ steps.paths.outputs.macos }}
       public: ${{ steps.paths.outputs.public }}
       updater: ${{ steps.paths.outputs.updater }}
     steps:
