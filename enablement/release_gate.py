@@ -9,6 +9,7 @@ import json
 import os
 import re
 import subprocess
+from pathlib import Path
 
 WORKFLOWS = {
     'linux': '.github/workflows/verification.yml',
@@ -42,6 +43,20 @@ def pages(path, fetch):
 def verified_run(repo, sha, platform, run_id, fetch, *, onboarding_candidate=False):
     prefix = f'repos/{repo}'
     workflow = WORKFLOWS[platform]
+    if not onboarding_candidate:
+        cd_runs = ([fetch(f'{prefix}/actions/runs/{run_id}')] if run_id else
+                   pages(f'{prefix}/actions/workflows/checks.yml/runs?head_sha={sha}&branch=main&event=push', fetch))
+        for candidate in sorted(cd_runs, key=lambda run: run['id'], reverse=True):
+            run = fetch(f'{prefix}/actions/runs/{candidate["id"]}')
+            if run['path'] != '.github/workflows/checks.yml':
+                continue
+            jobs = pages(f'{prefix}/actions/runs/{run["id"]}/attempts/{run["run_attempt"]}/jobs', fetch)
+            policy = Path(__file__).resolve().parent / 'ci/release-admission.ts'
+            accepted = subprocess.check_output(
+                ['node', '--experimental-strip-types', str(policy)], text=True,
+                input=json.dumps(dict(run=run, jobs=jobs, repo=repo, sha=sha, platform=platform)))
+            if json.loads(accepted):
+                return
     branch = 't3/onboarding-mac-release-baseline' if onboarding_candidate else 'main'
     events = {'workflow_dispatch'} if onboarding_candidate else {'push', 'workflow_dispatch'}
     if run_id:

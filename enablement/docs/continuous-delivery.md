@@ -119,9 +119,17 @@ Linux/shared and Mac receipts for the same commit. A queued/failed Mac run canno
 hold Linux publication; Linux success cannot authorize a Mac release.
 `enablement/release_gate.py --platform linux|macos` validates the exact caller
 workflow, upstream run/attempt, repository, main branch, SHA and every required job.
-Successful exact-main `workflow_dispatch` receipts are admitted alongside historical
-push receipts; this lets the manual-only verification workflow authorize delivery.
-PR/feature-branch checks, skipped jobs, failed/cancelled runs, legacy combined receipts
+Successful main-push `Continuous delivery` runs now supply publication evidence
+without a second manual verification run. Admission checks the current attempt's
+shared guards, applicable Hermes inspection and actual platform select, Desktop UI, client and Rust jobs; a
+skipped platform (including a documentation-only run) cannot authorize publication.
+A CD run with pending or failed Mac jobs can still admit Linux when all Linux/shared
+jobs passed; cancelled runs are refused. Existing exact-main manual receipts remain accepted for diagnostics
+and recovery. The onboarding branch exception still requires its manual receipts
+and signed candidate; CD cannot authorize that exception.
+New CD evidence policy lives in `enablement/ci/release-admission.ts`; the Python
+entrypoint retains GitHub API plumbing and the existing manual/onboarding policy.
+PR/feature-branch checks, skipped jobs, failed required jobs, cancelled runs, legacy combined receipts
 and another platform's receipt cannot substitute for the required proof.
 
 Automatic stale candidates are skipped before builds. Every downstream checkout
