@@ -44,6 +44,13 @@ and other backend fields never reach the renderer through this state method.
 This observes the **running Rust GUI**, not package metadata or a synthetic backend. It does not make Rust
 independent of the current GUI lifecycle.
 
+Failed state reads return only a bounded classification: native `app_busy` or
+`app_unresponsive`, local request timeout, unsafe endpoint, transport failure,
+or invalid/incomplete response. Unknown backend errors remain `invalid_response`;
+raw replies and native errors are never exposed. The native Storage report retains
+the initial rendered failure without another read, retry, or longer deadline.
+Successful Settings-worker reads do not establish GUI state-queue responsiveness.
+
 Missing/stale sockets are disconnected; unsafe permissions, invalid replies,
 unknown phases and timeouts are errors. The control directory and socket must
 belong to the effective user, be private, and not be symlinks. Nothing creates or
