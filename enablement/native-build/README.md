@@ -19,7 +19,12 @@ canonical `DEVELOPER_DIR` matching the normalized `xcode-select -p` result omits
 symlink, even on warm freshness checks. Both Xcode app roots and Developer paths
 qualify; app-root discovery is explicitly normalized to `Contents/Developer`.
 Mutable aliases retain conservative watches so retargeting them schedules the
-build script even when the environment string is unchanged. Selected Xcode `Info.plist`/`version.plist`, compiler
+build script even when the environment string is unchanged. Developer, compiler
+and SDK discovery traverses symlink targets component by component, including
+intermediate links and parents introduced by those targets. Unresolvable paths
+fail before a receipt is accepted. Selected directory aliases and the containing
+directories of file aliases still receive Cargo's recursive watches; the optimization removes the unrelated global Xcode
+watch, not every directory traversal. Selected Xcode `Info.plist`/`version.plist`, compiler
 executables and SDK settings remain watched and hashed; the selected developer
 path and native environment remain part of receipt identity. Unset, empty,
 relative or mismatched overrides retain the conservative global watch. Invalid

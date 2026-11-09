@@ -358,3 +358,88 @@ for (const kind of ['developer', 'app', 'parent', 'global'] as const) {
       assert.equal(f.count().length, 10);
     });
 }
+
+function checkRetarget(t: Parameters<typeof cargoFixture>[0],
+  prepare: (f: ReturnType<typeof cargoFixture>) => { extra?: Record<string, string>; retarget: () => void }) {
+  const f = cargoFixture(t);
+  const { extra = {}, retarget } = prepare(f);
+  let r = f.cargo(extra);
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(f.count().length, 5);
+  r = f.cargo(extra);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /Fresh native-cache-fixture/);
+  retarget();
+  r = f.cargo(extra);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /Dirty native-cache-fixture/);
+  assert.equal(f.count().length, 10, 'Cargo must schedule validation of the newly selected native inputs');
+  r = f.cargo(extra);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /Fresh native-cache-fixture/);
+  assert.equal(f.count().length, 10);
+}
+
+for (const kind of ['intermediate', 'target-parent', 'target-parent-traversal'] as const) {
+  test(`Cargo tracks developer alias ${kind} resolution`,
+    { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+      checkRetarget(t, f => {
+        const outer = join(f.root, 'outer'), inner = join(f.root, 'inner');
+        const target = (developer: string) => kind === 'target-parent' ? resolve(developer, '..') : developer;
+        symlinkSync(target(f.developer), inner);
+        symlinkSync(kind === 'intermediate' ? 'inner'
+          : kind === 'target-parent' ? 'inner/Developer' : 'inner/../Developer', outer);
+        return { extra: { DEVELOPER_DIR: outer }, retarget: () => {
+          rmSync(inner); symlinkSync(target(f.otherDeveloper), inner);
+        } };
+      });
+    });
+}
+
+function redirectDiscovery(f: ReturnType<typeof cargoFixture>, oldText: string, newText: string) {
+  const path = join(f.root, 'bin/xcrun'), body = readFileSync(path, 'utf8');
+  assert.ok(body.includes(oldText));
+  writeFileSync(path, body.replace(oldText, newText));
+}
+
+test('unresolvable native aliases fail before accepting or replacing a receipt', t => {
+  const f = fixture(t);
+  assert.equal(f.run().status, 0);
+  const receipt = readFileSync(join(f.out, 'native-build.json'), 'utf8');
+  const alias = join(f.root, 'sdk-alias');
+  redirectDiscovery(f, '"$FAKE_ROOT/sdk"', '"$FAKE_ROOT/sdk-alias"');
+  for (const target of ['missing-sdk', 'sdk-alias']) {
+    symlinkSync(target, alias);
+    const failed = f.run();
+    assert.notEqual(failed.status, 0, target);
+    assert.equal(readFileSync(join(f.out, 'native-build.json'), 'utf8'), receipt);
+    assert.equal(f.count().length, 5);
+    rmSync(alias);
+  }
+});
+
+for (const kind of ['tool', 'tool-parent', 'sdk'] as const) {
+  test(`Cargo with canonical developer selection tracks ${kind} aliases`,
+    { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+      checkRetarget(t, f => {
+        const relative = 'Xcode.app/Contents/Developer';
+        let alias: string, replacement: string;
+        if (kind === 'sdk') {
+          f.put(`${relative}/SDKs/old.sdk/SDKSettings.json`, '{"Version":"26.0"}');
+          f.put(`${relative}/SDKs/new.sdk/SDKSettings.json`, '{"Version":"26.1"}');
+          alias = join(f.developer, 'SDKs/MacOSX.sdk');
+          symlinkSync('old.sdk', alias); replacement = 'new.sdk';
+          redirectDiscovery(f, '"$FAKE_ROOT/sdk"', '"$FAKE_ROOT/Xcode.app/Contents/Developer/SDKs/MacOSX.sdk"');
+        } else {
+          f.put(`${relative}/Toolchains/old.xctoolchain/usr/bin/swiftc`, 'old compiler bytes');
+          f.put(`${relative}/Toolchains/new.xctoolchain/usr/bin/swiftc`, 'new compiler bytes');
+          alias = join(f.developer, kind === 'tool' ? 'swiftc' : 'Toolchains/Default.xctoolchain');
+          symlinkSync(kind === 'tool' ? 'Toolchains/old.xctoolchain/usr/bin/swiftc' : 'old.xctoolchain', alias);
+          replacement = kind === 'tool' ? 'Toolchains/new.xctoolchain/usr/bin/swiftc' : 'new.xctoolchain';
+          const tool = kind === 'tool' ? 'swiftc' : 'Toolchains/Default.xctoolchain/usr/bin/swiftc';
+          redirectDiscovery(f, '--find) printf', `--find) if [ "$2" = swiftc ]; then printf '%s\\n' "$FAKE_ROOT/Xcode.app/Contents/Developer/${tool}"; exit; fi; printf`);
+        }
+        return { retarget: () => { rmSync(alias); symlinkSync(replacement, alias); } };
+      });
+    });
+}

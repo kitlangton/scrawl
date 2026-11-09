@@ -1,7 +1,7 @@
 /** Build policy for the existing Mac helper/shaders; Cargo retains native execution. */
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
-import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
+import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readlinkSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
 import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -45,6 +45,32 @@ function regular(path: string) {
   try { return lstatSync(path).isFile(); } catch { return false; }
 }
 function watch(path: string) { console.log(`cargo:rerun-if-changed=${path}`); }
+function selectedPath(path: string) {
+  if (!path) throw new Error('Empty native input path');
+  const canonical = realpathSync.native(path);
+  const pending = (isAbsolute(path) ? path : `${process.cwd()}/${path}`).split('/');
+  let current = '/', links = 0;
+  while (pending.length) {
+    const part = pending.shift()!;
+    if (!part || part === '.') continue;
+    if (part === '..') { current = dirname(current); continue; }
+    const entry = join(current, part);
+    if (lstatSync(entry).isSymbolicLink()) {
+      if (++links > 64) throw new Error('Too many native input symlinks');
+      watch(entry);
+      // For file symlinks Cargo stats the target, so an older replacement can
+      // look fresh. Traversing the containing directory observes the link entry.
+      if (!statSync(entry).isDirectory()) watch(dirname(entry));
+      const target = readlinkSync(entry);
+      if (isAbsolute(target)) current = '/';
+      // Expand before processing '..'; normalizing the whole target first can
+      // erase a symlink component and resolve a different filesystem path.
+      pending.unshift(...target.split('/'));
+    } else current = entry;
+  }
+  if (realpathSync.native(current) !== canonical) throw new Error('Native input changed during selection');
+  return canonical;
+}
 function developerDirectory(selection: string) {
   if (!selection) throw new Error('Empty Xcode developer selection');
   // xcode-select can echo an app-root override. Do not rely on it to append
@@ -70,29 +96,23 @@ export function buildNative(root: string, output: string, architecture: string) 
 
   // Discover the actual selected tools/SDK before looking at any receipt. Neither
   // Cargo's root revision nor a cache file is evidence of compatible native inputs.
-  const developer = realpathSync(developerDirectory(command(['-p'], true, 'xcode-select')));
+  const developer = selectedPath(developerDirectory(command(['-p'], true, 'xcode-select')));
   const explicit = process.env.DEVELOPER_DIR;
   let explicitSelection = false;
-  if (explicit && isAbsolute(explicit)) {
-    try {
-      const path = developerDirectory(explicit);
-      explicitSelection = path === developer && realpathSync(path) === developer;
-    } catch { /* Invalid overrides are still checked by native tool discovery. */ }
+  if (explicit) {
+    const path = developerDirectory(explicit);
+    const canonical = selectedPath(path);
+    explicitSelection = isAbsolute(explicit) && path === developer && canonical === developer;
   }
   // Cargo follows directory symlinks recursively. Restrict the fast path to an
   // absolute canonical selection; aliases (including symlinked parents) can be
   // retargeted without an environment change. Watch their unresolved path too,
   // since the global selector need not point to that alias.
   if (explicit && !explicitSelection && existsSync(explicit)) {
-    const path = explicit.replace(/\/+$/, '') || '/';
-    watch(path);
-    // Watching a child directory does not watch a symlink in its parents.
-    for (let parent = dirname(path); parent !== dirname(parent); parent = dirname(parent)) {
-      if (lstatSync(parent).isSymbolicLink()) watch(parent);
-    }
+    watch(explicit.replace(/\/+$/, '') || '/');
   }
   if (!explicitSelection && existsSync('/var/db/xcode_select_link')) watch('/var/db/xcode_select_link');
-  const sdk = command(['--sdk', 'macosx', '--show-sdk-path'], true);
+  const sdk = selectedPath(command(['--sdk', 'macosx', '--show-sdk-path'], true));
   const identity: unknown[] = [root, output, arch, digest(script), developer,
     command(['--sdk', 'macosx', '--show-sdk-version'], true),
     command(['--sdk', 'macosx', '--show-sdk-build-version'], true), sdk,
@@ -103,7 +123,7 @@ export function buildNative(root: string, output: string, architecture: string) 
     if (regular(path)) { watch(path); identity.push([path, digest(path)]); }
   }
   for (const tool of ['swiftc', 'metal', 'metallib']) {
-    const path = realpathSync(command(tool === 'swiftc' ? ['--find', tool] : ['--sdk', 'macosx', '--find', tool], true));
+    const path = selectedPath(command(tool === 'swiftc' ? ['--find', tool] : ['--sdk', 'macosx', '--find', tool], true));
     watch(path);
     // metallib has no portable version flag; its exact executable bytes bind it.
     identity.push([tool, path, digest(path), tool === 'metallib' ? null
@@ -111,7 +131,7 @@ export function buildNative(root: string, output: string, architecture: string) 
   }
   // Swift's driver invokes a frontend and the platform linker separately.
   for (const tool of ['swift-frontend', 'clang', 'ld']) {
-    const path = realpathSync(command(['--find', tool], true));
+    const path = selectedPath(command(['--find', tool], true));
     watch(path);
     identity.push([tool, path, digest(path)]);
   }
