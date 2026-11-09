@@ -872,6 +872,16 @@ pub struct ApparentCoordinator {
     playback: Option<crate::capture::desktop::playback::Guard>,
     picker_metal_overlay: Option<LaserOverlay>,
     native_pill: Option<crate::capture::desktop::native::pill::NativePill>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    electron_pill: Option<ui::electron_pill::Session>,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    electron_pill_failed: bool,
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    electron_pill_routed: bool,
+    #[cfg(target_os="macos")]
+    electron_pill_exclusions: Vec<u32>,
+    #[cfg(target_os = "linux")]
+    electron_equalizer: InputEqualizer,
     iphone_preview: Option<PhoneSession>,
     island_phase: IslandPhase,
     island_prev_phase: IslandPhase,
@@ -999,6 +1009,16 @@ impl ApparentCoordinator {
             playback: None,
             picker_metal_overlay: None,
             native_pill: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            electron_pill: None,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            electron_pill_failed: false,
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            electron_pill_routed: false,
+            #[cfg(target_os="macos")]
+            electron_pill_exclusions: Vec::new(),
+            #[cfg(target_os = "linux")]
+            electron_equalizer: InputEqualizer::default(),
             iphone_preview: None,
             island_phase: IslandPhase::Hidden,
             island_prev_phase: IslandPhase::Hidden,
@@ -2499,7 +2519,7 @@ impl ApparentCoordinator {
 
     /// Puts the capsule on the pointer's display during screen recording or selection,
     /// else the one under the pointer (the phone mirror places its capsule separately).
-    fn place_capsule(&self) {
+    pub(crate) fn place_capsule(&self) {
         let centre = |[x, y, w, h]: [f64; 4]| [x + w / 2.0, y + h / 2.0];
         let anchor = match self.island_phase {
             IslandPhase::Recording => self
@@ -2513,6 +2533,8 @@ impl ApparentCoordinator {
         let Some(point) = anchor.or_else(crate::capture::engine::runtime::screens::pointer) else {
             return;
         };
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if let Some(session) = &self.electron_pill { session.place(point); }
         match self.native_pill {
             Some(ref pill) => pill.place_on(point),
             None => platform::place_hud_pill(point),
@@ -2548,6 +2570,8 @@ impl ApparentCoordinator {
         if let Some(ref pill) = self.native_pill {
             pill.place_on(centre);
         }
+        #[cfg(any(target_os="macos",target_os="linux"))]
+        if let Some(session)=&self.electron_pill {session.place(centre);}
     }
 
     /// Follow the pointer with Linux controls, not with the capture source. On Mac,
@@ -2583,7 +2607,7 @@ impl ApparentCoordinator {
             self.display_rect = frame.map(|v| v as f32);
             // A manually dragged Linux capsule remains where it was dropped.
             // Continue following with the ink overlay, but leave the pill alone.
-            if !platform::pill_user_moved() {
+            if !platform::pill_user_moved() && !self.electron_pill.as_ref().is_some_and(|s|s.moved()) {
                 self.place_capsule();
             }
         }
@@ -2641,6 +2665,8 @@ impl ApparentCoordinator {
     }
 
     pub(crate) fn ensure_native_pill(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        if self.electron_pill_routed { return; }
         if !crate::shared::handoff::native_pill() || self.native_pill.is_some() {
             return;
         }
@@ -2725,6 +2751,8 @@ impl ApparentCoordinator {
     }
 
     pub(crate) fn sync_native_pill(&mut self) {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        self.sync_electron_pill();
         if self.native_pill.is_some() {
             let snap = self.pill_snapshot();
             if let Some(ref pill) = self.native_pill {
@@ -2919,6 +2947,8 @@ impl ApparentCoordinator {
     /// The UI loop's tick: advances the springs unless a new capsule window awaits its second
     /// frame (`island_await_frame`).
     pub fn island_tick(&mut self, cx: &mut Context<Self>) {
+        #[cfg(any(target_os = "macos", target_os = "linux"))]
+        self.tick_electron_pill(cx);
         self.tick_hosted_sharing(cx);
         #[cfg(any(target_os = "linux", target_os = "macos"))]
         if matches!(self.island_phase, IslandPhase::Recording) {
@@ -2926,6 +2956,9 @@ impl ApparentCoordinator {
         }
         if self.note_ui.is_some() {
             let anchor = self.native_pill.as_ref().and_then(|p| p.note_badge_anchor());
+            #[cfg(any(target_os = "linux", target_os = "macos"))]
+            let anchor = self.electron_pill.as_ref().filter(|_| self.electron_pill_routed)
+                .and_then(|pill| pill.note_badge_anchor()).or(anchor);
             #[cfg(target_os = "linux")]
             let anchor = anchor.or_else(|| platform::note_badge_anchor(self.island_width * self.island_scale, self.island_y + (PILL_WINDOW_H - ISLAND_H * self.island_scale) / 2.0));
             if let (Some(ui), Some(point)) = (self.note_ui.as_mut(), anchor) { ui.position_badge(point); }
@@ -3025,6 +3058,8 @@ impl ApparentCoordinator {
                 .native_pill
                 .as_ref()
                 .map_or_else(pointer_on_hud_pill, |p| p.pointer_on_pill());
+            #[cfg(any(target_os = "macos", target_os = "linux"))]
+            let on_pill = self.electron_pill.as_ref().filter(|s| s.ready()).map_or(on_pill, |s| s.hovered());
             if self.reveal.tick(reveal_clock_ms(), on_pill, activity) {
                 self.play_fold();
             }
@@ -3255,6 +3290,8 @@ impl ApparentCoordinator {
     }
 
     pub fn start_recording_with_target(&mut self, target: TargetInfo, cx: &mut Context<Self>) {
+        #[cfg(any(target_os="macos",target_os="linux"))]
+        self.reconcile_electron_pill();
         if crate::capture::desktop::workflow::shutdown::requested() { return; }
         if crate::capture::engine::runtime::ensure_recording_mode(target.mode).is_err() {
             self.report_window_recording_disabled(cx);
@@ -3331,6 +3368,15 @@ impl ApparentCoordinator {
 
         self.telemetry.set_capture_mode(target.mode);
         self.telemetry.reset_for_session(target.frame);
+        #[cfg(target_os="linux")]
+        if let Some(id)=self.electron_pill.as_ref().and_then(ui::electron_pill::Session::window_number) {
+            self.telemetry.excluded_window_ids.lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner).push(id);
+        }
+        #[cfg(target_os="macos")]
+        self.telemetry.excluded_window_ids.lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .append(&mut self.electron_pill_exclusions);
         // The picker stays open until present_recording_island defers its close.
         // Keep it out of the first ScreenCaptureKit frames after the session reset.
         #[cfg(target_os = "macos")]
@@ -6387,6 +6433,18 @@ fn restack_soon(cx: &mut App) {
 }
 
 fn ensure_hud_pill_open(coord_entity: &Entity<ApparentCoordinator>, cx: &mut App) {
+    #[cfg(any(target_os = "macos", target_os = "linux"))]
+    {
+        coord_entity.update(cx, |coord, _| coord.ensure_electron_pill());
+        if coord_entity.read(cx).electron_pill_routed { return; }
+        // Linux reserves presentation for the launching renderer. The tick
+        // restores GPUI only on a real launch/readiness failure, avoiding a
+        // native pill flashing before the healthy Electron surface arrives.
+        #[cfg(target_os = "linux")]
+        if coord_entity.read(cx).electron_pill.as_ref().is_some_and(|session| session.healthy()) {
+            return;
+        }
+    }
     if crate::shared::handoff::native_pill() {
         let _ = coord_entity.update(cx, |coord, _| {
             coord.ensure_native_pill();
@@ -6764,6 +6822,10 @@ pub fn run_app(
         }
         let has_initial = initial_bundle.is_some();
         let coordinator = cx.new(|_| ApparentCoordinator::new(telemetry, initial_bundle));
+        // Warm the hidden Linux controls before the first capture. Capture
+        // admission and shortcuts do not wait for renderer startup.
+        #[cfg(target_os = "linux")]
+        coordinator.update(cx, |coord, _| coord.ensure_electron_pill());
         set_status_inbox_count(coordinator.read(cx).inbox.len());
         #[cfg(target_os = "macos")]
         let reopen_settings = crate::capture::desktop::sparkle::take_reopen_settings();
