@@ -35,16 +35,18 @@ function fixture(t: { after: (fn: () => void) => void }) {
 set -eu
 test "$1" = -p
 selected=\${DEVELOPER_DIR:-$FAKE_ROOT/selector}
-if [ -d "$selected/Contents/Developer" ]; then selected="$selected/Contents/Developer"; fi
-cd "$selected" || exit 1
-pwd -P
+printf '%s\\n' "$selected"
 `);
   chmodSync(join(root, 'bin/xcode-select'), 0o700);
   put('sdk/SDKSettings.json', '{"Version":"26"}');
   for (const tool of ['swiftc', 'metal', 'metallib', 'swift-frontend', 'clang', 'ld']) put(`bin/${tool}`, `synthetic ${tool} identity`);
   put('bin/xcrun', `#!/bin/sh
 set -eu
-"$FAKE_ROOT/bin/xcode-select" -p >/dev/null
+# Discovery can echo raw or invalid overrides. Model xcrun's validation
+# separately so xcode-select never supplies production normalization for us.
+selected=\${DEVELOPER_DIR:-$FAKE_ROOT/selector}
+if [ -d "$selected/Contents/Developer" ]; then selected="$selected/Contents/Developer"; fi
+test -d "$selected"
 if [ "$1" = --sdk ]; then shift 2; fi
 case "$1" in
   --show-sdk-path) printf '%s\\n' "$FAKE_ROOT/sdk"; exit ;;
@@ -165,7 +167,7 @@ test('only a validated explicit developer selection omits the recursive global w
   const f = fixture(t);
   const globalWatch = `cargo:rerun-if-changed=${join(f.root, 'selector')}`;
   symlinkSync(f.developer, join(f.root, 'developer-alias'));
-  for (const explicit of [f.developer, join(f.root, 'Xcode.app'), join(f.root, 'developer-alias')]) {
+  for (const explicit of [f.developer, join(f.root, 'Xcode.app')]) {
     const r = f.run('x86_64', { DEVELOPER_DIR: explicit });
     assert.equal(r.status, 0, r.stderr);
     assert.ok(!r.stdout.includes(globalWatch), 'explicit selection must not watch the global Xcode tree');
@@ -178,11 +180,42 @@ test('only a validated explicit developer selection omits the recursive global w
     assert.equal(r.status, 0, r.stderr);
     assert.ok(r.stdout.includes(globalWatch), 'unset/empty/relative selection keeps the conservative watch');
   }
+  const alias = join(f.root, 'developer-alias');
+  const aliased = f.run('x86_64', { DEVELOPER_DIR: alias });
+  assert.equal(aliased.status, 0, aliased.stderr);
+  assert.ok(aliased.stdout.includes(`cargo:rerun-if-changed=${alias}`), 'mutable aliases retain a conservative watch on their unresolved path');
   // A successful but mismatched discovery must not authorize dropping the watch.
   f.put('bin/xcode-select', `#!/bin/sh\nprintf '%s\\n' "$FAKE_ROOT/Other.app/Contents/Developer"\n`);
   const r = f.run();
   assert.equal(r.status, 0, r.stderr);
   assert.ok(r.stdout.includes(globalWatch));
+});
+
+test('both Mac workflows export the canonical selection before native builds', t => {
+  const f = fixture(t);
+  for (const [file, job, build, condition] of [
+    ['verification-platform.yml', 'rust', 'cargo ', "runner.os == 'macOS' && needs.select.outputs.root == 'true'"],
+    ['verification-mac.yml', 'onboarding-candidate', 'bash capture/desktop/scripts/packaging/build-mac-preview.sh', null],
+  ] as const) {
+    const workflow = readFileSync(join(repository, '.github/workflows', file), 'utf8');
+    const body = workflow.split(`\n  ${job}:`)[1];
+    assert.ok(body, `${file}: native job exists`);
+    const steps = body.split('      - ');
+    const selection = steps.findIndex(step => step.includes('uses: maxim-lobanov/setup-xcode@v1'));
+    const pin = steps[selection + 1];
+    assert.match(pin, /name: Pin selected Xcode for native builds/);
+    const actualCondition = pin.match(/^        if: (.+)$/m)?.[1] ?? null;
+    assert.equal(actualCondition, condition);
+    assert.ok(body.indexOf(pin) < body.indexOf(build), `${file}: selection reaches native build consumers`);
+    const shell = pin.split('        run: |\n')[1].split('\n').map(line => line.replace(/^          /, '')).join('\n');
+    assert.ok(shell.includes('/usr/bin/xcode-select'), 'use the OS selector, independent of PATH');
+    const environment = join(f.root, `${file}.env`);
+    const r = spawnSync('bash', ['-eu', '-c', shell.replaceAll('/usr/bin/xcode-select', join(f.root, 'bin/xcode-select'))], {
+      env: { ...f.env, DEVELOPER_DIR: f.otherDeveloper, GITHUB_ENV: environment }, encoding: 'utf8',
+    });
+    assert.equal(r.status, 0, r.stderr);
+    assert.equal(readFileSync(environment, 'utf8'), `DEVELOPER_DIR=${f.developer}\n`, 'clear a stale inherited override and publish the canonical global selection for subsequent steps');
+  }
 });
 
 test('invalid developer discovery fails without publishing or replacing a success receipt', t => {
@@ -297,3 +330,31 @@ test('Cargo without an explicit override tracks global selection and preserves r
     assert.equal(r.status, 0, r.stderr);
     assert.equal(f.count().length, 10);
   });
+
+for (const kind of ['developer', 'app', 'parent', 'global'] as const) {
+  test(`Cargo notices retargeting an explicit ${kind} alias without an environment change`,
+    { skip: process.env.APPARENT_NATIVE_CARGO_FIXTURE !== '1' }, t => {
+      const f = cargoFixture(t);
+      const alias = join(f.root, kind === 'global' ? 'selector' : 'developer-alias');
+      const target = (developer: string) => kind === 'app' ? resolve(developer, '../..')
+        : kind === 'parent' ? resolve(developer, '..') : developer;
+      if (kind !== 'global') symlinkSync(target(f.developer), alias);
+      const env = { DEVELOPER_DIR: kind === 'parent' ? join(alias, 'Developer') : alias };
+      let r = f.cargo(env);
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(f.count().length, 5);
+      r = f.cargo(env);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stderr, /Fresh native-cache-fixture/);
+      rmSync(alias);
+      symlinkSync(target(f.otherDeveloper), alias);
+      r = f.cargo(env);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stderr, /Dirty native-cache-fixture/);
+      assert.equal(f.count().length, 10, 'retargeting schedules native identity validation and recompilation');
+      r = f.cargo(env);
+      assert.equal(r.status, 0, r.stderr);
+      assert.match(r.stderr, /Fresh native-cache-fixture/);
+      assert.equal(f.count().length, 10);
+    });
+}

@@ -2,7 +2,7 @@
 import { createHash } from 'node:crypto';
 import { spawnSync } from 'node:child_process';
 import { chmodSync, closeSync, copyFileSync, existsSync, lstatSync, mkdtempSync, openSync, readFileSync, readSync, realpathSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs';
-import { isAbsolute, join, resolve } from 'node:path';
+import { dirname, isAbsolute, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const helperSources = [
@@ -45,6 +45,15 @@ function regular(path: string) {
   try { return lstatSync(path).isFile(); } catch { return false; }
 }
 function watch(path: string) { console.log(`cargo:rerun-if-changed=${path}`); }
+function developerDirectory(selection: string) {
+  if (!selection) throw new Error('Empty Xcode developer selection');
+  // xcode-select can echo an app-root override. Do not rely on it to append
+  // Contents/Developer or validate the directory before xcrun is invoked.
+  const nested = `${selection}/Contents/Developer`;
+  const path = existsSync(nested) && statSync(nested).isDirectory() ? nested : selection;
+  if (!statSync(path).isDirectory()) throw new Error('Xcode developer selection is not a directory');
+  return path;
+}
 
 export function buildNative(root: string, output: string, architecture: string) {
   root = realpathSync(root);
@@ -61,15 +70,27 @@ export function buildNative(root: string, output: string, architecture: string) 
 
   // Discover the actual selected tools/SDK before looking at any receipt. Neither
   // Cargo's root revision nor a cache file is evidence of compatible native inputs.
-  const developer = realpathSync(command(['-p'], true, 'xcode-select'));
+  const developer = realpathSync(developerDirectory(command(['-p'], true, 'xcode-select')));
   const explicit = process.env.DEVELOPER_DIR;
-  const explicitSelection = explicit && isAbsolute(explicit) && [explicit, join(explicit, 'Contents/Developer')].some(path => {
-    try { return statSync(path).isDirectory() && realpathSync(path) === developer; } catch { return false; }
-  });
-  // Cargo follows directory symlinks recursively. Only a validated explicit
-  // selection makes the global selector irrelevant. Keep the conservative watch
-  // for unset/empty/relative/mismatched overrides; xcode-select/xcrun still decide
-  // whether those forms are usable. Accept both app roots and Developer paths.
+  let explicitSelection = false;
+  if (explicit && isAbsolute(explicit)) {
+    try {
+      const path = developerDirectory(explicit);
+      explicitSelection = path === developer && realpathSync(path) === developer;
+    } catch { /* Invalid overrides are still checked by native tool discovery. */ }
+  }
+  // Cargo follows directory symlinks recursively. Restrict the fast path to an
+  // absolute canonical selection; aliases (including symlinked parents) can be
+  // retargeted without an environment change. Watch their unresolved path too,
+  // since the global selector need not point to that alias.
+  if (explicit && !explicitSelection && existsSync(explicit)) {
+    const path = explicit.replace(/\/+$/, '') || '/';
+    watch(path);
+    // Watching a child directory does not watch a symlink in its parents.
+    for (let parent = dirname(path); parent !== dirname(parent); parent = dirname(parent)) {
+      if (lstatSync(parent).isSymbolicLink()) watch(parent);
+    }
+  }
   if (!explicitSelection && existsSync('/var/db/xcode_select_link')) watch('/var/db/xcode_select_link');
   const sdk = command(['--sdk', 'macosx', '--show-sdk-path'], true);
   const identity: unknown[] = [root, output, arch, digest(script), developer,
