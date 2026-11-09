@@ -19,7 +19,7 @@ export async function prepareStorageChange(driver: PickerDriver, path: string) {
   return {beforeGo, goSheet, beforeChoose};
 }
 
-export const panelScript = `
+const pickerScript = `
 on run argv
   set targetPID to (item 1 of argv) as integer
   set operation to item 3 of argv
@@ -158,3 +158,12 @@ on run argv
   end tell
 end run
 `;
+
+// Preserve the last AX query in subprocess stderr when a hosted runner stalls.
+// Only logging is inserted: ownership checks, queries and one-shot mutations
+// remain in the one selector above, with the caller's existing deadline.
+export const panelScript = pickerScript.split('\n').flatMap((line, index) => {
+  const query = /^\s*(set|if)\b/.test(line) &&
+    /\b(application process|windows?|name|role|buttons|sheets|UI elements|position|size|enabled|frontmost|text fields|value)\b/.test(line);
+  return query ? [`${line.match(/^\s*/)![0]}log "AX probe source-line=${index + 1}"`, line] : [line];
+}).join('\n');
