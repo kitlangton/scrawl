@@ -15,6 +15,7 @@ pub(super) fn finish(
         crate::capture::engine::bundle::recover::UNSAFE_VIDEO,
         crate::capture::engine::runtime::audio::persistence::RECORDING,
         IN_PROGRESS,
+        "microphone-off", // Legacy intent is now persisted in apparent.json context.
     ] {
         // Open every marker before unlinking any: a directory/symlink collision
         // must not consume the recipe needed by the next recovery attempt.

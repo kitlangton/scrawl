@@ -201,6 +201,9 @@ impl ScreenCaptureSession {
         excluded_window_ids: Arc<Mutex<Vec<u32>>>,
     ) -> anyhow::Result<Self> {
         super::super::ensure_recording_mode(target.mode)?;
+        if let Some(directory) = video_output_path.as_deref().and_then(std::path::Path::parent) {
+            crate::capture::engine::bundle::recover::adopt_microphone_intent(directory, &target)?;
+        }
         let started_at = Instant::now();
         let stopping = Arc::new(AtomicBool::new(false));
         let urgent_snapshot = Arc::new(AtomicBool::new(true));

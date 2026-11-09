@@ -365,6 +365,8 @@ pub fn finalize_capture_bundle(
         recover::write(
             bundle_dir,
             &recover::Unfinished {
+                context: recover::capture_context(bundle_dir)
+                    .context("Could not persist recovery journal")?,
                 target: target.clone(),
                 duration_ms,
                 video: video_path
@@ -545,6 +547,7 @@ pub fn rebuild_screen_bundle_with(
         Some(video),
         old.note,
         SourceExtras {
+            context: old.context,
             activity: windows::ActivityLog {
                 windows: old.windows,
                 cursor: old.cursor,
@@ -604,10 +607,9 @@ pub fn build_bundle_from_parts(
             }
         }
         let mut extras = extras;
-        if bundle_dir.join("microphone-off").is_file() {
-            extras
-                .context
-                .insert("microphoneCapture".into(), "off".into());
+        // Persisted intent is read before the journal is retired on successful publication.
+        for (key, value) in recover::capture_context(bundle_dir)? {
+            extras.context.entry(key).or_insert(value);
         }
         let total_started = extras
             .timings
@@ -1040,7 +1042,6 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             std::fs::set_permissions(&dir, std::fs::Permissions::from_mode(0o700)).unwrap();
         }
-        publication::write(&dir, "microphone-off", b"").unwrap();
         let mut notes = crate::capture::engine::runtime::recording::notes::Store::new(&dir);
         notes.open(1, 250, 0.3, 0.4).unwrap();
         notes
@@ -1061,6 +1062,7 @@ mod tests {
                 scale: 1.0,
             },
         };
+        assert!(!dir.join("microphone-off").exists());
         let frames = || {
             vec![
                 RgbaFrame::new(0, 32, 32, vec![128; 32 * 32 * 4]),
@@ -1089,6 +1091,7 @@ mod tests {
             None,
             None,
             SourceExtras {
+                context: [("microphoneCapture".into(), "off".into())].into(),
                 autocrop: Some(None),
                 ..Default::default()
             },
@@ -1098,6 +1101,7 @@ mod tests {
         assert!(summary.contains("    Smaller button\n    Keep the label"));
         assert!(!summary.contains("No microphone audio"));
         assert_eq!(bundle.context["microphoneCapture"], "off");
+        assert!(!dir.join(recover::UNFINISHED).exists());
         assert_eq!(
             bundle
                 .events
@@ -1108,6 +1112,8 @@ mod tests {
         );
         let loaded: ApparentBundle =
             serde_json::from_slice(&std::fs::read(dir.join("apparent.json")).unwrap()).unwrap();
+        // Legacy bundles are migrated only after a successful re-publication.
+        publication::write(&dir, "microphone-off", b"").unwrap();
         let (_, rebuilt, _) = build_bundle_from_parts(
             &dir,
             target,
@@ -1124,6 +1130,8 @@ mod tests {
             },
         )
         .unwrap();
+        assert_eq!(rebuilt.context["microphoneCapture"], "off");
+        assert!(!dir.join("microphone-off").exists());
         assert_eq!(
             rebuilt
                 .events

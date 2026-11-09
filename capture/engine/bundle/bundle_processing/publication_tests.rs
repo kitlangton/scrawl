@@ -222,7 +222,7 @@ fn publication_rejects_external_and_symlinked_movies_before_decoder_callback() {
 fn publication_finalizes_durable_typed_notes_with_matching_recovery_journal() {
     let root = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
     publication::Directory::open(&root, true).unwrap();
-    publication::write(&root, "microphone-off", b"").unwrap();
+    recover::record_microphone_off(&root, &target()).unwrap();
     let mut notes = crate::capture::engine::runtime::recording::notes::Store::new(&root);
     notes.open(1, 250, 0.3, 0.4).unwrap();
     notes.save(1, "Keep the original anchor".into()).unwrap();
@@ -272,7 +272,7 @@ fn publication_recovery_reconciles_only_durable_typed_notes_before_journal_valid
         include_bytes!("publication/fixtures/tiny.mp4"),
     )
     .unwrap();
-    publication::write(&root, "microphone-off", b"").unwrap();
+    recover::record_microphone_off(&root, &target()).unwrap();
     let click = InteractionEvent::Click {
         t: 100,
         x: 0.3,
@@ -282,6 +282,7 @@ fn publication_recovery_reconciles_only_durable_typed_notes_before_journal_valid
         button: None,
     };
     let old = recover::Unfinished {
+        context: recover::capture_context(&root).unwrap(),
         target: target(),
         duration_ms: 1000,
         video: Some("recording.mp4".into()),

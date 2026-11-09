@@ -128,6 +128,8 @@ const MAX_VIDEO_OFFSET_MS: u64 = 1_000;
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct Unfinished {
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    pub context: std::collections::BTreeMap<String, String>,
     pub target: TargetInfo,
     pub duration_ms: u64,
     #[serde(default)]
@@ -157,6 +159,47 @@ pub fn write(bundle_dir: &Path, unfinished: &Unfinished) -> Result<()> {
         &serde_json::to_vec(unfinished)?,
     )
     .context("Could not persist recovery journal")
+}
+
+/// Capture intent belongs in the existing journal until the completed manifest takes over.
+pub fn record_microphone_off(bundle_dir: &Path, target: &TargetInfo) -> Result<()> {
+    write_metadata(bundle_dir, UNFINISHED, &serde_json::to_vec(&serde_json::json!({
+        "target": target, "durationMs": 0, "video": VIDEO,
+        "context": {"microphoneCapture": "off"}
+    }))?)
+}
+
+/// Translate the legacy Desktop admission signal before any media worker starts.
+pub fn adopt_microphone_intent(bundle_dir: &Path, target: &TargetInfo) -> Result<()> {
+    if bundle_dir.join("microphone-off").try_exists()? {
+        anyhow::ensure!(
+            crate::capture::engine::bundle::bundle_processing::publication::read_text(bundle_dir, "microphone-off")?.is_empty(),
+            "Invalid legacy microphone intent"
+        );
+        record_microphone_off(bundle_dir, target)?;
+        std::fs::remove_file(bundle_dir.join("microphone-off"))?;
+        std::fs::File::open(bundle_dir)?.sync_all()?;
+    }
+    Ok(())
+}
+
+/// Preserve JSON context through completion/reprocessing; read old marker bundles too.
+pub fn capture_context(bundle_dir: &Path) -> Result<std::collections::BTreeMap<String, String>> {
+    let mut context = std::collections::BTreeMap::new();
+    for name in ["apparent.json", UNFINISHED] {
+        if bundle_dir.join(name).try_exists()? {
+            let metadata: serde_json::Value = serde_json::from_str(
+                &crate::capture::engine::bundle::bundle_processing::publication::read_text(bundle_dir, name)?
+            )?;
+            if let Some(value) = metadata.get("context") {
+                context.extend(serde_json::from_value::<std::collections::BTreeMap<String, String>>(value.clone())?);
+            }
+        }
+    }
+    if bundle_dir.join("microphone-off").is_file() {
+        context.entry("microphoneCapture".into()).or_insert_with(|| "off".into());
+    }
+    Ok(context)
 }
 
 pub fn finished(bundle_dir: &Path) {
@@ -272,6 +315,7 @@ pub fn orphan_recipe(
         .map_or(0, |audio| audio.saturating_sub(video.duration_ms))
         .min(MAX_VIDEO_OFFSET_MS);
     Unfinished {
+        context: Default::default(),
         target: TargetInfo {
             mode: CaptureMode::Display,
             app: None,
@@ -488,6 +532,54 @@ mod tests {
             "video": "recording.mp4",
         }))
         .unwrap()
+    }
+
+    #[test]
+    fn microphone_intent_survives_journal_replacement_and_manifest_handoff() {
+        let dir = temp_dir("microphone-json");
+        record_microphone_off(&dir, &unfinished().target).unwrap();
+        assert!(!dir.join("microphone-off").exists());
+        let mut recipe = unfinished();
+        recipe.context = capture_context(&dir).unwrap();
+        recipe.context.insert("unrelated".into(), "retained".into());
+        write(&dir, &recipe).unwrap();
+        assert_eq!(read(&dir).unwrap().context["microphoneCapture"], "off");
+        write_metadata(&dir, "apparent.json", &serde_json::to_vec(&serde_json::json!({
+            "context": recipe.context
+        })).unwrap()).unwrap();
+        finished(&dir);
+        assert_eq!(capture_context(&dir).unwrap(), recipe.context);
+        assert!(!dir.join(UNFINISHED).exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_microphone_marker_is_fallback_only_and_bad_json_is_not_ignored() {
+        let dir = temp_dir("microphone-legacy");
+        write_metadata(&dir, "microphone-off", b"").unwrap();
+        assert_eq!(capture_context(&dir).unwrap()["microphoneCapture"], "off");
+        write_metadata(&dir, "apparent.json", br#"{"context":{"microphoneCapture":"on"}}"#).unwrap();
+        assert_eq!(capture_context(&dir).unwrap()["microphoneCapture"], "on");
+        write_metadata(&dir, UNFINISHED, b"invalid json").unwrap();
+        assert!(capture_context(&dir).is_err());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
+
+    #[test]
+    fn legacy_admission_is_consumed_into_json_before_media_start() {
+        let dir = temp_dir("microphone-admission");
+        write_metadata(&dir, "microphone-off", b"").unwrap();
+        adopt_microphone_intent(&dir, &unfinished().target).unwrap();
+        assert!(!dir.join("microphone-off").exists());
+        assert_eq!(read(&dir).unwrap().context["microphoneCapture"], "off");
+        // A repeated admission must not replace an existing recovery journal.
+        let before = std::fs::read(dir.join(UNFINISHED)).unwrap();
+        adopt_microphone_intent(&dir, &unfinished().target).unwrap();
+        assert_eq!(std::fs::read(dir.join(UNFINISHED)).unwrap(), before);
+        write_metadata(&dir, "microphone-off", b"unexpected").unwrap();
+        assert!(adopt_microphone_intent(&dir, &unfinished().target).is_err());
+        assert_eq!(std::fs::read(dir.join(UNFINISHED)).unwrap(), before);
+        std::fs::remove_dir_all(dir).unwrap();
     }
 
     #[test]

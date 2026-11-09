@@ -87,6 +87,7 @@ pub(in crate::capture::desktop) fn finalize(
                 crate::capture::engine::bundle::recover::write(
                     &bundle_dir,
                     &crate::capture::engine::bundle::recover::Unfinished {
+                        context: crate::capture::engine::bundle::recover::capture_context(&bundle_dir)?,
                         target: target.clone(),
                         duration_ms,
                         video: recording

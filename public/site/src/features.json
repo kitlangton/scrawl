@@ -122,7 +122,7 @@
         {
           "key": "microphoneEnabled",
           "value": "true",
-          "does": "Set false for intentional silent captures; applies to the next screen capture without changing the selected microphone device"
+          "does": "Set false for intentional silent captures; applies to the next screen capture without changing the selected microphone device. Intent is retained in recovery/manifest JSON without an extra microphone marker file"
         }
       ],
       "note": "Enabled by default. Rust persists notes before acknowledgement. The notes-only Electron surface does not replace the picker, native drawing or the complete recording capsule. Linux display video includes the visible popup, including drafts; unsaved text is excluded from note metadata and summary. Native platform acceptance is required before release.",

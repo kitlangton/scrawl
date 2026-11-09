@@ -302,3 +302,9 @@ microphone grant; set it from the menu or Electron Recording control. Its
 value is sampled at admission, and file edits apply at the next capture. The
 selected microphone and all unrelated config keys remain intact. The saved
 `context.microphoneCapture=off` distinguishes this choice from an audio error.
+It is persisted in the existing `unfinished.json` journal before recording and
+carried into `apparent.json` at completion. Engine consumes the legacy Desktop
+admission marker before media starts; no microphone sidecar remains during recording
+or in completed bundles. The legacy Desktop startup adapter remains until its
+coordinator can be split under the changed-file line limit. Legacy `microphone-off` files remain readable and are removed only
+after successful bundle publication preserves their intent in JSON.
