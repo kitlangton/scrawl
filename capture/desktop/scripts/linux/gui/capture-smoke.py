@@ -92,6 +92,7 @@ class Recipe:
         self.report = {"schema": 1, "proof": "native execution required; synthetic transport tests are not native proof",
                        "gates": {key: "UNRUN" for key in (
                            "environment", "h264_decoder", "scene", "gui_ready", "save_recording", "saved_receipt", "bundle_structure",
+                           "completion_state", "clipboard_handoff", "completion_focus",
                            "cancel_recording", "cancelled_receipt", "cancel_idle", "owned_process_cleanup",
                            "selected_target_pixels", "movie_full_decode", "movie_nonblack_changing",
                            "visual_bundle_review", "shortcut_picker_acceptance", "audio", "cancel_disk_cleanup", "runner_cleanup")},
@@ -270,6 +271,10 @@ class Recipe:
         if scene_job.poll() is not None:
             raise Failure("environment", "synthetic scene exited during recording")
         self.report["stage"] = "saved_receipt"
+        focus_before = None
+        if self.env.get("HYPRLAND_INSTANCE_SIGNATURE"):
+            focus_before = json.loads(subprocess.run(["hyprctl", "activewindow", "-j"],
+                env=self.env, check=True, capture_output=True, text=True, timeout=5).stdout)
         value = self.command("stop", owned, "--wait", "--timeout", "60", timeout=66)
         saved = receipt(value, owned, "saved")
         if receipt(self.command("inspect", owned), owned, "saved") != saved:
@@ -293,6 +298,35 @@ class Recipe:
         if not any(name.startswith("frames/") and name.endswith(".png") for name in files) or not any(name in files for name in ("recording.mp4", "recording.mov")):
             raise Failure("product", "saved bundle missing frames or movie")
         self.report["gates"]["bundle_structure"] = "PASS"
+        # A saved Agent receipt intentionally precedes the headless handoff.
+        # Wait for its consumer before starting the next capture, which revokes it.
+        self.report["stage"] = "completion_state"
+        self.wait(lambda: state(self.command("state")) == {"phase": "completed", "capture_id": None},
+                  15, "saved capture did not reach completed presentation")
+        self.report["gates"]["completion_state"] = "PASS"
+        if focus_before is not None:
+            self.report["stage"] = "clipboard_handoff"
+            types = subprocess.run(["wl-paste", "--list-types"], env=self.env, check=True,
+                                   capture_output=True, text=True, timeout=5).stdout
+            (self.out / "completion-clipboard-types.txt").write_text(types)
+            if not any(mime.startswith("text/plain") for mime in types.splitlines()):
+                raise Failure("product", "saved handoff did not offer text on the native clipboard")
+            text = subprocess.run(["wl-paste", "--no-newline", "--type", "text"], env=self.env,
+                                  check=True, capture_output=True, text=True, timeout=5).stdout
+            (self.out / "completion-clipboard.txt").write_text(text)
+            if saved not in text:
+                raise Failure("product", "clipboard does not name the exact saved capture")
+            self.report["gates"]["clipboard_handoff"] = "PASS"
+            self.report["stage"] = "completion_focus"
+            focus_after = json.loads(subprocess.run(["hyprctl", "activewindow", "-j"],
+                env=self.env, check=True, capture_output=True, text=True, timeout=5).stdout)
+            self.report["completion_focus"] = {"before": focus_before, "after": focus_after}
+            if not focus_before.get("address") or focus_before.get("address") != focus_after.get("address"):
+                raise Failure("product", "completion changed the foreground window")
+            self.report["gates"]["completion_focus"] = "PASS"
+            subprocess.run(["grim", str(self.out / "completion-desktop.png")],
+                           env=self.env, check=True, capture_output=True, timeout=5)
+        self.save()
         owned = self.start("cancel")
         time.sleep(2)
         self.report["stage"] = "cancelled_receipt"

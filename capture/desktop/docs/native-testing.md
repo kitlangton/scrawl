@@ -8,6 +8,12 @@ screen capture, then starts and cancels a second. Both requests use persisted,
 There is no messaging, paste into a composer, audio playback, tray targeting,
 OCR, simulated picker clicks or acknowledgement protocol.
 
+After the saved receipt, the scenario waits separately for completed presentation
+before admitting the cancel take. On Hyprland it also reads the native clipboard,
+requires the exact saved bundle path, checks that foreground focus is unchanged,
+and retains `completion-desktop.png` for visual pill inspection. Other desktops
+leave those clipboard/focus gates unrun. The Agent receipt alone is not handoff proof.
+
 ## Source-backed limits
 
 At baseline `6f043ff4ab4f4bdfa7e180c97ef7c37a397ff2ef`,
