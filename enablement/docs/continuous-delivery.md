@@ -304,6 +304,29 @@ checks do not replace current-main integration and review before merge.
 
 ## Verification timing diagnostics
 
+Mac verification pins Rust 1.99.1 and checks the disposable Intel hosted runner's
+compiler inventory before dependency-cache restore. Only the known unused 1.98.0
+stable toolchain may be removed; unknown identities fail before mutation. Keep all
+three workspace paths in the Rust cache even if client execution moves jobs:
+Actions cache versions include paths as well as the visible key. Compiler,
+environment and manifest invalidation remain Swatinem defaults. Mac dependency
+caches may save after later native failures on main and feature branches under
+Actions' normal branch isolation. Saving after failure is armed only once the
+changed-tree compilation and tests succeed, avoiding immutable partial seeds
+after compiler/setup failures. Caches never admit verification or publication.
+
+The existing unoptimized-root observation (Mac run 42505355940) restored a 748 MiB
+fallback cache in about 34 seconds and compiled root tests in 3m20s. Main already
+has that profile; this change claims no profile or compatible-hit speedup.
+Pinning prevents future compiler drift, and failure saves can avoid repeated cold
+dependency compilation after a failed run. Those savings are projected, not a
+measured walltime reduction; successful exact-key hits already skip cache saves.
+No main-only save restriction is used, so isolated feature branches can seed caches.
+
+After native prerequisites pass, the prepared Electron download-cache path is
+exported to subsequent job steps. Clean packaging installs reuse that archive
+while retaining the ordinary installer and its checksum/version checks.
+
 Platform Rust jobs retain seven-day observation-only JSONL spans and Cargo HTML
 compiler timings. Spans report elapsed active command time, never CPU time or
 billed savings. Runner queue time is separate: use Actions job queued/started

@@ -131,9 +131,17 @@ jobs:
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - uses: dtolnay/rust-toolchain@stable
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
+        with:
+          # Keep the Mac cache compiler stable across hosted-image updates.
+          toolchain: ${{ runner.os == 'macOS' && '1.99.1' || 'stable' }}
+      - name: Normalize the disposable Intel Mac compiler inventory
+        if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
+        uses: ./.github/actions/mac-rust-cache
       - uses: Swatinem/rust-cache@v2
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
+          # Cache versions include the entire path inventory. Retain the client
+          # path even when its execution moves to an independently required job.
           workspaces: |
             . -> target
             capture/engine -> target
@@ -146,6 +154,7 @@ jobs:
         id: timing
         run: |
           node --experimental-strip-types --test enablement/timing/command.test.ts
+          node --experimental-strip-types --test enablement/timing/mac-cache.test.ts
           echo "APPARENT_TIMING_FILE=$RUNNER_TEMP/verification-timings.jsonl" >> "$GITHUB_ENV"
           touch "$RUNNER_TEMP/verification-timings.jsonl"
       - name: Prepare private temporary root before first Cargo
@@ -171,6 +180,8 @@ jobs:
           npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
           node capture/desktop/ui/frontend/node_modules/electron/install.js
           node --experimental-strip-types enablement/prerequisites/native.ts
+          # Later clean packaging installs must use the archive prepared here.
+          printf 'electron_config_cache=%s\n' "$electron_config_cache" >> "$GITHUB_ENV"
       - name: Verify the independent Connect client package
         if: needs.select.outputs.root == 'true'
         run: |
@@ -202,6 +213,12 @@ jobs:
           fi
           BASE=$(git hash-object -t tree /dev/null)
           python3 enablement/verification.py --base "$BASE" --run --online --execution platform
+      - name: Retain completed Mac dependency seeds after later native failures
+        if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
+        # Swatinem's post action reads this variable. Arm it only after all
+        # ordinary compilation/tests pass: an immutable partial seed cannot be
+        # completed on an exact cache hit. Branch cache access stays unchanged.
+        run: echo 'CACHE_ON_FAILURE=true' >> "$GITHUB_ENV"
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
