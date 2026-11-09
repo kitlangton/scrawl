@@ -1,6 +1,10 @@
 if(process.argv.includes('--onboarding')) { require('./onboarding.cjs'); } else {
 const { app, BrowserWindow, dialog, ipcMain, Menu, session, shell, nativeTheme } = require('electron');
 const os = require('node:os');
+let exitWithReports = code => app.exit(code);
+if (process.env.APPARENT_DESKTOP_REPORTING === '1') {
+  exitWithReports = require('../dist/assets/reporting.cjs').install(app, kind => require('./runtime.cjs').reportException(os.homedir(), kind));
+}
 const {PublicShare} = require('./public-share.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
@@ -48,7 +52,7 @@ app.whenReady().then(() => {
   const failSettings = () => {
     settingsFailed = settingsClosing = true;
     clearTimeout(startupTimer);
-    app.exit(1);
+    exitWithReports(1);
   };
   const showSettings = () => {
     if (!settingsPainted || !settingsMounted || settingsClosing || window.isDestroyed()) return;

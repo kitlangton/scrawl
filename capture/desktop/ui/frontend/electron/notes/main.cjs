@@ -1,5 +1,9 @@
-// Only Rust's private inherited stdin supplies capture state. Never opens a socket or backend.
+// Only Rust's private inherited stdin supplies capture state. Technical failures
+// may use the same-user reporting socket; it cannot issue capture commands.
 const { app, BrowserWindow, ipcMain, screen, session, nativeTheme } = require('electron');
+if (process.env.APPARENT_DESKTOP_REPORTING === '1') {
+  require('../../dist/assets/reporting.cjs').install(app, kind => require('../runtime.cjs').reportException(require('node:os').homedir(), kind));
+}
 const path = require('node:path');
 const fs = require('node:fs');
 const suppliedProfile = process.argv.find(v => v.startsWith('--notes-profile='))?.slice('--notes-profile='.length);

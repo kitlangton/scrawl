@@ -64,6 +64,7 @@ pub(super) fn open(events: Arc<dyn Fn(Event) + Send + Sync>) -> anyhow::Result<T
 /// XWayland choice, while preserving an explicitly retained Wayland display.
 fn renderer_command(runtime: PathBuf, app: PathBuf) -> Command {
     let mut command = Command::new(runtime);
+    crate::capture::desktop::workflow::error_reporting::configure_child(&mut command);
     if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() {
         command.arg("--ozone-platform=x11");
     }
@@ -112,6 +113,10 @@ mod tests {
             (onboarding_command("/runtime/electron".into(), "/settings/app".into()), vec!["--onboarding"]),
         ] {
             assert_eq!(child.get_program(), "/runtime/electron");
+            if cfg!(debug_assertions) {
+                assert!(child.get_envs().any(|(key, value)| key == "APPARENT_DESKTOP_REPORTING" && value == Some(std::ffi::OsStr::new("0"))),
+                    "development Settings and onboarding must disable inherited reporting admission");
+            }
             let args: Vec<_> = child.get_args().map(|arg| arg.to_str().unwrap()).collect();
             let mut expected = vec![];
             if cfg!(target_os = "linux") && std::env::var_os("WAYLAND_DISPLAY").is_none() {

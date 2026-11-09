@@ -46,6 +46,9 @@ module.exports={project,actions,coachDimensions,setupDimensions,nativeRectangle,
 if(!process.versions.electron) return;
 const { app, BrowserWindow, ipcMain, screen, session } = require('electron');
 const {removeCompositorBorder}=require('../dist/onboarding-hyprland.cjs');
+if (process.env.APPARENT_DESKTOP_REPORTING === '1') {
+  require('../dist/assets/reporting.cjs').install(app, kind => require('./runtime.cjs').reportException(require('node:os').homedir(), kind));
+}
 app.setName(process.env.APPARENT_TEST_INSTANCE==='1'?'apparent onboarding preview':'apparent onboarding');
 app.setPath('userData',path.join(app.getPath('appData'),'apparent-onboarding'));
 if(process.env.APPARENT_UI_PROFILE)app.setPath('userData',process.env.APPARENT_UI_PROFILE);
