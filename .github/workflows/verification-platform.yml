@@ -6,6 +6,10 @@ on:
       runner:
         required: true
         type: string
+      release_receipt:
+        description: Emit the existing manual publication receipt on eligible refs
+        type: boolean
+        default: true
 
 permissions:
   contents: read
@@ -25,12 +29,10 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - run: node --experimental-strip-types --test enablement/prerequisites/native.test.ts
+      - run: node --experimental-strip-types --test enablement/prerequisites/*.test.ts
       - name: Selector and hook contracts (no native proof)
         run: |
-          python3 -m unittest discover -s enablement/tests -p 'test_pre_push_guard.py'
           python3 -m unittest discover -s enablement/tests -p 'test_commit_push_checkpoint.py'
-          python3 -m unittest discover -s enablement/tests -p 'test_verification.py'
           python3 -m unittest discover -s enablement/tests -p 'test_temp_preflight.py'
           python3 -m unittest discover -s enablement/tests -p 'test_owner_lanes.py'
           python3 -m unittest discover -s capture/desktop/scripts/tests/mac -p 'test_*.py'
@@ -49,16 +51,28 @@ jobs:
           name: owner-plan-${{ inputs.runner }}
           path: ${{ runner.temp }}/owner-plan.json
           if-no-files-found: error
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: '1.3.10'
+      - uses: browser-actions/setup-chrome@v1
+        id: chrome
       - id: plan
         run: |
           # Full tree: a cancelled earlier main run must not hide its delta.
           BASE=$(git hash-object -t tree /dev/null)
           python3 enablement/verification.py --base "${BASE:-unknown}" --github-output "$GITHUB_OUTPUT"
+      - name: Portable contracts and Connect browser fixtures (Linux, no native proof)
+        env:
+          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
+          TMPDIR: ${{ runner.temp }}
+        run: |
+          BASE=$(git hash-object -t tree /dev/null)
+          python3 enablement/verification.py --base "$BASE" --run --online --execution portable
 
   desktop-ui:
     needs: select
     # Each caller verifies one platform independently.
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: desktop-ui (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 15
@@ -92,7 +106,7 @@ jobs:
 
   rust:
     needs: select
-    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch'
+    if: github.ref == 'refs/heads/main' || github.event_name == 'workflow_dispatch' || (github.event_name == 'pull_request' && github.event.pull_request.draft == false)
     name: rust (${{ inputs.runner }})
     runs-on: ${{ inputs.runner }}
     timeout-minutes: 60
@@ -117,9 +131,17 @@ jobs:
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - uses: dtolnay/rust-toolchain@stable
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
+        with:
+          # Keep the Mac cache compiler stable across hosted-image updates.
+          toolchain: ${{ runner.os == 'macOS' && '1.99.1' || 'stable' }}
+      - name: Normalize the disposable Intel Mac compiler inventory
+        if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
+        uses: ./.github/actions/mac-rust-cache
       - uses: Swatinem/rust-cache@v2
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         with:
+          # Cache versions include the entire path inventory. Retain the client
+          # path even when its execution moves to an independently required job.
           workspaces: |
             . -> target
             capture/engine -> target
@@ -132,15 +154,9 @@ jobs:
         id: timing
         run: |
           node --experimental-strip-types --test enablement/timing/command.test.ts
+          node --experimental-strip-types --test enablement/timing/mac-cache.test.ts
           echo "APPARENT_TIMING_FILE=$RUNNER_TEMP/verification-timings.jsonl" >> "$GITHUB_ENV"
           touch "$RUNNER_TEMP/verification-timings.jsonl"
-      - uses: oven-sh/setup-bun@v2
-        if: needs.select.outputs.browser == 'true'
-        with:
-          bun-version: '1.3.10'
-      - uses: browser-actions/setup-chrome@v1
-        if: needs.select.outputs.browser == 'true'
-        id: chrome
       - name: Prepare private temporary root before first Cargo
         if: needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true'
         shell: bash
@@ -164,6 +180,8 @@ jobs:
           npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
           node capture/desktop/ui/frontend/node_modules/electron/install.js
           node --experimental-strip-types enablement/prerequisites/native.ts
+          # Later clean packaging installs must use the archive prepared here.
+          printf 'electron_config_cache=%s\n' "$electron_config_cache" >> "$GITHUB_ENV"
       - name: Verify the independent Connect client package
         if: needs.select.outputs.root == 'true'
         run: |
@@ -171,8 +189,6 @@ jobs:
           node --experimental-strip-types enablement/timing/command.ts client-test-compilation cargo test --manifest-path connect/client/Cargo.toml --locked --timings --no-run
           node --experimental-strip-types enablement/timing/command.ts client-test-execution cargo test --manifest-path connect/client/Cargo.toml --locked --timings -- --test-threads=2
       - name: Execute the same changed-tree checks (not GUI acceptance)
-        env:
-          CHROME_PATH: ${{ steps.chrome.outputs.chrome-path }}
         run: |
           # Engine finalizer proofs reject group-writable cache ancestors.
           verification_tmp="$(mktemp -d "$HOME/.apparent-verification.XXXXXX")"
@@ -196,7 +212,13 @@ jobs:
             fi
           fi
           BASE=$(git hash-object -t tree /dev/null)
-          python3 enablement/verification.py --base "$BASE" --run --online
+          python3 enablement/verification.py --base "$BASE" --run --online --execution platform
+      - name: Retain completed Mac dependency seeds after later native failures
+        if: runner.os == 'macOS' && (needs.select.outputs.root == 'true' || needs.select.outputs.engine == 'true')
+        # Swatinem's post action reads this variable. Arm it only after all
+        # ordinary compilation/tests pass: an immutable partial seed cannot be
+        # completed on an exact cache hit. Branch cache access stays unchanged.
+        run: echo 'CACHE_ON_FAILURE=true' >> "$GITHUB_ENV"
       - name: Actual Electron to Rust Settings integration (not native GUI proof)
         if: needs.select.outputs.root == 'true'
         shell: bash
@@ -319,7 +341,7 @@ jobs:
   release-ready:
     name: Release verification
     needs: [select, desktop-ui, rust]
-    if: github.ref == 'refs/heads/main' || (github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/t3/onboarding-mac-release-baseline' && github.event_name == 'workflow_dispatch')
+    if: inputs.release_receipt && (github.ref == 'refs/heads/main' || (github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/t3/onboarding-mac-release-baseline' && github.event_name == 'workflow_dispatch'))
     runs-on: ubuntu-24.04
     steps:
       - run: echo "Platform checks passed for $GITHUB_SHA"

@@ -27,13 +27,30 @@ older client/server source.
 ## Repository checks
 
 `Repository checks` runs automatically on PRs targeting main and main pushes.
-It validates the theme, selector, push-hook, publication-admission contracts and
-workflow syntax with read-only permissions. Feature pushes run the inexpensive
+It is the only automatic workflow: one run per PR open/reopen/commit update
+against main, and one per push to main. It validates the theme, selector,
+push-hook, publication-admission contracts and workflow syntax with read-only
+permissions. Public web verification runs as a reusable job when Public/shared
+web inputs change. The updater harness runs as a reusable job on main pushes
+when its inputs change. Changes to the CI orchestrator select both consumers;
+unavailable diff history selects both rather than skipping checks. Git diffs
+include deleted and renamed source paths. There are no PR-edit or verification
+lifecycle triggers. Superseded PR/main runs coalesce within their own event/ref.
+Neither reusable consumer publishes on an automatic run. Feature pushes run the inexpensive
 contracts locally; they do not rebuild the application.
 Use `python3 enablement/verification.py --base <base> --run` for explicit affected
 local checks. Dirty-tree, hidden-index and exact-HEAD push guards remain enforced.
 
-`Linux verification` and `Mac verification` are manual diagnostic entrypoints,
+The same workflow also calls the full Linux and Mac platform suites on main
+pushes and on non-draft PRs (opened, reopened, updated or marked ready for review).
+Drafts retain inexpensive checks; converting a PR back to draft cancels its
+superseded full run. Each update tests GitHub's proposed merge commit, with
+read-only permissions and no release receipt. These jobs appear directly on the
+PR, so their actual completion is visible without a status reporter or manual
+dispatch. Existing separate manual runs do not substitute for this integrated
+candidate. Publication remains manual and retains its existing admission policy.
+
+`Linux verification` and `Mac verification` remain manual diagnostic entrypoints,
 each coalescing superseded runs within its own platform. Both call the same reusable
 `verification-platform.yml`, preserving the full Rust, Engine/client, browser,
 Electron and applicable native checks. Each checks the entire tree, not just the
@@ -287,6 +304,29 @@ checks do not replace current-main integration and review before merge.
 
 ## Verification timing diagnostics
 
+Mac verification pins Rust 1.99.1 and checks the disposable Intel hosted runner's
+compiler inventory before dependency-cache restore. Only the known unused 1.98.0
+stable toolchain may be removed; unknown identities fail before mutation. Keep all
+three workspace paths in the Rust cache even if client execution moves jobs:
+Actions cache versions include paths as well as the visible key. Compiler,
+environment and manifest invalidation remain Swatinem defaults. Mac dependency
+caches may save after later native failures on main and feature branches under
+Actions' normal branch isolation. Saving after failure is armed only once the
+changed-tree compilation and tests succeed, avoiding immutable partial seeds
+after compiler/setup failures. Caches never admit verification or publication.
+
+The existing unoptimized-root observation (Mac run 42505355940) restored a 748 MiB
+fallback cache in about 34 seconds and compiled root tests in 3m20s. Main already
+has that profile; this change claims no profile or compatible-hit speedup.
+Pinning prevents future compiler drift, and failure saves can avoid repeated cold
+dependency compilation after a failed run. Those savings are projected, not a
+measured walltime reduction; successful exact-key hits already skip cache saves.
+No main-only save restriction is used, so isolated feature branches can seed caches.
+
+After native prerequisites pass, the prepared Electron download-cache path is
+exported to subsequent job steps. Clean packaging installs reuse that archive
+while retaining the ordinary installer and its checksum/version checks.
+
 Platform Rust jobs retain seven-day observation-only JSONL spans and Cargo HTML
 compiler timings. Spans report elapsed active command time, never CPU time or
 billed savings. Runner queue time is separate: use Actions job queued/started
@@ -308,63 +348,31 @@ step outcome, runs after failures, and missing diagnostics only warn. Diagnostic
 record no arguments, environment dump, transcript or application data. Existing
 native evidence, cleanup, 60-minute Rust timeout and release gates are unchanged.
 
-## PR verification status (bootstrap required)
+## Portable verification routing
 
-The `verification-status` job in `checks.yml` is a credentialed, event-driven default-branch reporter.
-It publishes the commit status **Verification complete**, independent of the cheap
-Repository checks. It never dispatches native work. PR changes, main pushes and
-manual verification lifecycle events reconcile affected open main PRs. Candidate
-events coalesce per branch; main pushes retain global reconciliation. Candidate code is read as data, never executed with the reporter token.
+Each platform caller runs portable contracts and the independent Connect web
+artifact/Chromium fixtures in its existing Linux `select` job. Its success is
+a prerequisite of both platform jobs. `--execution portable` runs the theme,
+selector contracts and selected Connect web fixtures; `--execution platform`
+retains push/credential/staging and temporary-filesystem contracts, root and staged Engine Rust suites.
+The ordinary local verifier defaults to `full`, preserving both inventories,
+full-delta selection and unknown-input fallback. No environment variable silently
+changes this split.
 
-Native changes require both manual exact-head workflows, their latest run and
-latest attempt, the complete current or parallel job union, and successful Mac
-native assertions. Feature-only skipped release receipts are excluded. Unknown
-inventories, missing history, fork candidates and policy mismatches stay pending;
-failed/cancelled runs and skipped/missing required jobs fail. Successful evidence
-is retained across unrelated owner-documentation changes on main; other new base
-inputs require integration. Owner documentation alone needs no platform run.
-Public-only changes require manual Public verification at the exact head (PR merge
-checks do not substitute); they require neither Mac nor Rust. This PR status never
-admits publication or replaces native product acceptance outside CI.
+Connect Rust/client security, filesystem, credential and staging tests remain on
+both platforms, as do Desktop tests, actual Electron integration, packaging and
+Mac native assertions. Both platform jobs depend on the successful Linux `select`
+prerequisite; portable failures prevent their allocation. This is once per
+platform caller, not reuse of another workflow's results. Reverting the explicit
+routing and workflow
+placement restores the previous duplicate execution.
 
-Bootstrap in order: merge reviewed reporter code into main under existing gates;
-open/update the authorized probe PR; inspect pending in `gh pr view --json
-statusCheckRollup`; dispatch only approved manual verification, demonstrate real
-failure and success transitions with Actions/status links; then add precisely
-`Verification complete` to required checks while preserving all live protections.
-No protection should be enabled on an unproven reporter. Initial read-only inspection
-found no main branch protection and no rulesets. This workflow cannot receive its
-own default-branch events before merge. Parent delivery ownership must retain the
-live transition proof and protection activation steps. A direct hand-written green
-status is not reporter proof. No polling, watchdog or expensive automatic run is
-part of this mechanism.
-
-Policy-changing PRs are evaluated as data using Bun 1.3.10 YAML parsing.
-The supported current/parallel job union must be present; each required command
-step must succeed in its owning job and candidate order. Mac assertions are
-required only on Mac. The manual run's triggering actor must retain repository
-write/maintain/admin access, checked again before status publication. Changed
-workflow policy is parsed as data and must preserve the trusted required job
-union and successful candidate command evidence. This completion status does
-not authenticate source-code correctness: independent source/security review
-remains part of delivery under the existing repository policy, without adding
-a second human GitHub approver requirement. It never authorizes publication.
-
-GitHub status writes have no compare-and-swap: final candidate/evidence re-reads
-and serialized writers reduce the race window; later lifecycle events reconcile
-concurrent external changes. Live bootstrap and required-check activation remain
-unverified until performed after merge under existing gates.
-
-The reporter writes pending before reading a known PR's evidence and isolates
-per-PR API failures so later candidates still reconcile. A PR lifecycle event
-can invalidate its known head even if PR enumeration fails. GitHub outages that
-prevent status writes, or prevent discovery of otherwise unknown heads during
-a global scan, cannot be made fail-closed by commit statuses alone. Reporter
-workflow failures remain operational errors; no green is proof of API freshness
-during such an outage. Public command steps, including verification and sealing,
-must succeed in the owning verify job; tolerated failures are rejected.
-
-
+The supplied six-hour cohort reports Mac changed-tree median 10:16 (n=32) and
+successful whole-run median 21:50 (n=19); these are mixed profiles/cache states.
+Only the portable fraction plus browser setup is projected to leave Mac runner
+time. No measured whole-run savings or queue reduction is established by local
+routing tests. Linux selection now takes longer before native jobs become
+eligible; candidate timings must assess that latency tradeoff separately.
 The disposable Mac Storage fixture waits for real Storage/Retention read receipts
 before its single Change click. Its TypeScript CI driver separates the owned
 Go-to-Folder shortcut, read-only AX sheet readiness, and one path-entry/Return
@@ -374,46 +382,11 @@ PID/window/sheet/control checks, Choose/Cancel/Reset assertions, native consent,
 process cleanup and test deadlines remain required. This is test orchestration,
 not a change to installed Desktop routing or application persistence policy.
 
-## Reporter API budgets and recovery
+## PR verification evidence
 
-The trusted reporter uses the workflow's Actions credential throughout; another
-user token's quota does not establish recovery. PR lifecycle events reconcile
-only that PR. Manual verification lifecycle events look up matching open PRs by
-head branch and exact SHA; automatic Public runs and first-attempt in-progress
-notifications do no API work. Requested/rerun-start events authenticate the latest
-run and attempt before leaving pending without evaluating complete job evidence.
-Delayed start events reconcile current completed evidence instead of leaving a
-stale pending result. Completed events evaluate the current
-manual runs. Main pushes and blank manual dispatches retain a global scan, with
-all known heads invalidated before evidence reads. Global and candidate work use
-separate job-level coalescing domains, including a separate targeted-recovery
-domain. Reporter events have unique workflow-level keys: rejected events cannot
-evict eligible work before the job condition is evaluated. Non-main PR events
-are filtered both by the trigger and by the reporter.
-
-Every process preflights the same Actions credential. Targeted runs have a
-60-request hard budget and need at least 70 remaining requests; global runs have
-a 200-request budget and need at least 210. Content reads pinned to immutable
-commit SHAs are reused within the run; mutable refs, permissions, run listings
-and final evidence reads are refreshed. Status writes are spaced by one second.
-Quota exhaustion, the five-request reserve, or budget exhaustion halts the whole
-run immediately; no further PR, status or evidence requests are attempted.
-
-There is no polling, automatic retry, credential substitution or manual status
-publication. A rate-limit failure records the response's reset/Retry-After time
-and request ID without dumping response bodies, process environments or tokens.
-After that time, allow a natural relevant lifecycle event or perform one targeted
-recovery from trusted main:
-
-```sh
-gh workflow run checks.yml --ref main -f pull_request=1094
-```
-
-The recovery process must pass its own Actions-token quota preflight before any
-status writes. A successful application suite or user-token rate-limit request
-does not satisfy that condition. If quota is still insufficient, stop and retain
-the gate hold until the newly reported reset; do not rerun application/native
-verification to repair reporter delivery. Status-write/discovery outages retain
-the documented limitation above: the reporter cannot invalidate a previously
-published status when GitHub refuses the write. Reporter repair must be proven
-live before making `Verification complete` required.
+The automatic verification status reporter and its `Verification complete` commit
+status have been removed to eliminate repeated GitHub API reconciliation.
+Linux, Mac and Public verification workflows remain available under their existing
+manual triggers. Exact-head verification, independent review, native acceptance
+and publication admission remain required; inspect their workflow evidence
+directly. The retired status is no longer required by branch protection.

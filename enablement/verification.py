@@ -251,23 +251,30 @@ def observed_run(command, timing_label=None, **kwargs):
                 pass
 
 
-def run_checks(selection, offline=True):
-    if selection["root"] or selection["engine"]:
+def run_checks(selection, offline=True, execution="full"):
+    """Explicit CI split; ordinary local callers retain the complete inventory."""
+    if execution not in ("full", "portable", "platform"):
+        raise ValueError(f"Unknown execution scope: {execution}")
+    portable = execution != "platform"
+    native = execution != "portable"
+    if native and (selection["root"] or selection["engine"]):
         check_temp_environment()
-    observed_run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
-    observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                    "-p", "test_*push*.py"], cwd=ROOT, check=True)
-    observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                    "-p", "test_verification.py"], cwd=ROOT, check=True)
-    observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
-                    "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
+    if portable:
+        observed_run(["python3", "shared/ui/scripts/check-theme.py"], cwd=ROOT, check=True)
+        observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                        "-p", "test_verification.py"], cwd=ROOT, check=True)
+    if native:
+        observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                        "-p", "test_*push*.py"], cwd=ROOT, check=True)
+        observed_run(["python3", "-m", "unittest", "discover", "-s", "enablement/tests",
+                        "-p", "test_temp_preflight.py"], cwd=ROOT, check=True)
     cargo = ["cargo"]
-    if subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
+    if native and subprocess.run(["sh", "-c", "command -v taskpolicy"], capture_output=True).returncode == 0:
         cargo = ["taskpolicy", "-c", "utility", "cargo"]
     jobs = os.environ.get("T3_BUILD_JOBS", "3")
     dependency_mode = "--offline" if offline else "--locked"
     timings = ["--timings"] if os.environ.get("APPARENT_TIMING_FILE") else []
-    if selection["root"]:
+    if native and selection["root"]:
         observed_run(cargo + ["build", "-j", jobs, dependency_mode] + timings, cwd=ROOT, check=True)
         if selection.get("focused"):
             for test_filter in selection["focused"]:
@@ -279,13 +286,13 @@ def run_checks(selection, offline=True):
                     raise RuntimeError(f"Focused filter selected no passing tests: {test_filter}")
         else:
             observed_run(cargo + ["test", "-j", jobs, dependency_mode, *timings, "--", "--test-threads=2"], cwd=ROOT, check=True)
-    if selection["engine"]:
+    if native and selection["engine"]:
         for command in ("build", "test"):
             args = cargo + [command, "--manifest-path", "capture/engine/Cargo.toml", "-j", jobs, dependency_mode] + timings
             if command == "test":
                 args += ["--", "--test-threads=2"]
             observed_run(args, cwd=ROOT, check=True)
-    if selection.get("browser"):
+    if portable and selection.get("browser"):
         # Use the existing package fixtures, including the separate loopback
         # build. Do not substitute a production artifact with synthetic config.
         browser = ROOT / "connect/web"
@@ -303,6 +310,8 @@ def main():
     parser.add_argument("--run", action="store_true")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
+    parser.add_argument("--execution", choices=("full", "portable", "platform"), default="full",
+                        help="Explicit CI routing; local default runs portable and platform checks")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
     if args.preflight:
@@ -318,7 +327,7 @@ def main():
     if args.pr:
         run_pr_checks()
     if args.run:
-        run_checks(selection, offline=not args.online)
+        run_checks(selection, offline=not args.online, execution=args.execution)
 
 
 if __name__ == "__main__":
