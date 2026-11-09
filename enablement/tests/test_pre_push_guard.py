@@ -79,6 +79,11 @@ class PrePushGuardTests(unittest.TestCase):
         for directory in ("connect/client", "connect/service", "connect/web", "public/site",
                           "capture/desktop/ui/frontend", "enablement/directory-width/tests", "hermes/tests"):
             (self.repo / directory).mkdir(parents=True, exist_ok=True)
+        # Cargo is stubbed in this hook fixture, so the production-binary check
+        # needs a finite TS fixture too. Its real behavior has its own CLI test.
+        encryption_test = self.repo / "connect/client/tests/encryption-default.test.ts"
+        encryption_test.parent.mkdir()
+        encryption_test.write_text("import {test} from 'node:test'; test('finite production CLI fixture', () => {});\n")
         # Fixture directories must survive the commit/clean-tree guard.
         for directory in ("enablement/directory-width/tests", "hermes/tests"):
             (self.repo / directory / "test_fixture.py").write_text(fixture_test)

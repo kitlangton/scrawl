@@ -28,7 +28,7 @@ struct StoredSpool {
 }
 
 impl Client {
-    fn endpoint_identity(&self, credential: &Credential) -> Result<encryption::Identity> {
+    pub(super) fn endpoint_identity(&self, credential: &Credential) -> Result<encryption::Identity> {
         let id = credential.encryption_identity.as_deref()
             .filter(|id| valid_id(id))
             .context("encryption_identity_missing: approve this device with hostedEncryption enabled; never replace lost keys implicitly")?;
