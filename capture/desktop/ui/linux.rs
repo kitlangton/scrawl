@@ -669,12 +669,17 @@ fn tray_available(available: bool) {
 
 pub(in crate::capture::desktop) fn show_controls(cx: &mut App) {
     CONTROLS.with(|controls| {
-        if let Some(controls) = controls.borrow_mut().as_mut() { controls.show(cx); }
+        if let Some(controls) = controls.borrow_mut().as_mut() {
+            controls.show(cx);
+            // A deliberate launch also satisfies a deferred automatic request.
+            // Closing this window must not reopen it when Settings later closes.
+            CONTROLS_PENDING.store(false, Ordering::Release);
+        }
     });
 }
 
-pub(in crate::capture::desktop) fn poll_controls(busy: bool, onboarding: bool, cx: &mut App) {
-    if take_controls_request(&CONTROLS_PENDING, !controls_needed(), busy, onboarding) {
+pub(in crate::capture::desktop) fn poll_controls(busy: bool, onboarding: bool, settings: bool, cx: &mut App) {
+    if take_controls_request(&CONTROLS_PENDING, !controls_needed(), busy, onboarding, settings) {
         crate::capture::desktop::workflow::launch_instance::request_open();
     }
     CONTROLS.with(|controls| {
@@ -682,8 +687,10 @@ pub(in crate::capture::desktop) fn poll_controls(busy: bool, onboarding: bool, c
     });
 }
 
-fn take_controls_request(pending: &AtomicBool, tray: bool, busy: bool, onboarding: bool) -> bool {
-    !tray && !busy && !onboarding && pending.swap(false, Ordering::AcqRel)
+fn take_controls_request(pending: &AtomicBool, tray: bool, busy: bool, onboarding: bool, settings: bool) -> bool {
+    // Automatic host-loss/startup presentation must not cover Settings (including
+    // About reopened after an update). Explicit launch requests stay independent.
+    !tray && !busy && !onboarding && !settings && pending.swap(false, Ordering::AcqRel)
 }
 
 fn tray_host_usable(host: bool, items: &[String], pid: u32, owner: impl Fn(&str) -> Option<u32>) -> bool {
@@ -712,20 +719,29 @@ mod controls_tests {
     #[test]
     fn no_tray_access_waits_for_setup_and_capture_without_losing_the_request() {
         let pending = AtomicBool::new(true);
-        assert!(!take_controls_request(&pending, false, false, true));
-        assert!(!take_controls_request(&pending, false, true, false));
-        assert!(!take_controls_request(&pending, false, true, true));
+        assert!(!take_controls_request(&pending, false, false, true, false));
+        assert!(!take_controls_request(&pending, false, true, false, false));
+        assert!(!take_controls_request(&pending, false, true, true, false));
         assert!(pending.load(Ordering::Acquire));
-        assert!(take_controls_request(&pending, false, false, false));
-        assert!(!take_controls_request(&pending, false, false, false));
+        assert!(take_controls_request(&pending, false, false, false, false));
+        assert!(!take_controls_request(&pending, false, false, false, false));
+    }
+
+    #[test]
+    fn automatic_controls_wait_for_settings_then_present_once_after_close() {
+        let pending = AtomicBool::new(true);
+        assert!(!take_controls_request(&pending, false, false, false, true));
+        assert!(pending.load(Ordering::Acquire));
+        assert!(take_controls_request(&pending, false, false, false, false));
+        assert!(!take_controls_request(&pending, false, false, false, false));
     }
 
     #[test]
     fn a_returned_tray_does_not_open_controls() {
         let pending = AtomicBool::new(true);
-        assert!(!take_controls_request(&pending, true, false, false));
+        assert!(!take_controls_request(&pending, true, false, false, false));
         assert!(pending.load(Ordering::Acquire));
-        assert!(take_controls_request(&pending, false, false, false));
+        assert!(take_controls_request(&pending, false, false, false, false));
     }
 }
 

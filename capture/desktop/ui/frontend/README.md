@@ -26,8 +26,8 @@ commands: Record screen, Choose target, Latest capture and Settings. Rust owns
 onboarding/busy admission, including a fresh check at coordinator dispatch; the
 renderer owns no capture state or persistence. Parent EOF closes it. Missing
 assets, failed startup or a crashed child restore a native controls window;
-ordinary dismissal stays closed until relaunch. Setup and active capture defer
-automatic presentation. See [Linux access](../../docs/linux/linux.md).
+ordinary dismissal stays closed until relaunch. Setup, open Settings and active capture defer automatic
+presentation. Explicit relaunch can still open controls while Settings is open. See [Linux access](../../docs/linux/linux.md).
 
 `tests/controls/host.test.ts` executes shipped host code against inert native
 effects. `tests/controls/smoke.ts` exercises the shipped renderer and real pipes
