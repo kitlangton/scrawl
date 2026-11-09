@@ -1,7 +1,9 @@
 export type RuntimeState =
   | { status: 'connected'; phase: 'idle' | 'selecting' | 'starting' | 'recording' | 'processing' | 'completed' }
   | { status: 'disconnected' }
-  | { status: 'error'; message: string };
+  | { status: 'error'; message: string; code?: 'app_busy' | 'app_unresponsive' | 'invalid_request'
+      | 'invalid_response' | 'invalid_json' | 'invalid_frame' | 'response_too_large'
+      | 'incomplete_response' | 'unsafe_endpoint' | 'transport_error' | 'request_timeout' };
 
 declare global {
   interface Window {
