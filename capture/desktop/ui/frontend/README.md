@@ -390,6 +390,7 @@ host config writes), after installing the frontend Electron binary, run from
 the repository root:
 
 ```sh
+(cd capture/desktop/ui/frontend && node --experimental-strip-types scripts/build-storage-policy.ts)
 APPARENT_STORAGE_TEST_ELECTRON="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/electron" \
   cargo test --offline storage_electron_rust_roundtrip -- --ignored --nocapture
 # On macOS the executable is dist/Electron.app/Contents/MacOS/Electron.
