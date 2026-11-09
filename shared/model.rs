@@ -72,6 +72,10 @@ pub struct ApparentBundle {
     /// Absent on older bundles; timed CLI recordings have no interaction collector.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub interaction_telemetry: Option<InteractionTelemetry>,
+    /// Producer evidence about live ink in the original movie. Unknown/old
+    /// bundles keep semantic replay; never infer this from the reading host OS.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub video_ink: Option<VideoInk>,
     pub keyframes: Vec<Keyframe>,
     pub contact_sheet: String,
     /// Why some keyframes use lower-resolution candidates instead of MP4 frames.
@@ -119,6 +123,26 @@ pub struct ApparentBundle {
 #[serde(rename_all = "camelCase")]
 pub enum InteractionTelemetry {
     VideoOnly,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub enum VideoInk {
+    /// Both movie and still-frame source pixels retain the live overlay.
+    Captured,
+    /// The movie contains live ink; still images may need reconstructed marks after release.
+    CapturedVideo,
+    Excluded,
+}
+
+impl VideoInk {
+    pub fn replay(source: Option<Self>) -> bool {
+        source != Some(Self::Captured)
+    }
+
+    pub fn replay_video(source: Option<Self>) -> bool {
+        !matches!(source, Some(Self::Captured | Self::CapturedVideo))
+    }
 }
 
 impl ApparentBundle {

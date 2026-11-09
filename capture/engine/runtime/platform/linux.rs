@@ -1187,6 +1187,20 @@ pub(crate) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
     crate::capture::desktop::linux::media::run_sampler(sampler)
 }
 
+/// Verified screen/area sources include live ink in their movie. KWin hides the
+/// overlay on release, so still images continue reconstructing semantic marks.
+/// Only a new successful video records this fact; historical sources stay unknown.
+pub(crate) fn screen_video_ink() -> Option<crate::shared::model::VideoInk> {
+    use crate::shared::model::VideoInk;
+    if linux::hyprland() {
+        Some(VideoInk::Captured)
+    } else if linux::kde() && linux::wayland_session() {
+        Some(VideoInk::CapturedVideo)
+    } else {
+        None
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

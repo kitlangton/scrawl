@@ -480,7 +480,7 @@ pub fn render_annotated_keyframe(
     events: &[InteractionEvent],
 ) -> RgbaFrame {
     let mut frame = base.clone();
-    annotate_keyframe_in_place(&mut frame, keyframe, strokes, marks, events);
+    annotate_keyframe_in_place(&mut frame, keyframe, strokes, marks, events, true);
     frame
 }
 
@@ -490,8 +490,9 @@ pub fn annotate_keyframe_in_place(
     strokes: &[Stroke],
     marks: &[Mark],
     events: &[InteractionEvent],
+    replay_ink: bool,
 ) {
-    annotate_keyframe_marks_in_place(frame, keyframe, strokes, marks, events);
+    annotate_keyframe_marks_in_place(frame, keyframe, strokes, marks, events, replay_ink);
     stamp_keyframe_badge_in_place(frame, keyframe);
 }
 
@@ -513,6 +514,7 @@ pub fn annotate_keyframe_marks_in_place(
     strokes: &[Stroke],
     marks: &[Mark],
     events: &[InteractionEvent],
+    replay_ink: bool,
 ) {
     frame.t_ms = keyframe.t;
     let w = frame.width as f32;
@@ -524,6 +526,7 @@ pub fn annotate_keyframe_marks_in_place(
     // A mark keyframe shows every mark drawn on its screen. Flags carry no ink, so a flagged
     // keyframe still shows the strokes of its moment.
     let shown = crate::capture::engine::sketch::marks_on(keyframe, marks);
+    if replay_ink {
     for (index, stroke) in strokes.iter().enumerate() {
         if stroke.laser {
             continue;
@@ -559,6 +562,7 @@ pub fn annotate_keyframe_marks_in_place(
     }
     for stroke in strokes.iter().filter(|s| s.laser) {
         draw_laser(frame, stroke, keyframe.t);
+    }
     }
     // Phone swipes that ended just before this moment (or produced it) leave a trail.
     for event in events {
@@ -2026,6 +2030,32 @@ mod tests {
             mark_id: None,
             cursor: None,
         }
+    }
+
+    #[test]
+    fn captured_video_ink_preserves_pixels_and_badge_avoidance() {
+        let mut source = solid(320, 200, [20, 20, 20, 255]);
+        for x in 32..100 {
+            let at = (20 * 320 + x) * 4;
+            source.rgba[at..at + 4].copy_from_slice(&[120, 40, 30, 255]);
+        }
+        let strokes = vec![Stroke {
+            color: None, t0: 100, t1: 300, fw: 320, fh: 200,
+            on: None, pin: None, laser: false,
+            pts: vec![1000, 1000, 0, 3000, 1000, 200],
+        }];
+        let mut frame_key = key(1);
+        frame_key.t = 300;
+        let mut captured = source.clone();
+        annotate_keyframe_marks_in_place(&mut captured, &frame_key, &strokes, &[], &[], crate::shared::model::VideoInk::replay(Some(crate::shared::model::VideoInk::Captured)));
+        assert!(captured.rgba == source.rgba, "do not redraw or erase recorded ink");
+        assert!(captured.badge_bottom_left, "saved stroke geometry still keeps the badge away from ink");
+        let mut excluded = source.clone();
+        annotate_keyframe_marks_in_place(&mut excluded, &frame_key, &strokes, &[], &[], true);
+        assert_ne!(excluded.rgba, source.rgba, "overlay-excluding and unknown routes still need replay");
+        let mut movie_only = source.clone();
+        annotate_keyframe_marks_in_place(&mut movie_only, &frame_key, &strokes, &[], &[], crate::shared::model::VideoInk::replay(Some(crate::shared::model::VideoInk::CapturedVideo)));
+        assert_eq!(movie_only.rgba, excluded.rgba, "KWin still images retain saved marks after release hides the live overlay");
     }
 
     #[test]
