@@ -8,6 +8,7 @@ import io
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import socket
 import subprocess
@@ -57,6 +58,14 @@ class GuestIsolationTests(unittest.TestCase):
                 self.assertEqual(marker.read_text(), 'preserve')
 
     def test_candidate_libraries_do_not_poison_real_system_bash(self):
+        if sys.platform != 'linux':
+            self.skipTest('loader fixture requires Linux ELF library search')
+        bash, ldd = shutil.which('bash'), shutil.which('ldd')
+        if not bash or not ldd:
+            self.skipTest('loader fixture requires Bash and ldd')
+        linked = subprocess.run([ldd, bash], capture_output=True, text=True, timeout=5)
+        if linked.returncode or 'libtinfo.so.6' not in linked.stdout:
+            self.skipTest('loader fixture requires Bash linked against libtinfo.so.6')
         with tempfile.TemporaryDirectory() as root:
             root = Path(root)
             # Faithful loader failure: the candidate bundles a library with the
@@ -66,18 +75,27 @@ class GuestIsolationTests(unittest.TestCase):
                                  capture_output=True, text=True)
             self.assertNotEqual(old.returncode, 0)
             self.assertIn('libtinfo.so.6', old.stderr)
-            scenario = root / 'scenario with spaces.sh'
-            scenario.write_text('set -eu\n'
-                                'test -z "${LD_LIBRARY_PATH+x}"\n'
-                                'bash -c "printf system-shell-ready"\n'
-                                'test "$SCRAWL_GUI_LIBRARY_PATH" = "$SCRAWL_GUI_OUTPUT"\n'
-                                'test "$SCRAWL_GUI_BINARY" = /synthetic/candidate\n')
-            env = dict(os.environ)
-            env.pop('LD_LIBRARY_PATH', None)
-            command = runner.scenario_command(str(scenario), str(root), '/synthetic/candidate', str(root), '')
-            new = subprocess.run(['sh', '-c', command], env=env, capture_output=True, text=True)
-            self.assertEqual(new.returncode, 0, new.stderr)
-            self.assertEqual(new.stdout, 'system-shell-ready')
+            self.assert_system_scenario_environment(root)
+
+    def test_scenario_keeps_system_library_environment(self):
+        # The environment contract remains covered on macOS and on Linux hosts
+        # whose Bash does not use the ELF library needed by the poison fixture.
+        with tempfile.TemporaryDirectory() as root:
+            self.assert_system_scenario_environment(Path(root))
+
+    def assert_system_scenario_environment(self, root):
+        scenario = root / 'scenario with spaces.sh'
+        scenario.write_text('set -eu\n'
+                            'test -z "${LD_LIBRARY_PATH+x}"\n'
+                            'bash -c "printf system-shell-ready"\n'
+                            'test "$SCRAWL_GUI_LIBRARY_PATH" = "$SCRAWL_GUI_OUTPUT"\n'
+                            'test "$SCRAWL_GUI_BINARY" = /synthetic/candidate\n')
+        env = dict(os.environ)
+        env.pop('LD_LIBRARY_PATH', None)
+        command = runner.scenario_command(str(scenario), str(root), '/synthetic/candidate', str(root), '')
+        new = subprocess.run(['sh', '-c', command], env=env, capture_output=True, text=True)
+        self.assertEqual(new.returncode, 0, new.stderr)
+        self.assertEqual(new.stdout, 'system-shell-ready')
 
     def test_command_failure_keeps_exact_command_and_both_streams(self):
         command = [sys.executable, '-c', 'import sys; print("out"); sys.stderr.write("diagnostic\\n"); sys.exit(7)']
