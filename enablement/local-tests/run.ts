@@ -4,6 +4,8 @@ import { readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import {changedPaths as inputPaths, workflowControlPaths} from '../ci/inputs.ts';
+import {serviceTests} from './service.ts';
+import type {Admission} from './service.ts';
 
 export const root = fileURLToPath(new URL('../../', import.meta.url));
 export const owners = ['capture', 'engine', 'desktop', 'capture-tools', 'client', 'web', 'service', 'public', 'hermes', 'tooling'] as const;
@@ -105,13 +107,13 @@ export function contractTests(cwd = root): Command[] {
     .map(name => `enablement/prerequisites/${name}`);
   if (!prerequisites.length) throw Error('Native prerequisite contract inventory is empty');
   return [
-    { argv: ['node', '--experimental-strip-types', '--test', 'enablement/local-tests/run.test.ts',
+    { argv: ['node', '--experimental-strip-types', '--test', 'enablement/local-tests/run.test.ts', 'enablement/local-tests/reuse.test.ts',
       ...prerequisites, 'enablement/timing/command.test.ts', 'enablement/timing/mac-cache.test.ts'], cwd: '.' },
     { argv: ['bun', 'test', 'enablement/ci/'], cwd: '.' },
   ];
 }
 
-export function execute(plan: Command[], cwd = root): void {
+export function execute(plan: Command[], cwd = root, admission?: Admission): void {
   // Git exports repository-local routing into hooks. Test fixtures and package
   // subprocesses must resolve their own cwd rather than mutate the caller's Git
   // config/index. Preserve identity/credentials and all non-local environment.
@@ -119,11 +121,14 @@ export function execute(plan: Command[], cwd = root): void {
   if (local.error || local.status !== 0) throw Error('Cannot isolate hook Git environment');
   const env = { ...process.env };
   for (const name of local.stdout.trim().split('\n')) delete env[name];
-  for (const { argv, cwd: directory, env: extra } of plan) {
+  const run = ({ argv, cwd: directory, env: extra }: Command, environment = env) => {
     console.error(`pre-push: [${directory}] ${argv.join(' ')}`);
-    const result = spawnSync(argv[0], argv.slice(1), { cwd: resolve(cwd, directory), env: {...env, ...extra}, stdio: 'inherit' });
+    const result = spawnSync(argv[0], argv.slice(1), { cwd: resolve(cwd, directory), env: {...environment, ...extra}, stdio: 'inherit' });
     if (result.error) throw result.error;
     if (result.status !== 0) throw Error(`Local test command failed (${result.signal || result.status}): ${argv.join(' ')}`);
+  };
+  for (const command of plan) {
+    if (!serviceTests(command, cwd, {...env, ...command.env}, admission, run)) run(command);
   }
 }
 
@@ -139,5 +144,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   const result = selection(base, head, root, args.includes('--conservative-workflows'));
   const plan = commands(result.selected, base, head);
   console.log(JSON.stringify({ ...result, commands: plan }));
-  if (args.includes('--run')) execute(plan);
+  if (args.includes('--run')) execute(plan, root, result.historyKnown ? {base, head} : undefined);
 }
