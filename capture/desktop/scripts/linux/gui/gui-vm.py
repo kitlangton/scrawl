@@ -127,6 +127,51 @@ def file_digest(path):
         return hashlib.file_digest(source, 'sha256').hexdigest()
 
 
+def validate_scenario(path):
+    source = path.read_text()
+    # bash -n parses the Python body even though this supported header execs
+    # Python first. Validate that exact entry and compile its body without exec.
+    header = '#!/usr/bin/env python3\n""":"\nexec python3 "$0" "$@"\n":"""\n'
+    if source.startswith(header):
+        compile(source, str(path), 'exec')
+        return 'bash/python3'
+    if source.startswith('#!') and 'python' in source.splitlines()[0]:
+        raise RuntimeError('scenario runs through Bash; use the supported shell/Python entry header')
+    execute(['bash', '--noprofile', '--norc', '-n', str(path.resolve())], timeout=5)
+    return 'bash'
+
+
+def prepared_inputs(args):
+    """Freeze local transport inputs, without executing the candidate or a guest."""
+    if not os.access(args.binary, os.X_OK):
+        raise RuntimeError(f'candidate is not executable: {args.binary}')
+    files = [args.binary, args.scenario, args.ovmf_vars, args.ssh_key,
+             Path(__file__), Path(__file__).with_name('gui-vm-reaper.py')]
+    libraries = sorted(args.binary.parent.glob('lib*.so*'))
+    files.extend(libraries)
+    if args.audio_file:
+        files.append(args.audio_file)
+    inventory = {}
+    for path in files:
+        if not path.is_file():
+            raise RuntimeError(f'missing regular input (including library symlink targets): {path}')
+        inventory[str(path.absolute())] = {'sha256': file_digest(path),
+                                          'mode': path.stat().st_mode & 0o777,
+                                          'target': str(path.resolve())}
+    template = args.template.stat()
+    # This detects local replacement, not image provenance. Consumers still
+    # verify the released immutable template seal, outside the cheap preflight.
+    return {'files': inventory, 'libraries': [str(path.absolute()) for path in libraries],
+            'paths': {name: str(getattr(args, name).absolute()) if getattr(args, name) else None
+                      for name in ('binary', 'scenario', 'audio_file', 'ovmf_vars', 'ssh_key')},
+            'scenario_interpreter': validate_scenario(args.scenario),
+            'template': {'path': str(args.template.resolve()), 'device': template.st_dev,
+                         'inode': template.st_ino, 'size': template.st_size,
+                         'mtime_ns': template.st_mtime_ns, 'ctime_ns': template.st_ctime_ns},
+            'desktop': args.desktop, 'ssh_user': args.ssh_user,
+            'isolated_network': args.isolated_network}
+
+
 # Used verbatim on both ends: successful scp alone is not verified retention.
 MANIFEST_SCRIPT = '''import hashlib, json, pathlib, sys
 root = pathlib.Path(sys.argv[1])
@@ -224,6 +269,23 @@ def ssh_prefix(port, key, known_hosts, user):
             "-i", str(key), "-p", str(port), f"{user}@127.0.0.1"]
 
 
+def guest_staging_command(binary_directory, output_directory):
+    # Released prerequisite from PR #1082, commit 1278ea9a2.
+    # Fresh UUID names only. Refuse collisions instead of repairing permissions.
+    return ('mkdir -m 700 -- ' + shlex.quote(binary_directory) +
+            ' && mkdir -m 700 -- ' + shlex.quote(output_directory))
+
+
+def scenario_command(remote, output, binary, libraries, audio):
+    # Library search applies only when the recipe invokes the candidate. Bash,
+    # Python and system desktop tools must load their own distribution runtime.
+    return ('SCRAWL_GUI_OUTPUT=' + shlex.quote(output) +
+            ' SCRAWL_GUI_BINARY=' + shlex.quote(binary) +
+            ' SCRAWL_GUI_AUDIO_FILE=' + shlex.quote(audio) +
+            ' SCRAWL_GUI_LIBRARY_PATH=' + shlex.quote(libraries) +
+            ' bash ' + shlex.quote(remote))
+
+
 def desktop_probe(desktop):
     if desktop == 'hyprland':
         return ('pgrep -u "$(id -u)" -x Hyprland >/dev/null && '
@@ -280,6 +342,10 @@ def main():
     parser.add_argument("--audio-file", type=Path, help="optional WAV stimulus staged inside the guest")
     parser.add_argument("--binary", type=Path, required=True, help="candidate executable (sibling .so files are staged too)")
     parser.add_argument("--results", type=Path, required=True, help="new directory; retained after the run")
+    parser.add_argument("--preflight-only", action="store_true",
+                        help="validate and fingerprint local inputs without allocating a guest")
+    parser.add_argument("--prepared-inputs", type=Path,
+                        help="require inputs to match a successful --preflight-only result.json")
     parser.add_argument("--memory", type=int, default=3072, help="guest MiB (default: 3072)")
     parser.add_argument("--isolated-network", action="store_true", help="deny guest outbound networking; preserve loopback SSH forwarding")
     parser.add_argument("--boot-timeout", type=int, default=180)
@@ -333,115 +399,126 @@ def main():
             raise RuntimeError('require memory >= 2048, job-timeout >= 30 and positive boot/scenario timeouts')
         if any(',' in str(path.resolve()) for path in (directory, args.template, args.ovmf_vars)):
             raise RuntimeError('QEMU disk and firmware paths must not contain commas')
-        status['candidate_sha256'] = file_digest(args.binary)
-        stage('overlay')
-        overlay = directory / "disk.qcow2"
-        make_overlay(args.template, overlay)
-        vars_copy = directory / "OVMF_VARS.fd"
-        copy_firmware(args.ovmf_vars, vars_copy)
-        port = available_port()
-        command = qemu_command(overlay, vars_copy, directory, port, args.memory, args.isolated_network)
-        # The user manager survives a SIGKILL or OOM kill of this runner.
-        # Refuse to boot at all if that independent expiry cannot be armed.
-        expiry_unit = arm_expiry(directory, args.job_timeout)
-        status['cleanup']['expiry'] = 'armed'
-        stage('boot')
-        if deadline - time.monotonic() <= 25:
-            raise subprocess.TimeoutExpired(command, args.job_timeout)
-        with (directory / "qemu.log").open("wb") as log:
-            try:
-                process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
-            except OSError as error:
-                setattr(error, 'cmd', command)
-                raise
-            prefix = ssh_prefix(port, args.ssh_key.resolve(), directory / "known_hosts", args.ssh_user)
-            try:
-                wait_for_desktop(prefix, process, min(args.boot_timeout, max(0, deadline - time.monotonic() - 25)), args.desktop)
-            except RuntimeError as error:
-                # A QEMU exit is a boot/driver failure, not product evidence.
-                setattr(error, 'cmd', command)
-                setattr(error, 'returncode', process.poll())
-                with (directory / 'qemu.log').open('rb') as source:
-                    source.seek(max(0, source.seek(0, os.SEEK_END) - 8192))
-                    setattr(error, 'stderr', source.read())
-                raise
-            boot_seconds = round(time.monotonic() - start, 2)
-            status['boot_seconds'] = boot_seconds
-            status['environment'] = 'ready'
-            stage('staging')
-            remote = "/home/" + args.ssh_user + "/scrawl-gui-scenario-" + uuid.uuid4().hex + ".sh"
-            guest_output = "/home/" + args.ssh_user + "/scrawl-gui-output-" + uuid.uuid4().hex
-            guest_bin = "/home/" + args.ssh_user + "/scrawl-gui-bin-" + uuid.uuid4().hex
-            call(prefix + ["mkdir -p " + shlex.quote(guest_bin)], timeout=10)
-            files = [args.binary.resolve()] + sorted(args.binary.parent.glob("lib*.so*"))
-            transfer = ["scp", "-q", "-P", str(port), "-i", str(args.ssh_key.resolve()),
-                        "-o", "StrictHostKeyChecking=accept-new",
-                        "-o", "UserKnownHostsFile=" + str(directory / "known_hosts")]
-            call(transfer + [*[str(path) for path in files],
-                            f"{args.ssh_user}@127.0.0.1:{guest_bin}/"], timeout=120)
-            digest = status['candidate_sha256']
-            guest_binary = guest_bin + "/" + args.binary.name
-            actual = call(prefix + ["sha256sum " + shlex.quote(guest_binary)]).stdout.split()[0]
-            if actual != digest:
-                raise RuntimeError("staged executable hash differs from candidate")
-            scp = transfer + [str(args.scenario), f"{args.ssh_user}@127.0.0.1:{remote}"]
-            call(scp)
-            audio_file = ""
-            if args.audio_file:
-                call(prefix + ["mkdir -p " + shlex.quote(guest_output)], timeout=10)
-                audio_file = guest_output + "/stimulus.wav"
-                call(transfer + [str(args.audio_file.resolve()),
-                                 f"{args.ssh_user}@127.0.0.1:{audio_file}"], timeout=120)
-            try:
-                stage('scenario')
-                status['unrun'] = []
-                status['product'] = 'unknown'
-                scenario_command = prefix + ["mkdir -p " + shlex.quote(guest_output) +
-                                            " && SCRAWL_GUI_OUTPUT=" + shlex.quote(guest_output) +
-                                            " SCRAWL_GUI_BINARY=" + shlex.quote(guest_binary) +
-                                            " SCRAWL_GUI_AUDIO_FILE=" + shlex.quote(audio_file) +
-                                            " LD_LIBRARY_PATH=" + shlex.quote(guest_bin) +
-                                            " bash " + shlex.quote(remote)]
-                # Files keep full private output without buffering a long recipe in RAM.
-                with (directory / 'scenario.log').open('w') as output, (directory / 'scenario.stderr').open('w') as errors:
-                    try:
-                        result = subprocess.run(scenario_command, stdout=output, stderr=errors,
-                                                timeout=min(args.scenario_timeout, max(0.1, deadline - time.monotonic() - 25)))
-                        status['scenario_exit'] = result.returncode
-                        # Only successful trusted scenarios certify their writer
-                        # cleanup. A failure may leave descendants alive, even
-                        # when SSH returned the remote shell's exit status.
-                        scenario_completed = result.returncode == 0
-                        code = result.returncode
-                        if code:
-                            raise subprocess.CalledProcessError(code, scenario_command)
-                    except (OSError, subprocess.SubprocessError, KeyboardInterrupt, SystemExit) as error:
-                        if not hasattr(error, 'cmd'):
-                            setattr(error, 'cmd', scenario_command)
-                        for key, path in (('stdout', directory / 'scenario.log'), ('stderr', directory / 'scenario.stderr')):
-                            with path.open('rb') as source:
-                                source.seek(max(0, path.stat().st_size - 8192))
-                                setattr(error, key, source.read())
-                        failure(error)
-                        code = (143 if isinstance(error, SystemExit) else
-                                130 if isinstance(error, KeyboardInterrupt) else status['scenario_exit'] or 1)
-            finally:
-                # Preserve guest diagnostics even when the scenario times out.
-                stage('retention')
-                status['artifact_retention'] = 'unverified'
-                expected = json.loads(call(prefix + ['python3 -c ' + shlex.quote(MANIFEST_SCRIPT) + ' ' + shlex.quote(guest_output)]).stdout)
-                call(transfer[:2] + ["-r"] + transfer[2:] +
-                     [f"{args.ssh_user}@127.0.0.1:{guest_output}/.", str(directory / "artifacts")], timeout=60)
-                actual = json.loads(call([sys.executable, '-c', MANIFEST_SCRIPT, str(directory / 'artifacts')]).stdout)
-                if actual != expected:
-                    raise RuntimeError('artifact transfer hash manifest mismatch; keeping cold job disk')
-                if scenario_completed:
-                    status['artifact_retention'] = 'verified'
-                    (directory / 'artifacts-retained').write_text('remote exit observed; sha256 manifest verified\n')
-                else:
-                    # Matching hashes prove only this snapshot, not that a
-                    # remote writer cannot produce more evidence after it.
-                    status['artifact_retention'] = 'partial_snapshot'
+        status['inputs'] = prepared_inputs(args)
+        status['candidate_sha256'] = status['inputs']['files'][str(args.binary.absolute())]['sha256']
+        if args.prepared_inputs:
+            prepared = json.loads(args.prepared_inputs.read_text())
+            if (prepared.get('preflight_only') is not True or prepared.get('exit_code') != 0 or
+                    prepared.get('inputs') != status['inputs']):
+                raise RuntimeError('prepared inputs changed or receipt is not a successful preflight; prepare again before admission')
+        status['preflight_only'] = args.preflight_only
+        status['preflight_seconds'] = round(time.monotonic() - start, 3)
+        if args.preflight_only:
+            code = 0
+            status['environment'] = 'unrun'
+        else:
+            stage('overlay')
+            overlay = directory / "disk.qcow2"
+            make_overlay(args.template, overlay)
+            vars_copy = directory / "OVMF_VARS.fd"
+            copy_firmware(args.ovmf_vars, vars_copy)
+            port = available_port()
+            command = qemu_command(overlay, vars_copy, directory, port, args.memory, args.isolated_network)
+            # The user manager survives a SIGKILL or OOM kill of this runner.
+            # Refuse to boot at all if that independent expiry cannot be armed.
+            expiry_unit = arm_expiry(directory, args.job_timeout)
+            status['cleanup']['expiry'] = 'armed'
+            stage('boot')
+            if deadline - time.monotonic() <= 25:
+                raise subprocess.TimeoutExpired(command, args.job_timeout)
+            with (directory / "qemu.log").open("wb") as log:
+                try:
+                    process = subprocess.Popen(command, stdout=log, stderr=subprocess.STDOUT, start_new_session=True)
+                except OSError as error:
+                    setattr(error, 'cmd', command)
+                    raise
+                prefix = ssh_prefix(port, args.ssh_key.resolve(), directory / "known_hosts", args.ssh_user)
+                try:
+                    wait_for_desktop(prefix, process, min(args.boot_timeout, max(0, deadline - time.monotonic() - 25)), args.desktop)
+                except RuntimeError as error:
+                    # A QEMU exit is a boot/driver failure, not product evidence.
+                    setattr(error, 'cmd', command)
+                    setattr(error, 'returncode', process.poll())
+                    with (directory / 'qemu.log').open('rb') as source:
+                        source.seek(max(0, source.seek(0, os.SEEK_END) - 8192))
+                        setattr(error, 'stderr', source.read())
+                    raise
+                boot_seconds = round(time.monotonic() - start, 2)
+                status['boot_seconds'] = boot_seconds
+                status['environment'] = 'ready'
+                stage('staging')
+                remote = "/home/" + args.ssh_user + "/scrawl-gui-scenario-" + uuid.uuid4().hex + ".sh"
+                guest_output = "/home/" + args.ssh_user + "/scrawl-gui-output-" + uuid.uuid4().hex
+                guest_bin = "/home/" + args.ssh_user + "/scrawl-gui-bin-" + uuid.uuid4().hex
+                call(prefix + [guest_staging_command(guest_bin, guest_output)], timeout=10)
+                files = [args.binary.absolute()] + [Path(path) for path in status['inputs']['libraries']]
+                transfer = ["scp", "-q", "-P", str(port), "-i", str(args.ssh_key.resolve()),
+                            "-o", "StrictHostKeyChecking=accept-new",
+                            "-o", "UserKnownHostsFile=" + str(directory / "known_hosts")]
+                call(transfer + [*[str(path) for path in files],
+                                f"{args.ssh_user}@127.0.0.1:{guest_bin}/"], timeout=120)
+                guest_binary = guest_bin + "/" + args.binary.name
+                scp = transfer + [str(args.scenario), f"{args.ssh_user}@127.0.0.1:{remote}"]
+                call(scp)
+                # Recheck every staged byte, including libraries and the driver.
+                # A candidate hash alone misses changed packaging/scenario inputs.
+                staged = [(path, guest_bin + '/' + path.name) for path in files]
+                staged.append((args.scenario, remote))
+                audio_file = ""
+                if args.audio_file:
+                    audio_file = guest_output + "/stimulus.wav"
+                    call(transfer + [str(args.audio_file.resolve()),
+                                     f"{args.ssh_user}@127.0.0.1:{audio_file}"], timeout=120)
+                    staged.append((args.audio_file, audio_file))
+                for source, target in staged:
+                    actual = call(prefix + ["sha256sum " + shlex.quote(target)]).stdout.split()[0]
+                    if actual != status['inputs']['files'][str(source.absolute())]['sha256']:
+                        raise RuntimeError(f'staged input hash differs from preflight: {source}')
+                try:
+                    stage('scenario')
+                    status['unrun'] = []
+                    status['product'] = 'unknown'
+                    command = prefix + [scenario_command(remote, guest_output, guest_binary, guest_bin, audio_file)]
+                    # Files keep full private output without buffering a long recipe in RAM.
+                    with (directory / 'scenario.log').open('w') as output, (directory / 'scenario.stderr').open('w') as errors:
+                        try:
+                            result = subprocess.run(command, stdout=output, stderr=errors,
+                                                    timeout=min(args.scenario_timeout, max(0.1, deadline - time.monotonic() - 25)))
+                            status['scenario_exit'] = result.returncode
+                            # Only successful trusted scenarios certify their writer
+                            # cleanup. A failure may leave descendants alive, even
+                            # when SSH returned the remote shell's exit status.
+                            scenario_completed = result.returncode == 0
+                            code = result.returncode
+                            if code:
+                                raise subprocess.CalledProcessError(code, command)
+                        except (OSError, subprocess.SubprocessError, KeyboardInterrupt, SystemExit) as error:
+                            if not hasattr(error, 'cmd'):
+                                setattr(error, 'cmd', command)
+                            for key, path in (('stdout', directory / 'scenario.log'), ('stderr', directory / 'scenario.stderr')):
+                                with path.open('rb') as source:
+                                    source.seek(max(0, path.stat().st_size - 8192))
+                                    setattr(error, key, source.read())
+                            failure(error)
+                            code = (143 if isinstance(error, SystemExit) else
+                                    130 if isinstance(error, KeyboardInterrupt) else status['scenario_exit'] or 1)
+                finally:
+                    # Preserve guest diagnostics even when the scenario times out.
+                    stage('retention')
+                    status['artifact_retention'] = 'unverified'
+                    expected = json.loads(call(prefix + ['python3 -c ' + shlex.quote(MANIFEST_SCRIPT) + ' ' + shlex.quote(guest_output)]).stdout)
+                    call(transfer[:2] + ["-r"] + transfer[2:] +
+                         [f"{args.ssh_user}@127.0.0.1:{guest_output}/.", str(directory / "artifacts")], timeout=60)
+                    actual = json.loads(call([sys.executable, '-c', MANIFEST_SCRIPT, str(directory / 'artifacts')]).stdout)
+                    if actual != expected:
+                        raise RuntimeError('artifact transfer hash manifest mismatch; keeping cold job disk')
+                    if scenario_completed:
+                        status['artifact_retention'] = 'verified'
+                        (directory / 'artifacts-retained').write_text('remote exit observed; sha256 manifest verified\n')
+                    else:
+                        # Matching hashes prove only this snapshot, not that a
+                        # remote writer cannot produce more evidence after it.
+                        status['artifact_retention'] = 'partial_snapshot'
     except Exception as error:
         failure(error)
         code = code or 1

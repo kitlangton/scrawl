@@ -145,13 +145,19 @@ class Scenario:
         self.report['commands'].append(record)
         self.save()
         with (self.out / record['stdout']).open('w') as stdout, (self.out / record['stderr']).open('w') as stderr:
-            result = subprocess.run(record['argv'], env=self.env, stdout=stdout, stderr=stderr,
+            result = subprocess.run(record['argv'], env=self.command_environment(argv), stdout=stdout, stderr=stderr,
                                     timeout=self.remaining(seconds))
         record['exit'] = result.returncode
         self.save()
         if check and result.returncode:
             raise Failure(f'command failed ({result.returncode}); see {stem}: {argv}')
         return (self.out / record['stdout']).read_text()
+
+    def command_environment(self, argv):
+        libraries = self.env.get('SCRAWL_GUI_LIBRARY_PATH')
+        if str(argv[0]) == str(self.binary) and libraries:
+            return dict(self.env, LD_LIBRARY_PATH=libraries)
+        return self.env
 
     def control(self, *args, seconds=8, check=True):
         value = json.loads(self.call([self.binary, 'capture', *args], seconds, check))
@@ -163,7 +169,7 @@ class Scenario:
 
     def launch(self, argv, name):
         with (self.out / (name + '.log')).open('w') as log:
-            job = subprocess.Popen(list(map(str, argv)), env=self.env, stdout=log,
+            job = subprocess.Popen(list(map(str, argv)), env=self.command_environment(argv), stdout=log,
                                    stderr=subprocess.STDOUT, start_new_session=True)
         self.jobs.append(job)
         return job

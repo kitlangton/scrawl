@@ -90,8 +90,9 @@ ELF needs its runtime closure (runner stages sibling `lib*.so*`); an AppImage
 needs its own complete runtime. Neither an old installed app nor `--help`
 proves the candidate.
 
-The baseline runner has no `doctor` subcommand. These are the exact launch-free
-preflight commands; do not treat an unknown `doctor` argument as a health pass:
+Run the launch-free checks before scarce build/VM admission. Use a separate
+new private results directory for preparation, then pass its receipt to the
+admitted run. The runner has no `doctor` subcommand.
 
 ```sh
 python3 capture/desktop/scripts/linux/gui/test-gui-vm.py
@@ -105,7 +106,32 @@ test -r "$GUI_TEST_KEY" && test -x "$CANDIDATE"
 systemctl --user show-environment >/dev/null
 qemu-img info --output=json "$GUI_TEMPLATE/system.qcow2"
 sha256sum "$CANDIDATE"
+python3 capture/desktop/scripts/linux/gui/gui-vm.py \
+  --template "$GUI_TEMPLATE/system.qcow2" \
+  --ovmf-vars "$GUI_TEMPLATE/OVMF_VARS.fd" \
+  --ssh-user "$GUI_TEST_USER" --ssh-key "$GUI_TEST_KEY" \
+  --binary "$CANDIDATE" --scenario capture/desktop/scripts/linux/gui/capture-smoke.py \
+  --results "$RUN-preflight" --isolated-network --preflight-only
 ```
+
+Preflight checks required local files, candidate execute permission, dangling
+sibling libraries and scenario syntax without executing the candidate or scenario.
+Ordinary scenarios must parse as Bash. Python recipes must use the exact four-line
+shell/Python header in `capture-smoke.py`; their Python body is compiled without
+execution. A plain Python shebang fails before overlay creation.
+
+The private receipt fingerprints candidate, sibling libraries, scenario, optional
+audio, firmware, access key and runner/reaper bytes, plus the desktop/network
+selection and template path/stat identity. `--prepared-inputs` rejects changed
+inputs before overlay allocation after queueing. It also binds the library file
+set, and staging verifies every transferred candidate/library/scenario/audio hash.
+Keep source-to-build provenance separately. Template stat identity detects local
+replacement; verify its published hash and provenance independently. Preparation
+does not execute the package or validate guest ABI, NSS, dlopen or decoder closure.
+Those checks still require the matching guest and normal package entry. For raw
+ELFs, stage all required versioned libraries and dlopen modules as real files
+beside the candidate. For AppImages, retain the normal launcher and existing
+packaging encoder/decoder checks.
 
 Require qcow2 with no backing file, stopped writers and sufficient KVM access;
 `qemu-img info` alone does not certify sanitization, ownership or capacity.
@@ -173,8 +199,8 @@ template writable or replace it. Admin changes require a separately owned
 derivative. KDE is a separate template and is not supplied by selecting
 `--desktop kde` on this image.
 
-For product capture or Settings tests, consume runner/reaper commit `1278ea9a2`
-from PR #1082. It creates fresh guest staging/output directories exactly once
+The current runner consumes the released private-staging fix from commit
+`1278ea9a2` in PR #1082. It creates fresh guest staging/output directories exactly once
 with mode 0700 regardless of guest umask, refusing collisions. Earlier environment
 qualification remains valid at its stated scope; it does not prove app writes.
 Do not weaken config/bundle ancestor validation or modify the template to repair
@@ -201,14 +227,26 @@ python3 capture/desktop/scripts/linux/gui/gui-vm.py \
   --ovmf-vars "$GUI_TEMPLATE/OVMF_VARS.fd" \
   --ssh-user "$GUI_TEST_USER" --ssh-key "$GUI_TEST_KEY" \
   --binary "$CANDIDATE" --scenario capture/desktop/scripts/linux/gui/capture-smoke.py \
+  --prepared-inputs "$RUN-preflight/result.json" \
   --results "$RUN" --memory 3072 --isolated-network \
   --boot-timeout 180 --scenario-timeout 300 --job-timeout 660
 ```
 
+Use the same `--desktop` in preparation and execution when selecting GNOME/KDE.
+On Clanker, run the execution command once through `/home/simon/.local/bin/t3-build`
+after measured capacity and ownership checks. Preparation itself allocates no VM.
+
 The Python file has a tested shell/Python entry header because the existing
 runner copies just one scenario file and invokes it with Bash. No sibling
 scenario dependency needs staging. The runner supplies `SCRAWL_GUI_BINARY`,
-`SCRAWL_GUI_OUTPUT` and the candidate library path. For an already owned guest
+`SCRAWL_GUI_OUTPUT` and `SCRAWL_GUI_LIBRARY_PATH`. Bash and system tools keep
+their session library environment. Both maintained Python recipes set
+`LD_LIBRARY_PATH` only for the exact candidate's GUI, CLI and decoder invocations.
+Custom Bash recipes must do the same at each candidate call, for example
+`LD_LIBRARY_PATH="$SCRAWL_GUI_LIBRARY_PATH" "$SCRAWL_GUI_BINARY" app`.
+Update older private scenarios that relied on the runner exporting a global
+`LD_LIBRARY_PATH`. Preserve exported `XAUTHORITY`, desktop bus/runtime and
+normal AppImage entry when isolating HOME. For an already owned guest
 with that same environment, the direct recipe invocation is:
 
 ```sh
