@@ -10,9 +10,11 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import signal
 import subprocess
 import sys
+import tempfile
 import time
 import uuid
 
@@ -89,6 +91,7 @@ class Recipe:
         self.out, self.binary, self.seconds = output, binary, seconds
         self.env = os.environ.copy()
         self.jobs, self.ids, self.serial = [], [], 0
+        self.runtime = None
         self.report = {"schema": 1, "proof": "native execution required; synthetic transport tests are not native proof",
                        "gates": {key: "UNRUN" for key in (
                            "environment", "h264_decoder", "scene", "gui_ready", "save_recording", "saved_receipt", "bundle_structure",
@@ -176,11 +179,15 @@ class Recipe:
         control_socket = home / ".config/apparent/agent-control/capture.sock"
         if len(os.fsencode(control_socket)) > 107:
             raise Failure("environment", "guest output/HOME is too long for capture.sock; runner must stage a shorter guest output path")
+        # AppImage extraction includes symlinks and is disposable runtime, not
+        # evidence. Keep it outside the runner's strictly regular-file archive.
+        self.runtime = Path(tempfile.mkdtemp(prefix="apparent-dev-capture-smoke-", dir="/tmp"))
+        self.report["runtime_directory"] = str(self.runtime)
         for key, path in {"HOME": home, "XDG_CONFIG_HOME": home / ".config", "XDG_DATA_HOME": home / ".local/share",
                           "XDG_CACHE_HOME": home / ".cache", "APPARENT_CONFIG": home / ".config/apparent/config.json",
-                          "APPARENT_CAPTURES_DIR": self.out / "captures", "TMPDIR": self.out / "tmp"}.items():
+                          "APPARENT_CAPTURES_DIR": self.out / "captures", "TMPDIR": self.runtime}.items():
             self.env[key] = str(path)
-        for key in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "APPARENT_CAPTURES_DIR", "TMPDIR"):
+        for key in ("XDG_CONFIG_HOME", "XDG_DATA_HOME", "XDG_CACHE_HOME", "APPARENT_CAPTURES_DIR"):
             Path(self.env[key]).mkdir(parents=True, mode=0o700)
         config = Path(self.env["APPARENT_CONFIG"])
         config.parent.mkdir(parents=True, exist_ok=True)
@@ -402,6 +409,14 @@ class Recipe:
                         self.report["removed_private_sockets"].append(relative)
                 except OSError as error:
                     self.report["cleanup_errors"].append(f"private socket {relative}: {error}")
+        if not self.report["cleanup_errors"] and self.runtime is not None:
+            try:
+                # rmtree refuses a symlink root and does not follow inner links.
+                # Never remove runtime while any owned writer is unaccounted for.
+                shutil.rmtree(self.runtime)
+                self.report["removed_private_runtime"] = True
+            except OSError as error:
+                self.report["cleanup_errors"].append(f"private runtime: {error}")
         self.report["gates"]["owned_process_cleanup"] = "FAIL" if self.report["cleanup_errors"] else "PASS"
         self.save()
 

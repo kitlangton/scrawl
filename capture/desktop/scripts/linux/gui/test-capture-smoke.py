@@ -28,6 +28,11 @@ if sys.argv[1] == 'decoder-check':
     print('Decoded 1 full-quality H.264 keyframe(s) (160x90)')
     sys.exit(0)
 if sys.argv[1:] == ['app']:
+    extracted = pathlib.Path(os.environ['TMPDIR']) / 'appimage-extracted'
+    extracted.mkdir()
+    evidence = root / 'retained-evidence'
+    evidence.write_text('must remain')
+    (extracted / 'AppRun').symlink_to(evidence)
     sockets = []
     for relative in ('.config/apparent/agent-control/capture.sock', '.config/apparent/launch/open.sock'):
         path = root / relative
@@ -123,6 +128,8 @@ class CleanupTests(unittest.TestCase):
     def test_reaped_peer_never_signalled_or_probed_and_live_peer_is_joined(self):
         with tempfile.TemporaryDirectory(prefix='cs-', dir=os.environ.get('TMPDIR')) as directory:
             recipe = smoke.Recipe(Path(directory), Path('/unused'), 1)
+            recipe.runtime = Path(directory) / 'runtime'
+            recipe.runtime.mkdir()
             stale = recipe.launch([sys.executable, '-c', 'pass'], 'stale.log')
             stale.wait(timeout=3)
             live = recipe.launch([sys.executable, '-c', 'import time; time.sleep(120)'], 'live.log')
@@ -138,6 +145,7 @@ class CleanupTests(unittest.TestCase):
                 self.assertIsNotNone(live.returncode)
                 self.assertEqual(recipe.report['gates']['owned_process_cleanup'], 'FAIL')
                 self.assertTrue(any('ownership' in error for error in recipe.report['cleanup_errors']))
+                self.assertTrue(recipe.runtime.is_dir(), 'uncertain writers must retain runtime')
             finally:
                 if live.poll() is None:
                     live.kill()
@@ -270,6 +278,11 @@ class TransportTests(unittest.TestCase):
                 return
             self.assertFalse((out / '.config/apparent/agent-control/capture.sock').exists())
             self.assertFalse((out / '.config/apparent/launch/open.sock').exists())
+            self.assertFalse(recipe.runtime.exists(), 'AppImage extraction must not reach artifact retention')
+            self.assertFalse(recipe.runtime.is_relative_to(out))
+            self.assertTrue(report['removed_private_runtime'])
+            if not no_decoder:
+                self.assertEqual((out / 'retained-evidence').read_text(), 'must remain')
             self.assertEqual(report['gates']['selected_target_pixels'], 'UNRUN')
             self.assertEqual(report['gates']['movie_nonblack_changing'], 'UNRUN')
             if no_decoder:

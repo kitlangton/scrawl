@@ -156,6 +156,9 @@ Linux's 107-byte pathname limit; the scenario refuses longer paths before GUI
 launch. For the baseline runner's `/home/simon/scrawl-gui-output-<32hex>` path,
 using the output itself as HOME fits; adding a nested `home/` does not. A longer
 guest username may require the runner owner to shorten its guest staging path.
+`TMPDIR` is a separate private guest directory: AppImage extraction contains
+symlinks and is not evidence. The recipe removes that runtime only after all
+owned processes stop; the runner's artifact symlink rejection remains unchanged.
 
 Use `--isolated-network` **always** for this recipe. The app's normal launch can
 attempt model/update downloads; no supported `transcriber: off` setting exists
