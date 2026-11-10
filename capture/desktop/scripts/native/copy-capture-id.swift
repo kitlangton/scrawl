@@ -80,6 +80,99 @@ struct OwnedWindow {
     let id: CGWindowID
     let bounds: CGRect
 }
+struct InputHit {
+    let error: AXError
+    let pid: pid_t
+}
+func admitForeground(_ current: pid_t?, previous: pid_t, owned: pid_t) throws -> pid_t {
+    guard let current, current == previous || current == owned else {
+        throw Failure("Foreground changed during owned input observation")
+    }
+    return current
+}
+// AX cannotComplete is a failed observation, never permission to send input.
+// Retry only that read, with each synchronous call bounded by the remaining
+// original budget. A successful foreign PID or changed identity fails at once.
+func readOwnedInput(expectedPID: pid_t, budget: TimeInterval,
+                    now: () -> TimeInterval, validate: () throws -> Void,
+                    read: (TimeInterval) throws -> InputHit, pause: (TimeInterval) -> Void,
+                    record: (InputHit, TimeInterval) -> Void) throws -> InputHit {
+    try require(budget > 0 && budget <= 1, "Invalid input observation budget")
+    let until = now() + budget
+    var hit = InputHit(error: .cannotComplete, pid: -1)
+    while now() < until {
+        try validate()
+        let left = until - now()
+        if left <= 0 { break }
+        let start = now()
+        hit = try read(until)
+        record(hit, now() - start)
+        if hit.error == .success {
+            try require(hit.pid == expectedPID, "The observed input point does not hit the exact owned app")
+            try validate()
+            try require(now() <= until, "Owned input observation exceeded its deadline")
+            return hit
+        }
+        if hit.error != .cannotComplete { return hit }
+        let wait = min(0.025, until - now())
+        if wait > 0 { pause(wait) }
+    }
+    return hit
+}
+func testInputObservationPolicy() throws {
+    var time: TimeInterval = 0
+    var reads = 0
+    let recovered = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { until in
+        try require(until - time > 0 && until - time <= 1, "Invalid scripted AX timeout")
+        reads += 1; time += 0.05
+        return InputHit(error: reads == 1 ? .cannotComplete : .success, pid: reads == 1 ? -1 : 42)
+    }, pause: { time += $0 }, record: { _, _ in })
+    try require(recovered.error == .success && recovered.pid == 42 && reads == 2, "Transient AX read did not recover")
+    time = 0; reads = 0
+    var rejected = false
+    do {
+        _ = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { _ in
+            reads += 1; time += 0.05; return InputHit(error: .success, pid: 43)
+        }, pause: { time += $0 }, record: { _, _ in })
+    } catch { rejected = true }
+    try require(rejected && reads == 1, "Foreign PID was retried or admitted")
+    time = 0; reads = 0
+    let exhausted = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { until in
+        reads += 1; time += min(0.2, until - time); return InputHit(error: .cannotComplete, pid: -1)
+    }, pause: { time += $0 }, record: { _, _ in })
+    try require(exhausted.error == .cannotComplete && time <= 1.000001 && reads <= 5,
+                "Persistent AX failure escaped its original budget")
+    time = 0; reads = 0; rejected = false
+    var validations = 0
+    do {
+        _ = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {
+            validations += 1; try require(validations == 1, "Scripted window identity changed")
+        }, read: { _ in
+            reads += 1; time += 0.05; return InputHit(error: .cannotComplete, pid: -1)
+        }, pause: { time += $0 }, record: { _, _ in })
+    } catch { rejected = true }
+    try require(rejected && reads == 1, "Changed window was queried again or admitted")
+    time = 0; reads = 0
+    let denied = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { _ in
+        reads += 1; return InputHit(error: .apiDisabled, pid: -1)
+    }, pause: { time += $0 }, record: { _, _ in })
+    try require(denied.error == .apiDisabled && reads == 1, "Permanent AX failure was retried")
+    time = 0; rejected = false
+    do {
+        _ = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { _ in
+            time = 1.01; return InputHit(error: .success, pid: 42)
+        }, pause: { time += $0 }, record: { _, _ in })
+    } catch { rejected = true }
+    try require(rejected, "Late AX response was admitted")
+    try require(try admitForeground(7, previous: 7, owned: 42) == 7, "Stable activation focus rejected")
+    try require(try admitForeground(42, previous: 7, owned: 42) == 42, "Owned activation transition rejected")
+    let foreignPIDs: [pid_t?] = [nil, 7, 43]
+    for foreign in foreignPIDs {
+        rejected = false
+        do { _ = try admitForeground(foreign, previous: 42, owned: 42) } catch { rejected = true }
+        try require(rejected, "Lost foreground ownership was admitted")
+    }
+}
 func window() throws -> OwnedWindow {
     guard let child = owned, child.isRunning else { throw Failure("Owned preview exited") }
     let rows = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] ?? []
@@ -111,15 +204,51 @@ func postOwnedWindowClick(_ expected: OwnedWindow, at point: CGPoint) throws {
     // or mouse-ignoring system surfaces can cover a window's rectangle. Ask AX
     // for the actual element at the observed point and keep the exact PID gate.
     let system = AXUIElementCreateSystemWide()
-    _ = AXUIElementSetMessagingTimeout(system, 1)
-    var element: AXUIElement?
-    let axError = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element)
-    var hitPID: pid_t = -1
-    if let element, axError == .success { _ = AXUIElementGetPid(element, &hitPID) }
+    defer { _ = AXUIElementSetMessagingTimeout(system, 1) }
+    var attempts: [[String: Any]] = []
+    // focusAndSize may use this exact-owned-window click to activate the app.
+    // Permit that controlled transition, but never a new foreign foreground PID
+    // or loss of foreground ownership after the child has become active.
+    guard var admittedForeground = NSWorkspace.shared.frontmostApplication?.processIdentifier else {
+        throw Failure("Foreground PID unavailable before input observation")
+    }
+    let started = ProcessInfo.processInfo.systemUptime
+    let observed = try readOwnedInput(expectedPID: child.processIdentifier, budget: remaining(1),
+        now: { ProcessInfo.processInfo.systemUptime }, validate: {
+            let latest = try window()
+            admittedForeground = try admitForeground(NSWorkspace.shared.frontmostApplication?.processIdentifier,
+                previous: admittedForeground, owned: child.processIdentifier)
+            try require(child.isRunning && latest.id == expected.id && latest.bounds == expected.bounds &&
+                        latest.bounds.contains(point),
+                        "Owned window or focus changed during input observation")
+        }, read: { readUntil in
+            let timeout = readUntil - ProcessInfo.processInfo.systemUptime
+            if timeout <= 0 { return InputHit(error: .cannotComplete, pid: -1) }
+            try require(AXUIElementSetMessagingTimeout(system, Float(timeout)) == .success, "Could not bound AX input observation")
+            if ProcessInfo.processInfo.systemUptime >= readUntil { return InputHit(error: .cannotComplete, pid: -1) }
+            var element: AXUIElement?
+            let error = AXUIElementCopyElementAtPosition(system, Float(point.x), Float(point.y), &element)
+            var pid: pid_t = -1
+            if let element, error == .success {
+                let left = readUntil - ProcessInfo.processInfo.systemUptime
+                if left <= 0 { return InputHit(error: .cannotComplete, pid: -1) }
+                try require(AXUIElementSetMessagingTimeout(system, Float(left)) == .success, "Could not bound AX PID observation")
+                if ProcessInfo.processInfo.systemUptime >= readUntil { return InputHit(error: .cannotComplete, pid: -1) }
+                let pidError = AXUIElementGetPid(element, &pid)
+                return InputHit(error: pidError, pid: pid)
+            }
+            return InputHit(error: error, pid: pid)
+        }, pause: { Thread.sleep(forTimeInterval: $0) }, record: { hit, elapsed in
+            attempts.append(["axError": hit.error.rawValue, "hitPID": hit.pid, "elapsedMs": elapsed * 1000])
+            report["lastInputReadAttempts"] = attempts
+        })
+    let axError = observed.error
+    let hitPID = observed.pid
     let inputAllowed = CGPreflightPostEventAccess()
     var inputs = report["inputTargets"] as? [[String: Any]] ?? []
     inputs.append(["expectedPID": child.processIdentifier, "hitPID": hitPID,
         "axError": axError.rawValue, "postEventAccess": inputAllowed,
+        "attempts": attempts, "elapsedMs": (ProcessInfo.processInfo.systemUptime - started) * 1000,
         "visualRectanglePID": hit?[kCGWindowOwnerPID as String] as? Int32 ?? -1,
         "visualRectangleLayer": hit?[kCGWindowLayer as String] as? Int ?? -1])
     report["inputTargets"] = inputs
@@ -146,6 +275,9 @@ func focusAndSize(_ width: Int? = nil) throws {
     }
     let accepted = running.activate(options: [.activateIgnoringOtherApps])
     let size = width.map { "set size of window 1 to {\($0), 700}\nset position of window 1 to {40, 40}" } ?? ""
+    // AXRaise can fail even while the owned CG window is visible and AppKit
+    // reports this exact PID active. The guarded header click and foreground
+    // check below establish activation without requiring that extra AX action.
     let axFrontmost = try run("/usr/bin/osascript", ["-e", """
     tell application "System Events"
         set p to first application process whose unix id is \(child.processIdentifier)
@@ -153,7 +285,6 @@ func focusAndSize(_ width: Int? = nil) throws {
             if (count of windows) is not 1 then error "Expected one owned AX window"
             set frontmost to true
             \(size)
-            perform action "AXRaise" of window 1
             return frontmost
         end tell
     end tell
@@ -298,6 +429,9 @@ func launch(_ executable: URL, disabled: Bool) throws {
 }
 var failure: Error?
 do {
+    try testInputObservationPolicy()
+    report["inputReadSelfTests"] = ["transientExact", "foreignRejected", "persistentBounded",
+        "identityDriftRejected", "permanentRejected", "lateRejected", "ownedActivationOnly"]
     try require(output.path.hasPrefix(runner.path + "/") && app.path.hasPrefix(NSHomeDirectory() + "/Applications/Apparent-Storage-"), "Paths escape disposable CI fixture")
     try require(!fm.fileExists(atPath: output.path), "Evidence directory must be fresh")
     try fm.createDirectory(at: output, withIntermediateDirectories: false, attributes: [.posixPermissions: 0o700])
