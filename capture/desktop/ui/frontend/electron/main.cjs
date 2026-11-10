@@ -84,7 +84,7 @@ const {PublicShare} = require('./public-share.cjs');
 const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readRuntimeState, storageLocation, errorReporting, captureReference, storagePreference, microphoneEnabled } = require('./runtime.cjs');
-const { locationCandidate, resolveLocationCandidate, normalizeSelectedPath } = require('./storage-policy.cjs');
+const { LocationWorkflow } = require('./storage-owner/location-workflow.js');
 const { ConnectSettings, actions } = require('./connect.cjs');
 const followWindowTheme = require('@apparent/ui/window-theme');
 nativeTheme.themeSource = 'system';
@@ -283,24 +283,17 @@ app.whenReady().then(() => {
       return requestConnect(action);
     });
   }
-  const resolveLocation = async (facts) => {
-    const candidate = locationCandidate(facts);
-    if (candidate.snapshot) return { status: 'connected', revision: candidate.revision, storage: candidate.snapshot };
-    const probe = await storageLocation(os.homedir(), 'probe', { path: candidate.probePath, expected: candidate.revision });
-    if (probe.status !== 'connected') return probe;
-    return { status: 'connected', revision: candidate.revision,
-      storage: resolveLocationCandidate(facts, probe.available) };
-  };
-  const readLocation = async () => {
-    const result = await storageLocation(os.homedir(), 'facts');
-    if (result.status !== 'connected') return result;
-    try { return await resolveLocation(result.location); }
-    catch { return { status: 'error', code: 'invalid_response' }; }
-  };
-  const project = (result) => {
-    if (result.status !== 'connected') return result;
-    return { status: 'connected', storage: result.storage };
-  };
+  const location = new LocationWorkflow({
+    facts: () => storageLocation(os.homedir(), 'facts'),
+    probe: (path, expected) => storageLocation(os.homedir(), 'probe', {path, expected}),
+    write: (operation, fields) => storageLocation(os.homedir(), operation, fields),
+    choose: effectivePath => dialog.showOpenDialog(window, {
+      title: 'Choose capture location', buttonLabel: 'Choose',
+      properties: ['openDirectory', 'createDirectory'],
+      ...(path.isAbsolute(effectivePath) ? {defaultPath: path.dirname(effectivePath)} : {}),
+      message: 'New captures use this location. Existing captures stay where they are.',
+    }),
+  });
   let reportingMutation = false;
   let microphoneMutation = false;
   ipcMain.handle('apparent:read-microphone-enabled', (event, ...args) => { validateFoundation(event, args); return microphoneEnabled(os.homedir()); });
@@ -327,8 +320,8 @@ app.whenReady().then(() => {
   ipcMain.handle('apparent:read-capture-location', async (event, ...args) => {
     validate(event, args);
     const version = storageVersion;
-    const result = await readLocation();
-    return version === storageVersion ? project(result) : { status: 'cancelled' };
+    const result = await location.read();
+    return version === storageVersion ? result : { status: 'cancelled' };
   });
   for (const operation of ['change', 'reset']) {
     ipcMain.handle(`apparent:${operation}-capture-location`, async (event, ...args) => {
@@ -338,29 +331,7 @@ app.whenReady().then(() => {
       storageVersion += 1;
       const token = generation;
       try {
-        const before = await readLocation();
-        if (token !== generation) return { status: 'cancelled' };
-        if (before.status !== 'connected') return project(before);
-        const fields = { expected: before.revision };
-        if (operation === 'change') {
-          const selected = await dialog.showOpenDialog(window, {
-            title: 'Choose capture location', buttonLabel: 'Choose',
-            properties: ['openDirectory', 'createDirectory'],
-            ...(path.isAbsolute(before.storage.effectivePath) ? { defaultPath: path.dirname(before.storage.effectivePath) } : {}),
-            message: 'New captures use this location. Existing captures stay where they are.',
-          });
-          if (token !== generation || window.isDestroyed() || selected.canceled) return { status: 'cancelled' };
-          if (selected.filePaths.length !== 1) return { status: 'error', code: 'invalid_path' };
-          fields.path = normalizeSelectedPath(selected.filePaths[0]);
-          if (!fields.path) return { status: 'error', code: 'invalid_path' };
-        }
-        if (token !== generation) return { status: 'cancelled' };
-        const saved = await storageLocation(os.homedir(), operation === 'change' ? 'set' : 'reset', fields);
-        if (saved.status !== 'connected') return project(saved);
-        if (token !== generation || window.isDestroyed()) return { status: 'cancelled' };
-        return project(await resolveLocation(saved.location));
-      } catch {
-        return { status: 'error', code: 'bridge_failed' };
+        return await location.mutate(operation, () => token === generation && !window.isDestroyed());
       } finally {
         storageVersion += 1;
         mutation = false;

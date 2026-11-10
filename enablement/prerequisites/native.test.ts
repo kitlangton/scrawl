@@ -26,6 +26,9 @@ function fixture(t: any) {
   for (const name of ['worker.js', 'policy.js', 'package.json']) {
     put('capture/desktop/ui/frontend/electron/record-completion/' + name);
   }
+  for (const name of ['location-workflow.js', 'location-policy.js', 'package.json']) {
+    put('capture/desktop/ui/frontend/electron/storage-owner/' + name);
+  }
   return { root, put, electron };
 }
 
@@ -43,6 +46,13 @@ test('missing generated Storage policy fails before Cargo', t => {
   rmSync(resolve(f.root, 'capture/desktop/ui/frontend/electron/storage-policy.cjs'));
   assert.throws(() => checkNativeInputs(f.root, 'linux'), /ENOENT/);
 });
+for (const name of ['location-workflow.js', 'location-policy.js', 'package.json']) {
+  test(`missing generated Storage workflow ${name} fails before Cargo`, t => {
+    const f = fixture(t);
+    rmSync(resolve(f.root, 'capture/desktop/ui/frontend/electron/storage-owner/' + name));
+    assert.throws(() => checkNativeInputs(f.root, 'linux'), /ENOENT/);
+  });
+}
 test('missing generated Connect transport fails before Cargo', t => {
   const f = fixture(t);
   rmSync(resolve(f.root, 'capture/desktop/ui/frontend/electron/connect.cjs'));
