@@ -2,8 +2,10 @@
 
 `@apparent/record-storage` owns capture-location preference interpretation,
 retention choices and the request/readback controllers used by Desktop's React
-Storage surface. Its injected ports expose bounded preference results and usage,
-not files, config revisions, credentials or arbitrary native commands.
+Storage surface. Renderer-controller ports expose bounded preference results and
+usage, not files, revisions, credentials or arbitrary native commands. Its host
+`LocationWorkflow` consumes revision-bearing native facts/probes, an OS chooser
+port and allowlisted set/reset execution; it never exposes revisions to rendering.
 
 ```sh
 npm ci
@@ -17,7 +19,7 @@ They need no Rust, Electron, React or native build output. Public consumers load
 compiled ESM and declarations through the package export; `npm pack` rebuilds
 the fixed `dist` inventory. The Desktop build uses its own installed compiler to
 build these same exports before typechecking/bundling its consumer, and generates
-the existing Electron CommonJS location-policy adapter from the same source.
+the Electron CommonJS location-policy and workflow adapters from the same source.
 
 Reads supersede older reads. Mutations serialize admission and require a trusted
 readback; failed or uncertain writes require Refresh before another mutation.
@@ -32,7 +34,12 @@ publication semantics. Native ports retain chooser execution, filesystem safety,
 bounded scanning and active-capture exclusions. Startup-folder timing is unchanged:
 existing workers retain their startup folder until the native app restarts.
 
-Desktop still owns Electron IPC, native dialog/revision sequencing and presentation.
+Record owns location facts/probe resolution, chooser-result validation and
+revision-bearing save/reset intent. Desktop retains Electron IPC, OS dialog
+execution, shared mutation admission, window lifetime and presentation. The host
+must hold that gate for `mutate` and supply its current lifetime check; the
+workflow suppresses stale results and never replays writes. A thrown write or
+post-publication resolution failure returns `outcome_unknown` for refresh.
 Linux and native fallback retain their existing Settings controller/preset menu;
 capture-time default resolution and cleanup policy interpretation also remain
 native compatibility debt. This package's headless checks prove its policy and

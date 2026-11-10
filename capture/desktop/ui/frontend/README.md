@@ -168,6 +168,12 @@ The headless `record/storage` TypeScript package owns Electron location preceden
 normalization, fallback presentation, retention defaults, labels, validation,
 save intent and renderer request/readback sequencing. React consumes its compiled
 controllers through injected Desktop ports in `src/storage/transport.ts`.
+Its `LocationWorkflow` also owns facts/probe resolution, chooser-result validation
+and revision-bearing save/reset intent. Electron consumes the generated CommonJS
+adapter from that same owner source; it retains the OS dialog, scoped IPC,
+window lifetime and shared operation gate. Rust retains the single durable
+transaction executor. A thrown write or post-write resolution failure is an
+unknown outcome requiring authoritative refresh, never an automatic write retry.
 `readRetention()` returns bounded presence-aware values; `saveRetention(policy)`
 accepts exactly `mediaDays` and `bundleDays` (u32 or null). Week is 7/30 days,
 Month 30/90 and Forever null/null. Custom known fields stay resettable, including

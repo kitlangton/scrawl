@@ -45,6 +45,38 @@ done
 const { panelScript, prepareStorageChange } = require('../../../../../enablement/prerequisites/mac-picker.ts');
 const { assertReportingRead } = require('../../../../../enablement/prerequisites/reporting-read.ts');
 
+// A direct authoritative read does not update the renderer's terminal app_busy.
+// Recover only that observed state with one visible read, never replay Choose.
+async function refreshBusyLocation({ idle, busy, refresh }) {
+  await idle();
+  if (!await busy()) return false;
+  await refresh();
+  return true;
+}
+
+// Exercise the shipped explicit read recovery, never a background product poll.
+// Both observations share the original ten-second startup allowance.
+async function initialRuntimeRead({ now, budget, observe, pause, refresh, connected }) {
+  const until = now() + budget(10000);
+  const remaining = () => {
+    const left = until - now();
+    assert.ok(left > 0, 'Initial runtime read deadline exceeded');
+    return budget(left);
+  };
+  const initial = await observe(remaining);
+  let refreshed = false;
+  if (initial === 'app_unresponsive') {
+    // The host caches completed state reads for one second. Do not turn the
+    // manual Refresh into another observation of that same cached failure.
+    assert.ok(remaining() > 1000, 'Insufficient initial runtime recovery budget');
+    await pause(1000);
+    await refresh(remaining());
+    refreshed = true;
+  }
+  await connected(remaining());
+  return {initial, refreshed};
+}
+
 async function within(promise, ms, label) {
   let timer;
   try {
@@ -323,14 +355,32 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     const rendererErrors = [];
     page.on('pageerror', error => rendererErrors.push(error.message));
     try {
-      await page.getByText('Connected · idle', { exact: true }).waitFor({ timeout: budget(10000) });
+      const runtimeStatus = page.locator('section[aria-labelledby="runtime-title"] [role="status"]');
+      report.initialRuntimeAdmission = await initialRuntimeRead({
+        now: Date.now, budget,
+        observe: async remaining => {
+          await expect(runtimeStatus).toBeVisible({timeout: remaining()});
+          await expect(runtimeStatus).not.toContainText('Reading local app…', {timeout: remaining()});
+          report.initialRuntimeRead = await runtimeStatus.innerText({timeout: remaining()});
+          return await runtimeStatus.getByText('The local app state read failed (app_unresponsive). Refresh when the app is responsive.', {exact: true})
+            .isVisible() ? 'app_unresponsive' : 'other';
+        },
+        pause: ms => new Promise(resolve => setTimeout(resolve, ms)),
+        refresh: async timeout => {
+          report.initialRuntimeRefreshAttempted = true;
+          await page.getByRole('button', {name: 'Refresh state', exact: true}).click({timeout});
+        },
+        connected: timeout => page.getByText('Connected · idle', {exact: true}).waitFor({timeout}),
+      });
     } catch (error) {
-      // Retain the initial one-shot result, not a new read that could mask it.
+      // Preserve the initial result alongside final failure; never issue a
+      // diagnostic bridge read that could replace either observation.
       // This section renders only the bounded runtime projection, never native payloads.
       try {
-        report.initialRuntimeRead = await page.locator('section[aria-labelledby="runtime-title"] [role="status"]')
+        report.runtimeReadFailure = await page.locator('section[aria-labelledby="runtime-title"] [role="status"]')
           .innerText({ timeout: budget(1500) });
-      } catch { report.initialRuntimeRead = 'unavailable'; }
+        report.initialRuntimeRead ??= report.runtimeReadFailure;
+      } catch { report.initialRuntimeRead ??= 'unavailable'; }
       throw error;
     }
     // CDP readiness does not establish that System Events can inspect this
@@ -470,6 +520,11 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       assert.equal(next.location.storage.savedPath, selected);
       return next;
     }, 'Saved location readback');
+    report.postChooseVisibleRefresh = await refreshBusyLocation({
+      idle: () => expect(refreshLocation).toBeEnabled({ timeout: budget() }),
+      busy: () => locationStatus.getByText('Another location request is still running. Refresh when it finishes.', { exact: true }).isVisible(),
+      refresh: () => refreshLocation.click({ timeout: budget() }),
+    });
     await locationStatus.getByText(changed.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
     report.change = { ...changed, files: await assertFiles(selected) };
     assert.equal(report.change.location.storage.source, 'configured');

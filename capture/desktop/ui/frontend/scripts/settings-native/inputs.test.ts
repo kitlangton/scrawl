@@ -7,6 +7,26 @@ import {consumerInput, contract, digest, testName} from './inputs.ts';
 import {main} from './cli.ts';
 import {verifyInventory, probe} from './provider.ts';
 
+async function processStat(pid: number, read = (file: string) => readFile(file, 'utf8')) {
+  try { return await read(`/proc/${pid}/stat`); }
+  catch (error) {
+    // procfs may lose the task after open but before read (ESRCH), as well as
+    // before open (ENOENT). Neither observation authorizes another signal.
+    if (['ENOENT', 'ESRCH'].includes((error as NodeJS.ErrnoException).code ?? '')) return '';
+    throw error;
+  }
+}
+test('process disappearance during open or read is absence; other read failures remain failures', async () => {
+  for (const code of ['ENOENT', 'ESRCH']) {
+    assert.equal(await processStat(42, async () => {throw Object.assign(Error('gone'), {code});}), '');
+  }
+  for (const code of ['EACCES', 'EIO']) {
+    const failure = Object.assign(Error('not absence'), {code});
+    await assert.rejects(processStat(42, async () => {throw failure;}), error => error === failure);
+  }
+  assert.equal(await processStat(42, async file => {assert.equal(file, '/proc/42/stat'); return 'live identity';}), 'live identity');
+});
+
 test('the independent surface excludes only the audited consumer owners', () => {
   for (const file of ['record/storage/src/policy.ts', 'record/storage/test/new.test.ts',
     'capture/desktop/ui/frontend/src/storage.tsx', 'capture/desktop/ui/frontend/tests/rust-storage.cjs']) assert.equal(consumerInput(file), true, file);
@@ -72,7 +92,7 @@ test('a stalled probe kills its owned descendants without a reaped-PGID retry', 
   const deadline = performance.now() + 500;
   for (const identity of identities) {
     for (;;) {
-      const stat = await readFile(`/proc/${identity.pid}/stat`, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
+      const stat = await processStat(identity.pid);
       const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
       if (!stat || fields[19] !== identity.start || ['Z', 'X'].includes(fields[0])) break;
       assert.ok(performance.now() < deadline, `Timed-out probe descendant still running: ${JSON.stringify({identity, state: fields[0]})}`);

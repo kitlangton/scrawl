@@ -1,6 +1,6 @@
 import ts from 'typescript';
 import path from 'node:path';
-import { copyFile, mkdir, rm, cp, realpath, lstat } from 'node:fs/promises';
+import { copyFile, mkdir, rm, cp, realpath, lstat, writeFile } from 'node:fs/promises';
 import {fileURLToPath} from 'node:url';
 import {build} from '../../../../../record/storage/build.ts';
 
@@ -23,7 +23,7 @@ if (await realpath(installed) !== await realpath(packageRoot)) {
 const owner = path.join(packageRoot, 'src');
 const source = path.join(owner, 'location-policy.ts');
 const temporary = path.join(root, '.storage-policy-build');
-const program = ts.createProgram([source], {
+const program = ts.createProgram([source, path.join(owner, 'location-workflow.ts')], {
   target: ts.ScriptTarget.ES2022,
   module: ts.ModuleKind.CommonJS,
   moduleResolution: ts.ModuleResolutionKind.Node10,
@@ -46,4 +46,13 @@ if (diagnostics.length) {
 if (program.emit().emitSkipped) throw Error('Storage policy emission failed');
 await mkdir(path.join(root, 'electron'), { recursive: true });
 await copyFile(path.join(temporary, 'location-policy.js'), path.join(root, 'electron/storage-policy.cjs'));
+const workflow = path.join(root, 'electron/storage-owner');
+try {
+  const info = await lstat(workflow);
+  if (!info.isDirectory() || info.isSymbolicLink()) throw Error('Unsafe generated Record Storage adapter');
+  await rm(workflow, {recursive: true});
+} catch (error) { if ((error as NodeJS.ErrnoException).code !== 'ENOENT') throw error; }
+await mkdir(workflow, {recursive: true});
+await cp(temporary, workflow, {recursive: true});
+await writeFile(path.join(workflow, 'package.json'), '{"type":"commonjs"}\n');
 await rm(temporary, { recursive: true, force: true });
