@@ -2,6 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {mkdtemp, mkdir, writeFile, chmod, rm, symlink, readFile} from 'node:fs/promises';
 import path from 'node:path';
+import {setTimeout as pause} from 'node:timers/promises';
 import {consumerInput, contract, digest, testName} from './inputs.ts';
 import {main} from './cli.ts';
 import {verifyInventory, probe} from './provider.ts';
@@ -55,12 +56,28 @@ test('a stalled probe kills its owned descendants without a reaped-PGID retry', 
   t.after(() => rm(root, {recursive: true, force: true}));
   const pids = path.join(root, 'pids');
   const source = `const {spawn}=require('node:child_process');const fs=require('node:fs');
-    const child=spawn(process.execPath,['-e','setTimeout(()=>{},2500)'],{stdio:'ignore'});
-    fs.writeFileSync(process.argv[1],JSON.stringify([process.pid,child.pid]));setTimeout(()=>{},2500);`;
+    const child=spawn(process.execPath,['-e','setTimeout(()=>{},10000)'],{stdio:'ignore'});
+    const identities=[process.pid,child.pid].map(pid=>{const stat=fs.readFileSync('/proc/'+pid+'/stat','utf8');
+      const fields=stat.slice(stat.lastIndexOf(')')+2).trim().split(/\\s+/);
+      return {pid,start:fields[19],group:fields[2]};});
+    fs.writeFileSync(process.argv[1],JSON.stringify(identities));setTimeout(()=>{},10000);`;
+  const started = performance.now();
   assert.throws(() => probe(process.execPath, ['-e', source, pids], 1), (error: unknown) =>
     !!error && typeof error === 'object' && ('signal' in error && error.signal === 'SIGKILL' || 'status' in error && error.status === 137));
-  for (const pid of JSON.parse(await readFile(pids, 'utf8')) as number[]) {
-    const stat = await readFile(`/proc/${pid}/stat`, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
-    assert.ok(!stat || /^\d+ \(.+\) [ZX] /.test(stat), 'Timed-out probe descendant is not running');
+  const identities = JSON.parse(await readFile(pids, 'utf8')) as Array<{pid: number; start: string; group: string}>;
+  assert.equal(identities.length, 2);
+  assert.equal(identities[0].group, identities[1].group, 'Fixture members belong to the same timeout-owned group');
+  // Reaping the timeout monitor does not synchronously reap every group member.
+  // Observe only these original identities; never signal a potentially reused PID/PGID.
+  const deadline = performance.now() + 500;
+  for (const identity of identities) {
+    for (;;) {
+      const stat = await readFile(`/proc/${identity.pid}/stat`, 'utf8').catch(error => { if (error.code === 'ENOENT') return ''; throw error; });
+      const fields = stat.slice(stat.lastIndexOf(')') + 2).trim().split(/\s+/);
+      if (!stat || fields[19] !== identity.start || ['Z', 'X'].includes(fields[0])) break;
+      assert.ok(performance.now() < deadline, `Timed-out probe descendant still running: ${JSON.stringify({identity, state: fields[0]})}`);
+      await pause(5);
+    }
   }
+  assert.ok(performance.now() - started < 5000, 'Cleanup was observed before the fixture could exit naturally');
 });
