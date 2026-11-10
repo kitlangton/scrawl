@@ -195,9 +195,11 @@ preparation receipt.
 
 Fresh environment qualification established same-user GNOME Wayland
 (`DISPLAY=:0`, `WAYLAND_DISPLAY=wayland-0`), gnome-shell 46.0/libmutter 46.2,
-two logical 1280×800 outputs at 1× and USB mouse EV_REL X/Y. Optional
-`--outputs 2 --relative-mouse` requires runner commit `aaf681411` (PR #1082);
-the default launcher is unchanged. StatusNotifierWatcher is absent, the account
+two logical 1280×800 outputs at 1× and USB mouse EV_REL X/Y, using historical
+runner `aaf681411` (PR #1082). The current runner accepts `--outputs 2` to add
+the second VirtIO GPU; the default is one output, and prepared receipts bind
+the count. The historical `--relative-mouse` option is not part of this runner.
+StatusNotifierWatcher is absent, the account
 has no broad passwordless sudo, and the image has no Apparent state/autostart or
 personal data. This is environment qualification only: capture, scale/coordinates,
 focus/ink, package and receiver acceptance remain unrun by this qualification.

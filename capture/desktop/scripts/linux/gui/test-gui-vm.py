@@ -141,6 +141,21 @@ class GuestIsolationTests(unittest.TestCase):
         network = command[command.index('-netdev') + 1]
         self.assertEqual(network, 'user,id=net0,hostfwd=tcp:127.0.0.1:23456-:22,restrict=on')
 
+    @patch.object(runner.os, 'getgroups', return_value=[1234])
+    @patch.object(runner.Path, 'stat', return_value=SimpleNamespace(st_gid=1234))
+    def test_two_outputs_add_only_the_owned_secondary_gpu(self, _stat, _groups):
+        directory = Path('/synthetic/job')
+        args = (directory / 'disk.qcow2', directory / 'OVMF_VARS.fd', directory, 23456, 3072, True)
+        default = runner.qemu_command(*args)
+        self.assertEqual(default, runner.qemu_command(*args, outputs=1))
+        dual = runner.qemu_command(*args, outputs=2)
+        self.assertEqual(dual[:-2], default)
+        self.assertEqual(dual[-2:], ['-device', 'virtio-gpu-pci,id=apparent-second-display'])
+        self.assertEqual(dual.count('virtio-vga'), 1)
+        for invalid in (0, 3):
+            with self.assertRaises(ValueError):
+                runner.qemu_command(*args, outputs=invalid)
+
     def test_expiry_is_armed_before_guest_boot_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as scratch:
             with patch.object(runner.subprocess, "run") as command:
@@ -382,6 +397,32 @@ class PreparationTests(unittest.TestCase):
                 overlay.assert_not_called()
                 self.assertIn('prepared inputs changed', status['primary_failure']['message'])
                 self.assertEqual(status['product'], 'unrun')
+
+    def test_prepared_receipt_rejects_changed_output_hardware_before_allocation(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            options = self.inputs(root)
+            code, prepared, _ = self.invoke(options, root / 'prepared', '--preflight-only')
+            self.assertEqual(code, 0)
+            self.assertEqual(prepared['outputs'], 1)
+            code, status, overlay = self.invoke(options, root / 'r', '--outputs', '2',
+                                              '--prepared-inputs', str(root / 'prepared/result.json'))
+            self.assertNotEqual(code, 0)
+            overlay.assert_not_called()
+            self.assertEqual(status['primary_failure']['stage'], 'preflight')
+            self.assertIn('prepared inputs changed', status['primary_failure']['message'])
+            self.assertEqual(status['product'], 'unrun')
+
+    def test_two_output_prepared_receipt_reaches_allocation_when_unchanged(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            options = [*self.inputs(root), '--outputs', '2']
+            code, prepared, _ = self.invoke(options, root / 'prepared', '--preflight-only')
+            self.assertEqual(code, 0)
+            self.assertEqual(prepared['inputs']['outputs'], 2)
+            _, status, overlay = self.invoke(options, root / 'r', '--prepared-inputs', str(root / 'prepared/result.json'))
+            overlay.assert_called_once()
+            self.assertEqual(status['primary_failure']['message'], 'allocation sentinel')
 
     def test_unchanged_prepared_inputs_reach_allocation(self):
         with tempfile.TemporaryDirectory() as scratch:

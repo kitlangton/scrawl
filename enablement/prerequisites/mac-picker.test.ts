@@ -186,3 +186,43 @@ test('initial runtime recovery is one explicit read within the original shared s
  const host=readFileSync('capture/desktop/ui/frontend/electron/main.cjs','utf8');
  assert.match(host,/Date\.now\(\) - lastRead < 1000/,'Fixture cooldown must match the shipped state-read cache');
 });
+
+test('bootstrap failure evidence distinguishes native windows from renderer readiness without page content',()=>{
+ const source=readFileSync('capture/desktop/ui/frontend/tests/mac-storage-native.cjs','utf8');
+ const start=source.indexOf('function bootstrapFailure('),end=source.indexOf('async function within(',start);
+ assert.ok(start>=0&&end>start);
+ const observe=new Function(source.slice(start,end)+'\nreturn bootstrapFailure;')();
+ const window=(id:number,destroyed=false)=>({id,isVisible:()=>true,webContents:{
+  isDestroyed:()=>destroyed,isLoadingMainFrame:()=>{assert.equal(destroyed,false);return true;},
+  isCrashed:()=>{assert.equal(destroyed,false);return false;},
+  getOSProcessId:()=>{assert.equal(destroyed,false);return 123;},
+  getURL:()=>{throw Error('must not inspect page content');},
+ }});
+ const result=observe({app:{isReady:()=>true},BrowserWindow:{getAllWindows:()=>[window(1),window(2,true),window(3)]}});
+ assert.equal(result.ready,true);assert.equal(result.windowCount,3);assert.equal(result.windows.length,2);
+ assert.deepEqual(result.windows[0],{id:1,visible:true,contentsDestroyed:false,loadingMainFrame:true,crashed:false,rendererPid:123});
+ assert.deepEqual(result.windows[1],{id:2,visible:true,contentsDestroyed:true});
+});
+
+test('a native window after firstWindow timeout never converts the original failure into acceptance',async()=>{
+ const source=readFileSync('capture/desktop/ui/frontend/tests/mac-storage-native.cjs','utf8');
+ const start=source.indexOf('    try {\n      page = await firstWindow;');
+ const end=source.indexOf('    await bootstrap;\n    report.electron =',start);
+ assert.ok(start>=0&&end>start);
+ const AsyncFunction=Object.getPrototypeOf(async function(){}).constructor;
+ const actual=new AsyncFunction('firstWindow','application','report','bootstrap','within','budget','bootstrapFailure',
+  'let page;\n'+source.slice(start,end)+'\nreturn page;');
+ for(const diagnosticFails of [false,true]) {
+  const failure=new Error('original firstWindow timeout');
+  const report:any={electronBootstrap:{}};
+  const application={windows:()=>[],evaluate:async()=>{
+   if(diagnosticFails)throw Error('diagnostic unavailable');
+   return {ready:true,windows:[{id:1,visible:true}]};
+  }};
+  await assert.rejects(actual(Promise.reject(failure),application,report,Promise.resolve(),
+   (promise:Promise<unknown>)=>promise,()=>1500,()=>{}),error=>error===failure);
+  assert.equal(report.electronBootstrap.attachedWindowsAtFailure,0);
+  if(diagnosticFails)assert.equal(report.electronBootstrap.failureObservationError,'diagnostic unavailable');
+  else assert.equal(report.electronBootstrap.failure.windows[0].visible,true);
+ }
+});

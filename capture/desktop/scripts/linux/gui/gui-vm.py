@@ -169,7 +169,7 @@ def prepared_inputs(args):
                          'inode': template.st_ino, 'size': template.st_size,
                          'mtime_ns': template.st_mtime_ns, 'ctime_ns': template.st_ctime_ns},
             'desktop': args.desktop, 'ssh_user': args.ssh_user,
-            'isolated_network': args.isolated_network}
+            'isolated_network': args.isolated_network, 'outputs': args.outputs}
 
 
 # Used verbatim on both ends: successful scp alone is not verified retention.
@@ -237,7 +237,9 @@ def arm_expiry(directory, seconds):
     return unit
 
 
-def qemu_command(overlay, vars_copy, directory, port, memory, isolated_network=False):
+def qemu_command(overlay, vars_copy, directory, port, memory, isolated_network=False, outputs=1):
+    if outputs not in (1, 2):
+        raise ValueError('only one or two isolated virtual outputs are supported')
     command = [
         "qemu-system-x86_64", "-name", "scrawl-gui-" + directory.name,
         "-machine", "q35,accel=kvm", "-cpu", "host", "-smp", "4", "-m", str(memory),
@@ -252,6 +254,8 @@ def qemu_command(overlay, vars_copy, directory, port, memory, isolated_network=F
         "-qmp", "unix:" + str(directory / "qmp.sock") + ",server=on,wait=off",
         "-monitor", "none", "-serial", "none",
     ]
+    if outputs == 2:
+        command += ['-device', 'virtio-gpu-pci,id=apparent-second-display']
     kvm_group = Path("/dev/kvm").stat().st_gid
     if kvm_group in os.getgroups():
         return command
@@ -347,6 +351,8 @@ def main():
     parser.add_argument("--prepared-inputs", type=Path,
                         help="require inputs to match a successful --preflight-only result.json")
     parser.add_argument("--memory", type=int, default=3072, help="guest MiB (default: 3072)")
+    parser.add_argument("--outputs", type=int, choices=(1, 2), default=1,
+                        help="virtual GPU outputs (default: 1; 2 adds a separate virtio GPU)")
     parser.add_argument("--isolated-network", action="store_true", help="deny guest outbound networking; preserve loopback SSH forwarding")
     parser.add_argument("--boot-timeout", type=int, default=180)
     parser.add_argument("--scenario-timeout", type=int, default=300)
@@ -363,7 +369,7 @@ def main():
     scenario_completed = False
     start = time.monotonic()
     deadline = start + args.job_timeout
-    status = {'version': 1, 'desktop': args.desktop, 'stage': 'preflight', 'progress': ['preflight'],
+    status = {'version': 1, 'desktop': args.desktop, 'outputs': args.outputs, 'stage': 'preflight', 'progress': ['preflight'],
               'environment': 'unknown', 'driver': 'running', 'product': 'unrun',
               'unrun': ['scenario'], 'scenario_exit': None, 'candidate_sha256': None,
               'primary_failure': None, 'secondary_failures': [], 'artifact_retention': 'not_attempted',
@@ -418,7 +424,7 @@ def main():
             vars_copy = directory / "OVMF_VARS.fd"
             copy_firmware(args.ovmf_vars, vars_copy)
             port = available_port()
-            command = qemu_command(overlay, vars_copy, directory, port, args.memory, args.isolated_network)
+            command = qemu_command(overlay, vars_copy, directory, port, args.memory, args.isolated_network, args.outputs)
             # The user manager survives a SIGKILL or OOM kill of this runner.
             # Refuse to boot at all if that independent expiry cannot be armed.
             expiry_unit = arm_expiry(directory, args.job_timeout)
