@@ -237,16 +237,20 @@ def arm_expiry(directory, seconds):
     return unit
 
 
-def qemu_command(overlay, vars_copy, directory, port, memory, isolated_network=False, outputs=1):
+def qemu_command(overlay, vars_copy, directory, port, memory, isolated_network=False, outputs=1, desktop='hyprland'):
     if outputs not in (1, 2):
         raise ValueError('only one or two isolated virtual outputs are supported')
+    # Xorg exposed only one monitor with the separate-provider fixture.
+    # Request two scanouts on one GPU; keep the existing Wayland hardware.
+    x11_heads = desktop == 'gnome-x11' and outputs == 2
+    primary = 'virtio-vga,max_outputs=2,id=apparent-x11-display' if x11_heads else 'virtio-vga'
     command = [
         "qemu-system-x86_64", "-name", "scrawl-gui-" + directory.name,
         "-machine", "q35,accel=kvm", "-cpu", "host", "-smp", "4", "-m", str(memory),
         "-drive", "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd",
         "-drive", "if=pflash,format=raw,file=" + str(vars_copy),
         "-drive", "if=virtio,format=qcow2,file=" + str(overlay) + ",cache=none",
-        "-boot", "order=c", "-device", "virtio-vga", "-display", "none",
+        "-boot", "order=c", "-device", primary, "-display", "none",
         "-vnc", "unix:" + str(directory / "vnc.sock"),
         "-device", "qemu-xhci", "-device", "usb-tablet", "-device", "usb-kbd",
         "-netdev", f"user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22" + (",restrict=on" if isolated_network else ""),
@@ -254,7 +258,7 @@ def qemu_command(overlay, vars_copy, directory, port, memory, isolated_network=F
         "-qmp", "unix:" + str(directory / "qmp.sock") + ",server=on,wait=off",
         "-monitor", "none", "-serial", "none",
     ]
-    if outputs == 2:
+    if outputs == 2 and not x11_heads:
         command += ['-device', 'virtio-gpu-pci,id=apparent-second-display']
     kvm_group = Path("/dev/kvm").stat().st_gid
     if kvm_group in os.getgroups():
@@ -356,7 +360,7 @@ def main():
                         help="require inputs to match a successful --preflight-only result.json")
     parser.add_argument("--memory", type=int, default=3072, help="guest MiB (default: 3072)")
     parser.add_argument("--outputs", type=int, choices=(1, 2), default=1,
-                        help="virtual GPU outputs (default: 1; 2 adds a separate virtio GPU)")
+                        help="virtual outputs (default: 1; 2 uses same-GPU heads on GNOME X11, separate GPUs otherwise)")
     parser.add_argument("--isolated-network", action="store_true", help="deny guest outbound networking; preserve loopback SSH forwarding")
     parser.add_argument("--boot-timeout", type=int, default=180)
     parser.add_argument("--scenario-timeout", type=int, default=300)
@@ -428,7 +432,7 @@ def main():
             vars_copy = directory / "OVMF_VARS.fd"
             copy_firmware(args.ovmf_vars, vars_copy)
             port = available_port()
-            command = qemu_command(overlay, vars_copy, directory, port, args.memory, args.isolated_network, args.outputs)
+            command = qemu_command(overlay, vars_copy, directory, port, args.memory, args.isolated_network, args.outputs, desktop=args.desktop)
             # The user manager survives a SIGKILL or OOM kill of this runner.
             # Refuse to boot at all if that independent expiry cannot be armed.
             expiry_unit = arm_expiry(directory, args.job_timeout)

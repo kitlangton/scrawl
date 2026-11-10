@@ -156,6 +156,23 @@ class GuestIsolationTests(unittest.TestCase):
             with self.assertRaises(ValueError):
                 runner.qemu_command(*args, outputs=invalid)
 
+    @patch.object(runner.os, 'getgroups', return_value=[1234])
+    @patch.object(runner.Path, 'stat', return_value=SimpleNamespace(st_gid=1234))
+    def test_x11_two_heads_share_one_gpu_without_changing_old_hardware(self, _stat, _groups):
+        directory = Path('/synthetic/job')
+        args = (directory / 'disk.qcow2', directory / 'OVMF_VARS.fd', directory, 23456, 3072, True)
+        single = runner.qemu_command(*args)
+        for desktop in ('hyprland', 'gnome', 'kde', 'gnome-x11'):
+            self.assertEqual(runner.qemu_command(*args, desktop=desktop), single)
+        legacy_dual = runner.qemu_command(*args, outputs=2)
+        for desktop in ('hyprland', 'gnome', 'kde'):
+            self.assertEqual(runner.qemu_command(*args, outputs=2, desktop=desktop), legacy_dual)
+        expected = list(single)
+        expected[expected.index('virtio-vga')] = 'virtio-vga,max_outputs=2,id=apparent-x11-display'
+        actual = runner.qemu_command(*args, outputs=2, desktop='gnome-x11')
+        self.assertEqual(actual, expected)
+        self.assertNotIn('virtio-gpu-pci,id=apparent-second-display', actual)
+
     def test_expiry_is_armed_before_guest_boot_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as scratch:
             with patch.object(runner.subprocess, "run") as command:
@@ -567,7 +584,7 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
         try:
             with patch.object(sys, 'argv', options), \
                  patch.object(runner, 'make_overlay', side_effect=overlay), \
-                 patch.object(runner, 'qemu_command', return_value=[sys.executable, '-c', 'import time; time.sleep(30)']), \
+                 patch.object(runner, 'qemu_command', return_value=[sys.executable, '-c', 'import time; time.sleep(30)']) as builder, \
                  patch.object(runner, 'arm_expiry', return_value='owned-fixture-expiry'), \
                  patch.object(runner, 'wait_for_desktop') as readiness, \
                  patch.object(runner, 'ssh_prefix', return_value=[sys.executable, str(transport), str(root), 'ssh', str(scenario_exit)]), \
@@ -589,6 +606,7 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
             self.assertEqual(writer.returncode, 0)
         status = json.loads((results / 'result.json').read_text())
         self.assertEqual(readiness.call_args.args[-1], desktop or 'hyprland')
+        self.assertEqual(builder.call_args.kwargs['desktop'], desktop or 'hyprland')
         self.assertEqual(status['desktop'], desktop or 'hyprland')
         self.assertEqual((results / 'result.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(status['candidate_sha256'], hashlib.sha256(binary.read_bytes()).hexdigest())
