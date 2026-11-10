@@ -13,6 +13,12 @@ Replace recording-host and the example path with the actual authorized host and 
 For a failed Connect upload, run apparent connect status on the recording computer to find its local bundle and error. Network failures may be retried with apparent connect retry; beta_required means account access is required, not another Google login. A remote agent cannot recover the original local path from a Connect ID alone. Ask the sender for the local handoff if necessary.
 After a failed upload, copy/paste the capture again to obtain its local handoff. Previously pasted Connect IDs do not change. Pending uploads can still use Connect IDs; an ID is not proof of readiness.`;
 
+export function fetchFailure(kind: unknown): string | null {
+  if (kind === 'unavailable') return 'Capture unavailable (not_found). The sender may still be uploading, the capture may have expired or been deleted, or this account/API origin may not have access. Check apparent connect status and confirm the API origin and approved read account with the sender; ask the sender to check upload status or provide a fresh handoff. Retry with --wait 120 if upload is still in progress.';
+  if (kind === 'authorization') return 'Capture read authorization failed. Run apparent connect login for the configured API origin and ask the user to approve its verification link/code, then retry inspection.';
+  return null;
+}
+
 // Native code supplies only a current, consented, generation-checked queue record.
 // Keep workflow eligibility here; unknown and terminal states use the local bundle.
 export function handoffPointer(value: unknown): string | null {
@@ -27,7 +33,7 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const lines = createInterface({ input: process.stdin, crlfDelay: Infinity });
   for await (const line of lines) {
     const request = JSON.parse(line);
-    process.stdout.write(`${JSON.stringify(request.operation === 'alternatives' ? alternatives : handoffPointer(request.job))}\n`);
+    process.stdout.write(`${JSON.stringify(request.operation === 'alternatives' ? alternatives : request.operation === 'fetchFailure' ? fetchFailure(request.kind) : handoffPointer(request.job))}\n`);
     break;
   }
   lines.close();

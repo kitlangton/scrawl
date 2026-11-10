@@ -256,3 +256,16 @@ it is not live Google, deployed Worker, Electron routing or native platform proo
 `cargo test -j 3 --offline hosted_ -- --test-threads=2` exercises the production curl subprocess against an isolated loopback HTTP server, synthetic device auth, complete bundle upload/fetch, restart queue recovery, pending pointers, quota/disable/logout, pending/transport deadlines, corruption, path and symlink rejection and v1 bounds. Tests use private synthetic config/bundle directories, not the user's credentials/captures. Native capture/paste and macOS tooling still require platform proof; a Linux build is not GUI proof.
 
 The independent package tests also exercise renewable account/upload/fetch/share/progress calls, proactive expiry and unexpected 401, separate-process single ownership, transient/permanent refresh failures, scope/grant mismatch, delayed refresh versus disable/logout/new generation, secret-free status, expired-grant revocation, offline logout and process exit after durable response before credential publication. These are synthetic protocol tests, not Better Auth/browser integration evidence; candidate backend-client integration and macOS/Linux native GUI checks remain separate gates.
+
+### Recipient fetch before reservation
+
+A pending pointer can precede upload reservation. Both hosted-ID `inspect` and
+`fetch --wait 120` retry a privacy-preserving `not_found` within their existing
+readiness budget, as well as a known pending manifest. `--wait 0` makes one
+manifest attempt. A 404 does not distinguish absent, expired, deleted, wrong-account
+or wrong-origin captures. Connect's TypeScript handoff policy supplies unavailable
+and read-approval guidance; the existing `connect alternatives` recovery remains.
+Authorization failures do not enter readiness polling. Integrity checks, private
+destinations and atomic complete-bundle publication are unchanged. This restores
+recipient behavior without evidence-first delivery or a claim about any incident's
+exact cause.

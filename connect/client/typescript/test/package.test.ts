@@ -68,6 +68,8 @@ test('packed consumer installs and runs without Rust, compilers or source resolu
     const output=execFileSync(process.execPath,[installedPolicy],{cwd:consumer,env,input:JSON.stringify({job:{id:'a'.repeat(32),status}})+'\n',encoding:'utf8'});
     assert.equal(JSON.parse(output),['pending','ready'].includes(status)?'apparent inspect '+'a'.repeat(32)+'\n':null);
   }
+  const unavailable=execFileSync(process.execPath,[installedPolicy],{cwd:consumer,env,input:'{"operation":"fetchFailure","kind":"unavailable"}\n',encoding:'utf8'});
+  assert.match(JSON.parse(unavailable), /Capture unavailable.*API origin.*fresh handoff/);
   const help=execFileSync(process.execPath,[installedPolicy],{cwd:consumer,env,input:'{"operation":"alternatives"}\n',encoding:'utf8'});
   assert.match(JSON.parse(help),/scp -r/);
   await fs.writeFile(path.join(consumer,'consumer.mts'),`

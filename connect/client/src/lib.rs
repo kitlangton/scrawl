@@ -2174,6 +2174,20 @@ impl Client {
         Ok(())
     }
     pub fn fetch(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
+        self.fetch_inner(id, out, wait).map_err(|error| {
+            let kind = match error.to_string().as_str() {
+                "Hosted API: not_found" => "unavailable",
+                message if message.starts_with("auth_required:") || matches!(message,
+                    "Hosted API: unauthorized" | "Hosted API: forbidden" | "Hosted API: reauthorization_required") => "authorization",
+                _ => return error,
+            };
+            // Presentation stays with Connect's TypeScript handoff owner.
+            Self::handoff_policy(json!({"operation":"fetchFailure","kind":kind}))
+                .ok().and_then(|value| value.as_str().map(str::to_owned))
+                .map(anyhow::Error::msg).unwrap_or(error)
+        })
+    }
+    fn fetch_inner(&self, id: &str, out: &Path, wait: u64) -> Result<PathBuf> {
         ensure!(
             valid_id(id),
             "Capture ID must be 32 lowercase hexadecimal characters"
@@ -2217,7 +2231,20 @@ impl Client {
                 None,
                 timeout,
                 &|| true,
-            )?;
+            );
+            // A pointer may precede reservation; a privacy-safe 404 also hides
+            // unavailable or inaccessible captures. Never retry authorization.
+            let reply = match reply {
+                Ok(reply) => reply,
+                Err(error) if error.to_string() == "Hosted API: not_found"
+                    && wait > 0 && Instant::now() < deadline => {
+                    std::thread::sleep(Duration::from_millis(500)
+                        .min(deadline.saturating_duration_since(Instant::now())));
+                    if Instant::now() >= deadline { return Err(error); }
+                    continue;
+                }
+                Err(error) => return Err(error),
+            };
             ensure!(
                 reply["id"].as_str() == Some(id),
                 "Wrong capture ID in manifest"
