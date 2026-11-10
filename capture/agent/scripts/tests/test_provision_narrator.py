@@ -4,6 +4,7 @@ import io
 import os
 from pathlib import Path
 import tempfile
+import subprocess
 import unittest
 from unittest.mock import patch
 
@@ -27,6 +28,24 @@ class ProvisionTests(unittest.TestCase):
         with patch.object(p, "urlopen", create=True, return_value=io.BytesIO(self.payload if data is None else data)) as request:
             p.ensure_asset(self.fd, "model.onnx", "https://example.org/model", len(self.payload), self.digest)
             return request.call_count
+
+    def test_readiness_missing_cache_does_not_create_directories(self):
+        missing = self.root / "missing/cache"
+        result = subprocess.run(["node", str(Path(__file__).parents[1] / "provision-narrator.ts"),
+                                 "--check", "--cache", str(missing)], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 1)
+        self.assertIn('"status":"unavailable"', result.stdout)
+        self.assertFalse((self.root / "missing").exists())
+
+    def test_typescript_policy_contracts(self):
+        subprocess.run(["node", "--test", str(Path(__file__).with_name("provision-narrator.test.ts"))], check=True)
+
+    def test_check_ignores_interrupted_partials(self):
+        (self.root / ".narrator-interrupted.partial").write_bytes(b"partial")
+        self.assertEqual(p.inspect_cache(self.root), {"assets": False, "worker": False})
+        self.assertTrue((self.root / ".narrator-interrupted.partial").exists())
+        self.assertEqual(self.asset(), 1)
+        self.assertTrue((self.root / ".narrator-interrupted.partial").exists())
 
     def test_download_and_verify_existing_without_network(self):
         self.assertEqual(self.asset(), 1)
@@ -81,6 +100,16 @@ class ProvisionTests(unittest.TestCase):
         with patch.object(p.time, "monotonic", side_effect=[0, 901]):
             with self.assertRaises(TimeoutError): self.asset()
         self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_interrupted_response_removes_only_own_partial_then_retry_succeeds(self):
+        class Interrupted(io.BytesIO):
+            def read(self, size=-1):
+                raise ConnectionResetError("interrupted fixture")
+        with patch.object(p, "urlopen", return_value=Interrupted()):
+            with self.assertRaises(ConnectionResetError):
+                p.ensure_asset(self.fd, "model.onnx", "https://example.org/model", len(self.payload), self.digest)
+        self.assertEqual(list(self.root.iterdir()), [])
+        self.assertEqual(self.asset(), 1)
 
     def test_refuses_https_downgrade(self):
         with self.assertRaises(ValueError):

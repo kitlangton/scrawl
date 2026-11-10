@@ -2,19 +2,49 @@
 
 This is an optional worker, not an app dependency. Its own manifest and lockfile
 are intentional; do not add these dependencies to the root Cargo files.
-The app owns cue scheduling, fitting, mixing and final publication.
+Export currently owns cue scheduling, fitting, mixing and final publication.
+Kokoro is text-to-speech narration; Parakeet and macOS Apple Speech transcribe
+recorded audio and are not narrator provisioning dependencies.
 
 ## Provision explicitly
 
 From the repository root, run:
 
 ```sh
-python3 capture/agent/scripts/provision-narrator.py
+node capture/agent/scripts/provision-narrator.ts --check
+# First setup only, when the native worker is absent:
+node capture/agent/scripts/provision-narrator.ts --build-from-source
 ```
 
-Requires Python 3.10+, Cargo/Rust 1.92+ and the platform's normal native linker.
+Requires Node 22.18+ and Python 3.10+. A missing worker additionally requires
+Cargo/Rust 1.92+ and the platform's normal native linker. No narrator executable
+is published in the current release assets: a fresh setup still needs this explicit
+source-build prerequisite. Do not invent a release URL or silently substitute TTS.
+Existing workers are reused without Cargo; an incompatible/broken worker fails
+the synthesis check. Use explicit `--rebuild-from-source` to replace that worker
+from locked source (failed builds preserve it); this is never automatic. Pinned model/voice files are verified
+even on reuse. Run setup without `--check` to download missing assets for an
+existing worker. The Python entry point remains a compatibility launcher into
+this TypeScript setup owner; Python alone owns descriptor-based cache mutation.
+There is no new config writer.
+
+`--check` does not create or change cache directories, download or build. It
+reports JSON `unavailable` for missing prerequisites, `failed` for unsafe/corrupt
+assets or failed synthesis, and `ready` only after pinned asset validation plus
+real synthetic speech and complete mono PCM16 24kHz WAV validation. The smoke cue
+and WAV live in a private disposable `/tmp/apparent-dev-narrator-smoke-*` directory
+and are removed afterward; no speakers are used. Ready certifies synthesis, not
+listening quality or an exported video's acceptance. Setup emits `downloading`
+or `building` while those operations run, then `ready` or `failed`. These are
+invocation events, not a durable background-job registry; after an interruption,
+run check again rather than trusting the last event.
+
+Interrupted partials are never read as assets. A retry uses a new exclusive
+partial and verifies the completed bytes before publication. Only this attempt's
+partial is removed; orphaned partials and existing user files are preserved.
 No prompts, shell evaluation, secrets or OS package installation. Provisioning is
-allowed to use the network: it fetches the two pinned assets and runs
+allowed to use the network: it fetches missing pinned assets and, when explicitly
+requested for a missing or broken worker, runs
 `cargo build --release --locked -j 3` against this manifest. Cargo may fetch
 locked crates; `ort-sys` may fetch its checksum-pinned prebuilt ONNX Runtime.
 The build has a 30-minute timeout and uses a disposable target outside the repo.
@@ -130,9 +160,11 @@ model startup. `strace -f -e trace=network` recorded no network syscalls.
 Float inference can vary in its last bits; output WAV hashes need not match
 across separate runs.
 
-**Mac portability remains unverified.** Run provision/build/tests and actual
-synthesis on the intended Mac architecture; inspect `otool -L`, verify upstream
-ONNX Runtime's architecture/minimum-OS compatibility, and decide signing/notarization
-for distributing the separately cached executable. Exercise Python's dir-fd,
-no-follow, hard-link, rename and deadline behavior there. Nothing here proves
-Mac synthesis, app CLI integration, cue fit, video export or GUI behavior.
+Fresh setup and reuse were also verified on Apple-silicon macOS 26.6.2 with
+Node 24.20, Python 3.14 and Rust 1.92: 16 Python tests plus three TypeScript
+contracts, pinned downloads, locked worker build, real synthesis and a second
+readiness check passed. `otool -L` showed only system libraries/frameworks.
+A synthetic cue produced a complete mono PCM16 24 kHz WAV with nonzero signal
+and no saturated samples; it was inspected silently, without listening approval.
+This does not establish older-macOS compatibility, signing/notarization for a
+published worker, app CLI integration, cue fit, video export or GUI behavior.

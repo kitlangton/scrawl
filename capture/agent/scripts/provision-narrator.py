@@ -4,6 +4,7 @@ from pathlib import Path
 import argparse
 import contextlib
 import hashlib
+import json
 import os
 import secrets
 import signal
@@ -44,7 +45,7 @@ def child_directory(parent_fd, name):
     return os.open(name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=parent_fd)
 
 
-def open_cache(path):
+def open_cache(path, create=True):
     path = Path(os.path.abspath(path))
     if path == ROOT or ROOT in path.parents:
         raise ValueError("cache must be outside the source repository")
@@ -57,7 +58,8 @@ def open_cache(path):
                 pass
             else:
                 raise ValueError("cache must be outside source repositories")
-            child = child_directory(fd, component)
+            child = (child_directory(fd, component) if create else
+                     os.open(component, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=fd))
             os.close(fd)
             fd = child
         try:
@@ -171,33 +173,81 @@ def install_worker(directory_fd, binary):
             os.unlink(temporary, dir_fd=directory_fd)
 
 
+def inspect_cache(path):
+    try:
+        cache = open_cache(path, create=False)
+    except FileNotFoundError:
+        return {"assets": False, "worker": False}
+    try:
+        assets = True
+        for relative, size, digest in [
+            ("model.onnx", MODEL_BYTES, MODEL_SHA256),
+            ("voices/bm_fable.bin", VOICE_BYTES, VOICE_SHA256),
+        ]:
+            parent = cache
+            voices = None
+            try:
+                name = relative
+                if "/" in relative:
+                    voices = os.open("voices", os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW, dir_fd=cache)
+                    info = os.fstat(voices)
+                    if info.st_uid != os.getuid() or info.st_mode & 0o022:
+                        raise ValueError("unsafe voices directory")
+                    parent, name = voices, "bm_fable.bin"
+                fd = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
+                try:
+                    verify(fd, size, digest)
+                finally:
+                    os.close(fd)
+            except FileNotFoundError:
+                assets = False
+            finally:
+                if voices is not None:
+                    os.close(voices)
+        try:
+            info = os.stat("apparent-narrator", dir_fd=cache, follow_symlinks=False)
+            if not stat.S_ISREG(info.st_mode) or info.st_uid != os.getuid() or info.st_mode & 0o022:
+                raise ValueError("worker must be a regular user-owned file, not writable by others")
+            worker = bool(info.st_mode & stat.S_IXUSR)
+        except FileNotFoundError:
+            worker = False
+        return {"assets": assets, "worker": worker}
+    finally:
+        os.close(cache)
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE,
-                        help="asset/worker cache (same default on macOS and Linux)")
-
-    args = parser.parse_args()
+    parser.add_argument("--cache", type=Path, default=DEFAULT_CACHE)
+    parser.add_argument("--operation", choices=["check", "assets", "build"])
+    args, extra = parser.parse_known_args()
+    if args.operation is None:
+        # Compatibility entry point; product setup policy has one TypeScript owner.
+        os.execvp("node", ["node", str(Path(__file__).with_suffix(".ts")), *os.sys.argv[1:]])
+    if extra:
+        parser.error("unexpected arguments")
+    if args.operation == "check":
+        print(json.dumps(inspect_cache(args.cache)))
+        return
     cache = open_cache(args.cache)
     try:
-        voices = child_directory(cache, "voices")
-        try:
-            info = os.fstat(voices)
-            if info.st_uid != os.getuid() or info.st_mode & 0o022:
-                raise ValueError("voices directory must be owned by this user and not writable by others")
-            for fd, name, url, size, digest in [
-                (cache, "model.onnx", MODEL_URL, MODEL_BYTES, MODEL_SHA256),
-                (voices, "bm_fable.bin", VOICE_URL, VOICE_BYTES, VOICE_SHA256),
-            ]:
-                ensure_asset(fd, name, url, size, digest)
-        finally:
-            os.close(voices)
-        # Build artifacts never enter the source tree or the model directory.
-        with tempfile.TemporaryDirectory(prefix="apparent-narrator-build-") as target:
-            command = ["cargo", "build", "--release", "--locked", "-j", "3", "--manifest-path",
-                       str(ROOT / "capture/agent/narrator/Cargo.toml"), "--target-dir", target]
-            subprocess.run(command, check=True, timeout=1800)
-            install_worker(cache, Path(target) / "release/apparent-narrator")
-        print(f"Narrator provisioned: {args.cache.absolute()}")
+        if args.operation == "assets":
+            voices = child_directory(cache, "voices")
+            try:
+                info = os.fstat(voices)
+                if info.st_uid != os.getuid() or info.st_mode & 0o022:
+                    raise ValueError("unsafe voices directory")
+                ensure_asset(cache, "model.onnx", MODEL_URL, MODEL_BYTES, MODEL_SHA256)
+                ensure_asset(voices, "bm_fable.bin", VOICE_URL, VOICE_BYTES, VOICE_SHA256)
+            finally:
+                os.close(voices)
+        else:
+            with tempfile.TemporaryDirectory(prefix="apparent-dev-narrator-build-", dir="/tmp") as target:
+                jobs = str(max(1, min(3, int(os.environ.get("T3_BUILD_JOBS", "3")))))
+                command = ["cargo", "build", "--release", "--locked", "-j", jobs, "--manifest-path",
+                           str(ROOT / "capture/agent/narrator/Cargo.toml"), "--target-dir", target]
+                subprocess.run(command, check=True, timeout=1800)
+                install_worker(cache, Path(target) / "release/apparent-narrator")
     finally:
         os.close(cache)
 
