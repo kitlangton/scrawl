@@ -101,6 +101,7 @@ fn problem(code: &str) -> String {
         "conflict" => "Storage changed during this request. Refresh before trying again.",
         "invalid_path" => "That folder was not accepted. Choose an absolute local folder.",
         "config_write_failed" => "The preference could not be saved. Refresh to read the saved settings.",
+        "outcome_unknown" => "The preference may have been saved. Refresh to read the saved settings before repeating the change.",
         "config_read_failed" => "Storage settings could not be read. Check the config file and refresh.",
         _ => "Folder usage is unavailable or the scan exceeded its limit. Refresh to try again.",
     }.into()
@@ -109,6 +110,26 @@ fn problem(code: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_storage_uncertain_save_requires_readback_before_repeating() {
+        let root = std::env::temp_dir().join(format!("native-storage-{}", crate::shared::ids::make_bundle_id()));
+        std::fs::create_dir(&root).unwrap();
+        let config = root.join("config.json");
+        std::fs::write(&config, r#"{"secret":"keep"}"#).unwrap();
+        let mut state = State::default();
+        let expected = state.view(&config).retention_revision.unwrap();
+        crate::shared::handoff::set_config_directory_sync_failure(true);
+        assert!(!state.command(&config, Command::Retention { preset: Some("forever".into()), expected }));
+        let uncertain = state.view(&config);
+        assert_eq!(uncertain.error.as_deref(), Some("The preference may have been saved. Refresh to read the saved settings before repeating the change."));
+        let raw: serde_json::Value = serde_json::from_slice(&std::fs::read(&config).unwrap()).unwrap();
+        assert_eq!(raw["retention"]["mediaDays"], serde_json::Value::Null);
+        assert_eq!(raw["secret"], "keep");
+        assert!(state.command(&config, Command::Refresh));
+        assert!(state.view(&config).error.is_none());
+        std::fs::remove_dir_all(root).unwrap();
+    }
 
     #[test]
     fn native_storage_keeps_transactions_conflicts_and_reset_without_moving_captures() {

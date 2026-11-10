@@ -3,6 +3,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use anyhow::{Context, Result, ensure};
 
+#[derive(Debug)]
+pub(crate) struct ConfigPublicationUncertain;
+
+impl std::fmt::Display for ConfigPublicationUncertain {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("Config was published but durability was not confirmed")
+    }
+}
+
+impl std::error::Error for ConfigPublicationUncertain {}
+
 pub fn default_config_path() -> PathBuf {
     std::env::var_os("APPARENT_CONFIG")
         .map(PathBuf::from)
@@ -83,15 +94,19 @@ fn update_config_checked_in(
     let tmp = std::ffi::CString::new(format!(".config-{}.tmp", crate::shared::ids::make_bundle_id()))?;
     let mut body = serde_json::to_vec_pretty(&config)?;
     body.push(b'\n');
+    let mut published = false;
     let result = (|| -> Result<()> {
         let mut file = writer.open(&tmp, libc::O_WRONLY | libc::O_CREAT | libc::O_EXCL)?;
         file.write_all(&body)?;
         file.sync_all()?;
+        #[cfg(test)]
+        config_write_hook("before_publish", path);
         ensure!(allowed.is_none_or(|check| check()), "cancelled");
         let fd = writer.directory.as_raw_fd();
         if unsafe { libc::renameat(fd, tmp.as_ptr(), fd, writer.name.as_ptr()) } != 0 {
             return Err(std::io::Error::last_os_error()).context("Could not publish config");
         }
+        published = true;
         #[cfg(test)]
         {
             config_write_hook("before_directory_sync", path);
@@ -110,7 +125,7 @@ fn update_config_checked_in(
             libc::unlinkat(writer.directory.as_raw_fd(), tmp.as_ptr(), 0);
         }
     }
-    result
+    if published { result.context(ConfigPublicationUncertain) } else { result }
 }
 
 struct ConfigWriter {

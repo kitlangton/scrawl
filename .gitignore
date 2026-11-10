@@ -9,3 +9,6 @@
 __pycache__/
 /hosted/wrangler.cd.json
 /capture/agent/narrator/target/
+
+/capture/desktop/ui/frontend/electron/storage-policy.cjs
+/capture/desktop/ui/frontend/.storage-policy-build/

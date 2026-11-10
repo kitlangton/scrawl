@@ -150,25 +150,41 @@ the owned generated-fixture windows and stay outside git.
 
 ## Storage retention and usage (#291)
 
-Installed Settings routes Storage to the branded React presentation by default.
-`experiments.electronCaptureLocation=false` restores the native Storage page on
-its next open. No retention policy is changed by enabling the presentation.
-`readRetention()`, `saveRetention(preset)`, `resetRetention()` and
-`readCaptureUsage()` are the only additional preload methods. Only Save takes
-an argument: a validated `week`, `month` or `forever` identifier. Rust supplies
-the option labels, current/custom policy, policy note, effective path and
-formatted logical-byte usage. No renderer-provided path, config, revision,
-deadline, filesystem, shell or arbitrary IPC operation is accepted.
+On macOS, installed Storage uses the existing React presentation by default;
+`experiments.electronCaptureLocation=false` restores native Storage on its next
+open. Linux retains its continuous native GPUI Settings frame. This bounded #530
+slice re-adopts the Electron policy removed by the Preview 0.12.2 baseline restore
+(#1030); it does not restore the broader migration branch or change pane routing.
+
+TypeScript in `src/storage/` owns Electron location precedence, normalization,
+fallback presentation and retention defaults, labels, validation and save intent.
+`readRetention()` returns bounded presence-aware values; `saveRetention(policy)`
+accepts exactly `mediaDays` and `bundleDays` (u32 or null). Week is 7/30 days,
+Month 30/90 and Forever null/null. Custom known fields stay resettable, including
+malformed values whose effective cleanup policy falls back to Week. Unknown
+nested fields remain on disk. The renderer receives no revision, raw config,
+filesystem capability or arbitrary IPC operation.
+
+Rust remains the sole durable transaction executor and supplies native path
+facts, filesystem availability, usage scans and cleanup execution. The retained
+Linux/native fallback preset menu is still Rust policy/presentation debt. Thus
+this slice does not establish whole-Settings or installed Linux TypeScript
+adoption. Record is the target owner of recording/retention intent; extraction
+from this existing Desktop surface remains migration debt, not a new package.
 
 The existing bounded socket worker admits `retention`, `saveretention`,
 `resetretention` and `usage` through its unchanged activation/expiry gate.
 Main retains the last authoritative retention revision; a concurrent edit
 conflicts rather than silently overwriting it. The existing config transaction
 preserves unrelated top-level and nested policy keys and secrets; Reset removes
-only the recognized retention fields, restoring `Policy::default()` (7-day
+only the recognized retention fields, restoring the compatible default (7-day
 media/30-day bundle policy). A custom hand-edited policy remains visible until
 explicitly replaced. Writes fail closed, including malformed/unsafe config;
 failed or outcome-unknown saves require a refresh and are never retried.
+Cancellation is checked under the writer lock and immediately before publication.
+Errors after rename carry explicit uncertain-publication context, even if the
+new values equal the old values; directory-sync failure never becomes a definite
+no-write claim. Absent keys and explicit JSON null have different CAS revisions.
 
 Saving/resetting nudges the **existing** Rust cleanup worker, as native Settings
 does: it schedules a pass about five seconds later, deferring while recording.
@@ -305,22 +321,27 @@ reload, navigation and closing the window discard an unfinished selection.
 Change and Reset are single-flight. A timeout never retries a mutation: refresh
 to establish its actual outcome before trying again.
 
-The same-user socket accepts strict JSON `{storage:"read",deadline}`,
-`{storage:"set",path,expected,deadline}` and `{storage:"reset",expected,deadline}`
-frames with a trailing newline. `deadline` is same-host monotonic milliseconds;
-Rust caps admission at three seconds and rechecks it after acquiring the config
-lock. Storage uses libuv's clock: `CLOCK_MONOTONIC` on Linux,
-`CLOCK_MONOTONIC_RAW` on macOS. The legacy Rust-client clock is unchanged.
-`expected` is an opaque 16-hex stale-edit fingerprint of **only** the raw
-`capturesDir` value, not a security token or portable content digest.
-Other config edits survive; a changed capture preference refuses the stale save.
+The same-user socket admits bounded `locationfacts`, `probelocation`,
+`setlocation` and `resetlocation` requests. Facts expose only the saved preference's
+kind/value, environment override, home/built-in paths and owner revision to main.
+TypeScript selects a candidate; Rust probes its filesystem availability and checks
+the expected revision before and after. The native capture-time resolver remains
+in place as a safety/data-reader contract. Legacy location read/set/reset requests
+are retained. No Node read-modify-write config store is introduced.
+
+Deadlines use the same-host monotonic clock (libuv: Linux CLOCK_MONOTONIC,
+macOS CLOCK_MONOTONIC_RAW), capped at three seconds. The opaque 16-hex revision
+covers only the owner preference and distinguishes absent from null; it is not a
+security token or portable digest. Other config edits survive under the same
+persistent config flock.
+
 One worker handles Storage without blocking the GUI or queuing config writers.
 Legacy state/start/inspect/stop/cancel requests keep their existing contract.
 
-Rust validates paths, preserves unknown config keys, removes the saved key on
-Reset, and returns authoritative saved/effective/display paths and source
-(`environment`, `configured`, `builtin`, `fallback`). Revisions remain in main;
-raw config and diagnostics never reach the renderer. An environment override
+TypeScript validates the Settings candidate while Rust enforces the narrow
+mutation boundary and actual capture safety. Reset removes only the saved key.
+Main returns projected saved/effective/display paths and source; revisions, raw
+config and diagnostics never reach the renderer. An environment override
 still wins over the saved preference. An unusable saved folder falls back to
 the built-in folder. Existing bundles keep their recorded directory; nothing
 is relocated. Subsequent captures resolve the new preference. Existing
@@ -369,6 +390,7 @@ host config writes), after installing the frontend Electron binary, run from
 the repository root:
 
 ```sh
+(cd capture/desktop/ui/frontend && node --experimental-strip-types scripts/build-storage-policy.ts)
 APPARENT_STORAGE_TEST_ELECTRON="$PWD/capture/desktop/ui/frontend/node_modules/electron/dist/electron" \
   cargo test --offline storage_electron_rust_roundtrip -- --ignored --nocapture
 # On macOS the executable is dist/Electron.app/Contents/MacOS/Electron.
