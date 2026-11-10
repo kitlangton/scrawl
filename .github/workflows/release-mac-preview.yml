@@ -59,6 +59,13 @@ jobs:
           cache-on-failure: true
       - name: Install the Metal toolchain
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
+      - name: Register PostHog desktop release
+        timeout-minutes: 3
+        env:
+          POSTHOG_CLI_API_KEY: ${{ secrets.POSTHOG_CLI_API_KEY }}
+        run: |
+          node --experimental-strip-types --test capture/desktop/scripts/release/posthog-release.test.ts
+          node --experimental-strip-types capture/desktop/scripts/release/posthog-release.ts macos
       - name: Build and verify the preview app
         env:
           APPARENT_APPLE_SIGNING_DIR: ${{ runner.temp }}/apparent-apple-signing

@@ -1,5 +1,26 @@
 # Releasing Apparent
 
+## PostHog release attribution
+
+Mac preview and Linux publication resolve a release before compiling via
+`scripts/release/posthog-release.ts` (PostHog CLI pinned to `0.19.0`). They use
+EU project `329943`, names `apparent-desktop-macos` / `apparent-desktop-linux`,
+the packaged version and the checked-out full commit, including tagged Linux
+builds. Registration failure blocks publication rather than shipping an
+unlinked reporting build. Linux verify-only builds skip registration entirely.
+
+Configure repository secret `POSTHOG_CLI_API_KEY` with a personal key scoped to
+the intended project and **error tracking write**. It is separate from the
+publishable ingestion secret `APPARENT_POSTHOG_TOKEN`; only the returned public
+release UUID is compiled into the app. Do not embed the personal key or expose
+CLI failure output. Registration does not enable alerts or send test exceptions.
+
+Verify the release's version/commit in PostHog Releases and an installed build's
+`$release_id` against that record. Tests with a synthetic UUID prove wiring, not
+live ingestion. Old binaries/events remain unlinked. Rollback is a reverted
+publication workflow/native ID change followed by a normally gated release;
+do not delete provider records or rewrite historical events to simulate success.
+
 ## Temporary Mac preview releases
 
 The fork's **Mac preview release** workflow

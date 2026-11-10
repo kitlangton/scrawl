@@ -175,7 +175,7 @@ impl Report {
             frame["filename"] = json!(file);
             frame["lineno"] = json!(self.line);
         }
-        Ok(json!({
+        let mut payload = json!({
             "api_key": token,
             "event": "$exception",
             // A fresh event identity, not a person, installation or session.
@@ -213,7 +213,14 @@ impl Report {
                     "stacktrace": { "type":"raw", "frames":[frame] }
                 }]
             }
-        }))
+        });
+        // Packaging registers the release; the native transport only forwards
+        // its compiled public ID, including for panics without a JS host.
+        let release_id = env!("APPARENT_POSTHOG_RELEASE_ID");
+        if !release_id.is_empty() {
+            payload["properties"]["$release_id"] = json!(release_id);
+        }
+        Ok(payload)
     }
 }
 

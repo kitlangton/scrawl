@@ -183,6 +183,12 @@ fn payload_is_allowlisted_with_no_user_or_error_text() {
         "$exception_fingerprint",
         "$exception_list",
     ];
+    if !env!("APPARENT_POSTHOG_RELEASE_ID").is_empty() {
+        allowed.push("$release_id");
+        assert_eq!(payload["properties"]["$release_id"], env!("APPARENT_POSTHOG_RELEASE_ID"));
+    } else {
+        assert!(payload["properties"].get("$release_id").is_none());
+    }
     allowed.sort();
     assert_eq!(keys, allowed);
     assert_eq!(payload["properties"]["commit_sha"], env!("APPARENT_COMMIT_SHA"));
