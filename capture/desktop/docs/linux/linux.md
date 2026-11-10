@@ -135,6 +135,22 @@ check, not general mixed-scale parity. Both checks exercised the stock
 AppImage's native controls fallback; they do not qualify the Electron Notes
 editor on Ubuntu.
 
+A separate Ubuntu 24.04/GNOME 46/Xorg 21.1.12 **X11** check on `480efe8c7`
+used two connected 1280×800 outputs at 1× on one VirtIO GPU. A native GTK
+click receipt established the pointer on the second output before the recording
+shortcut. The pointer crossed to the first output and back during capture;
+physical Finish saved the same owned capture with target `(1280,0,1280,800)`.
+The 1280×800 movie contained the right-hand changing synthetic scene throughout
+all 967 frames (32.23 seconds), reviewed in chronological stills rather than
+real-time playback. Original bundle text, keyframe and contact sheet matched.
+A separate recording's physical Cancel returned idle with no saved bundle.
+The live pill remained visible; this is not an overlay-exclusion claim. The stock
+AppImage used its supported extract-and-run path and native controls fallback
+after Electron's SUID sandbox refusal, without disabling the sandbox. This
+source-bound Screen/crossing/Finish/Cancel check does not qualify X11 Area,
+scaling, Notes editing, FUSE-mode launch or later layout-dependency changes;
+those inputs require their own acceptance.
+
 ### Hyprland
 
 The sharing chooser can offer Windows even for a screen request. Apparent checks
