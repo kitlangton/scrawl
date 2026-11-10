@@ -160,10 +160,18 @@ end run
 `;
 
 // Preserve the last AX query in subprocess stderr when a hosted runner stalls.
-// Only logging is inserted: ownership checks, queries and one-shot mutations
-// remain in the one selector above, with the caller's existing deadline.
+// Elapsed wall-clock seconds distinguish cumulative selector cost from the last
+// reached query. AppleScript's local date arithmetic adds no AX request. This is
+// coarse diagnostic timing, not evidence that a reached query completed.
+// Ownership checks, queries, mutations and the caller's deadline are unchanged.
 export const panelScript = pickerScript.split('\n').flatMap((line, index) => {
+  if (line === 'on run argv') return [line, '  set axProbeStartedAt to current date'];
   const query = /^\s*(set|if)\b/.test(line) &&
     /\b(application process|windows?|name|role|buttons|sheets|UI elements|position|size|enabled|frontmost|text fields|value)\b/.test(line);
-  return query ? [`${line.match(/^\s*/)![0]}log "AX probe source-line=${index + 1}"`, line] : [line];
-}).join('\n');
+  return query ? [`${line.match(/^\s*/)![0]}log ("AX probe source-line=${index + 1} elapsedSeconds=" & (my axProbeElapsed(axProbeStartedAt)))`, line] : [line];
+}).join('\n') + `
+-- Explicit script target: never ask System Events to supply the clock.
+on axProbeElapsed(startedAt)
+  return (current date) - startedAt
+end axProbeElapsed
+`;
