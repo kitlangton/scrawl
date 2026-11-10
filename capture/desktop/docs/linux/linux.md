@@ -106,6 +106,16 @@ renegotiated streams fail rather than recording the whole display. KDE Plasma
 5.27.12/KWin 5.27.11 on Ubuntu 24.04 passed physical Area Finish and Cancel with
 one 1280×800 output; all 465 frames of the saved 420×260 movie and bundle images
 matched the selected changing scene. This does not qualify scaled KDE Areas.
+
+A separate Screen check on the same KDE versions began with only Virtual-1
+enabled, then enabled Virtual-2 at the same origin while the sharing dialog
+was pending. KScreen and RandR confirmed two overlapping 1280×800 outputs at
+1× before the user selected Virtual-1 and clicked the enabled Share button.
+Apparent rejected the changed layout, returned idle with no active capture and
+saved no bundle. This used stock candidate `6a3d63d1a`; its relevant capture and
+portal code is unchanged on `98efceea6`. It qualifies that pending-consent
+rejection only, not X11, Area, scale changes, unplugging or general mirroring.
+
 GNOME 46 direct Screen captures separately saved the
 correct changing synthetic content from both 1280×800 outputs at 1×. A separate
 Ubuntu 24.04/GNOME Shell 46.0/libmutter 46.2 check on `521e5e3c4` used the native
