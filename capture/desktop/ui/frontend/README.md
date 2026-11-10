@@ -164,8 +164,10 @@ open. Linux retains its continuous native GPUI Settings frame. This bounded #530
 slice re-adopts the Electron policy removed by the Preview 0.12.2 baseline restore
 (#1030); it does not restore the broader migration branch or change pane routing.
 
-TypeScript in `src/storage/` owns Electron location precedence, normalization,
-fallback presentation and retention defaults, labels, validation and save intent.
+The headless `record/storage` TypeScript package owns Electron location precedence,
+normalization, fallback presentation, retention defaults, labels, validation,
+save intent and renderer request/readback sequencing. React consumes its compiled
+controllers through injected Desktop ports in `src/storage/transport.ts`.
 `readRetention()` returns bounded presence-aware values; `saveRetention(policy)`
 accepts exactly `mediaDays` and `bundleDays` (u32 or null). Week is 7/30 days,
 Month 30/90 and Forever null/null. Custom known fields stay resettable, including
@@ -177,8 +179,10 @@ Rust remains the sole durable transaction executor and supplies native path
 facts, filesystem availability, usage scans and cleanup execution. The retained
 Linux/native fallback preset menu is still Rust policy/presentation debt. Thus
 this slice does not establish whole-Settings or installed Linux TypeScript
-adoption. Record is the target owner of recording/retention intent; extraction
-from this existing Desktop surface remains migration debt, not a new package.
+adoption. Record's policy/controller package can be installed, built, typechecked
+and tested independently; Electron's dialog/revision coordinator, native fallback
+and actual capture/cleanup compatibility remain migration debt. See
+`record/storage/README.md` for the owner commands and exact boundary.
 
 The existing bounded socket worker admits `retention`, `saveretention`,
 `resetretention` and `usage` through its unchanged activation/expiry gate.

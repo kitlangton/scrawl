@@ -1,0 +1,17 @@
+{
+  "name": "@apparent/record-storage",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "types": "./dist/index.d.ts",
+  "engines": {"node": ">=22.18"},
+  "exports": {".": {"types": "./dist/index.d.ts", "import": "./dist/index.js"}},
+  "files": ["dist"],
+  "scripts": {
+    "build": "node --experimental-strip-types build.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "npm run build && node --experimental-strip-types --test test/*.test.ts",
+    "prepack": "npm run build"
+  },
+  "devDependencies": {"typescript": "5.9.3"}
+}

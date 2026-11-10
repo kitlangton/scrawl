@@ -1,4 +1,4 @@
-import type { LocationSnapshot, RetentionPolicy, RetentionPreset, RetentionView } from '../bridge';
+import type { LocationSnapshot, RetentionPolicy, RetentionPreset, RetentionView } from './types.js';
 
 export type RetentionField = { present: boolean; value: number | null };
 export type StoredRetention = { mediaDays: RetentionField; bundleDays: RetentionField };

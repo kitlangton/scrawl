@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@apparent/ui/button';
-import type { CaptureLocation, LocationSnapshot } from './bridge';
+import {LocationController, type LocationState} from '@apparent/record-storage';
 import { Retention } from './retention';
-import { changeCaptureLocation, readCaptureLocation, resetCaptureLocation } from './storage/transport';
+import {locationPorts} from './storage/transport';
 
 const errors: Record<string, string> = {
   conflict: 'The saved location changed while the picker was open. Refresh before choosing again.',
@@ -15,31 +15,17 @@ const errors: Record<string, string> = {
 };
 
 export function Storage({ settings = false }: { settings?: boolean }) {
-  const [result, setResult] = useState<CaptureLocation>({ status: 'disabled' });
-  const [snapshot, setSnapshot] = useState<LocationSnapshot>();
-  const [busy, setBusy] = useState(true);
-  const order = useRef(0);
-  async function request(operation: 'read' | 'change' | 'reset') {
-    const token = ++order.current;
-    setBusy(true);
-    try {
-      const next: CaptureLocation = operation === 'read' ? await readCaptureLocation() :
-        operation === 'change' ? await changeCaptureLocation() : await resetCaptureLocation();
-      if (token !== order.current) return;
-      if (next.status !== 'cancelled') {
-        setResult(next);
-        if (next.status === 'connected') setSnapshot(next.storage);
-        else setSnapshot(undefined); // No stale path masquerading as an authoritative read.
-      }
-    } catch {
-      if (token === order.current) {
-        setSnapshot(undefined);
-        setResult({ status: 'error', code: 'bridge_failed' });
-      }
-    }
-    finally { if (token === order.current) setBusy(false); }
-  }
-  useEffect(() => { void request('read'); return () => { order.current += 1; }; }, []);
+  const [state, setState] = useState<LocationState>({result: {status: 'disabled'}, busy: true});
+  const controller = useRef<LocationController | undefined>(undefined);
+  const {result, snapshot, busy} = state;
+  const request = (operation: 'read' | 'change' | 'reset') => controller.current?.request(operation);
+  useEffect(() => {
+    const current = new LocationController(locationPorts);
+    controller.current = current;
+    const unsubscribe = current.subscribe(setState);
+    void current.request('read');
+    return () => { unsubscribe(); current.dispose(); if (controller.current === current) controller.current = undefined; };
+  }, []);
   if (result.status === 'disabled' && !settings) return null;
   return <section aria-labelledby="storage-title" className="space-y-4 rounded-xl border border-border bg-surface p-6">
     <div className="flex flex-wrap items-center justify-between gap-4">
@@ -67,7 +53,7 @@ export function Storage({ settings = false }: { settings?: boolean }) {
       <Button disabled={busy || result.status !== 'connected'} onClick={() => void request('change')}>Change…</Button>
       <Button variant="outline" disabled={busy || result.status !== 'connected' || !snapshot?.custom} onClick={() => void request('reset')}>Reset</Button>
       {settings && <Button variant="outline" disabled={busy || result.status !== 'connected'} onClick={() => {
-        void window.apparent?.showCaptureFolder().catch(() => setResult({ status: 'error', code: 'bridge_failed' }));
+        void controller.current?.show();
       }}>Show folder</Button>}
     </div>
     {snapshot && !busy && <Retention key={snapshot.effectivePath} effectivePath={snapshot.effectivePath} settings={settings} />}
