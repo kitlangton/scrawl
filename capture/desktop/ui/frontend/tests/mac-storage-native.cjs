@@ -43,6 +43,7 @@ done
 // search other processes, use coordinates, or guess which Return commits a picker.
 // Unknown AX shapes fail with bounded diagnostics from this process alone.
 const { panelScript, prepareStorageChange } = require('../../../../../enablement/prerequisites/mac-picker.ts');
+const { assertReportingRead } = require('../../../../../enablement/prerequisites/reporting-read.ts');
 
 async function within(promise, ms, label) {
   let timer;
@@ -369,8 +370,11 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     await page.reload({ timeout: budget() });
     await expect(reportingToggle).not.toBeChecked({ timeout: budget() });
     await expect(reportingToggle).toBeEnabled({ timeout: budget() });
-    assert.deepEqual(await within(page.evaluate(() => window.apparent.readErrorReporting()), budget(), 'Restarted reporting read'),
-      { status: 'connected', enabled: false });
+    await assertReportingRead({
+      read: () => page.evaluate(() => window.apparent.readErrorReporting()),
+      enabled: false, label: 'Restarted reporting read', timeoutMs: budget(), deadline,
+      observations: report.errorReporting.restartReadAttempts = [],
+    });
     report.errorReporting.reopenAndRustRestartPersisted = true;
     await reportingToggle.click({ timeout: budget() });
     await expect(reportingToggle).toBeChecked({ timeout: budget() });

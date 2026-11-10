@@ -73,6 +73,12 @@ jobs:
         uses: maxim-lobanov/setup-xcode@v1
         with:
           xcode-version: '26.0'
+      - name: Pin selected Xcode for native builds
+        shell: bash
+        run: |
+          selected="$(env -u DEVELOPER_DIR /usr/bin/xcode-select -p)"
+          selected="$(cd "$selected" && pwd -P)"
+          printf 'DEVELOPER_DIR=%s\n' "$selected" >> "$GITHUB_ENV"
       - name: Prepare Metal
         run: xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
       - name: Build signed and notarized Preview candidate
