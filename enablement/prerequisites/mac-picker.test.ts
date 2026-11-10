@@ -125,3 +125,26 @@ test('initial AX startup has a bounded allowance while controls and permission f
  await assert.rejects(driver.preflight(),/synthetic unavailable System Events/);
  for(const call of calls){assert.equal(call.file,'/usr/bin/osascript');assert.equal(call.options.killSignal,'SIGKILL');assert.equal(call.options.maxBuffer,32768);}
 });
+
+test('post-Choose app_busy uses one visible read after authoritative save, never a mutation replay',async()=>{
+ const source=readFileSync('capture/desktop/ui/frontend/tests/mac-storage-native.cjs','utf8');
+ const start=source.indexOf('async function refreshBusyLocation('),end=source.indexOf('async function within(',start);
+ assert.ok(start>=0&&end>start);
+ const recover=new Function(source.slice(start,end)+';return refreshBusyLocation;')();
+ for(const busy of [false,true]){
+  const calls:string[]=[];
+  assert.equal(await recover({idle:async()=>{calls.push('idle');},busy:async()=>{calls.push('observe');return busy;},refresh:async()=>{calls.push('visible-read');}}),busy);
+  assert.deepEqual(calls,busy?['idle','observe','visible-read']:['idle','observe']);
+ }
+ let reads=0;
+ await assert.rejects(recover({idle:async()=>{throw Error('still pending');},busy:async()=>true,refresh:async()=>{reads++;}}),/still pending/);
+ await assert.rejects(recover({idle:async()=>{},busy:async()=>true,refresh:async()=>{reads++;throw Error('read failed');}}),/read failed/);
+ assert.equal(reads,1,'failed reads are not retried');
+ const save=source.indexOf("assert.equal(next.location.storage.savedPath, selected)");
+ const recovery=source.indexOf('report.postChooseVisibleRefresh =');
+ const visible=source.indexOf('await locationStatus.getByText(changed.location.storage.displayPath',recovery);
+ assert.ok(save<recovery&&recovery<visible);
+ const block=source.slice(recovery,visible);
+ assert.doesNotMatch(block,/startNativeChange|panel\(|snapshot\(|change\.click|reset\.click/);
+ assert.match(block,/refreshLocation\.click\(\{ timeout: budget\(\) \}\)/);
+});

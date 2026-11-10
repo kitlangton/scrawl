@@ -45,6 +45,15 @@ done
 const { panelScript, prepareStorageChange } = require('../../../../../enablement/prerequisites/mac-picker.ts');
 const { assertReportingRead } = require('../../../../../enablement/prerequisites/reporting-read.ts');
 
+// A direct authoritative read does not update the renderer's terminal app_busy.
+// Recover only that observed state with one visible read, never replay Choose.
+async function refreshBusyLocation({ idle, busy, refresh }) {
+  await idle();
+  if (!await busy()) return false;
+  await refresh();
+  return true;
+}
+
 async function within(promise, ms, label) {
   let timer;
   try {
@@ -470,6 +479,11 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
       assert.equal(next.location.storage.savedPath, selected);
       return next;
     }, 'Saved location readback');
+    report.postChooseVisibleRefresh = await refreshBusyLocation({
+      idle: () => expect(refreshLocation).toBeEnabled({ timeout: budget() }),
+      busy: () => locationStatus.getByText('Another location request is still running. Refresh when it finishes.', { exact: true }).isVisible(),
+      refresh: () => refreshLocation.click({ timeout: budget() }),
+    });
     await locationStatus.getByText(changed.location.storage.displayPath, { exact: true }).waitFor({ timeout: budget() });
     report.change = { ...changed, files: await assertFiles(selected) };
     assert.equal(report.change.location.storage.source, 'configured');
