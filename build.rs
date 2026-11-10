@@ -6,6 +6,13 @@ mod build_version { include!("enablement/build_version.rs"); }
 fn main() {
     build_version::emit();
     println!("cargo:rerun-if-env-changed=APPARENT_POSTHOG_TOKEN");
+    println!("cargo:rerun-if-env-changed=APPARENT_POSTHOG_RELEASE_ID");
+    let release_id = std::env::var("APPARENT_POSTHOG_RELEASE_ID").unwrap_or_default();
+    assert!(release_id.is_empty() || (release_id.len() == 36
+        && release_id.bytes().enumerate().all(|(i, b)| {
+            if [8, 13, 18, 23].contains(&i) { b == b'-' } else { b.is_ascii_hexdigit() }
+        })), "APPARENT_POSTHOG_RELEASE_ID must be a PostHog release UUID");
+    println!("cargo:rustc-env=APPARENT_POSTHOG_RELEASE_ID={release_id}");
     watch_desktop_tooling();
     if std::env::var("CARGO_CFG_TARGET_OS").as_deref() == Ok("linux") {
         stage_transcribe_shared_objects();

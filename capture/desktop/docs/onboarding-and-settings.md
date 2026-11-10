@@ -64,6 +64,13 @@ synthetic. Without packaging metadata, release is `unknown` and channel/environm
 are `development`; the Cargo package version is not substituted for a release.
 These values are frozen at compilation, never read from a user's runtime environment.
 
+Publication also resolves a PostHog release in EU project `329943` and embeds its
+public UUID as `APPARENT_POSTHOG_RELEASE_ID`; the native adapter sends it as
+`$release_id` for Rust and forwarded Electron failures. Custom `release_version`
+alone does not populate PostHog's Releases catalogue. Local/verification builds
+omit the ID and do not register releases. Existing installed binaries and old
+events are not retroactively linked by this change.
+
 Coverage: desktop recording storage/audio/screen/phone startup, capture finalization,
 video export and Rust panics after startup. This is a synthetic call-site frame,
 **not a full unwound stack or native crash dump**. Segfaults, forced exits,
