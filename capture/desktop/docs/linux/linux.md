@@ -128,6 +128,21 @@ hl.bind("ALT + SHIFT + S", hl.dsp.exec_cmd("apparent shortcut record"), { descri
 
 A config reload drops runtime binds, so Apparent binds them again on the event socket's `configreloaded`. The GlobalShortcuts portal can't stand in: `xdg-desktop-portal` refuses an app without an app id, and `xdg-desktop-portal-hyprland` only fires shortcuts the user bound by hand with `bind = …, global, <app id>:<name>`.
 
+Lua runtime registrations now retain the exact `hl.bind` handle. Pausing for the
+shortcut recorder or normal Quit disables that handle; it never removes all
+bindings on a chord. A compositor-local cache reuses up to 64 distinct action/chord
+pairs across app restarts and reports refusal if full until the user reloads their
+configuration. Its `[managed-v1]` description is diagnostic, not authentication.
+Quit cleanup runs off the UI thread within GPUI's 100 ms wait, with socket timeouts
+of at most 80 ms. Crashes, an unavailable
+compositor or an uncertain cleanup can leave an enabled binding until reload.
+Permanent bindings and inherited registrations without a handle are retained;
+their chord can still be consumed while recording a shortcut. Apparent does not
+reload or edit the user's configuration to resolve that limitation. The legacy
+hyprlang path is unchanged and has no new shutdown-cleanup claim. An obsolete
+inherited default blocks adoption of the permanent Copilot binding until reload,
+rather than claiming that the old chord has been removed.
+
 Clicks on the pill and the picker need four things, found in Hyprland's source (`ViewHitTester.cpp`, `XSurface.cpp`) and Omarchy's `windows.lua`, because the symptom is always the same: the click lands on the app below.
 
 - Omarchy gives `no_focus` to floating XWayland windows with an empty class and title, which Hyprland's hit test skips. GPUI sets no class on these windows, so `x11::accept_pointer` gives them one.

@@ -6813,6 +6813,9 @@ pub fn run_app(
         // ⌘W, Esc, the close button or Apparent itself: every way a window closes ends up here.
         cx.on_window_closed(|cx| cx.defer(platform::hand_back_keys))
             .detach();
+        #[cfg(target_os = "linux")]
+        cx.on_app_quit(|_| crate::capture::desktop::linux::hyprland::release_runtime_bindings())
+            .detach();
         let (ui_sender, ui_receiver) = flume::unbounded();
         crate::capture::desktop::web::start_server();
         let telemetry = SharedCaptureTelemetry::new(ui_sender);
