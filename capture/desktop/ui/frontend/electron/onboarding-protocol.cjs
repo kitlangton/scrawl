@@ -1,4 +1,4 @@
-const actions = new Set(['continue','back','later','close','settings','change-shortcut','use-desktop-shortcut','skip','watched','practiced','reset-shortcut','cancel-shortcut','practice-paste','practice-locate','practice-pasted','practice-finish']);
+const actions = new Set(['continue','back','later','close','settings','change-shortcut','use-desktop-shortcut','skip','watched','practiced','reset-shortcut','cancel-shortcut','practice-paste','practice-locate','practice-pasted','practice-finish','sign-in','cancel-sign-in','open-sign-in']);
 function parseAction(value) {
  if (typeof value === 'string') {
   if(actions.has(value)||/^pen:(coral|purple|blue|green)$/.test(value)) return {action:value};

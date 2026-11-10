@@ -98,7 +98,15 @@ On Ubuntu 24.04, KDE Plasma 5.27.12/KWin 5.27.11 returned only stream size and
 source type: choosing Virtual-2 while Apparent selected Virtual-1 previously
 saved Virtual-2's wallpaper with Virtual-1's bundle target. Equal dimensions
 could not identify the output. The single-output fallback is a safety limit,
-not multi-output parity. GNOME 46 direct Screen captures separately saved the
+not multi-output parity. For a single real, named output, an Area can also use
+an explicitly returned Monitor stream without position metadata: the native
+adapter requires unchanged topology and exact incoming output dimensions with
+square pixels before cropping. Unknown, mirrored, differently sized or
+renegotiated streams fail rather than recording the whole display. KDE Plasma
+5.27.12/KWin 5.27.11 on Ubuntu 24.04 passed physical Area Finish and Cancel with
+one 1280×800 output; all 465 frames of the saved 420×260 movie and bundle images
+matched the selected changing scene. This does not qualify scaled KDE Areas.
+GNOME 46 direct Screen captures separately saved the
 correct changing synthetic content from both 1280×800 outputs at 1×. A separate
 Ubuntu 24.04/GNOME Shell 46.0/libmutter 46.2 check on `521e5e3c4` used the native
 picker to select a 420×260 Area on the second output. Physical Finish saved
@@ -134,6 +142,21 @@ hl.bind("ALT + SHIFT + S", hl.dsp.exec_cmd("apparent shortcut record"), { descri
 ```
 
 A config reload drops runtime binds, so Apparent binds them again on the event socket's `configreloaded`. The GlobalShortcuts portal can't stand in: `xdg-desktop-portal` refuses an app without an app id, and `xdg-desktop-portal-hyprland` only fires shortcuts the user bound by hand with `bind = …, global, <app id>:<name>`.
+
+Lua runtime registrations now retain the exact `hl.bind` handle. Pausing for the
+shortcut recorder or normal Quit disables that handle; it never removes all
+bindings on a chord. A compositor-local cache reuses up to 64 distinct action/chord
+pairs across app restarts and reports refusal if full until the user reloads their
+configuration. Its `[managed-v1]` description is diagnostic, not authentication.
+Quit cleanup runs off the UI thread within GPUI's 100 ms wait, with socket timeouts
+of at most 80 ms. Crashes, an unavailable
+compositor or an uncertain cleanup can leave an enabled binding until reload.
+Permanent bindings and inherited registrations without a handle are retained;
+their chord can still be consumed while recording a shortcut. Apparent does not
+reload or edit the user's configuration to resolve that limitation. The legacy
+hyprlang path is unchanged and has no new shutdown-cleanup claim. An obsolete
+inherited default blocks adoption of the permanent Copilot binding until reload,
+rather than claiming that the old chord has been removed.
 
 Clicks on the pill and the picker need four things, found in Hyprland's source (`ViewHitTester.cpp`, `XSurface.cpp`) and Omarchy's `windows.lua`, because the symptom is always the same: the click lands on the app below.
 
