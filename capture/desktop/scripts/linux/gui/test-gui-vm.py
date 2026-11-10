@@ -243,6 +243,32 @@ class GuestIsolationTests(unittest.TestCase):
                     self.assertEqual(setters[0][4], ('(qqiiuu)', (325, 203, 1280, 0, 1280, 800)))
                 stream.close.assert_called_once()
 
+    def test_fragmented_qmp_response_cannot_extend_boot_deadline(self):
+        with tempfile.TemporaryDirectory() as scratch, socket.socket(socket.AF_UNIX) as server:
+            root = Path(scratch)
+            server.bind(str(root / 'qmp.sock'))
+            server.listen(1)
+            server.settimeout(1)
+            def trickle():
+                with server.accept()[0] as peer:
+                    try:
+                        for _ in range(30):
+                            peer.sendall(b' ')
+                            time.sleep(.02)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+            worker = threading.Thread(target=trickle)
+            worker.start()
+            start = time.monotonic()
+            try:
+                with patch.object(runner, 'x11_display_support', return_value=(MagicMock(), MagicMock())):
+                    with self.assertRaises(TimeoutError):
+                        runner.activate_x11_head(root, SimpleNamespace(poll=lambda: None), start + .08)
+                self.assertLess(time.monotonic() - start, .4)
+            finally:
+                worker.join(2)
+            self.assertFalse(worker.is_alive())
+
     def test_missing_x11_qmp_socket_obeys_original_deadline(self):
         with tempfile.TemporaryDirectory() as root, patch.object(runner, 'x11_display_support', return_value=(MagicMock(), MagicMock())):
             start = time.monotonic()
