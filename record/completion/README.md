@@ -56,7 +56,9 @@ It never reports copied based on child exit or renderer readiness.
 Desktop's existing `scripts/build-pill.ts` typechecks these sources and emits
 the worker into ignored `electron/record-completion/`. Existing settings staging
 copies that directory with the locked runtime. No Cargo build input embeds the
-policy. A policy-only owner build is independent; an installed composition still
+policy. Native CI prerequisite preparation also runs that generator and requires
+all three worker outputs before Cargo, including in jobs without a renderer build.
+A policy-only owner build is independent; an installed composition still
 requires Desktop packaging and native acceptance. No CI savings are claimed.
 
 `npm run test:pill` in the Desktop frontend checks the generated worker with the
