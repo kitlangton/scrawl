@@ -18,6 +18,7 @@ export function checkNativeInputs(root: string, platform = process.platform): st
     'capture/desktop/ui/frontend/electron/main.cjs',
     'capture/desktop/ui/frontend/electron/preload.cjs',
     'capture/desktop/ui/frontend/electron/runtime.cjs',
+    'capture/desktop/ui/frontend/electron/connect.cjs',
     'capture/desktop/ui/frontend/electron/storage-policy.cjs',
   ];
   if (platform === 'darwin') inputs.push(
@@ -40,5 +41,9 @@ export function checkNativeInputs(root: string, platform = process.platform): st
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1])).href) {
+  // The existing workflow invokes this entrypoint after the locked frontend
+  // install and before Cargo. Prepare the TS-owned artifact here as well as in
+  // owner-local build/test commands; a clean checkout has no committed CJS donor.
+  await import('../../capture/desktop/ui/frontend/scripts/build-connect-transport.ts');
   console.log('Native prerequisites ready: ' + checkNativeInputs(process.cwd()));
 }

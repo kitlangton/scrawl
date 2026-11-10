@@ -1,11 +1,18 @@
 // One Rust controller per owned stream. EOF cancels login; never retry a command.
-const { lstat } = require('node:fs/promises');
-const net = require('node:net');
-const path = require('node:path');
-const actions = new Set(['connect', 'allow', 'cancel', 'check', 'disable', 'disconnect', 'open-browser', 'request-disable', 'request-disconnect', 'open-shared-links']);
-const failed = () => ({ status: 'error' });
-const text = value => typeof value === 'string' && Buffer.byteLength(value) <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
-function browserUri(value, code) {
+import { lstat } from 'node:fs/promises';
+import net from 'node:net';
+import path from 'node:path';
+import type { ConnectAction, ConnectSettings as SettingsResult, ConnectView } from '../src/bridge';
+
+type Reply = SettingsResult & { openUri?: string };
+// JSON is untrusted. decode validates every projected field before returning it;
+// this shape describes expected wire members, not an assertion of validation.
+type WireReply = { error?: unknown; connect?: ConnectView; openUri?: string };
+
+const actions = new Set<string>(['connect', 'allow', 'cancel', 'check', 'disable', 'disconnect', 'open-browser', 'request-disable', 'request-disconnect', 'open-shared-links']);
+const failed = (): Reply => ({ status: 'error' });
+const text = (value: unknown): value is string => typeof value === 'string' && Buffer.byteLength(value) <= 4096 && !/[\x00-\x1f\x7f]/.test(value);
+function browserUri(value: unknown, code: string | null) {
   if (!text(value) || /[\s%#\\"']/.test(value)) return false;
   try {
     const url = new URL(value);
@@ -14,27 +21,27 @@ function browserUri(value, code) {
       (!url.search || url.search === `?code=${code}`);
   } catch { return false; }
 }
-function linksUri(value) {
+function linksUri(value: unknown) {
   if (!browserUri(value, null)) return false;
-  const url = new URL(value);
+  const url = new URL(value as string);
   return !url.search && ['/connect/shares', '/hosted/shares'].includes(url.pathname);
 }
-function decode(value, action) {
+function decode(value: WireReply | null, action?: ConnectAction): Reply {
   if (value?.error === 'feature_disabled') return { status: 'disabled' };
   const v = value?.connect;
-  if (!v || !['title', 'status', 'detail', 'note'].every(key => text(v[key])) ||
+  if (!v || !['title', 'status', 'detail', 'note'].every(key => text(v[key as keyof ConnectView])) ||
       !(v.server === null || text(v.server)) ||
       !(v.userCode === null || (typeof v.userCode === 'string' && /^[a-zA-Z0-9-]{1,128}$/.test(v.userCode))) ||
       !(v.verificationUri === null || browserUri(v.verificationUri, v.userCode)) ||
       !Array.isArray(v.buttons) || v.buttons.length > actions.size ||
       !v.buttons.every(b => actions.has(b.command) && text(b.title) && typeof b.enabled === 'boolean') ||
       new Set(v.buttons.map(b => b.command)).size !== v.buttons.length) return failed();
-  let presentation;
+  let presentation: ConnectView['presentation'];
   if (v.presentation !== undefined) {
     const p = v.presentation;
     if (!p || !['neutral','success','progress','warning','failure'].includes(p.tone) ||
-        !['headline','detail','note'].every(k => text(p[k])) ||
-        !['artwork','compact','accountMenu'].every(k => typeof p[k] === 'boolean') ||
+        !['headline','detail','note'].every(k => text(p[k as keyof typeof p])) ||
+        !['artwork','compact','accountMenu'].every(k => typeof p[k as keyof typeof p] === 'boolean') ||
         !(p.accountInitial === undefined || typeof p.accountInitial === 'string' && /^[\p{L}\p{N}]{1,3}$/u.test(p.accountInitial)) ||
         !Array.isArray(p.buttons) || p.buttons.length > actions.size ||
         !p.buttons.every(b => actions.has(b.command) && text(b.title) && typeof b.enabled === 'boolean') ||
@@ -46,21 +53,22 @@ function decode(value, action) {
       ...(p.accountInitial === undefined ? {} : { accountInitial:p.accountInitial }),
       buttons:p.buttons.map(({command,title,enabled}) => ({command,title,enabled})), menuActions:[...p.menuActions], sharedLinksUrl:p.sharedLinksUrl ?? null };
   }
-  if (value.openUri !== undefined && !(
+  if (value?.openUri !== undefined && !(
       action === 'open-browser' && value.openUri === v.verificationUri && browserUri(value.openUri, v.userCode) ||
       action === 'open-shared-links' && value.openUri === presentation?.sharedLinksUrl && linksUri(value.openUri))) return failed();
   return { status: 'connected', view: { title: v.title, status: v.status, detail: v.detail, note: v.note,
     ...(presentation === undefined ? {} : { presentation }),
     server: v.server, verificationUri: v.verificationUri, userCode: v.userCode,
     buttons: v.buttons.map(({ command, title, enabled }) => ({ command, title, enabled })) },
-    ...(value.openUri === undefined ? {} : { openUri: value.openUri }) };
+    ...(value?.openUri === undefined ? {} : { openUri: value.openUri }) };
 }
 class ConnectSettings {
-  constructor(home, timeout = 3500) {
-    this.home = home;
-    this.timeout = timeout;
-    this.generation = 0;
-  }
+  private generation = 0;
+  private socket?: net.Socket;
+  private opened = false;
+  private busy = false;
+  private finish?: (result: Reply) => void;
+  constructor(private readonly home: string, private readonly timeout = 3500) {}
   close() {
     this.generation += 1;
     this.socket?.destroy();
@@ -68,17 +76,17 @@ class ConnectSettings {
     this.opened = false;
     this.finish?.({ status: 'cancelled' });
   }
-  async request(action) {
-    let timer;
+  async request(action?: ConnectAction): Promise<Reply> {
+    let timer: ReturnType<typeof setTimeout> | undefined;
     try {
-      return await Promise.race([this.exchange(action), new Promise(resolve => {
+      return await Promise.race([this.exchange(action), new Promise<Reply>(resolve => {
         // Includes filesystem admission, not just the socket round trip. A late
         // filesystem completion observes the invalidated generation before I/O.
         timer = setTimeout(() => { this.close(); resolve({ status: 'cancelled' }); }, this.timeout);
       })]);
     } finally { clearTimeout(timer); }
   }
-  async exchange(action) {
+  private async exchange(action?: ConnectAction): Promise<Reply> {
     if (action !== undefined && !actions.has(action)) throw new Error('Invalid Connect action');
     if (this.busy) return failed();
     this.busy = true;
@@ -91,10 +99,10 @@ class ConnectSettings {
         const address = path.join(directory, 'capture.sock');
         let dir, entry;
         try { [dir, entry] = await Promise.all([lstat(directory), lstat(address)]); }
-        catch (error) { return error.code === 'ENOENT' ? { status: 'disconnected' } : failed(); }
+        catch (error) { return (error as NodeJS.ErrnoException).code === 'ENOENT' ? { status: 'disconnected' } : failed(); }
         if (generation !== this.generation) return { status: 'cancelled' };
-        if (!dir.isDirectory() || dir.uid !== process.geteuid() || (dir.mode & 0o077) !== 0 ||
-            !entry.isSocket() || entry.uid !== process.geteuid() || (entry.mode & 0o777) !== 0o600) return failed();
+        if (!dir.isDirectory() || dir.uid !== process.geteuid!() || (dir.mode & 0o077) !== 0 ||
+            !entry.isSocket() || entry.uid !== process.geteuid!() || (entry.mode & 0o777) !== 0o600) return failed();
         const socket = net.createConnection(address);
         this.socket = socket;
         const closed = () => { if (this.socket === socket) this.close(); };
@@ -104,10 +112,10 @@ class ConnectSettings {
       }
       const socket = this.socket;
       const first = !this.opened;
-      const result = await new Promise(resolve => {
+      const result = await new Promise<Reply>(resolve => {
         let bytes = Buffer.alloc(0);
         let finished = false;
-        const finish = result => {
+        const finish = (result: Reply) => {
           if (finished) return;
           finished = true;
           clearTimeout(timer);
@@ -115,12 +123,12 @@ class ConnectSettings {
           if (this.finish === finish) this.finish = undefined;
           resolve(result);
         };
-        const onData = chunk => {
+        const onData = (chunk: Buffer) => {
           bytes = Buffer.concat([bytes, chunk]);
           const newline = bytes.indexOf(10);
           if (bytes.length > 65536 || (newline >= 0 && newline !== bytes.length - 1)) { finish(failed()); return; }
           if (newline < 0) return;
-          try { finish(decode(JSON.parse(bytes.subarray(0, newline).toString('utf8')), action)); }
+          try { finish(decode(JSON.parse(bytes.subarray(0, newline).toString('utf8')) as WireReply, action)); }
           catch { finish(failed()); }
         };
         const timer = setTimeout(() => { finish(failed()); this.close(); }, this.timeout);
@@ -138,4 +146,4 @@ class ConnectSettings {
     } finally { this.busy = false; }
   }
 }
-module.exports = { ConnectSettings, actions, browserUri };
+export { ConnectSettings, actions, browserUri };
