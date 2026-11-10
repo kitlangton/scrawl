@@ -139,13 +139,21 @@ pub fn forward_open() -> Result<()> {
 
 fn forward_open_at(path: &Path, deadline: Instant) -> Result<()> {
     let mut stream = retry_until(deadline, || connect_nonblocking(path))?;
+    #[cfg(test)]
+    retry_trace(if unsafe { libc::fcntl(stream.as_raw_fd(), libc::F_GETFL) } & libc::O_NONBLOCK != 0 { "connected nonblocking" } else { "connected blocking" }, Duration::ZERO);
     let mut sent = 0;
     while sent < 5 {
         let count = retry_until(deadline, || stream.write(&b"open\n"[sent..]))?;
         ensure!(count > 0, "launch connection closed during request");
         sent += count;
     }
+    #[cfg(test)]
+    let shutting_down = Instant::now();
     stream.shutdown(std::net::Shutdown::Write)?;
+    #[cfg(test)]
+    retry_trace("shutdown", shutting_down.elapsed());
+    #[cfg(test)]
+    retry_trace("awaiting acknowledgement", Duration::ZERO);
     let mut reply = [0; 3];
     let mut received = 0;
     while received < reply.len() {
@@ -168,7 +176,12 @@ fn retry_until<T>(
         let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
             return Err(std::io::ErrorKind::TimedOut.into());
         };
-        match operation() {
+        #[cfg(test)]
+        let attempted = Instant::now();
+        let result = operation();
+        #[cfg(test)]
+        retry_trace("io", attempted.elapsed());
+        match result {
             Ok(value) => return Ok(value),
             Err(error)
                 if matches!(
@@ -179,11 +192,27 @@ fn retry_until<T>(
                         | std::io::ErrorKind::ConnectionRefused
                 ) || error.raw_os_error() == Some(libc::EINPROGRESS) =>
             {
+                #[cfg(test)]
+                let sleeping = Instant::now();
                 std::thread::sleep(remaining.min(Duration::from_millis(10)));
+                #[cfg(test)]
+                retry_trace("sleep (at most 10ms requested)", sleeping.elapsed());
             }
             Err(error) => return Err(error),
         }
     }
+}
+
+#[cfg(test)]
+std::thread_local! {
+    static RETRY_TRACE: std::cell::RefCell<Option<Vec<(&'static str, Duration)>>> = const { std::cell::RefCell::new(None) };
+}
+
+#[cfg(test)]
+fn retry_trace(event: &'static str, elapsed: Duration) {
+    RETRY_TRACE.with_borrow_mut(|trace| {
+        if let Some(events) = trace { if events.len() < 128 { events.push((event, elapsed)); } }
+    });
 }
 
 // std's UnixStream::connect has no deadline. Set O_NONBLOCK before connecting,
@@ -306,9 +335,14 @@ mod tests {
             std::thread::sleep(Duration::from_millis(600));
         });
         let start = Instant::now();
-        assert!(forward_open_at(&path, start + Duration::from_millis(100)).is_err());
+        RETRY_TRACE.with_borrow_mut(|trace| *trace = Some(Vec::new()));
+        let result = forward_open_at(&path, start + Duration::from_millis(100));
         let elapsed = start.elapsed();
+        let trace = RETRY_TRACE.with_borrow_mut(Option::take);
+        // Direct stderr retains this one safe timing record even when libtest captures a pass.
+        let _ = writeln!(std::io::stderr().lock(), "launch acknowledgement deadline: elapsed={elapsed:?}, result={result:?}, trace={trace:?}");
         server.join().unwrap();
+        assert!(result.is_err());
         assert!(
             elapsed < Duration::from_millis(500),
             "acknowledgement exceeded deadline: {elapsed:?}"

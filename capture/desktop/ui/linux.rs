@@ -500,6 +500,13 @@ pub(in crate::capture::desktop) struct PillChrome {
     id: Option<u32>,
 }
 
+/// The mapped recording controls, in the same X11 root pixels as the board.
+pub(in crate::capture::desktop) fn coach_anchor() -> Option<[f32; 4]> {
+    let xid = own_window(&PILL_WINDOW)?;
+    let info = x11::window_info(xid as isize)?;
+    info.on_screen().then(|| info.rect.map(|v| v as f32))
+}
+
 impl Drop for PillChrome {
     fn drop(&mut self) {
         if let Some(id) = self.id {

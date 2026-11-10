@@ -353,8 +353,22 @@ pub(in crate::capture::desktop) fn finish_snapshot(
 pub(in crate::capture::desktop) fn frame(cx: &mut App) -> Option<[f32;4]> {
     for handle in cx.windows() {
         if handle.downcast::<WhiteboardWindow>().is_some() {
-            if let Ok(bounds) = handle.update(cx, |_, window, _| window.bounds()) {
-                return Some([bounds.origin.x.into(), bounds.origin.y.into(), bounds.size.width.into(), bounds.size.height.into()]);
+            if let Ok(frame) = handle.update(cx, |_, window, _| {
+                #[cfg(target_os = "linux")]
+                {
+                    // GPUI's cached bounds precede Hyprland's float/move. The
+                    // presentation transport needs the mapped X11 client in pixels.
+                    let xid = crate::capture::desktop::linux::x11::window_id(window)?;
+                    let info = crate::capture::desktop::linux::x11::window_info(xid as isize)?;
+                    return info.on_screen().then(|| info.rect.map(|v| v as f32));
+                }
+                #[cfg(not(target_os = "linux"))]
+                {
+                    let bounds = window.bounds();
+                    Some([bounds.origin.x.into(), bounds.origin.y.into(), bounds.size.width.into(), bounds.size.height.into()])
+                }
+            }) {
+                return frame;
             }
         }
     }

@@ -72,6 +72,8 @@ def main():
                     ignore=shutil.ignore_patterns("foundation-*"))
     shutil.copy2(frontend / "dist/settings.html", app / "dist/settings.html")
     shutil.copy2(frontend / "dist/onboarding.html", app / "dist/onboarding.html")
+    for name in ("presentation", "hyprland", "account"):
+        shutil.copy2(frontend / f"dist/onboarding-{name}.cjs", app / f"dist/onboarding-{name}.cjs")
     shutil.copytree(frontend / "dist/pill", app / "dist/pill")
     installer_ui = app / "electron/installer/ui"
     (installer_ui / "src/installer").mkdir(parents=True)

@@ -75,7 +75,16 @@ html.native-onboarding-shell body { background: transparent !important; margin: 
 .native-coach h1 { font-size: 1.125rem; font-weight: 700; line-height: 1.5; margin: 16px 0 8px; text-wrap: balance; }
 .native-coach p { font-size: 1.125rem; line-height: 1.5; margin: 0 0 16px; text-wrap: pretty; }
 .native-coach button { max-width: 100%; }
-.native-later { display: block; color: var(--apparent-foreground); background: none; border: 0; margin-top: 8px; text-align: left; }
+.native-later { display: block; margin-top: 8px; text-align: left; }
+.native-exit-detail { flex: 1; min-width: 100px; font-size: .875rem; line-height: 1.4; }
+.native-shortcut .native-shortcut-detail { font-size: .9375rem; line-height: 1.4; max-width: 34rem; margin: 8px auto; }
+.native-shortcut-choices { display: flex; flex-wrap: wrap; justify-content: center; gap: 12px; }
+.native-shortcut[data-managed=true] { gap: 12px; }
+.native-shortcut[data-managed=true] p { margin: 0; }
+.native-shortcut[data-managed=true] kbd { min-height: 64px; padding: 8px 16px; font-size: 2rem; }
+.native-account { display: flex; flex-direction: column; align-items: center; gap: 10px; max-width: 36rem; }
+.native-account p { font-size: 1rem; margin: 0; }
+.native-account code { font-size: 1.25rem; letter-spacing: .12em; }
 .native-coach [role=alert], .native-setup [role=alert] { color: var(--apparent-destructive); background: var(--apparent-paper); padding: 8px; }
 .native-coach[data-arrow=true]:before { content: ''; position: absolute; top: -10px; left: calc(var(--coach-arrow,50%) - 9px); width: 18px; height: 18px; background: var(--apparent-surface); border-top: 1px solid var(--apparent-border); border-left: 1px solid var(--apparent-border); transform: rotate(45deg); }
 .native-pencils { display: flex; flex-wrap: wrap; justify-content: center; gap: 16px; max-width: 100%; margin: 32px 0 16px; }

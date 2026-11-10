@@ -26,14 +26,14 @@ jobs:
   # Private-to-authenticated-Actions artifact for installed testing. This job has
   # no release/feed write permission and does not produce a release receipt.
   onboarding-candidate:
-    if: github.event_name == 'workflow_dispatch' && github.repository == 'tryapparent/apparent' && github.ref == 'refs/heads/t3/onboarding-mac-release-baseline'
+    if: github.event_name == 'workflow_dispatch' && github.repository == 'tryapparent/apparent' && (github.ref == 'refs/heads/t3/onboarding-mac-release-baseline' || github.ref == 'refs/heads/fix/onboarding-omarchy-feedback')
     needs: verify
     runs-on: macos-latest
     timeout-minutes: 90
     env:
       APPARENT_PREVIEW_NOTARIZE: 'true'
-      APPARENT_PREVIEW_VERSION: '0.12.2'
-      APPARENT_PREVIEW_BUILD_NUMBER: '12.2'
+      APPARENT_PREVIEW_VERSION: '0.17.2'
+      APPARENT_PREVIEW_BUILD_NUMBER: '17.2'
       APPARENT_PREVIEW_PUBLIC_KEY: ${{ vars.SPARKLE_PREVIEW_PUBLIC_KEY }}
       APPARENT_APPLE_SIGNING_IDENTITY: ${{ vars.APPLE_SIGNING_IDENTITY }}
       APPARENT_APPLE_TEAM_ID: ${{ vars.APPLE_TEAM_ID }}
@@ -109,7 +109,7 @@ jobs:
           for name in ['HostGrotesk-Variable.ttf', 'settings/app/dist/onboarding.html', 'settings/app/electron/onboarding.cjs']:
               assert (resources / name).is_file(), name
           assert 'arm64' in subprocess.check_output(['lipo', '-archs', str(app / 'Contents/MacOS/apparent')], text=True)
-          assets = sorted(pathlib.Path('dist').glob('Apparent-Preview-0.12.2-arm64.*'))
+          assets = sorted(pathlib.Path('dist').glob(f"Apparent-Preview-{os.environ['APPARENT_PREVIEW_VERSION']}-arm64.*"))
           assert {p.suffix for p in assets} >= {'.dmg', '.zip', '.sha256'}
           manifest = {'commit': os.environ['GITHUB_SHA'], 'tree': subprocess.check_output(['git', 'rev-parse', 'HEAD^{tree}'], text=True).strip(),
                       'version': info['CFBundleShortVersionString'], 'build': info['CFBundleVersion'], 'nativeAcceptance': 'pending', 'releaseAdmission': 'held',
@@ -122,9 +122,9 @@ jobs:
           retention-days: 7
           if-no-files-found: error
           path: |
-            dist/Apparent-Preview-0.12.2-arm64.dmg
-            dist/Apparent-Preview-0.12.2-arm64.dmg.sha256
-            dist/Apparent-Preview-0.12.2-arm64.zip
+            dist/Apparent-Preview-${{ env.APPARENT_PREVIEW_VERSION }}-arm64.dmg
+            dist/Apparent-Preview-${{ env.APPARENT_PREVIEW_VERSION }}-arm64.dmg.sha256
+            dist/Apparent-Preview-${{ env.APPARENT_PREVIEW_VERSION }}-arm64.zip
             dist/candidate.json
       - name: Remove job-private signing material
         if: always()

@@ -1624,13 +1624,22 @@ impl ApparentCoordinator {
     /// Polled while the gate holds a request: shows the permissions window once ⌥⇧ is up.
     pub(in crate::capture::desktop) fn tick_onboarding_practice(&mut self,cx:&mut Context<Self>) {
         if let Some(session) = self.onboarding.as_mut() {
+            session.refresh_account();
             session.observe_shortcut_modifiers(crate::capture::engine::runtime::modifier_flags());
         }
         if !self.onboarding.as_ref().is_some_and(|s|s.practice_active()) {return;}
         #[cfg(target_os="macos")]
         let anchor=if self.onboarding.as_ref().is_some_and(|s|s.practice_locating()) {crate::capture::desktop::ui::macos::status_bar_anchor()} else {self.native_pill.as_ref().and_then(|p|p.coach_anchor())};
-        #[cfg(not(target_os="macos"))]
+        #[cfg(target_os="linux")]
+        let anchor=crate::capture::desktop::ui::linux::coach_anchor();
+        #[cfg(not(any(target_os="macos",target_os="linux")))]
         let anchor=None;
+        #[cfg(any(target_os="macos",target_os="linux"))]
+        let anchor = if self.electron_pill_routed
+            && !(cfg!(target_os="macos") && self.onboarding.as_ref().is_some_and(|s| s.practice_locating())) {
+            self.electron_pill.as_ref().and_then(|pill| pill.note_badge_anchor())
+                .map(|rect| rect.map(|value| value as f32))
+        } else { anchor };
         if let Some(session)=self.onboarding.as_mut(){session.practice_anchor(anchor);}
         let board_frame=whiteboard::frame(cx);
         if let Some(session)=self.onboarding.as_mut(){session.practice_board(board_frame);}
@@ -6823,6 +6832,9 @@ pub fn run_app(
         crate::capture::desktop::settings::reconcile_login_item();
         // ⌘W, Esc, the close button or Apparent itself: every way a window closes ends up here.
         cx.on_window_closed(|cx| cx.defer(platform::hand_back_keys))
+            .detach();
+        #[cfg(target_os = "linux")]
+        cx.on_app_quit(|_| crate::capture::desktop::linux::hyprland::release_runtime_bindings())
             .detach();
         let (ui_sender, ui_receiver) = flume::unbounded();
         crate::capture::desktop::web::start_server();
