@@ -149,6 +149,14 @@ jobs:
       - name: Confirm build identity
         if: env.TAG == ''
         run: test "$(git rev-parse HEAD)" = "$CANDIDATE_SHA"
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22.23.0'
+      - name: Build Connect client prerequisite for native tests
+        working-directory: connect/client/typescript
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
       - name: Install build and packaging dependencies
         run: ./capture/desktop/scripts/linux/appimage/dependencies.sh
       - uses: dtolnay/rust-toolchain@stable
