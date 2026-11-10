@@ -147,8 +147,12 @@ for jobs,requested,focused,execution in [('3',True,[],'platform'),('3',False,[],
    commands.append(command)
    if command[0]=='sh': return subprocess.CompletedProcess(command,0 if mac else 1)
    return subprocess.CompletedProcess(command,0,stdout='test result: ok. 2 passed; 0 failed')
-  with patch.object(v,'check_temp_environment'),patch.object(v.subprocess,'run',side_effect=execute),patch.dict(os.environ,{'T3_BUILD_JOBS':jobs,'APPARENT_TIMING_FILE':os.environ['APPARENT_ADAPTER_TIMING']}):
+  with patch.object(v,'check_temp_environment'),patch.object(v,'prepare_connect_typescript',side_effect=lambda:execute(['connect-preparation'])),patch.object(v.subprocess,'run',side_effect=execute),patch.dict(os.environ,{'T3_BUILD_JOBS':jobs,'APPARENT_TIMING_FILE':os.environ['APPARENT_ADAPTER_TIMING']}):
    v.run_checks(dict(selection,focused=focused),offline=False,execution=execution,overlap_root_build=requested)
+  assert commands.count(['connect-preparation']) == (0 if execution=='portable' else 1),commands
+  if execution!='portable':
+   first_native=next(i for i,c in enumerate(commands) if 'cargo' in c or (c[0]=='node' and any(arg.endswith('/ci/root.ts') for arg in c)))
+   assert commands.index(['connect-preparation']) < first_native,commands
   helpers=[c for c in commands if c[0]=='node' and any(arg.endswith('/ci/root.ts') for arg in c)]
   production=[c for c in commands if 'connect/client/tests/encryption-default.test.ts' in c]
   assert bool(production)==(execution!='portable' and not focused),commands
@@ -167,7 +171,7 @@ def failed(command,**kwargs):
  if command[0]=='node': raise subprocess.CalledProcessError(31,command)
  assert 'capture/engine/Cargo.toml' not in command
  return subprocess.CompletedProcess(command,1 if command[0]=='sh' else 0)
-with patch.object(v,'check_temp_environment'),patch.object(v.subprocess,'run',side_effect=failed),patch.dict(os.environ,{'T3_BUILD_JOBS':'3','APPARENT_TIMING_FILE':os.environ['APPARENT_ADAPTER_TIMING']}):
+with patch.object(v,'check_temp_environment'),patch.object(v,'prepare_connect_typescript'),patch.object(v.subprocess,'run',side_effect=failed),patch.dict(os.environ,{'T3_BUILD_JOBS':'3','APPARENT_TIMING_FILE':os.environ['APPARENT_ADAPTER_TIMING']}):
  try:v.run_checks(selection,execution='platform',overlap_root_build=True)
  except subprocess.CalledProcessError as e:assert e.returncode==31
  else:raise AssertionError('failed overlap passed')
