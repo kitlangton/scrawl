@@ -184,6 +184,14 @@ class AdmissionTests(unittest.TestCase):
         self.assertNotIn('secrets.', artifact)
         self.assertNotIn('contents: write', workflow)
 
+    def test_native_artifact_prepares_generated_storage_before_native_preflight(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/verification-mac.yml').read_text()
+        artifact = workflow.split('\n  native-candidate:\n', 1)[1]
+        generate = '(cd capture/desktop/ui/frontend && node --experimental-strip-types scripts/build-storage-policy.ts)'
+        self.assertIn(generate, artifact)
+        self.assertLess(artifact.index('npm --prefix capture/desktop/ui/frontend ci'), artifact.index(generate))
+        self.assertLess(artifact.index(generate), artifact.index('node --experimental-strip-types enablement/prerequisites/native.ts'))
+
     def test_manual_main_verification_retains_identity_and_required_job_checks(self):
         for run in self.runs.values():
             run['event'] = 'workflow_dispatch'

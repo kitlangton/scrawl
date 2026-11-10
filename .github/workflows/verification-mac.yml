@@ -169,6 +169,7 @@ jobs:
           xcrun --sdk macosx metal --version || xcodebuild -downloadComponent MetalToolchain
           npm --prefix capture/desktop/ui/frontend ci --no-audit --no-fund
           node capture/desktop/ui/frontend/node_modules/electron/install.js
+          (cd capture/desktop/ui/frontend && node --experimental-strip-types scripts/build-storage-policy.ts)
           node --experimental-strip-types enablement/prerequisites/native.ts
           cargo fetch --locked
       - name: Package the exact checkout without launch or installed routing
