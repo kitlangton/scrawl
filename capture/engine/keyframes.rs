@@ -5,6 +5,7 @@ const THUMB_WIDTH: usize = 64;
 const THUMB_HEIGHT: usize = 36;
 const THUMB_PIXELS: usize = THUMB_WIDTH * THUMB_HEIGHT;
 const FRAME_GAP_MS: u64 = 750;
+const ACTION_SETTLE_MS: u64 = 250;
 
 /// Sample the centers of a fixed grid; cost is independent of capture resolution.
 fn luma_thumbnail(frame: &RgbaFrame) -> [f32; THUMB_PIXELS] {
@@ -457,6 +458,18 @@ pub fn select_keyframes(
     transcript: &TranscriptData,
     max_keyframes: usize,
 ) -> Vec<(Keyframe, RgbaFrame)> {
+    select_keyframes_with_video_ink(frames, strokes, marks, events, transcript, max_keyframes, None)
+}
+
+pub fn select_keyframes_with_video_ink(
+    frames: &[RgbaFrame],
+    strokes: &[Stroke],
+    marks: &mut [Mark],
+    events: &[InteractionEvent],
+    transcript: &TranscriptData,
+    max_keyframes: usize,
+    video_ink: Option<VideoInk>,
+) -> Vec<(Keyframe, RgbaFrame)> {
     for mark in marks.iter_mut() {
         mark.frame = None;
     }
@@ -506,7 +519,17 @@ pub fn select_keyframes(
                 }))
             }).max();
             Candidate {
-                frame: note_time.map_or_else(|| nearest_frame(&frames, last.t1),
+                frame: note_time.map_or_else(|| {
+                    if video_ink == Some(VideoInk::Captured)
+                        && group.iter().any(|&i| marks[i].pin.is_none() && !marks[i].strokes.is_empty())
+                    {
+                        let end = group.iter().map(|&i| marks[i].t1).max().unwrap_or(last.t1);
+                        // Input delivery precedes presentation. Use the same settling
+                        // interval as clicks, then retain an actual captured sample.
+                        let settled = end.saturating_add(ACTION_SETTLE_MS);
+                        frames.partition_point(|frame| frame.t_ms < settled).min(frames.len() - 1)
+                    } else { nearest_frame(&frames, last.t1) }
+                },
                     |t| frames.partition_point(|frame| frame.t_ms <= t).saturating_sub(1)),
                 span: (first.t0, last.t1),
                 score: 100.0,
@@ -541,7 +564,7 @@ pub fn select_keyframes(
                 // A short delay captures the result of the action rather than the
                 // mouse-down state. Prefer an actual post-action frame when present.
                 let first_after = frames.partition_point(|frame| frame.t_ms < end);
-                let after = nearest_frame(&frames, end.saturating_add(250))
+                let after = nearest_frame(&frames, end.saturating_add(ACTION_SETTLE_MS))
                     .max(first_after.min(frames.len() - 1));
                 let delta = thumbnail_diff(&thumbnails[before], &thumbnails[after]);
                 candidates.push(Candidate {
@@ -919,6 +942,24 @@ fn scene_candidate(frame: usize, span: (u64, u64), diff: f32) -> Candidate {
     }
 }
 
+/// Settling is a sampling heuristic, not a compositor presentation receipt.
+pub fn captured_ink_frame_warning(
+    selected: &[(Keyframe, RgbaFrame)],
+    marks: &[Mark],
+    source: Option<VideoInk>,
+) -> Option<String> {
+    if source != Some(VideoInk::Captured) {
+        return None;
+    }
+    marks.iter().any(|mark| {
+        mark.pin.is_none() && !mark.strokes.is_empty()
+            && selected.iter().any(|(key, _)| {
+                mark.frame.as_deref() == Some(key.file.as_str())
+                    && key.t < mark.t1.saturating_add(ACTION_SETTLE_MS)
+            })
+    }).then(|| "Some captured-ink stills have no settled post-stroke sample. Full stroke metadata is retained; inspect recording.mp4 for the recorded appearance.".into())
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -956,6 +997,41 @@ mod tests {
     }
 
     #[test]
+    fn captured_freehand_allows_pixels_to_settle_after_the_last_input_point() {
+        // Retained native capture: the sample 8ms after the last point still
+        // contained only its first dot; the later sample contained the line.
+        let frames = vec![frame(48120, 0), frame(48224, 0), frame(48524, 255)];
+        let mut marks = vec![mark("line", 48216)];
+        let selected = select_keyframes_with_video_ink(
+            &frames, &[], &mut marks, &[], &TranscriptData::default(), 1,
+            Some(VideoInk::Captured),
+        );
+        assert_eq!(selected[0].0.t, 48524);
+        assert_eq!(selected[0].1.rgba[0], 255);
+        assert!(captured_ink_frame_warning(&selected, &marks, Some(VideoInk::Captured)).is_none());
+    }
+
+    #[test]
+    fn captured_freehand_uses_a_settled_frame_without_changing_other_sources() {
+        let frames = vec![frame(0, 0), frame(900, 0), frame(1100, 0), frame(1300, 255)];
+        for (source, expected) in [(Some(VideoInk::Captured), 1300), (None, 900), (Some(VideoInk::CapturedVideo), 900)] {
+            let mut marks = vec![mark("line", 1000)];
+            let selected = select_keyframes_with_video_ink(&frames, &[], &mut marks, &[], &TranscriptData::default(), 1, source);
+            assert_eq!(selected[0].0.t, expected, "{source:?}");
+        }
+    }
+
+    #[test]
+    fn captured_freehand_reports_a_missing_settled_frame() {
+        let frames = vec![frame(0, 0), frame(900, 0), frame(1008, 0)];
+        let mut marks = vec![mark("line", 1000)];
+        let selected = select_keyframes_with_video_ink(&frames, &[], &mut marks, &[], &TranscriptData::default(), 1, Some(VideoInk::Captured));
+        assert_eq!(selected[0].0.t, 1008, "retain the latest available pixels");
+        assert!(captured_ink_frame_warning(&selected, &marks, Some(VideoInk::Captured)).is_some());
+        assert!(captured_ink_frame_warning(&selected, &marks, None).is_none());
+    }
+
+    #[test]
     fn note_image_precedes_its_editor_and_keeps_original_click_anchor() {
         let frames = vec![frame(0, 0), frame(900, 0), frame(1100, 255), frame(2000, 255)];
         let mut pin = mark("pin-7", 1100);
@@ -963,10 +1039,12 @@ mod tests {
         pin.shape = Shape::Pin;
         let mut marks = vec![pin];
         let notes = vec![InteractionEvent::Note { pin: 7, t: 1000, x: 0.5, y: 0.5, text: "Original target".into() }];
-        let selected = select_keyframes(&frames, &[], &mut marks, &notes, &TranscriptData::default(), 1);
-        assert_eq!(selected[0].0.t, 900);
-        assert_eq!(marks[0].frame.as_deref(), Some(selected[0].0.file.as_str()));
-        assert_eq!(notes[0].timestamp_ms(), 1000);
+        for source in [None, Some(VideoInk::Captured), Some(VideoInk::CapturedVideo)] {
+            let selected = select_keyframes_with_video_ink(&frames, &[], &mut marks, &notes, &TranscriptData::default(), 1, source);
+            assert_eq!(selected[0].0.t, 900);
+            assert_eq!(marks[0].frame.as_deref(), Some(selected[0].0.file.as_str()));
+            assert_eq!(notes[0].timestamp_ms(), 1000);
+        }
     }
 
     #[test]

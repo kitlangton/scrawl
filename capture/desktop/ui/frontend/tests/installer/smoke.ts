@@ -7,7 +7,7 @@ import path from 'node:path';
 import os from 'node:os';
 const require = createRequire(import.meta.url);
 const {_electron: electron, expect} = require('@playwright/test');
-for (const route of ['frog', 'app', 'drag', 'replace', 'reduced']) test(`installer ${route} uses one frog-and-app hop`, {timeout: 30000}, async t => {
+for (const route of ['frog', 'app', 'drag', 'replace', 'reduced', 'delayed-observer']) test(`installer ${route} uses one frog-and-app hop`, {timeout: 30000}, async t => {
   const replace = route === 'replace';
   const root = await fs.mkdtemp(path.join(os.tmpdir(),'apparent-installer-renderer-'));
   let application: any;
@@ -33,6 +33,28 @@ app.on('window-all-closed',()=>app.quit());`);
   const beforeIcon = await page.locator('.installer-app-icon').boundingBox();
   assert.ok(before.y < beforeIcon.y && before.y+before.height <= beforeIcon.y+20,'frog sits on top of the app');
   assert.ok(Math.abs(before.x+before.width/2-beforeIcon.x-beforeIcon.width/2)<1,'frog is centered on app');
+  if(route!=='reduced') await page.locator('.installer-app').evaluate((app:HTMLElement)=>{
+    // Arm in the renderer before the action. A later Node/IPC round trip must
+    // not decide which portion of a real animation the test happens to see.
+    (globalThis as any).__installerHop = new Promise(resolve=>{
+      let frogTop=Infinity,iconTop=Infinity,aligned=true,samples=0,observed=false,done=false;
+      let timer:ReturnType<typeof setTimeout>|undefined;
+      const finish=()=>{done=true;clearTimeout(timer);resolve({frogTop,iconTop,aligned,samples,observed});};
+      function frame(){
+        if(done)return;
+        const hopping=app.closest('.installer-journey')?.getAttribute('data-hopping')==='true';
+        if(hopping){
+          // Existing action/test deadlines bound preparation and confirmation.
+          if(!observed)timer=setTimeout(finish,5000);
+          observed=true;samples++;
+          const frog=app.querySelector('.installer-frog')!.getBoundingClientRect(),icon=app.querySelector('.installer-app-icon')!.getBoundingClientRect();
+          frogTop=Math.min(frogTop,frog.top);iconTop=Math.min(iconTop,icon.top);
+          aligned &&= Math.abs(frog.left+frog.width/2-icon.left-icon.width/2)<1 && frog.top<icon.top;
+        }else if(observed){finish();return;}
+        requestAnimationFrame(frame);
+      }requestAnimationFrame(frame);
+    });
+  });
   if(route==='drag') await page.locator('.installer-app').dragTo(page.locator('.installer-applications'));
   else await page.locator(route==='frog'?'.installer-frog':'.installer-app-icon').click();
   if(replace) {
@@ -43,15 +65,11 @@ app.on('window-all-closed',()=>app.quit());`);
   if(route!=='reduced') {
     await expect(page.locator('.installer-journey')).toHaveAttribute('data-hopping','true');
     assert.equal((await application.evaluate(()=> (globalThis as any).fixtureCalls)).filter((x:any)=>x.action==='install').length,0,'copy waits for the hop');
-    const movement = await page.locator('.installer-app').evaluate((app:HTMLElement)=>new Promise<{frogTop:number;iconTop:number;aligned:boolean}>(resolve=>{
-      const started=performance.now();let frogTop=Infinity,iconTop=Infinity,aligned=true;
-      function frame(){
-        const frog=app.querySelector('.installer-frog')!.getBoundingClientRect(),icon=app.querySelector('.installer-app-icon')!.getBoundingClientRect();
-        frogTop=Math.min(frogTop,frog.top);iconTop=Math.min(iconTop,icon.top);
-        aligned &&= Math.abs(frog.left+frog.width/2-icon.left-icon.width/2)<1 && frog.top<icon.top;
-        if(performance.now()-started<800)requestAnimationFrame(frame);else resolve({frogTop,iconTop,aligned});
-      }requestAnimationFrame(frame);
-    }));
+    // Model a delayed Node/IPC continuation after the early copy-order check.
+    // Real renderer frames must already be observed while Node is unavailable.
+    if(route==='delayed-observer') await application.evaluate(()=>new Promise(resolve=>setTimeout(resolve,1400)));
+    const movement = await page.evaluate(()=> (globalThis as any).__installerHop);
+    assert.ok(movement.observed && movement.samples>1,'real hopping frames were observed');
     assert.ok(movement.frogTop<before.y-24 && movement.iconTop<beforeIcon.y-24,'both frog and app rise in the hop');
     assert.ok(movement.aligned,'frog stays on top of its app throughout the hop');
   }

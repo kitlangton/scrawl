@@ -137,7 +137,21 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     try {
     let last;
     do {
-      try { return await fn(); } catch (error) { last = error; }
+      const attempt = performance.now();
+      try { return await fn(); } catch (error) {
+        last = error;
+        if (label.includes('readiness')) {
+          // Keep the first and most recent failed observations. A later AX
+          // error must not erase the earlier query/deadline that preceded it.
+          const history = (report.readinessAttempts ??= {})[label] ??= [];
+          if (history.length >= 8) history.splice(1, 1);
+          const subprocess = error.stderr !== undefined ? error : error.cause;
+          history.push({ elapsedMs: Math.round(performance.now() - tick),
+            durationMs: Math.round(performance.now() - attempt),
+            detail: String(subprocess?.stderr ?? error.message).slice(-2048),
+            code: subprocess?.code ?? null, signal: subprocess?.signal ?? null });
+        }
+      }
       await sleep();
     } while (Date.now() < until);
     throw new Error(`${label}: ${last?.message ?? 'not ready'}`, { cause: last });

@@ -14,16 +14,17 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   let initialRetentionBusy = true;
   let preset = 'week';
   let custom = false;
+  let storedPolicy = { mediaDays: { present: false, value: null }, bundleDays: { present: false, value: null } };
   let revision = 'a'.repeat(16);
   let failure;
+  let unknownOutcome = false;
   let usageError = false;
   let releaseUsage;
   let holdUsage = true;
   let releaseLocation;
   const requests = [];
   const clients = new Set();
-  const policy = () => ({ revision, custom, retention: { preset, note: 'Rust policy note',
-    options: ['week', 'month', 'forever'].map(id => ({ id, label: id, secret: 'hidden' })) }, secret: 'hidden' });
+  const policy = () => ({ revision, custom, retention: storedPolicy, secret: 'hidden' });
   const server = net.createServer(socket => {
     clients.add(socket); socket.on('close', () => clients.delete(socket)); socket.on('error', () => {});
     socket.once('data', data => {
@@ -32,11 +33,13 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
       const send = value => socket.end(JSON.stringify(value) + '\n');
       if (r.reference || r.connect) return send({ error: 'feature_disabled' });
       if (r.storage === 'retention' && initialRetentionBusy) return send({ error: 'app_busy' });
-      if (r.storage === 'read') {
-        const reply = () => send({ storage: { savedPath: '/captures', effectivePath: '/captures', displayPath: '/captures', source: 'configured', custom: true, revision } });
+      if (r.storage === 'locationfacts') {
+        const reply = () => send({ location: { saved: { kind: 'string', value: '/captures' },
+          environment: { present: false, value: null }, homePath: home, builtinPath: '/builtin', revision } });
         if (!releaseLocation) { releaseLocation = reply; return; }
         return reply();
       }
+      if (r.storage === 'probelocation') return send({ probe: { available: true } });
       if (r.storage === 'usage') {
         if (usageError) return send({ error: 'usage_unavailable', message: 'private failure' });
         const reply = { usage: { effectivePath: '/captures', displayPath: '/captures', formatted: '12 MB', secret: 'hidden' } };
@@ -46,8 +49,17 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
       if (r.storage === 'saveretention' || r.storage === 'resetretention') {
         if (failure) return send({ error: failure, message: 'private failure' });
         assert.equal(r.expected, revision);
-        preset = r.storage === 'saveretention' ? r.preset : 'week';
+        if (r.storage === 'saveretention') {
+          assert.ok(JSON.stringify(r.policy) === JSON.stringify({ mediaDays: 30, bundleDays: 90 }) ||
+            JSON.stringify(r.policy) === JSON.stringify({ mediaDays: null, bundleDays: null }));
+          storedPolicy = { mediaDays: { present: true, value: r.policy.mediaDays }, bundleDays: { present: true, value: r.policy.bundleDays } };
+          preset = r.policy.mediaDays === 30 ? 'month' : r.policy.mediaDays === null ? 'forever' : 'week';
+        } else {
+          preset = 'week'; custom = false;
+          storedPolicy = { mediaDays: { present: false, value: null }, bundleDays: { present: false, value: null } };
+        }
         custom = r.storage === 'saveretention'; revision = (custom ? 'b' : 'c').repeat(16);
+        if (unknownOutcome) { unknownOutcome = false; return send({ error: 'outcome_unknown', message: 'private failure' }); }
       }
       send(policy());
     });
@@ -114,6 +126,14 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   failure = undefined;
   await page.getByRole('button', { name: 'Refresh retention', exact: true }).click();
   await expect(select).toHaveValue('week');
+  unknownOutcome = true;
+  const previousSaves = requests.filter(request => request.storage === 'saveretention').length;
+  await select.selectOption('month');
+  await page.getByRole('button', { name: 'Save retention', exact: true }).click();
+  await expect(page.getByText('The save outcome is unknown.', { exact: false })).toBeVisible();
+  assert.equal(requests.filter(request => request.storage === 'saveretention').length, previousSaves + 1);
+  await page.getByRole('button', { name: 'Refresh retention', exact: true }).click();
+  await expect(select).toHaveValue('month');
   usageError = true;
   await page.getByRole('button', { name: 'Refresh usage', exact: true }).click();
   await expect(page.getByText('Folder usage is unavailable', { exact: false })).toBeVisible();
@@ -122,14 +142,14 @@ test('Retention save/reset/readback, failure, usage loading/error and stale resp
   holdUsage = true;
   await page.evaluate(() => { window.oldUsage = window.apparent.readCaptureUsage(); });
   await expect.poll(() => typeof releaseUsage).toBe('function');
-  await select.selectOption('month');
+  await select.selectOption('forever');
   await page.getByRole('button', { name: 'Save retention', exact: true }).click();
-  await expect(select).toHaveValue('month');
+  await expect(select).toHaveValue('forever');
   releaseUsage(); releaseUsage = undefined;
   assert.deepEqual(await page.evaluate(() => window.oldUsage), { status: 'cancelled' });
   t.diagnostic('Stale usage cancelled');
   const safe = await page.evaluate(() => window.apparent.readRetention());
-  assert.equal(safe.revision, undefined); assert.equal(safe.secret, undefined); assert.equal(safe.retention.options[0].secret, undefined);
+  assert.equal(safe.revision, undefined); assert.equal(safe.secret, undefined);
   assert.equal(await page.evaluate(() => window.apparent.saveRetention('arbitrary').then(() => false, () => true)), true);
   assert.deepEqual(await page.evaluate(() => Object.keys(window.apparent).sort()), [
     'readCaptureLocation', 'changeCaptureLocation', 'resetCaptureLocation', 'readRetention',

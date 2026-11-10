@@ -27,7 +27,7 @@ on run argv
   tell application "System Events"
     set owned to first application process whose unix id is targetPID
     tell owned
-      if (count of windows) is 0 then error "Owned process has no AX windows"
+      if (count of windows) is 0 then error "Owned process has no AX windows; frontmost=" & (frontmost as text)
       set outerWindow to window 1
       set picker to outerWindow
       set depth to 0
