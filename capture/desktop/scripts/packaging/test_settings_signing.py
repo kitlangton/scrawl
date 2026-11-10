@@ -1,5 +1,6 @@
 """Exercise nested Electron signing order without invoking a real signer."""
 import importlib.util
+import json
 from pathlib import Path
 import plistlib
 import subprocess
@@ -29,12 +30,19 @@ class SigningTests(unittest.TestCase):
                 file.parent.mkdir(parents=True, exist_ok=True)
                 file.write_text(name)
             destination = root / "staged"
+            connect = root / "connect/client/typescript"
+            (connect / "dist").mkdir(parents=True)
+            module = "export const syntheticListing = true;\n"
+            (connect / "dist/shares.js").write_text(module)
             script = root / "capture/desktop/scripts/packaging/stage-settings.py"
             with patch.object(stage, "__file__", str(script)), \
                  patch.object(stage.sys, "argv", [str(script), str(destination)]), \
                  patch.object(stage.sys, "platform", "linux"), \
-                 patch.object(stage.subprocess, "run"):
+                 patch.object(stage.subprocess, "run") as build:
                 stage.main()
+            self.assertTrue(any(call.kwargs.get("cwd") == connect and call.args[0] == ["npm", "run", "build"] for call in build.call_args_list))
+            self.assertEqual((destination / "app/connect-client/dist/shares.js").read_text(), module)
+            self.assertEqual(json.loads((destination / "app/connect-client/package.json").read_text()), {"type": "module"})
             self.assertEqual((destination / "app/dist/src/controls/index.html").read_text(), "dist/src/controls/index.html")
             for relative in ("electron/main.cjs", "electron/preload.cjs", "dist/assets/controls.js",
                              "node_modules/@apparent/ui/src/window-theme.cjs"):
