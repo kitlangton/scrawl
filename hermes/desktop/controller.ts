@@ -1,4 +1,9 @@
 export interface Destination { session: string; connectionId: string; profile: string; targetProfile: string; mode: string; local: boolean }
+// Preflight only: native Start still owns atomic capture admission.
+// Completed presents saved-recording Paste controls and can start another take.
+export function captureCanStart(phase: unknown): boolean {
+  return phase === 'idle' || phase === 'completed';
+}
 export const validToken = (s: unknown): boolean => typeof s === 'string' && /^[a-f0-9]{32}$/.test(s);
 export function launchURL(token: string, port: number) {
   if (!validToken(token) || !Number.isInteger(port) || port < 32768 || port > 60999) throw new Error('Invalid recording request');

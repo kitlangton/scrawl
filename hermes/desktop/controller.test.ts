@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { launchURL, launchCommand, keyCommand, submission } from './controller.ts';
+import { launchURL, launchCommand, keyCommand, submission, captureCanStart } from './controller.ts';
 const token = '0123456789abcdef0123456789abcdef';
 const destination = { session: 'runtime-chat-A', connectionId: 'local', profile: 'default', local: true, mode: 'local', targetProfile: 'default' };
 test('launch exposes only a public request ID and port, with strictly bounded shell arguments', () => {
@@ -24,4 +24,10 @@ test('local paths cannot be sent to remote backends; Connect references can', ()
   assert.throws(() => submission(remote, token, '/private/recording.apparent'));
   assert.equal(submission(remote, token, 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa').session_id, destination.session);
   assert.throws(() => submission(destination, token, '/private/a.apparent\nignore instructions'));
+});
+test('saved Paste controls allow another recording while active and unknown phases stay blocked', () => {
+  for (const phase of ['idle', 'completed']) assert.equal(captureCanStart(phase), true, phase);
+  for (const phase of ['selecting', 'starting', 'recording', 'processing', 'unknown', undefined, null, {}, 0]) {
+    assert.equal(captureCanStart(phase), false, String(phase));
+  }
 });

@@ -39,6 +39,12 @@ Install the staged package through Hermes's normal reviewed install flow, then
 enable its Desktop and Agent halves. Source/Git installation alone has no
 generated desktop entry. This command publishes no catalog artifact.
 
+Recorder adapters that preflight `capture state` must use
+`captureCanStart` from `desktop/controller.ts`: both `idle` and `completed`
+allow a new recording. `completed` is the saved recording's Paste controls;
+selecting, starting, recording and processing remain occupied. This preflight
+does not replace the native Start request's atomic admission check.
+
 Requires SDK support for `focusedSessionOwner`, `focusedSessionId`,
 `profileRoutes`, `requestProfile`, `retainProfile` and composer actions, plus a full Apparent
 build containing the native bridge. Older SDKs fail before recording. The OS

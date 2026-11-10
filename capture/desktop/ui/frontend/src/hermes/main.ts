@@ -6,6 +6,7 @@ import { randomBytes } from 'node:crypto';
 import { Recording, destination, type Receipt, type View } from './protocol';
 import { mailbox } from './mailbox';
 import { keyDirectory, publishKey } from './key';
+import { captureCanStart } from '../../../../../../hermes/desktop/controller';
 const option = (key: string) => process.argv[process.argv.indexOf(key) + 1];
 const request = destination(option('--hermes-request'));
 const executable = option('--apparent-executable');
@@ -85,7 +86,7 @@ app.whenReady().then(async () => {
   // A URL must not put a new window into an existing capture. Admission is
   // checked atomically again by the native engine if the person confirms.
   const occupied = await new Promise<boolean>(resolve => execFile(executable, ['capture', 'state'], { timeout: 4500, maxBuffer: 65536, encoding: 'utf8' }, (_error, stdout) => {
-    try { resolve(['selecting', 'starting', 'recording', 'processing'].includes(JSON.parse(stdout)?.state?.phase)); } catch { resolve(false); }
+    try { resolve(!captureCanStart(JSON.parse(stdout)?.state?.phase)); } catch { resolve(false); }
   }));
   if (occupied) view = { phase: 'error', code: 'occupied', message: 'Finish the current Apparent capture before recording from Hermes.' };
   await window.loadFile(path.join(__dirname, 'index.html'), { query: { surface: 'hermes' } });
