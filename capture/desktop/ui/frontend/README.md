@@ -158,11 +158,12 @@ the owned generated-fixture windows and stay outside git.
 
 ## Storage retention and usage (#291)
 
-On macOS, installed Storage uses the existing React presentation by default;
-`experiments.electronCaptureLocation=false` restores native Storage on its next
-open. Linux retains its continuous native GPUI Settings frame. This bounded #530
-slice re-adopts the Electron policy removed by the Preview 0.12.2 baseline restore
-(#1030); it does not restore the broader migration branch or change pane routing.
+`experiments.electronCaptureLocation` routes Storage through Electron on macOS
+and Linux. With it off, Storage stays native; About stays Electron. When enabled,
+Storage and About share one Electron Settings window. The other panes keep their
+native routes. This bounded #530 slice re-adopts the Electron policy removed by
+the Preview 0.12.2 baseline restore (#1030); it does not restore the broader
+migration branch.
 
 The headless `record/storage` TypeScript package owns Electron location precedence,
 normalization, fallback presentation, retention defaults, labels, validation,
@@ -226,18 +227,18 @@ effective path. Loading/error states hide old totals, and Retry never starts
 Rust. A slow filesystem syscall can outlive client expiry; the existing single
 Storage worker stays busy rather than spawning unbounded scans.
 
-On macOS the Rust Settings session owns navigation and the Electron child. The installed
-page contains Storage only, with the existing Settings sidebar and system-following
-light/dark Paper/Carbon/Signal palette. Other sidebar pages return to their native
-presentation. Retired windows cannot send commands or close the current page.
-Closing Settings cancels the session; an Electron crash restores native Storage.
-Missing packaged assets also fall back to native Storage. Reopen Settings after
-editing the opt-out. Saved preferences remain readable by both presentations.
+The Rust Settings session owns navigation and the Electron child. The installed
+page contains Storage and About, with the existing Settings sidebar and
+system-following light/dark Paper/Carbon/Signal palette. Other sidebar pages return
+to their native presentation; those crossings may replace the window. Retired
+windows cannot send commands or close the current page. Closing Settings cancels
+the session; an Electron crash or missing assets restore the active pane's native
+presentation. Reopen Settings after editing the experiment. Saved preferences
+remain readable by both presentations.
 
-Electron Storage uses the native Mac Settings' 720×530 frame and 210px black
-sidebar. macOS centers after applying its inset titlebar and accepts the first
-inactive click; content scrolls inside the frame to keep lower controls reachable.
-The other Settings pages keep their native routing.
+Electron Storage and About use the existing 720×530 frame and 210px black sidebar.
+macOS centers after applying its inset titlebar and accepts the first inactive
+click; content scrolls inside the frame to keep lower controls reachable.
 The Linux parent supplies the X11 backend option before Electron starts when it
 has selected XWayland; a live native-Wayland opt-in keeps its existing selection.
 
@@ -261,11 +262,12 @@ The broader intermittent blanking reported in #562 remains unconfirmed.
 installer/release packages. Installed packages contain no development dashboard or
 synthetic examples. Node/npm are build prerequisites, not runtime dependencies.
 macOS stages and signs nested Electron code before the enclosing app is signed.
-Linux keeps every installed Settings pane inside one native GPUI frame, including
-the folder picker, retention and usage controls. Switching to Storage does not
-replace the window. The Electron development harness and Rust bridge remain
-available on Linux; the installed macOS route retains its explicit opt-out and
-startup/crash fallback. Remove a native presentation only after applicable native
+Linux keeps native Settings panes in one GPUI frame. With
+`electronCaptureLocation` enabled, Storage and About share the Electron window;
+with it off, Storage stays in GPUI. Crossing between those Electron panes reuses
+their window, while crossings to native panes may replace it. The Electron
+development harness and Rust bridge remain available on Linux. Remove a native
+presentation only after applicable native
 acceptance and a deliberate retirement of its fallback contract. Functional
 transport tests and synthetic backend fixtures remain verification tooling.
 
@@ -329,10 +331,10 @@ physical-device or performance acceptance.
 
 ## Experimental Storage card
 
-The Electron Storage bridge is on unless `experiments.electronCaptureLocation`
-is explicitly false in the Rust app's `~/.config/apparent/config.json`. File edits
-apply at the next request; on macOS reopen Settings to change presentation routing. Linux
-installed Settings always uses its continuous native frame. The
+Electron Storage routing is enabled by `experiments.electronCaptureLocation` in
+the Rust app's `~/.config/apparent/config.json`. With the experiment off, Storage
+uses its native presentation; About remains Electron. File edits apply at the next
+request; reopen Settings to change presentation routing. The
 separate `npm start` window remains a developer harness; it is not installed or
 used by the Settings route. Browser preview has no Storage bridge.
 

@@ -18,12 +18,13 @@ function host(mode: string) {
   const lines = new EventEmitter();
   const exits: number[] = [];
   const written: string[] = [];
+  const sent: unknown[][] = [];
   const output = Object.assign(new EventEmitter(), { write: (line: string) => written.push(line) });
   const handlers = new Map<string, (...args: any[]) => void>();
   const timers: { callback: () => void; active: boolean; unref(): void }[] = [];
   let window: Window;
   class Window extends EventEmitter {
-    webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, mainFrame: { url: '' } });
+    webContents = Object.assign(new EventEmitter(), { setWindowOpenHandler() {}, mainFrame: { url: '' }, send: (...args: unknown[]) => sent.push(args) });
     visible: boolean;
     focuses = 0;
     centers = 0;
@@ -69,8 +70,38 @@ function host(mode: string) {
   const mounted = () => handlers.get('apparent:settings-mounted')!({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
   const expire = () => { for (const timer of timers) if (timer.active) { timer.active = false; timer.callback(); } };
   const frameReady = () => handlers.get('apparent:settings-frame-ready')!({ sender: window.webContents, senderFrame: window.webContents.mainFrame });
-  return { window: window!, lines, exits, written, mounted, frameReady, expire, handlers, output };
+  return { window: window!, lines, exits, written, sent, mounted, frameReady, expire, handlers, output };
 }
+
+test('the Rust parent can switch Electron panes in place without widening pane actions', async () => {
+  const { window, lines, written, sent, handlers } = host('--settings-storage');
+  const event = { sender: window.webContents, senderFrame: window.webContents.mainFrame };
+  const readAbout = handlers.get('apparent:about-read')!;
+  const aboutAction = handlers.get('apparent:about-action')!;
+  const navigate = handlers.get('apparent:navigate-settings')!;
+  assert.throws(() => readAbout(event), /Unavailable outside About/);
+  assert.throws(() => aboutAction(event, { action: 'check-for-updates' }), /Forbidden About action/);
+
+  navigate(event, 'about');
+  assert.deepEqual(JSON.parse(written[0]), { action: 'navigate', pane: 'about' });
+  lines.emit('line', JSON.stringify({ type: 'settings-pane', pane: 'about' }));
+  window.webContents.mainFrame.url += '#about'; // React applies this hash in the rendered host.
+  assert.equal(readAbout(event), undefined);
+  await assert.rejects(handlers.get('apparent:read-capture-location')!(event), /Unavailable outside Storage/);
+  assert.throws(() => handlers.get('apparent:show-capture-folder')!(event), /Unavailable outside Storage/);
+  aboutAction(event, { action: 'check-for-updates' });
+  assert.deepEqual(JSON.parse(written[1]), { action: 'check-for-updates' });
+  lines.emit('line', JSON.stringify({ type: 'about-state', version: '1.2.3' }));
+  assert.equal(JSON.stringify(sent.at(-1)), '["apparent:about-state",{"type":"about-state","version":"1.2.3"}]');
+  assert.throws(() => aboutAction(event, { action: 'set', key: 'microphoneEnabled', value: 'true' }), /Forbidden About action/);
+
+  navigate(event, 'storage');
+  lines.emit('line', JSON.stringify({ type: 'settings-pane', pane: 'storage' }));
+  window.webContents.mainFrame.url = window.webContents.mainFrame.url.replace('#about', '');
+  assert.throws(() => readAbout(event), /Unavailable outside About/);
+  assert.throws(() => aboutAction(event, { action: 'check-for-updates' }), /Forbidden About action/);
+  assert.throws(() => navigate(event, 'unknown'), /Forbidden Settings page/);
+});
 
 test('parent retirement and broken stdout never report user dismissal or reopen Settings', () => {
   for (const cause of ['close', 'eof', 'broken-pipe']) {

@@ -50,9 +50,8 @@ pub(super) fn open(about: bool, events: Arc<dyn Fn(Event) + Send + Sync>) -> any
                 // This presentation may navigate or reveal the effective folder;
                 // it cannot invoke other native Settings actions through this pipe.
                 if let Ok(action) = serde_json::from_str::<Action>(&line)
-                    && (matches!(action, Action::Navigate { .. } | Action::ShowCaptures | Action::Close)
-                        || about && (matches!(action, Action::CheckForUpdates | Action::DismissUpdateCheck | Action::UpdateNow | Action::UpdateLater | Action::Tour)
-                            || matches!(&action, Action::Set { key, value } if key == "updateChannel" && matches!(value.as_str(), Some("stable" | "main")))))
+                    && (super::settings::electron_action_allowed(false, &action)
+                        || super::settings::electron_action_allowed(true, &action))
                 {
                     events(Event::Action(action));
                 }

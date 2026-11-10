@@ -260,14 +260,15 @@ Recording › Microphone (`capture/engine/runtime/audio/mic.rs`): `"microphone":
 
 Storage › Location (`CapturesDirView`): Change… opens the helper's folder picker and sends `set capturesDir` with an absolute path; Reset sends `""`, which removes the key. `handoff::default_captures_dir` reads it on every call (`APPARENT_CAPTURES_DIR` wins, then `"capturesDir"`, then `builtin_captures_dir`; `~` expands, a relative path is logged and skipped; tests never read the config). New captures and fresh CLI/size lookups use the new location; already-running retention/transcript workers keep their startup directory until the Rust app restarts. Captures already made aren't moved. The default Electron Storage route, native fallback and its proof limits are documented in `capture/desktop/ui/frontend/README.md`. A folder that can't be created or written falls back to the built-in one (logged once). State kept beside the captures (`inbox.json`, `last-mode`, legacy `config.json`) stays under `builtin_captures_dir`'s parent. The legacy config path stays under `builtin_captures_dir`.
 
-Storage now opens the branded Electron Settings page by default; other Settings pages keep their native presentation. Set `experiments.electronCaptureLocation=false` and reopen Settings to use native Storage. Missing packaged assets or an Electron crash also restore native Storage. Rust supplies the policy/options/note, saves through the existing config transaction and measures the effective folder; the renderer never reads files. Saving/resetting schedules the existing retention worker for about five seconds later (deferred while recording); file edits are read on the next pass, normally hourly. Running workers keep their startup folder until restart. The native Storage presentation remains the opt-out and failure fallback. Activation, rollback, failed/stale results, usage scan limits and the exact old-UI removal condition are in `capture/desktop/ui/frontend/README.md#storage-retention-and-usage-291`.
+With `electronCaptureLocation` enabled, Storage and About share the branded Electron Settings window on macOS and Linux; with it off, Storage stays native and About stays Electron. General, Recording, Permissions and Agents keep their native presentation. Missing packaged assets or an Electron crash restore the active pane's native presentation. Rust supplies the policy/options/note, saves through the existing config transaction and measures the effective folder; the renderer never reads files. Saving/resetting schedules the existing retention worker for about five seconds later (deferred while recording); file edits are read on the next pass, normally hourly. Running workers keep their startup folder until restart. The native Storage presentation remains the opt-out and failure fallback. Activation, rollback, failed/stale results, usage scan limits and the exact old-UI removal condition are in `capture/desktop/ui/frontend/README.md#storage-retention-and-usage-291`.
 
 Recording › Language shows under Transcription while it's Apple Speech: Automatic, then the helper's supported `locales` by name. It writes `appleLocale` (Automatic removes the key) and returns `Effect::SpeechModel`, which restarts the model check for the new language (see `capture/engine/docs/keyframes-and-text.md`).
 
-The sidebar is the helper's alone: a row selects on mouse-down and its pane replaces the last on the next frame, with no transition (keep it that way; a fade read as lag; the level meter starts after the Recording pane has drawn). Rust's `state` never carries the pane (only `show` does, when Settings is opened again), so a reply can't move the selection.
+The native helper sidebar selects on mouse-down and replaces its pane on the next frame without a transition; a fade read as lag, and the level meter starts after Recording draws. The Electron Storage/About sidebar receives explicit parent pane changes, while native Settings state and its other panes keep their existing behavior.
 
-On Linux all Settings panes, including Storage, stay inside the same GPUI window.
-Navigation preserves its frame, position and focus. Storage has a native folder
+On Linux, native Settings panes stay inside the same GPUI window. With
+`electronCaptureLocation` enabled, Storage and About share the Electron window;
+with it off, Storage stays native and About stays Electron. Storage has a native folder
 picker, Change/Reset, effective-location readback, retention presets/reset and
 Refresh Storage for folder usage. These use the existing Rust preference
 transactions; picker Cancel writes nothing and existing captures are never moved.
@@ -308,12 +309,15 @@ native updater; it does not synthesize a frog result from a Sparkle launch.
 Sparkle's committed update relaunch also reopens Settings on About. Its native
 one-shot relaunch receipt is consumed at startup; ordinary launches do not set it.
 About now uses the packaged Electron Settings shell with React/TypeScript and
-shared shadcn buttons. The private parent pipe projects only version, update availability,
-channel and check result; an allowlist accepts check, dismiss, now/later, tour and
-validated channel changes. TypeScript owns result presentation and keyboard choices.
-Native code remains the single updater/config owner and enforces capture-safe restart.
-Other panes retain their current routing. Missing assets, spawn failure or a child crash
-restore native About; Storage's existing opt-out is unchanged. Native About remains
+shared shadcn buttons. With `electronCaptureLocation` enabled, Storage and About
+switch inside the same Electron window; with it off, Storage remains native and
+About remains Electron. The private parent pipe projects only version, update availability,
+channel and check result while About is active; its allowlist accepts check, dismiss,
+now/later, tour and validated channel changes. TypeScript owns result presentation
+and keyboard choices. Native code remains the single updater/config owner and
+enforces capture-safe restart. Other panes retain their current routing. Missing
+assets, spawn failure or a child crash restore native About or Storage as appropriate.
+Native About remains
 the failure fallback until packaged Linux and macOS navigation, update, restart and
 fallback acceptance passes and its build/consumer dependencies are verified removable.
 No installed-route activation outside this packaged presentation is required.

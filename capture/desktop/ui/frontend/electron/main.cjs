@@ -91,7 +91,7 @@ const { ConnectSettings, actions } = require('./connect.cjs');
 const followWindowTheme = require('@apparent/ui/window-theme');
 nativeTheme.themeSource = 'system';
 const settings = process.argv.includes('--settings-storage');
-const about = settings && process.argv.includes('--settings-about');
+let about = settings && process.argv.includes('--settings-about');
 let aboutState;
 
 // Deliberately separate from the installed application's profile and identity.
@@ -169,6 +169,10 @@ app.whenReady().then(() => {
     if (settings) throw new Error('Unavailable in Storage Settings');
     validate(event, args);
   };
+  const validateStorageSettings = (event, args) => {
+    validate(event, args);
+    if (settings && about) throw new Error('Unavailable outside Storage');
+  };
   ipcMain.handle('apparent:settings-mounted', (event, ...args) => {
     validate(event, args);
     if (!settings) throw new Error('Unavailable outside Settings');
@@ -207,7 +211,7 @@ app.whenReady().then(() => {
     process.stdout.write(`${JSON.stringify({ action: 'navigate', pane: args[0] })}\n`);
   });
   ipcMain.handle('apparent:show-capture-folder', (event, ...args) => {
-    validate(event, args);
+    validateStorageSettings(event, args);
     if (!settings) throw new Error('Unavailable outside Settings');
     process.stdout.write(`${JSON.stringify({ action: 'show-captures' })}\n`);
   });
@@ -222,6 +226,11 @@ app.whenReady().then(() => {
     lines.on('line', line => {
       try {
         const command = JSON.parse(line);
+        if (command.type === 'settings-pane' && ['storage', 'about'].includes(command.pane)) {
+          about = command.pane === 'about';
+          if (!about) aboutState = undefined;
+          window.webContents.send('apparent:settings-pane', command.pane);
+        }
         if (command.type === 'about-state' && about) {
           aboutState = command;
           window.webContents.send('apparent:about-state', command);
@@ -323,14 +332,14 @@ app.whenReady().then(() => {
     finally { reportingMutation = false; }
   });
   ipcMain.handle('apparent:read-capture-location', async (event, ...args) => {
-    validate(event, args);
+    validateStorageSettings(event, args);
     const version = storageVersion;
     const result = await location.read();
     return version === storageVersion ? result : { status: 'cancelled' };
   });
   for (const operation of ['change', 'reset']) {
     ipcMain.handle(`apparent:${operation}-capture-location`, async (event, ...args) => {
-      validate(event, args);
+      validateStorageSettings(event, args);
       if (mutation) return { status: 'error', code: 'app_busy' };
       mutation = true;
       storageVersion += 1;
@@ -369,19 +378,19 @@ app.whenReady().then(() => {
     });
   }
   ipcMain.handle('apparent:read-retention', async (event, ...args) => {
-    validate(event, args);
+    validateStorageSettings(event, args);
     const version = storageVersion;
     return retention.read(version, () => version === storageVersion);
   });
   ipcMain.handle('apparent:read-capture-usage', async (event, ...args) => {
-    validate(event, args);
+    validateStorageSettings(event, args);
     const version = storageVersion;
     return retention.measure(() => version === storageVersion);
   });
   for (const operation of ['save', 'reset']) {
     ipcMain.handle(`apparent:${operation}-retention`, async (event, ...args) => {
       const policy = operation === 'save' ? args[0] : undefined;
-      validate(event, operation === 'save' && args.length === 1 ? [] : args);
+      validateStorageSettings(event, operation === 'save' && args.length === 1 ? [] : args);
       if (operation === 'save' && !isRetentionPolicy(policy)) {
         throw new Error('Invalid retention policy');
       }

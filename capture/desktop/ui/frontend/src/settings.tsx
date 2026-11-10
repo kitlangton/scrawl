@@ -1,4 +1,4 @@
-import { useLayoutEffect, useState } from 'react';
+import { useEffect, useLayoutEffect, useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import { About } from './about/about';
 import { Storage } from './storage';
@@ -17,16 +17,23 @@ const icons = [
 ];
 
 declare global {
-  interface Window { apparentSettingsMounted?: () => Promise<void>; }
+  interface Window {
+    apparentSettingsMounted?: () => Promise<void>;
+    apparentSettingsPane?: (callback: (pane: 'storage' | 'about') => void) => () => void;
+  }
 }
 
 function Settings() {
-  const current = location.hash === '#about' ? 'About' : 'Storage';
+  const [current, setCurrent] = useState<'Storage' | 'About'>(() => location.hash === '#about' ? 'About' : 'Storage');
   useLayoutEffect(() => {
     // React's DOM is committed here. The preload owns the first-frame wait;
     // a hidden page's animation scheduling must not hold up this acknowledgement.
     void window.apparentSettingsMounted?.().catch(() => {});
   }, []);
+  useEffect(() => window.apparentSettingsPane?.(pane => {
+    history.replaceState(null, '', pane === 'about' ? '#about' : location.pathname);
+    setCurrent(pane === 'about' ? 'About' : 'Storage');
+  }), []);
   const [error, setError] = useState('');
   const [navigating, setNavigating] = useState(false);
   async function navigate(pane: string) {

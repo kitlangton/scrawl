@@ -23,6 +23,12 @@ contextBridge.exposeInMainWorld('apparent', Object.freeze({
   showCaptureFolder: () => ipcRenderer.invoke('apparent:show-capture-folder'),
 }));
 
+contextBridge.exposeInMainWorld('apparentSettingsPane', (callback) => {
+  const listener = (_event, pane) => callback(pane);
+  ipcRenderer.on('apparent:settings-pane', listener);
+  return () => ipcRenderer.removeListener('apparent:settings-pane', listener);
+});
+
 contextBridge.exposeInMainWorld('apparentAbout', Object.freeze({
   read: () => ipcRenderer.invoke('apparent:about-read'),
   link: link => ipcRenderer.invoke('apparent:about-link', link),

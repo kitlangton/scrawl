@@ -1848,10 +1848,29 @@ pub struct Session {
     _microphones: crate::capture::engine::runtime::audio::mic::Watch,
 }
 
-fn electron_storage(pane: Option<Pane>, enabled: bool) -> bool {
-    // Linux panes share one GPUI frame. Replacing it for Storage loses the
-    // compositor's position/focus and visibly unmaps Settings during startup.
-    !cfg!(target_os = "linux") && enabled && pane == Some(Pane::Storage)
+fn electron_settings(pane: Option<Pane>, enabled: bool) -> bool {
+    // About remains on Electron. Storage joins it only under its existing
+    // experiment; every other pane keeps its native presentation.
+    pane == Some(Pane::About) || enabled && pane == Some(Pane::Storage)
+}
+
+fn shared_electron_navigation(current_electron: bool, pane: Pane, enabled: bool) -> bool {
+    current_electron && enabled && matches!(pane, Pane::Storage | Pane::About)
+}
+
+pub(super) fn electron_action_allowed(about: bool, action: &Action) -> bool {
+    match action {
+        Action::Navigate { .. } | Action::ShowCaptures | Action::Close => true,
+        Action::CheckForUpdates
+        | Action::DismissUpdateCheck
+        | Action::UpdateNow
+        | Action::UpdateLater
+        | Action::Tour => about,
+        Action::Set { key, value } => {
+            about && key == "updateChannel" && matches!(value.as_str(), Some("stable" | "main"))
+        }
+        _ => false,
+    }
 }
 
 impl Session {
@@ -1954,7 +1973,12 @@ impl Session {
         let events: std::sync::Arc<dyn Fn(Event) + Send + Sync> = std::sync::Arc::new(move |event| {
             target(Event::Presentation { generation, event: Box::new(event) });
         });
-        if allow_storage && (pane == Some(Pane::About) || electron_storage(pane, crate::shared::handoff::experiment("electronCaptureLocation"))) {
+        if allow_storage
+            && electron_settings(
+                pane,
+                crate::shared::handoff::experiment("electronCaptureLocation"),
+            )
+        {
             match super::presentation::open(pane == Some(Pane::About), events.clone()) {
                 Ok(transport) => return Ok((transport, true)),
                 Err(error) => crate::capture::engine::runtime::apparent_log(format!("Storage Settings fallback: {error:#}")),
@@ -2023,6 +2047,12 @@ impl Session {
 
     pub fn event(&mut self, event: Event, host: &mut dyn Host) -> Effect {
         let Some(event) = self.current_event(event) else { return Effect::None; };
+        if let Event::Action(action) = &event
+            && self.storage
+            && !electron_action_allowed(self.about, action)
+        {
+            return Effect::None;
+        }
         let effect = match event {
             Event::Presentation { .. } => return Effect::None,
             #[cfg(target_os = "linux")]
@@ -2176,8 +2206,12 @@ impl Session {
 
     pub fn show(&mut self, pane: Option<Pane>) {
         if let Some(pane) = pane {
-            let storage = pane == Pane::About || electron_storage(Some(pane), crate::shared::handoff::experiment("electronCaptureLocation"));
-            if storage != self.storage || (self.storage && self.about != (pane == Pane::About)) {
+            let electron_capture_location = crate::shared::handoff::experiment("electronCaptureLocation");
+            if shared_electron_navigation(self.storage, pane, electron_capture_location) {
+                self.about = pane == Pane::About;
+                self.last_view.clear();
+                self.send(&serde_json::json!({"type": "settings-pane", "pane": pane}));
+            } else if electron_settings(Some(pane), electron_capture_location) != self.storage {
                 let generation = super::presentation::generation();
                 match Self::open_presentation(Some(pane), generation, &self.events, true) {
                     Ok((transport, storage)) => {
@@ -2281,14 +2315,66 @@ impl Drop for Session {
 mod tests {
     use super::*;
 
-    #[cfg(target_os = "linux")]
     #[test]
-    fn linux_storage_navigation_never_replaces_the_native_frame() {
-        for enabled in [true, false] {
-            for pane in [None, Some(Pane::General), Some(Pane::Storage), Some(Pane::Recording), Some(Pane::Storage), Some(Pane::Permissions)] {
-                assert!(!electron_storage(pane, enabled), "Linux must keep the existing Settings presentation for {pane:?}");
-            }
+    fn settings_experiment_controls_storage_and_other_panes_stay_native() {
+        assert!(!electron_settings(Some(Pane::Storage), false));
+        assert!(electron_settings(Some(Pane::Storage), true));
+        assert!(electron_settings(Some(Pane::About), false));
+        assert!(electron_settings(Some(Pane::About), true));
+        for pane in [
+            Pane::General,
+            Pane::Recording,
+            Pane::Permissions,
+            Pane::Agents,
+        ] {
+            assert!(
+                !electron_settings(Some(pane), true),
+                "{pane:?} must keep its native presentation"
+            );
+            assert!(!shared_electron_navigation(true, pane, true));
         }
+        assert!(shared_electron_navigation(true, Pane::Storage, true));
+        assert!(shared_electron_navigation(true, Pane::About, true));
+        assert!(!shared_electron_navigation(false, Pane::Storage, true));
+        assert!(!shared_electron_navigation(false, Pane::About, true));
+        assert!(!shared_electron_navigation(true, Pane::Storage, false));
+        assert!(!shared_electron_navigation(true, Pane::About, false));
+
+        for action in [
+            Action::CheckForUpdates,
+            Action::DismissUpdateCheck,
+            Action::UpdateNow,
+            Action::UpdateLater,
+            Action::Tour,
+            Action::Set {
+                key: "updateChannel".into(),
+                value: "stable".into(),
+            },
+        ] {
+            assert!(
+                electron_action_allowed(true, &action),
+                "About action {action:?} is retained"
+            );
+            assert!(
+                !electron_action_allowed(false, &action),
+                "Storage must reject About action {action:?}"
+            );
+        }
+        assert!(!electron_action_allowed(
+            true,
+            &Action::Set {
+                key: "microphoneEnabled".into(),
+                value: true.into()
+            }
+        ));
+        assert!(!electron_action_allowed(
+            true,
+            &Action::Grant {
+                permission: Permission::Microphone
+            }
+        ));
+        assert!(electron_action_allowed(false, &Action::Navigate { pane: Pane::About }));
+        assert!(electron_action_allowed(false, &Action::ShowCaptures));
     }
 
     #[test]
