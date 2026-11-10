@@ -2,6 +2,10 @@
 
 Apparent records screen, voice, cursor, clicks and ink so a human can point, talk and draw while an agent builds. It produces `.apparent` bundles for inspection and handoff. Supported platforms are **macOS and Linux**; do not add Windows support, tests, release assets or new docs. Existing Windows code is not a support promise; retire it only in a separately scoped, verified change.
 
+## Subagents
+
+Use Codex subagents with model `gpt-6-luna` by default. Honor an explicit user request for another provider or model.
+
 ## Product invariants
 
 - Minimize human effort: capture, marking and handoff should be quick. Record known window, element, URL and session context instead of making agents infer it from pixels or vague references.
