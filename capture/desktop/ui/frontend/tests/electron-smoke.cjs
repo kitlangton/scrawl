@@ -365,7 +365,7 @@ for(const mode of ['--onboarding'])test(`onboarding fixed window shrinks to coac
   await expect(page.locator('.native-control button')).toBeHidden();
   await page.emulateMedia({reducedMotion:'no-preference'});
   send({step:'try-it',practice:'whiteboard',platform:'linux',firstCaptureRequired:true});
-  await expect(page.getByText('Click Whiteboard in the recording controls.',{exact:true})).toBeVisible();
+  await expect(page.getByText('Open Whiteboard from the recording controls.',{exact:true})).toBeVisible();
   await expect(page.getByRole('figure',{name:'Example: click Whiteboard',exact:true})).toBeVisible();
   await expect(page.locator('.control-screen')).toBeHidden();
   await expect(page.locator('.control-board')).toHaveCSS('opacity','1');
