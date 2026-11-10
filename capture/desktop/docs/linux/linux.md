@@ -99,8 +99,16 @@ source type: choosing Virtual-2 while Apparent selected Virtual-1 previously
 saved Virtual-2's wallpaper with Virtual-1's bundle target. Equal dimensions
 could not identify the output. The single-output fallback is a safety limit,
 not multi-output parity. GNOME 46 direct Screen captures separately saved the
-correct changing synthetic content from both 1280×800 outputs at 1×; that check
-does not establish Area, mixed-scale or relative-pointer acceptance.
+correct changing synthetic content from both 1280×800 outputs at 1×. A separate
+Ubuntu 24.04/GNOME Shell 46.0/libmutter 46.2 check on `521e5e3c4` used the native
+picker to select a 420×260 Area on the second output. Physical Finish saved
+468 frames (15.6 seconds); the Region target, movie, contact sheet and keyframes
+matched that changing synthetic scene. Physical Cancel on a second Area capture
+returned idle and removed its bundle. Every movie frame was inspected in
+chronological stills, not real-time playback; the summary still labelled the
+capture “Display” while its manifest correctly recorded `region`. These checks
+do not establish mixed-scale, relative-pointer or pending-consent layout-change
+acceptance.
 
 ### Hyprland
 
