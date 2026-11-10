@@ -74,7 +74,8 @@ impl Shortcuts {
             let _ = std::fs::remove_file(&legacy);
         }
         #[cfg(target_os = "linux")]
-        if let Some(record) = crate::capture::desktop::linux::hyprland::external_record() {
+        if !prefers_app_shortcut(&read_json(&path))
+            && let Some(record) = crate::capture::desktop::linux::hyprland::external_record() {
             return Self {
                 record,
                 ..shortcuts
@@ -181,13 +182,24 @@ pub fn save_shortcut_in(
     kind: ShortcutKind,
     cfg: &ShortcutConfig,
 ) -> anyhow::Result<()> {
+    #[cfg(target_os = "linux")]
+    let app_owned = kind == ShortcutKind::Record && (prefers_app_shortcut(&read_json(path))
+        || crate::capture::desktop::linux::hyprland::external_record().is_some());
+    #[cfg(not(target_os = "linux"))]
+    let app_owned = false;
+    save_shortcut_source_in(path, kind, cfg, app_owned)
+}
+
+// The existing shortcut writer remains authoritative. An explicit app choice
+// can coexist with a permanent desktop launcher; it never edits that binding.
+fn save_shortcut_source_in(path: &Path, kind: ShortcutKind, cfg: &ShortcutConfig, app_owned: bool) -> anyhow::Result<()> {
     let mut shortcuts = read_json(path)
         .get("shortcuts")
         .cloned()
         .filter(serde_json::Value::is_object)
         .unwrap_or_else(|| serde_json::json!({}));
     let map = shortcuts.as_object_mut().expect("an object");
-    if cfg.is_default_for(kind) {
+    if cfg.is_default_for(kind) && !app_owned {
         map.remove(kind_key(kind));
     } else if cfg.is_unset() {
         anyhow::ensure!(
@@ -196,16 +208,25 @@ pub fn save_shortcut_in(
         );
         map.insert(kind_key(kind).to_owned(), serde_json::Value::Null);
     } else {
-        map.insert(
-            kind_key(kind).to_owned(),
-            serde_json::to_value(Stored {
+        let mut stored = serde_json::to_value(Stored {
                 key_code: cfg.key_code,
                 modifiers: cfg.carbon_modifiers,
                 label: cfg.label.clone(),
-            })?,
-        );
+            })?;
+        if app_owned { stored["source"] = "app".into(); }
+        map.insert(kind_key(kind).to_owned(), stored);
     }
     crate::shared::handoff::set_config_value_in(path, "shortcuts", shortcuts)
+}
+
+fn prefers_app_shortcut(config: &serde_json::Value) -> bool {
+    let Some(value) = config.pointer("/shortcuts/record") else { return false; };
+    value.get("source").and_then(serde_json::Value::as_str) == Some("app")
+        && serde_json::from_value::<Stored>(value.clone()).ok()
+            .and_then(|stored| from_stored(ShortcutKind::Record, stored))
+            .is_some_and(|cfg| cfg.key_code <= 255
+                && cfg.carbon_modifiers & (CARBON_CONTROL_KEY | CARBON_OPTION_KEY | CARBON_CMD_KEY) != 0
+                && cfg.carbon_modifiers & !(CARBON_CONTROL_KEY | CARBON_OPTION_KEY | CARBON_CMD_KEY | CARBON_SHIFT_KEY) == 0)
 }
 
 /// The label of the paste shortcut, for hints (`⌥⇧V`, or `Alt+Shift+V`, unless changed; "the
@@ -1107,7 +1128,8 @@ fn shortcut_view(
 pub(crate) fn external_record_owned(kind: ShortcutKind) -> bool {
     #[cfg(target_os = "linux")]
     {
-        kind == ShortcutKind::Record && crate::capture::desktop::linux::hyprland::external_record().is_some()
+        kind == ShortcutKind::Record && !prefers_app_shortcut(&read_json(&crate::shared::handoff::default_config_path()))
+            && crate::capture::desktop::linux::hyprland::external_record().is_some()
     }
     #[cfg(not(target_os = "linux"))]
     {
@@ -1299,9 +1321,6 @@ impl Panel {
                 else { Effect::Measure }
             }
             Action::RecordShortcut { kind } => {
-                if external_record_owned(kind) {
-                    return Effect::None;
-                }
                 self.error = None;
                 if self.recording.replace(kind).is_none() {
                     host.pause_shortcuts(true);
@@ -1313,9 +1332,6 @@ impl Panel {
                 Effect::None
             }
             Action::Shortcut { kind, pressed } => {
-                if external_record_owned(kind) {
-                    return Effect::None;
-                }
                 if self.recording != Some(kind) {
                     return Effect::None;
                 }
@@ -2697,6 +2713,35 @@ mod tests {
         assert_eq!(key_label(SLASH, "/").as_deref(), Some("/"));
         assert_eq!(key_label(ESC, "\u{1b}"), None);
         assert_eq!(key_label(0, ""), None);
+    }
+
+    #[test]
+    fn explicit_app_shortcut_survives_desktop_default_and_preserves_unrelated_config() {
+        let dir = TempDir::new("desktop-shortcut-choice");
+        let path = dir.0.join("config.json");
+        std::fs::write(&path, r#"{"ingestToken":"private","shortcuts":{"paste":null},"onboarding":{"firstCaptureCompleted":false}}"#).unwrap();
+        assert!(!prefers_app_shortcut(&read_json(&path)));
+        // Even choosing Apparent's built-in chord explicitly must survive relaunch
+        // on a desktop whose permanent Copilot binding remains in place.
+        let record = ShortcutConfig::default_record();
+        save_shortcut_source_in(&path, ShortcutKind::Record, &record, true).unwrap();
+        let config = read_json(&path);
+        assert!(prefers_app_shortcut(&config));
+        assert_eq!(Shortcuts::load_from(&path, &dir.0.join("legacy.json")).0.record, record);
+        assert_eq!(config["ingestToken"], "private");
+        assert!(config["shortcuts"]["paste"].is_null());
+        assert_eq!(config["onboarding"]["firstCaptureCompleted"], false);
+        #[cfg(target_os = "linux")]
+        {
+            // The desktop binding may be absent after a relaunch. Saving the
+            // chosen app default must retain its existing explicit preference.
+            save_shortcut_in(&path, ShortcutKind::Record, &record).unwrap();
+            assert!(prefers_app_shortcut(&read_json(&path)));
+        }
+        let mut invalid = config.clone(); invalid["shortcuts"]["record"]["modifiers"] = 0.into();
+        assert!(!prefers_app_shortcut(&invalid), "a malformed preference cannot suppress the working desktop adapter");
+        save_shortcut_source_in(&path, ShortcutKind::Record, &record, false).unwrap();
+        assert!(!prefers_app_shortcut(&read_json(&path)));
     }
 
     #[test]

@@ -16,7 +16,14 @@ for (const file of ['button.tsx', 'tabs.tsx', 'utils.ts', 'theme.css', 'tokens.c
 let reportingOutput: string;
 export default defineConfig({
   base: './',
-  plugins: [react(), tailwindcss(), {
+  plugins: [react(), tailwindcss(), {name: 'onboarding-host-policy', closeBundle() {
+    for (const name of ['presentation', 'hyprland', 'account']) {
+      const file = `electron/onboarding/${name}.ts`;
+      const result = ts.transpileModule(readFileSync(file, 'utf8'), {fileName: file,
+        compilerOptions: {module: ts.ModuleKind.CommonJS, target: ts.ScriptTarget.ES2022}});
+      writeFileSync(`dist/onboarding-${name}.cjs`, result.outputText);
+    }
+  }}, {
     name: 'desktop-reporting-policy',
     apply: 'build',
     configResolved(config) { reportingOutput = path.resolve(config.root, config.build.outDir, config.build.assetsDir); },

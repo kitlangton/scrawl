@@ -40,6 +40,12 @@ static SYNTAX: Mutex<Option<Syntax>> = Mutex::new(None);
 /// The chords Apparent bound, by shortcut id (`record`, `paste`), to take them off again.
 static BOUND: Mutex<Option<HashMap<&'static str, (u32, String)>>> = Mutex::new(None);
 
+mod bindings;
+
+pub fn release_runtime_bindings() -> impl std::future::Future<Output = ()> + 'static {
+    bindings::close()
+}
+
 /// This session is Hyprland, and its socket answers where `HYPRLAND_INSTANCE_SIGNATURE` says.
 pub fn running() -> bool {
     static RUNNING: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
@@ -310,8 +316,8 @@ fn external_record_live() -> Option<ShortcutConfig> {
     if !executable.is_file() || executable.permissions().mode() & 0o111 == 0 {
         return None;
     }
-    // An old Apparent process may have registered the built-in default in this same
-    // compositor session. Remove only that described chord, never a different owner's S.
+    // Older processes may have left the built-in chord behind. Lua retains those
+    // unowned handles; its chord-wide removal cannot preserve concurrent user binds.
     if remove_obsolete_default_in(&live).is_err() {
         return None;
     }
@@ -320,6 +326,13 @@ fn external_record_live() -> Option<ShortcutConfig> {
 
 fn remove_obsolete_default_in(live: &str) -> Result<()> {
     if obsolete_default_in(live) {
+        if syntax()? == Syntax::Lua {
+            // An inherited description is not an exact handle. Lua's unbind and
+            // handle:remove both remove all matching chords, including a user's
+            // binding added after our observation. Retain it until a user reload.
+            crate::capture::engine::runtime::apparent_log("Inherited Hyprland Record binding retained until configuration reload");
+            bail!("Reload desktop configuration before adopting the permanent Record shortcut");
+        }
         unbind(CARBON_OPTION_KEY | CARBON_SHIFT_KEY, "S")?;
     }
     Ok(())
@@ -354,13 +367,19 @@ enum Existing {
     /// A bind with Apparent's description: ours from before, or one the user made permanent
     /// from the snippet in `capture/desktop/docs/linux/linux.md`.
     Apparent,
+    /// This row must be backed by an exact handle in our bounded Lua cache.
+    Managed,
     Other,
 }
 
 fn existing(binds_json: &str, mask: u32, key: &str, id: &str) -> Existing {
     let Ok(binds) = serde_json::from_str::<Vec<serde_json::Value>>(binds_json) else {
-        return Existing::Free;
+        return Existing::Other;
     };
+    if binds.iter().any(|bind| bind["modmask"].as_u64().and_then(|mask| u32::try_from(mask).ok()).is_none()
+        || !bind["key"].is_string()) {
+        return Existing::Other;
+    }
     let ours = description(id);
     let mut found = Existing::Free;
     for bind in &binds {
@@ -374,12 +393,16 @@ fn existing(binds_json: &str, mask: u32, key: &str, id: &str) -> Existing {
         if !(same_mask && same_key) {
             continue;
         }
+        if found != Existing::Free { return Existing::Other; }
         // Lua-backed code binds are opaque here. A description cannot prove which code
         // was pressed; only external_record_from can establish the matching source.
         if key != "Copilot" && bind["description"].as_str() == Some(ours.as_str()) {
-            return Existing::Apparent;
+            found = Existing::Apparent;
+        } else if key != "Copilot" && bind["description"].as_str() == Some(bindings::managed_description(id).as_str()) {
+            found = Existing::Managed;
+        } else {
+            return Existing::Other;
         }
-        found = Existing::Other;
     }
     found
 }
@@ -609,10 +632,7 @@ pub fn float_whiteboard() -> Result<()> {
 fn unbind(carbon_modifiers: u32, key: &str) -> Result<()> {
     let mask = modmask(carbon_modifiers);
     match syntax()? {
-        Syntax::Lua => run(&format!(
-            "eval hl.unbind({})",
-            lua_str(&lua_chord(mask, key))
-        )),
+        Syntax::Lua => bail!("Lua shortcut release requires its exact runtime handle"),
         Syntax::Hyprlang => run(&format!(
             "keyword unbind {}, {}",
             mod_names(mask).join(" "),
@@ -624,6 +644,7 @@ fn unbind(carbon_modifiers: u32, key: &str) -> Result<()> {
 /// Binds (or, with `None`, unbinds) one shortcut's chord. A chord something else holds is left
 /// alone and reported as an error, like the other backends' "already taken".
 pub fn bind(id: &'static str, chord: Option<(u32, &str)>) -> Result<()> {
+    if syntax()? == Syntax::Lua { return bindings::bind(id, chord); }
     let mut bound = BOUND
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -651,23 +672,15 @@ pub fn bind(id: &'static str, chord: Option<(u32, &str)>) -> Result<()> {
     }
     match existing(&request("j/binds")?, mask, key, id) {
         Existing::Apparent => return Ok(()),
-        Existing::Other => bail!("{} is already bound", lua_chord(mask, key)),
+        Existing::Other | Existing::Managed => bail!("{} is already bound", lua_chord(mask, key)),
         Existing::Free => {}
     }
     let (command, description) = (command(id)?, description(id));
-    match syntax()? {
-        Syntax::Lua => run(&format!(
-            "eval hl.bind({}, hl.dsp.exec_cmd({}), {{ description = {} }})",
-            lua_str(&lua_chord(mask, key)),
-            lua_str(&command),
-            lua_str(&description),
-        ))?,
-        Syntax::Hyprlang => run(&format!(
-            "keyword bindd {}, {}, {description}, exec, {command}",
-            mod_names(mask).join(" "),
-            key_name(key),
-        ))?,
-    }
+    run(&format!(
+        "keyword bindd {}, {}, {description}, exec, {command}",
+        mod_names(mask).join(" "),
+        key_name(key),
+    ))?;
     bound.insert(id, (modifiers, key.to_owned()));
     Ok(())
 }
@@ -976,7 +989,15 @@ mod tests {
         assert_eq!(existing(binds, 9, "Tab", "record"), Existing::Apparent);
         assert_eq!(existing(binds, 9, "v", "paste"), Existing::Other);
         assert_eq!(existing(binds, 9, "S", "record"), Existing::Free);
-        assert_eq!(existing("not json", 9, "S", "record"), Existing::Free);
+        assert_eq!(existing("not json", 9, "S", "record"), Existing::Other);
+        assert_eq!(existing(r#"[{"modmask":9}]"#, 9, "S", "record"), Existing::Other);
+
+        let managed = r#"{"modmask":9,"key":"S","description":"Apparent: record [managed-v1]"}"#;
+        let user = r#"{"modmask":9,"key":"S","description":"User command"}"#;
+        assert_eq!(existing(&format!("[{managed}]"), 9, "S", "record"), Existing::Managed);
+        for mixed in [format!("[{managed},{user}]"), format!("[{user},{managed}]")] {
+            assert_eq!(existing(&mixed, 9, "S", "record"), Existing::Other);
+        }
         // Hyprland reports a code:201 Lua binding with an empty key and keycode 0.
         let copilot = r#"[{"modmask":65,"key":"","keycode":0,"description":"Apparent: record"}]"#;
         assert_eq!(existing(copilot, 65, "Copilot", "record"), Existing::Other);

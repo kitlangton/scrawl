@@ -96,9 +96,31 @@ renderer JavaScript errors and hangs remain outside this slice's coverage.
 
 ## Onboarding (`capture/desktop/settings/onboarding.rs`, `capture/desktop/native/Onboarding.swift`)
 
+The shared Electron Welcome page offers Google sign-in through Connect's existing
+read-only device approval. It shows the public code and opens only the current
+native-validated approval URL on an explicit click. Cancel, leaving Welcome,
+renderer fallback and closing the session cancel pending enrollment; late replies
+cannot update a successor. Local setup remains available when offline or rejected.
+Sign-in does not enable uploads, grant upload consent or complete tour milestones.
+Connect remains the sole credential/config writer; the native onboarding adapter
+owns worker lifetime, while TypeScript owns account presentation and coach placement.
+
+On Omarchy the shortcut page shows the actual desktop chord before acceptance and
+also offers a custom shortcut. A custom choice uses the existing validated shortcut
+writer (`shortcuts.record.source = "app"` retains that explicit preference even for
+the built-in chord). It leaves the permanent Hyprland binding available and never
+edits the user's compositor configuration. The custom chord still requires its
+non-recording trial. Linux sends mapped X11 control/whiteboard rectangles rather
+than cached pre-compositor bounds. The coach clears those surfaces when space is
+available, defaults near the top centre without an anchor, and removes only its own
+Hyprland Lua window border. **Close guide** explains that an active recording
+continues; Finish remains in the recording controls. Closing never fabricates lesson
+completion. Native fallback remains available if the Electron transport fails;
+its legacy account presentation remains local-only.
+
 Rust decides what shows (`Flow`, `launch_plan`, `Gate`, tested) and stores progress under `"onboarding"` in `~/.config/apparent/config.json`, including the tour's current step (`resume`), so any quit (macOS's "Quit & Reopen" too) picks up there; the SwiftUI window in `apparent-helper onboarding` only renders the state it's sent and reports buttons (`grant:<permission>` for a row).
 
-Tour: Welcome → Permissions (one checklist of three required rows, Screen Recording first, then Microphone and Accessibility; any order works) → Shortcut → TryIt → Done. The default first-capture shortcut page starts with no selection and uses Settings' validation/save/cancel behavior. A saved combination must pass a non-recording press-and-release trial. The pen picker goes directly to permissions or shortcut choice; the demonstration page is removed. An explicit replay from Settings clears only tour milestones, requiring shortcut selection and its non-recording trial again; ordinary quit/relaunch resumes unfinished shortcut setup, but never re-enrols a user whose shortcut setup is complete. The Electron tour then advances automatically to **Go again.** The next shortcut starts the real guided capture. The native fallback retains its Continue action. The explicit optional-practice opt-out retains the legacy advance behavior. Leaving the page cancels an unfinished recording and resumes hotkeys. On Omarchy, a Hyprland-owned shortcut cannot be replaced by Apparent; the inline page explains that ownership. Camera (iPhone) is never in the tour: its first use opens `Flow::fix(vec![Camera])`, the same screen with one row.
+Tour: Welcome → Permissions (one checklist of three required rows, Screen Recording first, then Microphone and Accessibility; any order works) → Shortcut → TryIt → Done. The default first-capture shortcut page starts with no selection and uses Settings' validation/save/cancel behavior. A saved combination must pass a non-recording press-and-release trial. The pen picker goes directly to permissions or shortcut choice; the demonstration page is removed. An explicit replay from Settings clears only tour milestones, requiring shortcut selection and its non-recording trial again; ordinary quit/relaunch resumes unfinished shortcut setup, but never re-enrols a user whose shortcut setup is complete. The Electron tour then advances automatically to **Go again.** The next shortcut starts the real guided capture. The native fallback retains its Continue action. The explicit optional-practice opt-out retains the legacy advance behavior. Leaving the page cancels an unfinished recording and resumes hotkeys. On Omarchy, the existing Hyprland chord can be explicitly accepted or a custom app chord chosen while preserving the permanent binding. Camera (iPhone) is never in the tour: its first use opens `Flow::fix(vec![Camera])`, the same screen with one row.
 
 The legacy `how-it-works` value remains readable in saved config, but routes past the removed page in both Electron and native fallback. Back navigation and step counts exclude it.
 

@@ -105,8 +105,8 @@ func readOwnedInput(expectedPID: pid_t, budget: TimeInterval,
         let left = until - now()
         if left <= 0 { break }
         let start = now()
-        // A failed synchronous AX call can consume its entire timeout. Leave
-        // room for another observation within the same original one-second cap.
+        // Leave room for a second read when AX uses its whole messaging timeout.
+        // The outer one-second budget and all identity gates remain authoritative.
         hit = try read(min(until, start + 0.4))
         record(hit, now() - start)
         if hit.error == .success {
@@ -125,8 +125,8 @@ func testInputObservationPolicy() throws {
     var time: TimeInterval = 0
     var reads = 0
     let recovered = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { until in
-        try require(until - time > 0 && until - time <= 1, "Invalid scripted AX timeout")
-        reads += 1; time += 0.05
+        try require(until - time > 0 && until - time <= 0.4, "Invalid scripted AX timeout")
+        reads += 1; time = until
         return InputHit(error: reads == 1 ? .cannotComplete : .success, pid: reads == 1 ? -1 : 42)
     }, pause: { time += $0 }, record: { _, _ in })
     try require(recovered.error == .success && recovered.pid == 42 && reads == 2, "Transient AX read did not recover")
@@ -243,7 +243,7 @@ func postOwnedWindowClick(_ expected: OwnedWindow, at point: CGPoint) throws {
             if let element, error == .success {
                 let left = readUntil - ProcessInfo.processInfo.systemUptime
                 if left <= 0 { return InputHit(error: .cannotComplete, pid: -1) }
-                try require(AXUIElementSetMessagingTimeout(system, Float(left)) == .success, "Could not bound AX PID observation")
+                try require(AXUIElementSetMessagingTimeout(element, Float(left)) == .success, "Could not bound AX PID observation")
                 if ProcessInfo.processInfo.systemUptime >= readUntil { return InputHit(error: .cannotComplete, pid: -1) }
                 let pidError = AXUIElementGetPid(element, &pid)
                 return InputHit(error: pidError, pid: pid)
