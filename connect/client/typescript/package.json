@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "test": "node --experimental-strip-types --test test/*.test.ts",
+    "test:cli": "node --experimental-strip-types --test test/cli.integration.ts",
     "typecheck": "tsc --noEmit",
     "build": "node scripts/build.ts",
     "pack": "npm pack --dry-run",

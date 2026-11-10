@@ -86,10 +86,21 @@ test('changed route mapping or replaced runtime cannot receive the saved recordi
     for (const change of [() => { shared.routes[0].targetProfile = 'other'; }, () => { shared.runtime.instance_id = 'replacement'; }]) {
       reset(); const f = fixture();
       let phase = 'recording';
-      globalThis.fetch = async () => packet(shared.key, phase);
-      f.click(); await until(() => f.launch()); f.tick(); await until(() => shared.keyReads.length === 1);
-      await new Promise(resolve => setTimeout(resolve, 10));
-      change(); phase = 'saved'; f.tick(); await until(() => !f.watching());
+      let stateReads = 0; let releaseSaved!: () => void; let savedReadStarted!: () => void;
+      const savedRead = new Promise<void>(resolve => { savedReadStarted = resolve; });
+      const savedResponse = new Promise<void>(resolve => { releaseSaved = resolve; });
+      globalThis.fetch = async () => {
+        stateReads++;
+        if (stateReads === 2) { savedReadStarted(); await savedResponse; }
+        return packet(shared.key, phase);
+      };
+      f.click(); await until(() => f.launch());
+      // Drive until a second poll is actually in fetch. That proves the initial
+      // poll released its working guard; a single tick can be ignored while it runs.
+      await until(() => { f.tick(); return stateReads >= 2; });
+      await savedRead;
+      change(); phase = 'saved'; releaseSaved();
+      await until(() => !f.watching());
       assert.equal(shared.submissions.length, 0);
       assert.equal(f.saved().source, '/private/owned.apparent');
       await f.discard(); assert.equal(f.saved(), null);

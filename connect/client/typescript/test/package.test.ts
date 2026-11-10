@@ -27,7 +27,7 @@ test('build removes stale generated modules and refuses redirected output',async
   await fs.mkdir(dist);await fs.writeFile(path.join(dist,'obsolete.js'),'obsolete');
   await fs.writeFile(path.join(dist,'obsolete.d.ts'),'obsolete');
   run('npm',['run','build'],source);
-  assert.deepEqual((await fs.readdir(dist)).sort(),['index.d.ts','index.js']);
+  assert.deepEqual((await fs.readdir(dist)).sort(),['index.d.ts','index.js','shares.d.ts','shares.js']);
   await fs.rm(dist,{recursive:true});
   const external=path.join(root,'external');await fs.mkdir(external);
   await fs.writeFile(path.join(external,'sentinel'),'preserve');
@@ -40,9 +40,9 @@ test('packed consumer installs and runs without Rust, compilers or source resolu
   const {root,source}=await fixture(t);
   const result=JSON.parse(run('npm',['pack','--json','--pack-destination',root],source))[0];
   assert.deepEqual(result.files.map((file:{path:string})=>file.path).sort(),
-    ['README.md','dist/index.d.ts','dist/index.js','package.json']);
+    ['README.md','dist/index.d.ts','dist/index.js','dist/shares.d.ts','dist/shares.js','package.json']);
   const bin=path.join(root,'deny');await fs.mkdir(bin);
-  for(const name of ['cargo','rustc','tsc','esbuild']) {
+  for(const name of ['cargo','rustc','electron','tsc','esbuild']) {
     await fs.writeFile(path.join(bin,name),'#!/bin/sh\necho forbidden-build-tool >&2\nexit 99\n',{mode:0o700});
   }
   const env={...process.env,PATH:bin+path.delimiter+process.env.PATH};
@@ -69,4 +69,22 @@ test('packed consumer installs and runs without Rust, compilers or source resolu
     target:'ES2023',module:'NodeNext',moduleResolution:'NodeNext',lib:['ES2023'],types:[],strict:true,noEmit:true}}));
   // The explicitly supplied development compiler checks declarations only.
   run(process.execPath,[path.join(owner,'node_modules/typescript/bin/tsc')],consumer,env);
+  run(process.execPath,['--input-type=module','-e',`
+    import assert from 'node:assert/strict';
+    import {spawn} from 'node:child_process';
+    import {createInterface} from 'node:readline';
+    const origin='https://connect.example.test';
+    const child=spawn(process.execPath,[process.argv[1],origin],{stdio:['pipe','pipe','pipe']});
+    const lines=createInterface({input:child.stdout});
+    let result;
+    lines.on('line',line=>{
+      const message=JSON.parse(line);
+      if(message.operation==='page') child.stdin.write(JSON.stringify({ok:true,body:{shares:[{id:'a'.repeat(32),captureId:'c'.repeat(32),url:origin+'/s/'+'b'.repeat(64),status:'active',createdAt:'2026-11-10T00:00:00.000Z',expiresAt:'2026-11-17T00:00:00.000Z',title:'Synthetic'}],nextCursor:null}})+'\\n');
+      else {result=message.result;child.stdin.end();}
+    });
+    const [code]=await new Promise(resolve=>child.once('exit',(code,signal)=>resolve([code,signal])));
+    assert.equal(code,0);
+    assert.equal(result.shares.length,1);
+    assert.equal(result.nextCursor,null);
+  `,path.join(consumer,'node_modules/@apparent/connect-crypto/dist/shares.js')],consumer,env);
 });

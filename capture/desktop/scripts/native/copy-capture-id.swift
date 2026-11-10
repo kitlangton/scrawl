@@ -131,6 +131,15 @@ func testInputObservationPolicy() throws {
     }, pause: { time += $0 }, record: { _, _ in })
     try require(recovered.error == .success && recovered.pid == 42 && reads == 2, "Transient AX read did not recover")
     time = 0; reads = 0
+    let timeoutRecovered = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { until in
+        reads += 1
+        if reads == 1 { time = until; return InputHit(error: .cannotComplete, pid: -1) }
+        time += 0.01
+        return InputHit(error: .success, pid: 42)
+    }, pause: { time += $0 }, record: { _, _ in })
+    try require(timeoutRecovered.error == .success && reads == 2 && time <= 1,
+                "A full AX call timeout consumed the entire observation budget")
+    time = 0; reads = 0
     var rejected = false
     do {
         _ = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { _ in
@@ -432,7 +441,7 @@ func launch(_ executable: URL, disabled: Bool) throws {
 var failure: Error?
 do {
     try testInputObservationPolicy()
-    report["inputReadSelfTests"] = ["transientExact", "foreignRejected", "persistentBounded",
+    report["inputReadSelfTests"] = ["transientExact", "fullCallTimeoutRecovery", "foreignRejected", "persistentBounded",
         "identityDriftRejected", "permanentRejected", "lateRejected", "ownedActivationOnly"]
     try require(output.path.hasPrefix(runner.path + "/") && app.path.hasPrefix(NSHomeDirectory() + "/Applications/Apparent-Storage-"), "Paths escape disposable CI fixture")
     try require(!fm.fileExists(atPath: output.path), "Evidence directory must be fresh")
@@ -489,6 +498,20 @@ do {
     report["passed"] = true
     report["nativeProof"] = "Executed installed Rust GPUI on GitHub-hosted macOS; inspect PNG and JSON artifacts"
 } catch { failure = error; report["error"] = String(describing: error) }
+// Preserve a failure-time stack from this exact owned synthetic process before
+// stopping it. No memory dump, foreign process sampling, input or new time budget.
+// Leave room for the existing failure screenshot and cleanup; diagnostics never mask the
+// original failure and are skipped when the remaining budget cannot cover them.
+if failure != nil, let child = owned, child.isRunning, deadline.timeIntervalSinceNow > 11 {
+    let sample = output.appendingPathComponent("failure-owned-app.sample.txt")
+    do {
+        _ = try run("/usr/bin/sample", [String(child.processIdentifier), "1", "1", "-file", sample.path], cap: 4)
+        report["failureSample"] = ["pid": child.processIdentifier, "file": sample.lastPathComponent] as [String: Any]
+    } catch {
+        report["failureSample"] = ["pid": child.processIdentifier, "available": fm.fileExists(atPath: sample.path),
+            "status": "sampling unavailable; original failure preserved"] as [String: Any]
+    }
+}
 // Retain failure pixels when possible, without widening to another window/screen.
 if failure != nil && owned?.isRunning == true && deadline.timeIntervalSinceNow > 0 {
     _ = try? screenshot("failure-owned-window")

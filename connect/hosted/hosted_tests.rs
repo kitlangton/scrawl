@@ -40,6 +40,11 @@ fn hosted_connect_disabled_upload_suggests_canonical_login() {
     test_support::hosted_connect_disabled_upload_suggests_canonical_login();
 }
 #[test]
+fn hosted_shares_denial_is_sanitized() {
+    setup();
+    test_support::hosted_shares_denial_is_sanitized();
+}
+#[test]
 fn hosted_config_setting_snapshot_cannot_restore_consent() {
     setup();
     test_support::hosted_config_setting_snapshot_cannot_restore_consent();
@@ -335,4 +340,41 @@ fn hosted_constructed_client_and_prepared_link_read_current_provider() {
 fn hosted_provider_write_failure_never_reports_disabled_or_login_success() {
     setup();
     test_support::hosted_provider_write_failure_never_reports_disabled_or_login_success();
+}
+
+// The existing automatic installed-app bridge lane selects this test by suffix.
+// Product assertions stay in the Connect-owned TypeScript CLI fixture.
+#[cfg(target_os = "macos")]
+#[test]
+#[ignore = "requires the current run's installed Mac app; automatic bridge lane"]
+fn connect_shares_installed_electron_rust_roundtrip() {
+    assert_eq!(std::env::var("GITHUB_ACTIONS").as_deref(), Ok("true"));
+    assert_eq!(
+        std::env::var("RUNNER_ENVIRONMENT").as_deref(),
+        Ok("github-hosted")
+    );
+    let run = std::env::var("GITHUB_RUN_ID").expect("current CI run");
+    let attempt = std::env::var("GITHUB_RUN_ATTEMPT").expect("current CI attempt");
+    assert!(!run.is_empty() && run.bytes().all(|b| b.is_ascii_digit()));
+    assert!(!attempt.is_empty() && attempt.bytes().all(|b| b.is_ascii_digit()));
+    let app = PathBuf::from(std::env::var_os("HOME").expect("CI home"))
+        .join(format!("Applications/Apparent-Storage-{run}-{attempt}.app"));
+    let root = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let output = std::process::Command::new("node")
+        .args(["--experimental-strip-types", "--test"])
+        .arg(root.join("connect/client/typescript/test/cli.integration.ts"))
+        .env(
+            "APPARENT_CONNECT_TEST_BINARY",
+            app.join("Contents/MacOS/apparent"),
+        )
+        .env("APPARENT_CONNECT_TEST_INSTALLED_APP", &app)
+        .output()
+        .expect("execute Connect-owned installed CLI assertions");
+    assert!(
+        output.status.success(),
+        "{}\n{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    println!("{}", String::from_utf8_lossy(&output.stdout));
 }
