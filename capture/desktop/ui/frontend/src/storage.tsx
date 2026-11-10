@@ -2,10 +2,11 @@ import { useEffect, useRef, useState } from 'react';
 import { Button } from '@apparent/ui/button';
 import type { CaptureLocation, LocationSnapshot } from './bridge';
 import { Retention } from './retention';
+import { changeCaptureLocation, readCaptureLocation, resetCaptureLocation } from './storage/transport';
 
 const errors: Record<string, string> = {
   conflict: 'The saved location changed while the picker was open. Refresh before choosing again.',
-  outcome_unknown: 'The save timed out. Its outcome is unknown. Refresh to read the saved location; do not repeat it blindly.',
+  outcome_unknown: 'The save outcome is unknown. Refresh to read the saved location; do not repeat it blindly.',
   admission_expired: 'The request expired before the save. Refresh and choose again.',
   config_write_failed: 'The preference could not be saved. The config may be unavailable or unsafe.',
   config_read_failed: 'The Rust app could not read the saved preference.',
@@ -22,10 +23,8 @@ export function Storage({ settings = false }: { settings?: boolean }) {
     const token = ++order.current;
     setBusy(true);
     try {
-      const bridge = window.apparent;
-      const next: CaptureLocation = !bridge ? { status: 'disabled' } : await (
-        operation === 'read' ? bridge.readCaptureLocation() :
-          operation === 'change' ? bridge.changeCaptureLocation() : bridge.resetCaptureLocation());
+      const next: CaptureLocation = operation === 'read' ? await readCaptureLocation() :
+        operation === 'change' ? await changeCaptureLocation() : await resetCaptureLocation();
       if (token !== order.current) return;
       if (next.status !== 'cancelled') {
         setResult(next);

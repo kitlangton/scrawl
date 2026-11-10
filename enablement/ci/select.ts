@@ -54,6 +54,14 @@ const portableSettings = new Set([
 ].map(name => 'capture/desktop/ui/frontend/src/' + name));
 
 const portal = 'capture/desktop/linux/capture/portal.rs';
+// Audited cfg(linux) leaf adapter; no shared policy or Mac compiler consumer.
+const linuxAdapters = new Set(['capture/desktop/linux/integration/appearance.rs']);
+// Launch-free test drivers, not shipped runtime/package inputs. Keep their
+// build/version watches: selection avoids unrelated PR verification, not stamping.
+const linuxDrivers = new Set([
+  'capture-smoke.py', 'gui-vm.py', 'gui-vm-reaper.py',
+  'test-capture-smoke.py', 'test-gui-vm.py',
+].map(name => 'capture/desktop/scripts/linux/gui/' + name));
 const linuxDoc = 'capture/desktop/docs/linux/linux.md';
 
 export function macDecision(paths: string[] | null, nonModifications: string[] | null = []) {
@@ -61,6 +69,8 @@ export function macDecision(paths: string[] | null, nonModifications: string[] |
   if (!paths.length) return {macos: true, reasons: ['mac:empty-delta']};
   const reasons = paths.map(path => {
     if (nonModifications.includes(path)) return 'mac:unsupported-change:' + path;
+    if (linuxAdapters.has(path)) return 'linux:reviewed-adapter:' + path;
+    if (linuxDrivers.has(path)) return 'linux:reviewed-test-driver:' + path;
     if (portableSettings.has(path)) return 'linux:reviewed-settings:' + path;
     // Audited cfg(linux) module and guide; no Mac build/package consumer.
     if (path === portal || path === linuxDoc) return 'linux:reviewed-portal-input:' + path;

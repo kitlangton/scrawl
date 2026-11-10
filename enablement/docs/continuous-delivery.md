@@ -511,3 +511,30 @@ Restore unconditional ready-PR Mac admission to roll back the source exemption; 
 broaden it without reviewing the new platform boundary. Selector tests establish selection,
 not measured queue/runtime savings. Qualify subsequent real runs by their actual selected
 and executed job inventory.
+
+### Audited Linux PR inputs
+
+Ready PRs may omit the Mac application platform suite for regular-file
+modifications to the exact Linux inputs in `enablement/ci/select.ts`.
+The existing portal/guide and five Settings-card exceptions compose with:
+- `capture/desktop/linux/integration/appearance.rs`: XDG colour-scheme adapter,
+  reached through Desktop's cfg(linux) module; its callers and exports are not exempt.
+- Five files under `capture/desktop/scripts/linux/gui/`: `gui-vm.py`,
+  `gui-vm-reaper.py`, `capture-smoke.py`, `test-gui-vm.py` and
+  `test-capture-smoke.py`. These are isolated VM/guest test drivers and
+  launch-free regression tests, not shipped Mac or AppImage payloads.
+
+Other cfg(linux) adapters, module declarations, packaging/maintenance/updater
+scripts and unaudited VM scenarios retain broad coverage. This is a finite
+consumer audit, not a directory or Rust-extension rule. Additions, deletions,
+renames, mode/type changes, missing/divergent/shallow history and mixed shared,
+build, CI or unknown inputs retain Mac verification. Linux platform tests,
+portable driver regressions, main's Mac verification, Hermes inspection, native
+acceptance and exact-source release admission remain unchanged.
+
+`build.rs::watch_desktop_tooling` still watches these drivers;
+`enablement/build_version.rs` still watches all tracked files for correct
+revision/modified labels. Removing those watches would not establish compile
+independence. Existing validated Swift/Metal reuse remains authoritative.
+This selection changes only hosted PR admission; it claims no warm build reuse
+or measured end-to-end speedup.

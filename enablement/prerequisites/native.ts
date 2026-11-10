@@ -18,6 +18,7 @@ export function checkNativeInputs(root: string, platform = process.platform): st
     'capture/desktop/ui/frontend/electron/main.cjs',
     'capture/desktop/ui/frontend/electron/preload.cjs',
     'capture/desktop/ui/frontend/electron/runtime.cjs',
+    'capture/desktop/ui/frontend/electron/storage-policy.cjs',
   ];
   if (platform === 'darwin') inputs.push(
     'capture/desktop/ui/frontend/tests/mac-storage-native.cjs',
