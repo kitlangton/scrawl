@@ -234,18 +234,23 @@ class GuestIsolationTests(unittest.TestCase):
             systemctl = root / 'systemctl'
             systemctl.write_text('#!/bin/sh\nprintf "%s\\n" "$FIXTURE_ENV"\n')
             systemctl.chmod(0o700)
-            for desktop, compositor, identity in [('gnome', 'gnome-shell', 'GNOME'), ('kde', 'kwin_wayland', 'KDE')]:
+            for desktop, compositor, identity, session in [
+                ('gnome', 'gnome-shell', 'GNOME', 'wayland'),
+                ('kde', 'kwin_wayland', 'KDE', 'wayland'),
+                ('gnome-x11', 'gnome-shell', 'GNOME', 'x11'),
+            ]:
                 valid = ['DISPLAY=:0', 'WAYLAND_DISPLAY=wayland-0',
-                         'XDG_RUNTIME_DIR=/run/user/1000', 'XDG_SESSION_TYPE=wayland',
+                         'XDG_RUNTIME_DIR=/run/user/1000', 'XDG_SESSION_TYPE=' + session,
                          'XDG_CURRENT_DESKTOP=' + identity]
                 for environment, process, ready in [
                     (valid, compositor, True),
                     ([line.replace(identity, 'vendor:' + identity) for line in valid], compositor, True),
                     (valid, 'Hyprland', False),
-                    ([line for line in valid if not line.startswith('WAYLAND_DISPLAY=')], compositor, False),
+                    ([line for line in valid if not line.startswith('WAYLAND_DISPLAY=')], compositor, session == 'x11'),
                     ([line for line in valid if not line.startswith('XDG_RUNTIME_DIR=')], compositor, False),
                     ([line.replace('=/run/user/1000', '=relative') for line in valid], compositor, False),
-                    ([line.replace('=wayland', '=x11') for line in valid], compositor, False),
+                    ([line.replace('XDG_SESSION_TYPE=' + session, 'XDG_SESSION_TYPE=' + ('wayland' if session == 'x11' else 'x11')) for line in valid], compositor, False),
+                    (valid, 'kwin_wayland' if session == 'x11' else 'kwin_x11', False),
                     ([line.replace(identity, 'Hyprland') for line in valid], compositor, False),
                     ([line.replace('DISPLAY=:0', 'DISPLAY=') for line in valid], compositor, False),
                 ]:
@@ -406,6 +411,21 @@ class PreparationTests(unittest.TestCase):
             self.assertEqual(code, 0)
             self.assertEqual(prepared['outputs'], 1)
             code, status, overlay = self.invoke(options, root / 'r', '--outputs', '2',
+                                              '--prepared-inputs', str(root / 'prepared/result.json'))
+            self.assertNotEqual(code, 0)
+            overlay.assert_not_called()
+            self.assertEqual(status['primary_failure']['stage'], 'preflight')
+            self.assertIn('prepared inputs changed', status['primary_failure']['message'])
+            self.assertEqual(status['product'], 'unrun')
+
+    def test_prepared_receipt_rejects_changed_session_backend_before_allocation(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            options = self.inputs(root)
+            code, prepared, _ = self.invoke(options, root / 'prepared', '--desktop', 'gnome', '--preflight-only')
+            self.assertEqual(code, 0)
+            self.assertEqual(prepared['desktop'], 'gnome')
+            code, status, overlay = self.invoke(options, root / 'r', '--desktop', 'gnome-x11',
                                               '--prepared-inputs', str(root / 'prepared/result.json'))
             self.assertNotEqual(code, 0)
             overlay.assert_not_called()
@@ -575,7 +595,7 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
         return code, status, results
 
     def test_selected_desktop_reaches_readiness_and_receipt(self):
-        for desktop in ('gnome', 'kde'):
+        for desktop in ('gnome', 'kde', 'gnome-x11'):
             with self.subTest(desktop=desktop), tempfile.TemporaryDirectory() as root:
                 code, _, _ = self.exercise(root, scenario_exit=0, desktop=desktop)
                 self.assertEqual(code, 0)

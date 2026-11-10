@@ -180,6 +180,15 @@ capture smoke recipe below remains an Omarchy-tested recipe until separately
 verified on those desktops. Keep compositor/version, multi-output and native
 product evidence separate from driver contracts.
 
+For a separately prepared GNOME X11 image, `--desktop gnome-x11` requires the
+test account's `gnome-shell`, X11 session type, DISPLAY/runtime environment and
+GNOME identity. It does not require WAYLAND_DISPLAY or change the guest session.
+The released GNOME image below is Wayland; this selector does not convert it or
+qualify X11 capture. Prepared inputs bind the exact desktop/backend selection.
+Actual qualification on GNOME 46/Xorg 21.1.12 verified a local active X11
+session and GdkX11Display without executing Apparent. It exposed only one
+1280×800 monitor despite two GPU providers; multi-output capture is unqualified.
+
 ### Released GNOME environment (Clanker, 2026-11-08)
 
 The read-only standalone template is
