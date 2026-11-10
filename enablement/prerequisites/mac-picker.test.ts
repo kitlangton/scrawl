@@ -2,7 +2,7 @@ import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {execFileSync} from 'node:child_process';
 import {readFileSync} from 'node:fs';
-import {prepareStorageChange, type PickerDriver} from './mac-picker.ts';
+import {panelScript, prepareStorageChange, type PickerDriver} from './mac-picker.ts';
 function deferred<T>() {
  let resolve!: (value:T)=>void;
  const promise=new Promise<T>(done=>{resolve=done;});
@@ -13,6 +13,25 @@ function fixture(patch: Partial<PickerDriver> = {}) {
  const driver:PickerDriver={storageIdle:async()=>{},change:async()=>{calls.change++;},picker:async()=>{calls.picker++;return 'owned-picker';},openGo:async()=>{calls.openGo++;},goSheet:async()=> 'owned-go-sheet',navigate:async()=>{calls.navigate++;},...patch};
  return {calls,driver};
 }
+test('query timing preserves the exact selector and stable source-line identities', () => {
+ const source=readFileSync('enablement/prerequisites/mac-picker.ts','utf8');
+ const original=source.slice(source.indexOf('const pickerScript = `')+'const pickerScript = `'.length,source.indexOf('\n`;')+1);
+ const handler='\n-- Explicit script target: never ask System Events to supply the clock.\non axProbeElapsed(startedAt)\n  return (current date) - startedAt\nend axProbeElapsed\n';
+ assert.ok(panelScript.endsWith(handler));
+ const lines=panelScript.slice(0,-handler.length).split('\n');
+ assert.equal(lines.filter(line=>line.trim()==='set axProbeStartedAt to current date').length,1);
+ const stripped=lines.filter(line=>line.trim()!=='set axProbeStartedAt to current date'&&!line.trim().startsWith('log ("AX probe source-line=')).join('\n');
+ assert.equal(stripped,original);
+ let queries=0;
+ for(let index=0;index<lines.length;index++) {
+  const match=lines[index].match(/log \("AX probe source-line=(\d+) elapsedSeconds=" & \(my axProbeElapsed\(axProbeStartedAt\)\)\)/);
+  if(!match)continue;
+  queries++;
+  assert.equal(lines[index+1],original.split('\n')[Number(match[1])-1]);
+ }
+ assert.ok(queries>20,'All existing query boundaries remain instrumented');
+ assert.match(panelScript,/source-line=96 elapsedSeconds=/);
+});
 test('the actual Storage/Retention receipt precedes Change, and Go sheet readiness precedes path entry',async()=>{
  const storage=deferred<void>(),go=deferred<string>(),opened=deferred<void>();
  const {calls,driver}=fixture({storageIdle:()=>storage.promise,goSheet:()=>go.promise});
