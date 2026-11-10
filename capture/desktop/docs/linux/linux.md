@@ -328,3 +328,20 @@ cargo build -j 2 --offline
 ```
 
 GPUI needs Vulkan (`mesa-vulkan-drivers`; llvmpipe works in a VM). Tests: `cargo test`. A desktop test runs in a Tart Ubuntu VM on the Mac mini (`macvm`, see `~/code/home/tools/macvm`): GNOME on Wayland by default, X11 with `WaylandEnable=false` in `/etc/gdm3/custom.conf`. Never test on Kit's desktop session.
+
+### Native Shift-click notes on Hyprland Lua
+
+The recording overlay's GPUI left-button callbacks supply the point and modifiers
+for Shift-click notes. Convert the local point with the actual GPUI paint scale
+and the overlay origin; the monitor's scale alone is insufficient. GPUI supplies
+no event timestamp, so the note time is callback observation time. A raw device
+press or a later overlay motion sample is never joined to this point.
+
+Desktop binds this route to the recording overlay and capture incarnation after
+opening it. Its pending press is separate from the legacy poller's pending slot;
+both use the existing pin handler and default Electron editor/persistence. The
+native route disables polled Shift pin creation, while ordinary click observation
+continues. Finish/reset invalidates the binding. Other sessions keep their
+existing input route. This introduces no setting or experiment. If the native
+route must be reverted, remove its Desktop binding and the existing polled route
+remains available; retain that route for sessions without accepted native delivery.
