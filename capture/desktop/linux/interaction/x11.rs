@@ -128,6 +128,8 @@ pub struct Monitor {
     pub handle: isize,
     /// The output's name (`DP-3`), empty when the server doesn't say.
     pub name: String,
+    /// Physical RandR outputs in this monitor; zero for the synthetic root fallback.
+    pub outputs: usize,
     pub rect: [f64; 4],
     pub work: [f64; 4],
     pub scale: f64,
@@ -200,6 +202,7 @@ pub fn monitors() -> Vec<Monitor> {
             Monitor {
                 handle: m.name as isize,
                 name,
+                outputs: m.outputs.len(),
                 rect,
                 work: workarea.and_then(|w| intersect(rect, w)).unwrap_or(rect),
                 scale,
@@ -218,6 +221,7 @@ pub fn monitors() -> Vec<Monitor> {
         list.push(Monitor {
             handle: 0,
             name: String::new(),
+            outputs: 0,
             rect,
             work: workarea.and_then(|w| intersect(rect, w)).unwrap_or(rect),
             scale,
