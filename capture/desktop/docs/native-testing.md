@@ -8,6 +8,12 @@ screen capture, then starts and cancels a second. Both requests use persisted,
 There is no messaging, paste into a composer, audio playback, tray targeting,
 OCR, simulated picker clicks or acknowledgement protocol.
 
+After the saved receipt, the scenario waits separately for completed presentation
+before admitting the cancel take. On Hyprland it also reads the native clipboard,
+requires the exact saved bundle path, checks that foreground focus is unchanged,
+and retains `completion-desktop.png` for visual pill inspection. Other desktops
+leave those clipboard/focus gates unrun. The Agent receipt alone is not handoff proof.
+
 ## Source-backed limits
 
 At baseline `6f043ff4ab4f4bdfa7e180c97ef7c37a397ff2ef`,
@@ -150,6 +156,9 @@ Linux's 107-byte pathname limit; the scenario refuses longer paths before GUI
 launch. For the baseline runner's `/home/simon/scrawl-gui-output-<32hex>` path,
 using the output itself as HOME fits; adding a nested `home/` does not. A longer
 guest username may require the runner owner to shorten its guest staging path.
+`TMPDIR` is a separate private guest directory: AppImage extraction contains
+symlinks and is not evidence. The recipe removes that runtime only after all
+owned processes stop; the runner's artifact symlink rejection remains unchanged.
 
 Use `--isolated-network` **always** for this recipe. The app's normal launch can
 attempt model/update downloads; no supported `transcriber: off` setting exists
@@ -357,3 +366,19 @@ including saved/cancelled receipts, retained nonzero stderr/stdout and a pending
 start timeout. Their media are deliberately invalid labelled strings and their
 scene producer is replaced. They test driver wiring, **not** native execution,
 X11 visibility, portal consent, encoder output or candidate product behavior.
+
+## Mac test-artifact preparation
+
+The manual `verification-mac.yml` workflow accepts `native_candidate=true` to
+prepare an ARM64 test app using the existing installer. Its default remains
+false; ordinary verification and the older signed Preview candidate keep their
+gates. The new app is never launched, uses ad-hoc signing and does not change
+installed routing, feeds or release admission. Artifacts expire after three days.
+
+`native-candidate.ts` seals the exact checkout commit/tree, actual ARM64 hardware
+and runtime, native executables, archive checksum and every packaged file's bytes
+(including owner workers). It extracts and checks the archive before upload.
+Before allocating a native provider, download and inspect that exact artifact:
+verify its run/source identity, archive checksum and expected owner worker bytes.
+The manifest records `nativeAcceptance: pending`. Separate installed
+clipboard/focus/pill and actual capture proof are still required.
