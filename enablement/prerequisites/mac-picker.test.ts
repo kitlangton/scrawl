@@ -148,3 +148,41 @@ test('post-Choose app_busy uses one visible read after authoritative save, never
  assert.doesNotMatch(block,/startNativeChange|panel\(|snapshot\(|change\.click|reset\.click/);
  assert.match(block,/refreshLocation\.click\(\{ timeout: budget\(\) \}\)/);
 });
+
+test('initial runtime recovery is one explicit read within the original shared startup deadline',async()=>{
+ const source=readFileSync('capture/desktop/ui/frontend/tests/mac-storage-native.cjs','utf8');
+ const start=source.indexOf('async function initialRuntimeRead('),end=source.indexOf('async function within(',start);
+ assert.ok(start>=0&&end>start);
+ const admit=new Function('assert',source.slice(start,end)+';return initialRuntimeRead;')(assert);
+ for(const initial of ['connected','app_unresponsive','app_busy','request_timeout','invalid_response']) {
+  let now=0;const calls:Array<[string,number]>=[];
+  const ports={now:()=>now,budget:(cap:number)=>Math.min(cap,95000-now),
+   observe:async(remaining:()=>number)=>{assert.equal(remaining(),10000);now=3000;return initial;},
+   pause:async(ms:number)=>{calls.push(['pause',ms]);now+=ms;},
+   refresh:async(ms:number)=>{calls.push(['refresh',ms]);now+=100;},
+   connected:async(ms:number)=>{calls.push(['connected',ms]);if(!['connected','app_unresponsive'].includes(initial))throw Error(initial);},
+  };
+  if(['connected','app_unresponsive'].includes(initial))assert.equal((await admit(ports)).refreshed,initial==='app_unresponsive');
+  else await assert.rejects(admit(ports),new RegExp(initial));
+  assert.deepEqual(calls,initial==='app_unresponsive'?[['pause',1000],['refresh',6000],['connected',5900]]:[['connected',7000]]);
+ }
+ let now=0,refreshes=0;
+ const ports={now:()=>now,budget:(cap:number)=>Math.min(cap,95000-now),observe:async()=>{now=9500;return 'app_unresponsive';},
+  pause:async()=>{throw Error('must not pause');},refresh:async()=>{refreshes++;},connected:async()=>{throw Error('must not accept');}};
+ await assert.rejects(admit(ports),/Insufficient initial runtime recovery budget/);assert.equal(refreshes,0);
+ now=0;
+ await assert.rejects(admit({...ports,observe:async()=>{now=3000;return 'app_unresponsive';},pause:async()=>{now=10000;}}),/deadline exceeded/);
+ assert.equal(refreshes,0,'An expired shared deadline never dispatches another read');
+ now=0;const failure=Error('permission refusal');
+ await assert.rejects(admit({...ports,observe:async()=>{throw failure;}}),error=>error===failure);
+ assert.equal(refreshes,0);
+ now=94500;
+ await admit({...ports,observe:async(remaining:()=>number)=>{assert.equal(remaining(),500);return 'connected';},
+  connected:async(timeout:number)=>{assert.equal(timeout,500);}});
+ now=0;
+ await assert.rejects(admit({...ports,observe:async()=>{now=3000;return 'app_unresponsive';},pause:async()=>{now+=1000;},
+  refresh:async()=>{refreshes++;throw failure;}}),error=>error===failure);
+ assert.equal(refreshes,1,'A failed visible read is not retried');
+ const host=readFileSync('capture/desktop/ui/frontend/electron/main.cjs','utf8');
+ assert.match(host,/Date\.now\(\) - lastRead < 1000/,'Fixture cooldown must match the shipped state-read cache');
+});
