@@ -997,10 +997,10 @@ fn serve(mut stream: TcpStream, state: &Mutex<State>, origin: &str) {
             s.list_routes.push(route.into());
             if s.mode == "paged-shares" || s.mode == "looped-shares" {
                 let second = route.contains('?');
-                let shares: Vec<_> = (if second {100..103} else {0..100}).map(|i| json!({"id":format!("{i:032x}"),"captureId":"a".repeat(32),"url":format!("{origin}/s/{}", "b".repeat(64)),"status":"ready","createdAt":123,"expiresAt":12345,"title":"Synthetic capture"})).collect();
+                let shares: Vec<_> = (if second {100..103} else {0..100}).map(|i| json!({"id":format!("{i:032x}"),"captureId":"a".repeat(32),"url":format!("{origin}/s/{}", "b".repeat(64)),"status":"ready","createdAt":"2026-11-10T00:00:00.000Z","expiresAt":"2026-11-17T00:00:00.000Z","title":"Synthetic capture"})).collect();
                 json!({"shares":shares,"nextCursor":if !second || s.mode == "looped-shares" {Some("1234:opaque /?&+")} else {None}}).to_string().into_bytes()
             } else {
-                json!({"shares":if s.shares == 0 || s.revoked {vec![]} else {vec![json!({"id":"c".repeat(32),"captureId":s.capture_id,"url":format!("{origin}/s/{}", "b".repeat(64)),"status":"uploading","createdAt":123,"expiresAt":12345,"title":"Synthetic capture"})]},"nextCursor":null}).to_string().into_bytes()
+                json!({"shares":if s.shares == 0 || s.revoked {vec![]} else {vec![json!({"id":"c".repeat(32),"captureId":s.capture_id,"url":format!("{origin}/s/{}", "b".repeat(64)),"status":"uploading","createdAt":"2026-11-10T00:00:00.000Z","expiresAt":"2026-11-17T00:00:00.000Z","title":"Synthetic capture"})]},"nextCursor":null}).to_string().into_bytes()
             }
         } else if route == format!("/v1/shares/{}", "c".repeat(32)) && method == "DELETE" {
             s.revoked = true;

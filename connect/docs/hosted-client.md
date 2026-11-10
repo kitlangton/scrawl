@@ -79,10 +79,10 @@ page requests, token renewal and 30-second request timeout; it receives only
 allowlisted `page` operations and returns response bodies over the private pipe.
 The installed Electron run-as-Node runtime is resolved from the existing Settings
 runtime. Its package must also stage `connect-client/dist/shares.js` beside that
-runtime (`Resources/connect-client` on macOS, `usr/share/apparent/connect-client`
-on Linux); the current Settings staging script does not yet copy this owner module.
-Until that narrow packaging handoff lands, an installed CLI without the module
-fails closed instead of using the retired Rust listing loop. No credential,
+runtime (`Resources/settings/app/connect-client` on macOS, `usr/share/apparent/settings/app/connect-client`
+on Linux), including its ESM package marker. The Settings staging script builds
+and copies that dependency-free module for both packagers. An installed CLI with
+a missing module fails closed instead of using the retired Rust listing loop. No credential,
 capability URL or response body is placed in arguments, environment variables or
 logs. The root CLI and owner package remain Rust-dependent overall; this slice
 does not claim Connect client independence.

@@ -55,6 +55,9 @@ def main():
     subprocess.run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=frontend, env=env, check=True)
     subprocess.run(["node", "node_modules/electron/install.js"], cwd=frontend, env=env, check=True)
     subprocess.run(["npm", "run", "build"], cwd=frontend, env=env, check=True)
+    connect = root / "connect/client/typescript"
+    subprocess.run(["npm", "ci", "--ignore-scripts", "--no-audit", "--no-fund"], cwd=connect, env=env, check=True)
+    subprocess.run(["npm", "run", "build"], cwd=connect, env=env, check=True)
     destination = args.destination.absolute()
     if destination.is_symlink():
         parser.error("Refusing a symlink staging destination")
@@ -62,6 +65,12 @@ def main():
         shutil.rmtree(destination)
     app = destination / "app"
     app.mkdir(parents=True)
+    # The CLI uses the same locked Electron runtime, with a dependency-free ESM
+    # listing module. Keep both inside this staging destination for all packagers.
+    connect_dist = app / "connect-client/dist"
+    connect_dist.mkdir(parents=True)
+    shutil.copy2(connect / "dist/shares.js", connect_dist / "shares.js")
+    (connect_dist.parent / "package.json").write_text('{"type":"module"}\n')
     shutil.copytree(frontend / "electron", app / "electron")
     theme = app / "node_modules/@apparent/ui"
     (theme / "src").mkdir(parents=True)

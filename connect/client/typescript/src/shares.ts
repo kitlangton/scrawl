@@ -2,12 +2,13 @@ import { createInterface } from 'node:readline';
 import { pathToFileURL } from 'node:url';
 
 export type Share = {
+  [key: string]: unknown;
   id: string;
   captureId: string;
   url: string | null;
   status: string;
-  createdAt: number;
-  expiresAt: number;
+  createdAt: string;
+  expiresAt: string;
   title: string;
 };
 
@@ -34,7 +35,7 @@ function parsePage(value: unknown, origin: string): SharesPage {
     if (!value || typeof value !== 'object' || Array.isArray(value)) return invalid('Invalid share response');
     const row = value as Record<string, unknown>;
     if (typeof row.id !== 'string' || row.id.length !== 32 || !ID.test(row.id) || typeof row.captureId !== 'string' || row.captureId.length !== 32 || !ID.test(row.captureId)) return invalid('Invalid share identity');
-    if (typeof row.status !== 'string' || typeof row.title !== 'string' || !Number.isSafeInteger(row.createdAt) || !Number.isSafeInteger(row.expiresAt)) return invalid('Invalid share response');
+    if (typeof row.status !== 'string' || typeof row.title !== 'string' || typeof row.createdAt !== 'string' || typeof row.expiresAt !== 'string') return invalid('Invalid share response');
     if (INACTIVE.has(row.status)) {
       if (row.url !== null) return invalid('Inactive share exposed a URL');
     } else {
@@ -42,7 +43,7 @@ function parsePage(value: unknown, origin: string): SharesPage {
       const capability = typeof row.url === 'string' && row.url.startsWith(prefix) ? row.url.slice(prefix.length) : '';
       if (!row.url || capability.length !== 64 || !HASH.test(capability)) return invalid('Invalid share URL');
     }
-    return { id: row.id, captureId: row.captureId, url: row.url as string | null, status: row.status, createdAt: row.createdAt as number, expiresAt: row.expiresAt as number, title: row.title };
+    return { ...row, id: row.id, captureId: row.captureId, url: row.url as string | null, status: row.status, createdAt: row.createdAt, expiresAt: row.expiresAt, title: row.title };
   });
   return { shares, nextCursor: page.nextCursor as string | null };
 }
@@ -58,8 +59,12 @@ export async function listShares(origin: string, fetchPage: PagePort): Promise<S
   let cursor: string | null = null;
   const seen = new Set<string>();
   const shares: Share[] = [];
+  let bytes = 0;
   for (;;) {
     const page = parsePage(await fetchPage(cursor), origin);
+    // Bound work before retaining the page, including empty unique-cursor pages.
+    bytes += Buffer.byteLength(JSON.stringify(page), 'utf8');
+    if (bytes > MAX_RESULT_BYTES) return invalid('Shares list exceeds the 64 MiB output limit');
     shares.push(...page.shares);
     cursor = page.nextCursor;
     if (cursor === null) {
@@ -88,7 +93,7 @@ export async function runSharesStdio(origin: string): Promise<void> {
       wake = undefined;
     }
     const line = pending.shift()!;
-    if (Buffer.byteLength(line, 'utf8') > 2_000_000) return invalid('Invalid shares transport response');
+    if (Buffer.byteLength(line, 'utf8') > 2_000_032) return invalid('Invalid shares transport response');
     try { return JSON.parse(line); } catch { return invalid('Invalid shares transport response'); }
   };
   let result: SharesResult;

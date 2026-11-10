@@ -2,7 +2,7 @@
 //! Secrets go only through curl's stdin config, never argv or diagnostic output.
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{BufRead, Read, Write};
+use std::io::{Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -314,12 +314,12 @@ fn shares_typescript_runtime() -> Result<(PathBuf, PathBuf, bool)> {
     #[cfg(target_os = "macos")]
     let (runtime, module) = (
         installed.join("../Resources/settings/runtime/Electron.app/Contents/MacOS/Electron"),
-        installed.join("../Resources/connect-client/dist/shares.js"),
+        installed.join("../Resources/settings/app/connect-client/dist/shares.js"),
     );
     #[cfg(target_os = "linux")]
     let (runtime, module) = (
         installed.join("../share/apparent/settings/runtime/electron"),
-        installed.join("../share/apparent/connect-client/dist/shares.js"),
+        installed.join("../share/apparent/settings/app/connect-client/dist/shares.js"),
     );
     if runtime.is_file() {
         ensure!(
@@ -353,6 +353,64 @@ fn shares_typescript_runtime() -> Result<(PathBuf, PathBuf, bool)> {
         .find(|path| path.is_file())
         .context("Electron Node runtime or supported Node.js runtime is missing")?;
     Ok((node, module, false))
+}
+
+// Native pipe mechanics only: absolute frame deadline and pre-allocation bound.
+fn shares_policy_frame(output: &mut std::process::ChildStdout) -> Result<String> {
+    shares_policy_frame_bounded(output, Duration::from_secs(30), 64 * 1024 * 1024 + 1024)
+}
+fn shares_policy_frame_bounded(output: &mut std::process::ChildStdout, timeout: Duration, limit: usize) -> Result<String> {
+    let deadline = Instant::now() + timeout;
+    let mut bytes = Vec::new();
+    loop {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        ensure!(!remaining.is_zero(), "Shares policy response timed out");
+        let mut fd = libc::pollfd { fd: output.as_raw_fd(), events: libc::POLLIN, revents: 0 };
+        let ready = unsafe { libc::poll(&mut fd, 1, remaining.as_millis().min(30_000).max(1) as i32) };
+        if ready < 0 && std::io::Error::last_os_error().kind() == std::io::ErrorKind::Interrupted { continue; }
+        ensure!(ready > 0, "Shares policy response timed out");
+        let mut chunk = [0u8; 8192];
+        let count = output.read(&mut chunk)?;
+        ensure!(count > 0, "Shares policy exited without a result");
+        ensure!(bytes.len() + count <= limit, "Oversized shares policy frame");
+        bytes.extend_from_slice(&chunk[..count]);
+        if let Some(end) = chunk[..count].iter().position(|b| *b == b'\n') {
+            ensure!(end == count - 1, "Compound shares policy frame");
+            return String::from_utf8(bytes).context("Invalid shares policy encoding");
+        }
+    }
+}
+fn shares_policy_write(input: &mut std::process::ChildStdin, value: &Value) -> Result<()> {
+    let mut bytes = serde_json::to_vec(value)?;
+    bytes.push(b'\n');
+    ensure!(bytes.len() <= 2_000_032, "Oversized shares transport response");
+    let flags = unsafe { libc::fcntl(input.as_raw_fd(), libc::F_GETFL) };
+    ensure!(flags >= 0 && unsafe { libc::fcntl(input.as_raw_fd(), libc::F_SETFL, flags | libc::O_NONBLOCK) } >= 0, "Shares pipe setup failed");
+    let deadline = Instant::now() + Duration::from_secs(30);
+    let mut offset = 0;
+    while offset < bytes.len() {
+        ensure!(Instant::now() < deadline, "Shares policy write timed out");
+        match input.write(&bytes[offset..]) {
+            Ok(0) => bail!("Shares policy input closed"),
+            Ok(count) => offset += count,
+            Err(error) if error.kind() == std::io::ErrorKind::Interrupted => (),
+            Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                let mut fd = libc::pollfd { fd: input.as_raw_fd(), events: libc::POLLOUT, revents: 0 };
+                unsafe { libc::poll(&mut fd, 1, 20); }
+            }
+            Err(error) => return Err(error.into()),
+        }
+    }
+    Ok(())
+}
+
+fn shares_policy_exit(child: &mut std::process::Child) -> Result<std::process::ExitStatus> {
+    let deadline = Instant::now() + Duration::from_secs(5);
+    loop {
+        if let Some(status) = child.try_wait()? { return Ok(status); }
+        ensure!(Instant::now() < deadline, "Shares policy exit timed out");
+        std::thread::sleep(Duration::from_millis(10));
+    }
 }
 
 struct SharesPolicyChild(std::process::Child);
@@ -762,18 +820,9 @@ impl Client {
                 .context("Could not start Connect shares policy runtime")?,
         );
         let mut input = child.stdin.take().context("Missing shares policy input")?;
-        let output = child.stdout.take().context("Missing shares policy output")?;
-        let mut output = std::io::BufReader::new(output);
+        let mut output = child.stdout.take().context("Missing shares policy output")?;
         loop {
-            let mut line = String::new();
-            ensure!(
-                output.read_line(&mut line)? > 0,
-                "Shares policy exited without a result"
-            );
-            ensure!(
-                line.len() <= 64 * 1024 * 1024 + 1024,
-                "Oversized shares policy frame"
-            );
+            let line = shares_policy_frame(&mut output)?;
             let request: Value = serde_json::from_str(&line)
                 .with_context(|| format!("Invalid shares policy JSON ({} bytes)", line.len()))?;
             match request["operation"].as_str() {
@@ -784,7 +833,7 @@ impl Client {
                         "Invalid shares policy result"
                     );
                     drop(input);
-                    let status = child.wait()?;
+                    let status = shares_policy_exit(&mut child)?;
                     ensure!(status.success(), "Shares policy failed");
                     return Ok(request["result"].clone());
                 }
@@ -798,7 +847,7 @@ impl Client {
                         "Invalid shares policy error"
                     );
                     drop(input);
-                    let status = child.wait()?;
+                    let status = shares_policy_exit(&mut child)?;
                     ensure!(
                         !status.success(),
                         "Shares policy error frame exited successfully"
@@ -837,8 +886,7 @@ impl Client {
                         Ok(body) => json!({"ok":true,"body":body}),
                         Err(error) => json!({"ok":false,"error":safe_shares_error(&error.to_string())}),
                     };
-                    writeln!(input, "{}", response)?;
-                    input.flush()?;
+                    shares_policy_write(&mut input, &response)?;
                 }
                 _ => bail!("Invalid shares policy operation"),
             }
@@ -2545,3 +2593,34 @@ impl Client {
 
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
+
+#[cfg(test)]
+mod shares_pipe_tests {
+    use super::*;
+    fn probe(code: &str) -> SharesPolicyChild {
+        let (runtime, _, electron) = shares_typescript_runtime().unwrap();
+        let mut command = Command::new(runtime);
+        if electron { command.env("ELECTRON_RUN_AS_NODE", "1"); }
+        SharesPolicyChild(command.args(["-e", code]).stdout(Stdio::piped()).stderr(Stdio::null()).spawn().unwrap())
+    }
+    #[test]
+    fn shares_pipe_refuses_unterminated_oversize_and_compound_output() {
+        for (code, limit, expected) in [
+            ("process.stdout.write('x'.repeat(65536))", 1024, "Oversized"),
+            ("process.stdout.write('{}\\n{}\\n')", 1024, "Compound"),
+        ] {
+            let mut child = probe(code);
+            let mut output = child.stdout.take().unwrap();
+            let error = shares_policy_frame_bounded(&mut output, Duration::from_secs(5), limit).unwrap_err();
+            assert!(error.to_string().contains(expected), "{error}");
+        }
+    }
+    #[test]
+    fn shares_pipe_stalled_child_has_an_absolute_read_deadline() {
+        let mut child = probe("setInterval(() => {}, 1000)");
+        let mut output = child.stdout.take().unwrap();
+        let started = Instant::now();
+        assert!(shares_policy_frame_bounded(&mut output, Duration::from_millis(30), 1024).unwrap_err().to_string().contains("timed out"));
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}

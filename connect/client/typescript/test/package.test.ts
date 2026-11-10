@@ -79,7 +79,7 @@ test('packed consumer installs and runs without Rust, compilers or source resolu
     let result;
     lines.on('line',line=>{
       const message=JSON.parse(line);
-      if(message.operation==='page') child.stdin.write(JSON.stringify({ok:true,body:{shares:[{id:'a'.repeat(32),captureId:'c'.repeat(32),url:origin+'/s/'+'b'.repeat(64),status:'active',createdAt:123,expiresAt:456,title:'Synthetic'}],nextCursor:null}})+'\\n');
+      if(message.operation==='page') child.stdin.write(JSON.stringify({ok:true,body:{shares:[{id:'a'.repeat(32),captureId:'c'.repeat(32),url:origin+'/s/'+'b'.repeat(64),status:'active',createdAt:'2026-11-10T00:00:00.000Z',expiresAt:'2026-11-17T00:00:00.000Z',title:'Synthetic'}],nextCursor:null}})+'\\n');
       else {result=message.result;child.stdin.end();}
     });
     const [code]=await new Promise(resolve=>child.once('exit',(code,signal)=>resolve([code,signal])));
