@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync, chmodSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { select, selection, owners, changedPaths, captureToolTests, commands, contractTests, execute, root } from './run.ts';
@@ -75,6 +75,56 @@ function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
     rmSync(dir, { recursive: true, force: true });
   }
 }
+
+test('native temporary environment and Desktop gates fail before expensive Rust work', () => {
+  for (const platform of ['linux', 'darwin']) {
+    const plan = commands(['capture', 'desktop'], 'base', 'head', platform);
+    const preflight = plan.findIndex(command => command.argv.includes('--preflight'));
+    const rust = plan.findIndex(command => command.argv.includes('--run'));
+    const desktop = plan.findIndex(command => command.argv.at(-1) === 'test:electron');
+    assert.equal(preflight, 0, 'temporary-root failure must precede even cheap contracts');
+    assert.ok(desktop > preflight && desktop < rust, 'Electron readiness must be established before Rust');
+    assert.equal(plan.filter(command => command.argv.at(-1) === 'test:electron').length, 1);
+  }
+  for (const selected of [['capture'], ['engine'], ['client']] as const) {
+    assert.ok(commands([...selected], 'base', 'head')[0].argv.includes('--preflight'));
+  }
+  assert.ok(!commands([], 'base', 'head').some(command => command.argv.includes('--preflight')));
+});
+
+test('real command execution stops at temporary-root or Electron failure without reaching Rust', () => fixture((dir, env) => {
+  const bin = join(dir, 'bin'); mkdirSync(bin);
+  const trace = join(dir, 'trace');
+  for (const name of ['python3', 'npm', 'xvfb-run']) {
+    const file = join(bin, name);
+    writeFileSync(file, '#!/bin/sh\n' +
+      (name === 'xvfb-run' ? 'shift\nexec "$@"\n' :
+        'printf "%s\\n" "$*" >> "$PREFLIGHT_TRACE"\n' +
+        'case " $* " in *" $PREFLIGHT_FAIL "*) exit 19;; esac\n'));
+    chmodSync(file, 0o700);
+  }
+  const old = {...process.env};
+  try {
+    Object.assign(process.env, {PATH: bin + ':' + env.PATH, PREFLIGHT_TRACE: trace});
+    for (const failure of ['--preflight', 'test:electron']) {
+      process.env.PREFLIGHT_FAIL = failure;
+      writeFileSync(trace, '');
+      const plan = commands(['capture', 'desktop'], 'base', 'head', 'linux');
+      // All package working directories exist, but no installed/generated
+      // artifacts are available to conceal a missing prerequisite.
+      mkdirSync(join(dir, 'capture/desktop/ui/frontend'), {recursive: true});
+      assert.throws(() => execute(plan, dir), /failed \(19\)/);
+      const calls = readFileSync(trace, 'utf8');
+      assert.ok(calls.includes(failure));
+      assert.doesNotMatch(calls, /--run|cargo/);
+      if (failure === '--preflight') assert.doesNotMatch(calls, /--pr\b|ci --no-audit/);
+    }
+  } finally {
+    for (const name of ['PATH', 'PREFLIGHT_TRACE', 'PREFLIGHT_FAIL']) {
+      if (old[name] === undefined) delete process.env[name]; else process.env[name] = old[name];
+    }
+  }
+}));
 
 test('committed concurrency-only workflow edits select contracts rather than product suites', () => fixture((dir, env) => {
   const git = (...args: string[]) => {

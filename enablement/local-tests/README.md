@@ -1,5 +1,13 @@
 # Local verification reuse
 
+Local selections that need Rust check the existing private temporary-root contract
+before other commands. When Desktop is selected, its locked install, unit tests
+and complete Electron suite run before Rust verification. This catches missing
+Electron downloads, display/sandbox setup and renderer failures before a cold
+native build. No checks are omitted or duplicated, and no sandbox permissions or
+host configuration are changed. Repair the reported prerequisite and rerun the
+normal command; this ordering does not turn renderer checks into native proof.
+
 The local runner reuses successful Connect service serial Node tests on Linux x64/glibc by
 default when their qualified inputs match. The audited closure is pinned in
 `service.ts` to the service, shared UI and shared assets at `49d3414b2`. Changing

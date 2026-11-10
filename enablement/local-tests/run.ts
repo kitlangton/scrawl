@@ -61,6 +61,9 @@ export function captureToolTests(cwd = root): Command[] {
 export function commands(selected: Owner[], base: string, head: string, platform = process.platform): Command[] {
   const result: Command[] = [];
   const add = (argv: string[], cwd = '.') => result.push({ argv, cwd });
+  // Diagnose invalid/private/overlong temporary roots before any selected work.
+  if (selected.some(owner => ['capture', 'engine', 'client'].includes(owner)))
+    add(['python3', 'enablement/verification.py', '--base', base, '--preflight']);
   // These cheap contracts were previously missing from feature pushes.
   add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--pr']);
   const tools = selected.includes('capture-tools') ? captureToolTests() : [];
@@ -70,6 +73,15 @@ export function commands(selected: Owner[], base: string, head: string, platform
     add(['python3', '-m', 'unittest', 'discover', '-s', 'hermes/tests', '-p', 'test_*.py']);
     add(['node', '--experimental-strip-types', '--test', 'hermes/desktop/controller.test.ts', 'hermes/desktop/plugin.test.ts',
       'capture/desktop/ui/frontend/src/hermes/protocol.test.ts', 'capture/desktop/ui/frontend/src/hermes/mailbox.test.ts']);
+  }
+  // These TypeScript/renderer checks are independent of Rust. Run their real
+  // locked install and full Electron suite first so a broken download, display
+  // or sandbox cannot waste a cold native build. Keep every canonical assertion.
+  if (selected.includes('desktop')) {
+    const cwd = 'capture/desktop/ui/frontend';
+    add(['npm', 'ci', '--no-audit', '--no-fund'], cwd);
+    add(['npm', 'test'], cwd);
+    add([...(platform === 'linux' ? ['xvfb-run', '-a'] : []), 'npm', 'run', 'test:electron'], cwd);
   }
   if (selected.includes('capture') || selected.includes('engine')) {
     // Reuse the authoritative conservative Rust verifier, including TMPDIR and jobs.
@@ -86,16 +98,9 @@ export function commands(selected: Owner[], base: string, head: string, platform
     // standalone client owner lane safe without duplicating that work.
     if (!selected.includes('capture') && !selected.includes('engine'))
       add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--prepare-connect-typescript']);
-    add(['python3', 'enablement/verification.py', '--base', base, '--preflight']);
     const cargo = platform === 'darwin' ? ['taskpolicy', '-c', 'utility', 'cargo'] : ['cargo'];
     for (const action of ['build', 'test']) add([...cargo, action, '--manifest-path', 'connect/client/Cargo.toml',
       '-j', process.env.T3_BUILD_JOBS || '3', '--offline', ...(action === 'test' ? ['--', '--test-threads=2'] : [])]);
-  }
-  if (selected.includes('desktop')) {
-    const cwd = 'capture/desktop/ui/frontend';
-    add(['npm', 'ci', '--no-audit', '--no-fund'], cwd);
-    add(['npm', 'test'], cwd);
-    add([...(platform === 'linux' ? ['xvfb-run', '-a'] : []), 'npm', 'run', 'test:electron'], cwd);
   }
   if (selected.includes('service')) {
     add(['npm', 'ci', '--no-audit', '--no-fund'], 'connect/service');
