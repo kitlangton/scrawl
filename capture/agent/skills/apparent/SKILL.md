@@ -46,6 +46,22 @@ Other files: `apparent.json` is the full manifest (keyframes, `marks` with shape
 
 ## The apparent CLI
 
+### Check the build
+
+Run `apparent --version` before diagnosing missing CLI capabilities. Updated builds
+print the embedded identity, for example `apparent 0.3.13 · 2362f2b`, with
+`+modified` for tracked source edits or `build unknown` when no valid revision was
+available at build time. `apparent -V` keeps the package version alone. Compare the
+revision with the intended release's source commit and check that executable's
+`<command> --help`. Version reporting works offline from any directory.
+
+Older releases can print only `apparent 0.3.13` even when their code differs. Resolve
+the executable/link and compare its installation provenance and artifact checksum
+with the intended platform release. To check a separately prepared candidate,
+invoke its absolute executable or extracted-AppImage wrapper path with `--version`.
+Keep the extracted runtime libraries beside it. See the repository's
+`capture/agent/docs/installation.md` for platform layouts.
+
 ### Configuring Apparent
 
 Native app launch is available by default on Mac and Linux (an explicit
