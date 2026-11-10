@@ -174,6 +174,10 @@ adapter from that same owner source; it retains the OS dialog, scoped IPC,
 window lifetime and shared operation gate. Rust retains the single durable
 transaction executor. A thrown write or post-write resolution failure is an
 unknown outcome requiring authoritative refresh, never an automatic write retry.
+Record's `RetentionWorkflow` similarly owns revision privacy, read coalescing,
+save/reset validation and stale preference/usage retirement. Electron supplies
+the operation lease and the unchanged native transport; it retains the shared
+native-operation gate. Transport and IPC consume the same owner policy validator.
 `readRetention()` returns bounded presence-aware values; `saveRetention(policy)`
 accepts exactly `mediaDays` and `bundleDays` (u32 or null). Week is 7/30 days,
 Month 30/90 and Forever null/null. Custom known fields stay resettable, including

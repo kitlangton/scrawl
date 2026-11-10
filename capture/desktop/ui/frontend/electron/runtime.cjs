@@ -186,8 +186,7 @@ function storagePreference(home, operation, fields = {}, timeoutMs = 3500) {
   }
   if (operation === 'saveretention') {
     const policy = fields.policy;
-    const validDays = value => value === null || (Number.isInteger(value) && value >= 0 && value <= 0xffffffff);
-    if (!policy || Object.keys(policy).length !== 2 || !validDays(policy.mediaDays) || !validDays(policy.bundleDays))
+    if (!require('./storage-owner/policy.js').isRetentionPolicy(policy))
       throw new Error('Invalid retention policy');
     request.policy = { mediaDays: policy.mediaDays, bundleDays: policy.bundleDays };
   }
