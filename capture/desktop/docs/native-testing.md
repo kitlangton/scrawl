@@ -185,9 +185,20 @@ test account's `gnome-shell`, X11 session type, DISPLAY/runtime environment and
 GNOME identity. It does not require WAYLAND_DISPLAY or change the guest session.
 The released GNOME image below is Wayland; this selector does not convert it or
 qualify X11 capture. Prepared inputs bind the exact desktop/backend selection.
-Actual qualification on GNOME 46/Xorg 21.1.12 verified a local active X11
-session and GdkX11Display without executing Apparent. It exposed only one
-1280×800 monitor despite two GPU providers; multi-output capture is unqualified.
+With `gnome-x11 --outputs 2`, the runner requests two heads on one VirtIO GPU
+and sends one bounded head-1 UIInfo through QEMU’s private peer D-Bus display
+interface. This profile requires host Python GI (Gio/GLib), checked before
+allocation; it does not use the host session bus or change the guest session.
+Initialization shares the original boot deadline. Other backends keep the
+separate-GPU arrangement. Check actual connected and
+active outputs in XRandR/GDK before treating the request as two-output proof.
+On Ubuntu 24.04 with QEMU 8.2.2, GNOME 46/Xorg 21.1.12 qualification
+verified an active local X11 session and two connected, active 1280×800@1×
+outputs at (0,0) and (1280,0), matching XRandR and GdkX11Display. The separate-GPU
+predecessor exposed only one monitor; merely requesting two scanouts also left
+the second disconnected. The private UIInfo initialization enabled the real
+second connector. Apparent was staged but never executed: Screen/Area capture,
+scaling, crossings and Finish/Cancel remain unqualified by this environment test.
 
 ### Released GNOME environment (Clanker, 2026-11-08)
 

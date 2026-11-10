@@ -15,8 +15,11 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import array
+import threading
+import time
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import patch, MagicMock
 
 MODULE = Path(__file__).with_name("gui-vm.py")
 spec = importlib.util.spec_from_file_location("gui_vm", MODULE)
@@ -155,6 +158,123 @@ class GuestIsolationTests(unittest.TestCase):
         for invalid in (0, 3):
             with self.assertRaises(ValueError):
                 runner.qemu_command(*args, outputs=invalid)
+
+    @patch.object(runner.os, 'getgroups', return_value=[1234])
+    @patch.object(runner.Path, 'stat', return_value=SimpleNamespace(st_gid=1234))
+    def test_x11_two_heads_share_one_gpu_without_changing_old_hardware(self, _stat, _groups):
+        directory = Path('/synthetic/job')
+        args = (directory / 'disk.qcow2', directory / 'OVMF_VARS.fd', directory, 23456, 3072, True)
+        single = runner.qemu_command(*args)
+        for desktop in ('hyprland', 'gnome', 'kde', 'gnome-x11'):
+            self.assertEqual(runner.qemu_command(*args, desktop=desktop), single)
+        legacy_dual = runner.qemu_command(*args, outputs=2)
+        for desktop in ('hyprland', 'gnome', 'kde'):
+            self.assertEqual(runner.qemu_command(*args, outputs=2, desktop=desktop), legacy_dual)
+        expected = list(single)
+        expected[expected.index('virtio-vga')] = 'virtio-vga,max_outputs=2,id=apparent-x11-display'
+        expected[expected.index('none')] = 'dbus,p2p=yes'
+        actual = runner.qemu_command(*args, outputs=2, desktop='gnome-x11')
+        self.assertEqual(actual, expected)
+        self.assertNotIn('virtio-gpu-pci,id=apparent-second-display', actual)
+
+    def test_x11_head_uses_private_fd_validates_identity_and_never_replays_mutation(self):
+        for head, rejected in ((1, False), (0, False), (1, True)):
+            with self.subTest(head=head, rejected=rejected), tempfile.TemporaryDirectory() as scratch:
+                root = Path(scratch)
+                calls, commands, failures = [], [], []
+                gio, glib = MagicMock(), MagicMock()
+                glib.Variant.side_effect = lambda signature, value: (signature, value)
+                stream = gio.Socket.new_from_fd.return_value.connection_factory_create_connection.return_value
+                def take_fd(fd):
+                    os.close(fd)  # fake GI takes ownership, as real GSocket does
+                    return gio.Socket.new_from_fd.return_value
+                gio.Socket.new_from_fd.side_effect = take_fd
+                def dbus_call(*args):
+                    calls.append(args)
+                    if args[3] == 'Get':
+                        return SimpleNamespace(unpack=lambda: (head,))
+                    if rejected:
+                        raise RuntimeError('UIInfo rejected')
+                    return None
+                gio.DBusConnection.new_sync.return_value.call_sync.side_effect = dbus_call
+                with socket.socket(socket.AF_UNIX) as server:
+                    server.bind(str(root / 'qmp.sock'))
+                    server.listen(1)
+                    server.settimeout(3)
+                    def serve():
+                        try:
+                            with server.accept()[0] as peer:
+                                peer.settimeout(3)
+                                peer.sendall(b'{"QMP":{}}\n')
+                                for expected in ('qmp_capabilities', 'getfd', 'add_client'):
+                                    raw, anc, _, _ = peer.recvmsg(4096, socket.CMSG_SPACE(array.array('i').itemsize))
+                                    command = json.loads(raw)
+                                    commands.append(command)
+                                    self.assertEqual(command['execute'], expected)
+                                    if expected == 'add_client':
+                                        self.assertEqual(command['arguments'], {'protocol': '@dbus-display', 'fdname': 'x11-head'})
+                                    if expected == 'getfd':
+                                        received = array.array('i')
+                                        self.assertEqual(anc[0][:2], (socket.SOL_SOCKET, socket.SCM_RIGHTS))
+                                        received.frombytes(anc[0][2])
+                                        with socket.socket(fileno=received[0]) as transferred:
+                                            self.assertEqual(transferred.family, socket.AF_UNIX)
+                                    peer.sendall(json.dumps({'return': {}, 'id': expected}).encode() + b'\n')
+                        except BaseException as error:
+                            failures.append(error)
+                    worker = threading.Thread(target=serve)
+                    worker.start()
+                    try:
+                        with patch.object(runner, 'x11_display_support', return_value=(gio, glib)):
+                            if head != 1 or rejected:
+                                with self.assertRaises(RuntimeError):
+                                    runner.activate_x11_head(root, SimpleNamespace(poll=lambda: None), time.monotonic() + 2)
+                            else:
+                                runner.activate_x11_head(root, SimpleNamespace(poll=lambda: None), time.monotonic() + 2)
+                    finally:
+                        worker.join(4)
+                self.assertFalse(worker.is_alive())
+                self.assertEqual(failures, [])
+                self.assertEqual(len(commands), 3)
+                setters = [call for call in calls if call[3] == 'SetUIInfo']
+                self.assertEqual(len(setters), 0 if head != 1 else 1)
+                if setters:
+                    self.assertIsNone(setters[0][0])  # no destination bus name
+                    self.assertEqual(setters[0][4], ('(qqiiuu)', (325, 203, 1280, 0, 1280, 800)))
+                stream.close.assert_called_once()
+
+    def test_fragmented_qmp_response_cannot_extend_boot_deadline(self):
+        with tempfile.TemporaryDirectory() as scratch, socket.socket(socket.AF_UNIX) as server:
+            root = Path(scratch)
+            server.bind(str(root / 'qmp.sock'))
+            server.listen(1)
+            server.settimeout(1)
+            def trickle():
+                with server.accept()[0] as peer:
+                    try:
+                        for _ in range(30):
+                            peer.sendall(b' ')
+                            time.sleep(.02)
+                    except (BrokenPipeError, ConnectionResetError):
+                        pass
+            worker = threading.Thread(target=trickle)
+            worker.start()
+            start = time.monotonic()
+            try:
+                with patch.object(runner, 'x11_display_support', return_value=(MagicMock(), MagicMock())):
+                    with self.assertRaises(TimeoutError):
+                        runner.activate_x11_head(root, SimpleNamespace(poll=lambda: None), start + .08)
+                self.assertLess(time.monotonic() - start, .4)
+            finally:
+                worker.join(2)
+            self.assertFalse(worker.is_alive())
+
+    def test_missing_x11_qmp_socket_obeys_original_deadline(self):
+        with tempfile.TemporaryDirectory() as root, patch.object(runner, 'x11_display_support', return_value=(MagicMock(), MagicMock())):
+            start = time.monotonic()
+            with self.assertRaises(TimeoutError):
+                runner.activate_x11_head(Path(root), SimpleNamespace(poll=lambda: None), start + .05)
+            self.assertLess(time.monotonic() - start, .5)
 
     def test_expiry_is_armed_before_guest_boot_and_fail_closed(self):
         with tempfile.TemporaryDirectory() as scratch:
@@ -371,6 +491,16 @@ class PreparationTests(unittest.TestCase):
                 self.assertEqual(status['primary_failure']['stage'], 'preflight')
                 self.assertEqual(status['product'], 'unrun')
 
+    def test_x11_transport_dependency_is_required_before_allocation(self):
+        with tempfile.TemporaryDirectory() as scratch:
+            root = Path(scratch)
+            options = self.inputs(root)
+            with patch.object(runner, 'x11_display_support', side_effect=ImportError('missing GI')):
+                code, status, overlay = self.invoke(options, root / 'r', '--desktop', 'gnome-x11', '--outputs', '2', '--preflight-only')
+            self.assertNotEqual(code, 0)
+            overlay.assert_not_called()
+            self.assertEqual(status['primary_failure']['stage'], 'preflight')
+
     def test_preflight_checks_supported_python_without_executing_scenario(self):
         with tempfile.TemporaryDirectory() as scratch:
             root = Path(scratch)
@@ -473,7 +603,7 @@ class PreparationTests(unittest.TestCase):
 class RunnerFailureTests(unittest.TestCase):
     """Real owned child/streams and disk cleanup; VM/SSH/systemd are inert adapters."""
 
-    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False, desktop=None, stale_scenario=False):
+    def exercise(self, root, scenario_exit: int | str = 7, transfer_exit=0, cleanup_exit=0, corrupt=False, delayed_writer=False, desktop=None, stale_scenario=False, outputs=1):
         root = Path(root)
         binary = root / 'candidate'
         binary.write_bytes(b'synthetic candidate')
@@ -547,6 +677,7 @@ elif operation == 'cleanup':
                    '--binary', str(binary), '--results', str(results), '--scenario-timeout', '1']
         if desktop is not None:
             options.extend(['--desktop', desktop])
+        options.extend(['--outputs', str(outputs)])
         owned_processes = []
         real_popen = runner.subprocess.Popen
 
@@ -567,9 +698,11 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
         try:
             with patch.object(sys, 'argv', options), \
                  patch.object(runner, 'make_overlay', side_effect=overlay), \
-                 patch.object(runner, 'qemu_command', return_value=[sys.executable, '-c', 'import time; time.sleep(30)']), \
+                 patch.object(runner, 'qemu_command', return_value=[sys.executable, '-c', 'import time; time.sleep(30)']) as builder, \
                  patch.object(runner, 'arm_expiry', return_value='owned-fixture-expiry'), \
                  patch.object(runner, 'wait_for_desktop') as readiness, \
+                 patch.object(runner, 'x11_display_support'), \
+                 patch.object(runner, 'activate_x11_head') as activate, \
                  patch.object(runner, 'ssh_prefix', return_value=[sys.executable, str(transport), str(root), 'ssh', str(scenario_exit)]), \
                  patch.object(runner, 'execute', side_effect=transport_execute), \
                  patch.object(runner.subprocess, 'Popen', side_effect=track_process), contextlib.redirect_stdout(io.StringIO()):
@@ -589,10 +722,23 @@ while not (root / 'release-writer').exists(): time.sleep(.01)
             self.assertEqual(writer.returncode, 0)
         status = json.loads((results / 'result.json').read_text())
         self.assertEqual(readiness.call_args.args[-1], desktop or 'hyprland')
+        self.assertEqual(builder.call_args.kwargs['desktop'], desktop or 'hyprland')
+        if desktop == 'gnome-x11' and outputs == 2:
+            activate.assert_called_once()
+            self.assertEqual(activate.call_args.args[0], results.resolve())
+            self.assertGreater(activate.call_args.args[2], time.monotonic())
+            self.assertLessEqual(readiness.call_args.args[2], 180)
+        else:
+            activate.assert_not_called()
         self.assertEqual(status['desktop'], desktop or 'hyprland')
         self.assertEqual((results / 'result.json').stat().st_mode & 0o777, 0o600)
         self.assertEqual(status['candidate_sha256'], hashlib.sha256(binary.read_bytes()).hexdigest())
         return code, status, results
+
+    def test_x11_two_head_activation_is_wired_before_readiness(self):
+        with tempfile.TemporaryDirectory() as root:
+            code, _, _ = self.exercise(root, scenario_exit=0, desktop='gnome-x11', outputs=2)
+            self.assertEqual(code, 0)
 
     def test_selected_desktop_reaches_readiness_and_receipt(self):
         for desktop in ('gnome', 'kde', 'gnome-x11'):
