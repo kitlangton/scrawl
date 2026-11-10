@@ -79,7 +79,7 @@ export function NativeOnboarding(){
     const content:Record<string,{title:string;text:string;button?:string;action?:string}>={
       start:{title:'Go again.',text:''},
       screen:{title:'Choose Screen.',text:'Choose Screen in the capture controls. Whiteboard becomes available once recording starts.'},
-      whiteboard:{title:`Open ${boardName}.`,text:state.platform==='linux'?'Click Whiteboard in the recording controls.':'Click Screen, then choose Whiteboard.'},
+      whiteboard:{title:`Open ${boardName}.`,text:'Open Whiteboard from the recording controls.'},
       'board-ink':{title:'Draw on the whiteboard.',text:'Draw a circle or arrow on the white paper. You don’t need Shift here. Release to continue.'},
       note:{title:'Add a note.',text:'Hold Shift and click without dragging. Type a note, then save it.'},
       'screen-ink':{title:'Draw on your screen.',text:'Hold Shift and circle something in your window.'},

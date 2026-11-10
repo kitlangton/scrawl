@@ -92,6 +92,7 @@ class PrePushGuardTests(unittest.TestCase):
         encryption_test = self.repo / "connect/client/tests/encryption-default.test.ts"
         encryption_test.parent.mkdir()
         encryption_test.write_text("import {test} from 'node:test'; test('finite production CLI fixture', () => {});\n")
+        (self.repo / "enablement/cli-version.test.ts").write_text(encryption_test.read_text())
         # Fixture directories must survive the commit/clean-tree guard.
         for directory in ("enablement/directory-width/tests", "hermes/tests"):
             (self.repo / directory / "test_fixture.py").write_text(fixture_test)

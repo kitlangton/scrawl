@@ -303,7 +303,8 @@ def run_checks(selection, offline=True, execution="full", overlap_root_build=Fal
         # production CLI too, using isolated config with no upload permission.
         candidate = (ROOT / os.environ.get("CARGO_TARGET_DIR", "target") / "debug/apparent").resolve()
         observed_run(["node", "--experimental-strip-types", "--test",
-                      "connect/client/tests/encryption-default.test.ts"], cwd=ROOT,
+                      "connect/client/tests/encryption-default.test.ts",
+                      "enablement/cli-version.test.ts"], cwd=ROOT,
                      env=dict(os.environ, APPARENT_BIN=str(candidate)), check=True)
     if native and selection["engine"]:
         for command in ("build", "test"):

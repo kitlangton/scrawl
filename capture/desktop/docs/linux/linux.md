@@ -107,8 +107,15 @@ matched that changing synthetic scene. Physical Cancel on a second Area capture
 returned idle and removed its bundle. Every movie frame was inspected in
 chronological stills, not real-time playback; the summary still labelled the
 capture “Display” while its manifest correctly recorded `region`. These checks
-do not establish mixed-scale, relative-pointer or pending-consent layout-change
-acceptance.
+do not establish relative-pointer or pending-consent layout-change acceptance.
+A later check with the same capture inputs used a 1280×800 output at 1× and a
+1920×1080 output at 2×. Selecting a 420×260 Area on the scaled output saved the
+intended physical-pixel rectangle: all 514 movie frames (17.13 seconds), the
+keyframe and contact sheet matched the changing scene. A second Area's physical
+Cancel returned idle without a saved bundle. This is a bounded GNOME 46 Area
+check, not general mixed-scale parity. Both checks exercised the stock
+AppImage's native controls fallback; they do not qualify the Electron Notes
+editor on Ubuntu.
 
 ### Hyprland
 
