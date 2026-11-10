@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { spawn } from 'node:child_process';
-import { chmod, mkdir, mkdtemp, readFile, realpath, rm, writeFile } from 'node:fs/promises';
+import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
 import test from 'node:test';
@@ -11,6 +11,21 @@ const binary = process.env.APPARENT_CONNECT_TEST_BINARY;
 if (!binary || !path.isAbsolute(binary)) throw Error('Set APPARENT_CONNECT_TEST_BINARY to the rebuilt absolute apparent binary');
 
 test('real Connect/cloud shares CLI preserves service rows, pagination and safe failures', { timeout: 120_000 }, async () => {
+  const installedApp = process.env.APPARENT_CONNECT_TEST_INSTALLED_APP;
+  if (installedApp) {
+    assert.equal(process.platform, 'darwin', 'Installed Mac proof requires macOS');
+    assert.ok(path.isAbsolute(installedApp));
+    assert.equal(binary, path.join(installedApp, 'Contents/MacOS/apparent'));
+    const settings = path.join(installedApp, 'Contents/Resources/settings');
+    for (const executable of [binary, path.join(settings, 'runtime/Electron.app/Contents/MacOS/Electron')]) {
+      const metadata = await stat(executable);
+      assert.ok(metadata.isFile() && (metadata.mode & 0o111) !== 0, 'Packaged executable required');
+    }
+    const packaged = path.join(settings, 'app/connect-client');
+    assert.deepEqual(JSON.parse(await readFile(path.join(packaged, 'package.json'), 'utf8')), { type: 'module' });
+    assert.deepEqual(await readFile(path.join(packaged, 'dist/shares.js')),
+      await readFile(new URL('../dist/shares.js', import.meta.url)), 'Installed policy must match this source build');
+  }
   const root = await realpath(await mkdtemp('/tmp/apparent-dev-shares-cli-'));
   await chmod(root, 0o700);
   const home = path.join(root, 'home');

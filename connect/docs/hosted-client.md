@@ -87,6 +87,13 @@ capability URL or response body is placed in arguments, environment variables or
 logs. The root CLI and owner package remain Rust-dependent overall; this slice
 does not claim Connect client independence.
 
+`npm run test:cli` in `connect/client/typescript` runs the real CLI against a
+synthetic local service; set `APPARENT_CONNECT_TEST_BINARY` to its absolute path.
+The automatic Mac installed-app bridge lane also runs
+`connect_shares_installed_electron_rust_roundtrip`, selecting the current CI
+run/attempt app and requiring its bundled runtime and byte-identical policy.
+This is installed CLI/child-runtime proof, not GUI or live-service acceptance.
+
 Provider cloud/experiment reads are fresh at every check, including after client
 construction and at prepared-link delivery. Root experiment reads retain
 `handoff::experiment` overrides and test semantics. Cloud/experiment writes call
