@@ -105,7 +105,9 @@ func readOwnedInput(expectedPID: pid_t, budget: TimeInterval,
         let left = until - now()
         if left <= 0 { break }
         let start = now()
-        hit = try read(until)
+        // A failed synchronous AX call can consume its entire timeout. Leave
+        // room for another observation within the same original one-second cap.
+        hit = try read(min(until, start + 0.4))
         record(hit, now() - start)
         if hit.error == .success {
             try require(hit.pid == expectedPID, "The observed input point does not hit the exact owned app")
@@ -128,6 +130,15 @@ func testInputObservationPolicy() throws {
         return InputHit(error: reads == 1 ? .cannotComplete : .success, pid: reads == 1 ? -1 : 42)
     }, pause: { time += $0 }, record: { _, _ in })
     try require(recovered.error == .success && recovered.pid == 42 && reads == 2, "Transient AX read did not recover")
+    time = 0; reads = 0
+    let timeoutRecovered = try readOwnedInput(expectedPID: 42, budget: 1, now: { time }, validate: {}, read: { until in
+        reads += 1
+        if reads == 1 { time = until; return InputHit(error: .cannotComplete, pid: -1) }
+        time += 0.01
+        return InputHit(error: .success, pid: 42)
+    }, pause: { time += $0 }, record: { _, _ in })
+    try require(timeoutRecovered.error == .success && reads == 2 && time <= 1,
+                "A full AX call timeout consumed the entire observation budget")
     time = 0; reads = 0
     var rejected = false
     do {
@@ -430,7 +441,7 @@ func launch(_ executable: URL, disabled: Bool) throws {
 var failure: Error?
 do {
     try testInputObservationPolicy()
-    report["inputReadSelfTests"] = ["transientExact", "foreignRejected", "persistentBounded",
+    report["inputReadSelfTests"] = ["transientExact", "fullCallTimeoutRecovery", "foreignRejected", "persistentBounded",
         "identityDriftRejected", "permanentRejected", "lateRejected", "ownedActivationOnly"]
     try require(output.path.hasPrefix(runner.path + "/") && app.path.hasPrefix(NSHomeDirectory() + "/Applications/Apparent-Storage-"), "Paths escape disposable CI fixture")
     try require(!fm.fileExists(atPath: output.path), "Evidence directory must be fresh")
