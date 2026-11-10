@@ -17,7 +17,8 @@ def execute(command, **kwargs):
         raise subprocess.CalledProcessError(7, command)
     return subprocess.CompletedProcess(command, 0)
 try:
-    with patch.object(v, "check_temp_environment"), patch.object(v.subprocess, "run", side_effect=execute):
+    with patch.object(v, "check_temp_environment"), patch.object(v.subprocess, "run", side_effect=execute), patch.object(
+            v, "prepare_connect_typescript", side_effect=lambda: execute(["connect-typescript-prerequisite"])):
         if sys.argv[1] == "default":
             v.run_checks(selection)
         else:
@@ -38,6 +39,11 @@ test('explicit routing partitions the unchanged local full inventory', () => {
   assert.ok(portable.some(c => c[0] === 'bun'));
   assert.ok(portable.some(c => c.includes('scripts/test-browser.mjs')));
   assert.ok(!portable.some(c => c[0] === 'cargo' || c.includes('test_temp_preflight.py')));
+  const preparation = platform.findIndex(c => c[0] === 'connect-typescript-prerequisite');
+  const cargo = platform.findIndex(c => c[0] === 'cargo' || c.includes('cargo'));
+  assert.ok(preparation >= 0 && cargo > preparation);
+  assert.equal(platform.filter(c => c[0] === 'connect-typescript-prerequisite').length, 1);
+  assert.ok(!portable.some(c => c[0] === 'connect-typescript-prerequisite'));
   assert.ok(platform.some(c => c.includes('capture/engine/Cargo.toml')));
   assert.ok(platform.some(c => c.includes('test_temp_preflight.py')));
   assert.ok(!platform.some(c => c[0] === 'bun' || c.includes('test_verification.py')));
