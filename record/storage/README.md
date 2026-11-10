@@ -47,7 +47,11 @@ gate for mutations. Invalidation retires pending replies independently; failed o
 uncertain writes require fresh authoritative readback, including when a read
 completed while the write was pending. Both renderer and native transport guards
 consume Record's same bounded retention-policy validator.
-Linux and native fallback retain their existing Settings controller/preset menu;
+Linux and native fallback retain their existing Settings controller/preset menu,
+but all routes persist recognized retention leaves through the same native
+Storage executor, preserving unknown nested keys. The fallback obtains a fresh
+owner revision before saving; a concurrent change is refused without replay.
+Engine no longer supplies a whole-object retention writer;
 capture-time default resolution and cleanup policy interpretation also remain
 native compatibility debt. This package's headless checks prove its policy and
 controller loop, not Linux adoption, native GUI acceptance or whole-Settings build

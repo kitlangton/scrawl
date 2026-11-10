@@ -127,10 +127,6 @@ impl Policy {
             .unwrap_or_default()
     }
 
-    /// Writes `"retention"`, keeping the rest of the config (and its `0600` mode) as it is.
-    pub fn save_to(&self, path: &Path) -> Result<()> {
-        crate::shared::handoff::set_config_value_in(path, "retention", serde_json::to_value(self)?)
-    }
 }
 
 // MARK: What Apparent is busy with
@@ -907,7 +903,7 @@ mod tests {
     }
 
     #[test]
-    fn policy_reads_presets_nulls_and_keeps_other_keys() {
+    fn policy_reads_defaults_and_explicit_nulls() {
         let tmp = TempDir::new("config");
         let path = tmp.0.join("config.json");
         assert_eq!(Policy::load_from(&path), Preset::Week.policy());
@@ -925,14 +921,7 @@ mod tests {
             }
         );
         assert_eq!(loaded.preset(), None);
-        Preset::Forever.policy().save_to(&path).unwrap();
-        assert_eq!(Policy::load_from(&path).preset(), Some(Preset::Forever));
-        let config: serde_json::Value =
-            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
-        assert_eq!(config["ingestToken"], "abc");
-        assert_eq!(config["agentHost"], "studio");
-        assert_eq!(config["retention"]["mediaDays"], serde_json::Value::Null);
-        Preset::Month.policy().save_to(&path).unwrap();
+        std::fs::write(&path, r#"{"retention":{"mediaDays":30,"bundleDays":90,"futurePolicy":42}}"#).unwrap();
         assert_eq!(
             Policy::load_from(&path),
             Policy {
