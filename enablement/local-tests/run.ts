@@ -81,6 +81,11 @@ export function commands(selected: Owner[], base: string, head: string, platform
   if (tools.some(command => command.env?.APPARENT_BIN) && !selected.includes('capture')) throw Error('CLI tests require root build coverage');
   result.push(...tools.filter(command => command.env?.APPARENT_BIN));
   if (selected.includes('client')) {
+    // The Rust client-only lane also consumes the compiled shares policy. The
+    // broad root verifier above prepares it when present; this route keeps the
+    // standalone client owner lane safe without duplicating that work.
+    if (!selected.includes('capture') && !selected.includes('engine'))
+      add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--prepare-connect-typescript']);
     add(['python3', 'enablement/verification.py', '--base', base, '--preflight']);
     const cargo = platform === 'darwin' ? ['taskpolicy', '-c', 'utility', 'cargo'] : ['cargo'];
     for (const action of ['build', 'test']) add([...cargo, action, '--manifest-path', 'connect/client/Cargo.toml',

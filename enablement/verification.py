@@ -251,6 +251,18 @@ def observed_run(command, timing_label=None, **kwargs):
                 pass
 
 
+def prepare_connect_typescript():
+    """Build the shares module consumed by ordinary Connect client Rust tests."""
+    package = ROOT / "connect/client/typescript"
+    if not (package / "package-lock.json").is_file() or not (package / "package.json").is_file():
+        raise FileNotFoundError(f"Connect client TypeScript package is missing: {package}")
+    observed_run(["npm", "ci", "--no-audit", "--no-fund"], cwd=package, check=True)
+    observed_run(["npm", "run", "build"], cwd=package, check=True)
+    module = package / "dist/shares.js"
+    if not module.is_file():
+        raise FileNotFoundError(f"Connect shares build did not produce its Rust consumer module: {module}")
+
+
 def run_checks(selection, offline=True, execution="full", overlap_root_build=False):
     """Explicit CI split; ordinary local callers retain the complete inventory."""
     if execution not in ("full", "portable", "platform"):
@@ -275,6 +287,10 @@ def run_checks(selection, offline=True, execution="full", overlap_root_build=Fal
     dependency_mode = "--offline" if offline else "--locked"
     timings = ["--timings"] if os.environ.get("APPARENT_TIMING_FILE") else []
     if native and selection["root"]:
+        # Root Rust tests include the Connect client shares policy bridge. A
+        # fresh checkout has no ignored TypeScript dist/; prepare its owning
+        # package before any Rust command can observe it.
+        prepare_connect_typescript()
         # Only CI opts in. Cargo releases its compilation lock before its
         # build-finished event; two harness threads then overlap one app worker.
         overlap = overlap_root_build and jobs.isdigit() and int(jobs) >= 3 and not selection.get("focused")
@@ -328,6 +344,8 @@ def main():
     parser.add_argument("--preflight", action="store_true", help="Check temporary environment only; no builds or mutations")
     parser.add_argument("--head", default="HEAD")
     parser.add_argument("--run", action="store_true")
+    parser.add_argument("--prepare-connect-typescript", action="store_true",
+                        help="Install/build the Connect shares module for the client-only native lane")
     parser.add_argument("--pr", action="store_true", help="Hook/CI: cheap PR contract checks")
     parser.add_argument("--online", action="store_true", help="CI: use locked graph instead of offline cache")
     parser.add_argument("--execution", choices=("full", "portable", "platform"), default="full",
@@ -336,6 +354,9 @@ def main():
                         help="CI: overlap two root test threads with one required app-build worker")
     parser.add_argument("--github-output", type=Path)
     args = parser.parse_args()
+    if args.prepare_connect_typescript:
+        prepare_connect_typescript()
+        return
     if args.preflight:
         check_temp_environment()
         print("Temporary environment prerequisites passed; not native proof.")

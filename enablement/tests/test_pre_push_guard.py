@@ -87,6 +87,12 @@ class PrePushGuardTests(unittest.TestCase):
         for directory in ("connect/client", "connect/service", "connect/web", "public/site",
                           "capture/desktop/ui/frontend", "enablement/directory-width/tests", "hermes/tests"):
             (self.repo / directory).mkdir(parents=True, exist_ok=True)
+        # Model the prerequisite package without network work in this finite repo.
+        package = self.repo / "connect/client/typescript"
+        package.mkdir()
+        (package / "package.json").write_text("{}\n")
+        (package / "package-lock.json").write_text("{}\n")
+        (package / ".gitignore").write_text("dist/\n")
         # Cargo is stubbed in this hook fixture, so the production-binary check
         # needs a finite TS fixture too. Its real behavior has its own CLI test.
         encryption_test = self.repo / "connect/client/tests/encryption-default.test.ts"
@@ -100,6 +106,12 @@ class PrePushGuardTests(unittest.TestCase):
             stub = self.bin / tool
             stub.write_text('#!/bin/sh\nexit "${MOCK_STATUS:-0}"\n')
             stub.chmod(0o755)
+        (self.bin / "npm").write_text(
+            '#!/bin/sh\nprintf "%s\\n" "$*" >> "$COMMAND_LOG.npm"\n'
+            '[ "${MOCK_STATUS:-0}" = 0 ] || exit "$MOCK_STATUS"\n'
+            'if [ "$*" = "run build" ] && [ "${PWD##*/}" = typescript ]; then\n'
+            '  mkdir -p dist && printf "export {};\\n" > dist/shares.js\n'
+            'fi\n')
         # Root/Engine run through the taskpolicy stub; Linux's independently
         # selected client invokes Cargo directly. Observe that allocation too.
         (self.bin / "cargo").write_text('#!/bin/sh\nprintf "cargo %s\\n" "$*" >> "$COMMAND_LOG"\nexit "${MOCK_STATUS:-0}"\n')
@@ -264,10 +276,14 @@ class PrePushGuardTests(unittest.TestCase):
         commands = self.log.read_text().splitlines()
         self.assertEqual(len(commands), 4)
         self.assertTrue(all("--locked" in line and "--offline" not in line for line in commands))
+        npm_log = Path(str(self.log) + ".npm")
+        self.assertEqual(npm_log.read_text().splitlines(), ["ci --no-audit --no-fund", "run build"])
+        npm_log.unlink()
         self.log.unlink()
         result = run(*args, cwd=self.repo, env=dict(self.env, MOCK_STATUS="1"))
         self.assertNotEqual(result.returncode, 0)
-        self.assertEqual(len(self.log.read_text().splitlines()), 1)
+        self.assertFalse(self.log.exists(), "failed preparation must prevent Cargo admission")
+        self.assertEqual(npm_log.read_text().splitlines(), ["ci --no-audit --no-fund"])
 
     def test_tree_changed_during_verification_rejects_push(self):
         taskpolicy = self.bin / "taskpolicy"

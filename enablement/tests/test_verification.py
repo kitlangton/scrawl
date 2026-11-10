@@ -3,6 +3,7 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -134,7 +135,8 @@ class SelectionTests(unittest.TestCase):
     def test_focused_checks_compile_root_and_reject_zero_matches(self):
         result = subprocess.CompletedProcess([], 0, stdout="test result: ok. 2 passed; 0 failed\n")
         selection = {"root": True, "engine": False, "browser": False, "focused": ["capture::"]}
-        with patch.object(verification.subprocess, "run", return_value=result) as run:
+        with patch.object(verification, "prepare_connect_typescript"), patch.object(
+                verification.subprocess, "run", return_value=result) as run:
             verification.run_checks(selection)
             commands = [call.args[0] for call in run.call_args_list]
             self.assertTrue(any("build" in c for c in commands))
@@ -142,15 +144,75 @@ class SelectionTests(unittest.TestCase):
             self.assertFalse(any("capture/engine/Cargo.toml" in c for c in commands))
             self.assertFalse(any("test" in c and "capture::" not in c for c in commands))
         result.stdout = "test result: ok. 0 passed; 0 failed; 90 filtered out\n"
-        with patch.object(verification.subprocess, "run", return_value=result):
+        with patch.object(verification, "prepare_connect_typescript"), patch.object(
+                verification.subprocess, "run", return_value=result):
             with self.assertRaises(RuntimeError):
                 verification.run_checks(selection)
+
+    def test_direct_run_builds_connect_shares_before_root_cargo(self):
+        selection = {"root": True, "engine": False, "browser": False, "focused": []}
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "connect/client/typescript"
+            package.mkdir(parents=True)
+            (package / "package.json").write_text("{}")
+            (package / "package-lock.json").write_text("{}")
+            calls = []
+            def run(command, **kwargs):
+                calls.append((command, kwargs.get("cwd")))
+                if command == ["npm", "run", "build"]:
+                    (package / "dist").mkdir()
+                    (package / "dist/shares.js").write_text("export {};")
+                return subprocess.CompletedProcess(command, 0, stdout="test result: ok. 1 passed; 0 failed\n")
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification, "check_temp_environment"), patch.object(
+                    verification, "plan", return_value=selection), patch.object(
+                    verification, "observed_run", side_effect=run), patch.object(
+                    sys, "argv", ["verification.py", "--base", "origin/main", "--run"]):
+                verification.main()
+            npm_build = next(i for i, (command, _) in enumerate(calls) if command == ["npm", "run", "build"])
+            cargo = next(i for i, (command, _) in enumerate(calls) if command[0] == "cargo")
+            self.assertLess(npm_build, cargo)
+            self.assertEqual(calls[npm_build][1], package)
+
+    def test_connect_build_failure_or_missing_module_stops_before_cargo(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            package = root / "connect/client/typescript"
+            package.mkdir(parents=True)
+            (package / "package.json").write_text("{}")
+            (package / "package-lock.json").write_text("{}")
+            selection = {"root": True, "engine": False, "browser": False, "focused": []}
+            calls = []
+            def failed(command, **kwargs):
+                calls.append(command)
+                if command == ["npm", "run", "build"]:
+                    raise subprocess.CalledProcessError(23, command)
+                return subprocess.CompletedProcess(command, 0)
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification, "check_temp_environment"), patch.object(
+                    verification, "observed_run", side_effect=failed):
+                with self.assertRaises(subprocess.CalledProcessError):
+                    verification.run_checks(selection, execution="platform")
+            self.assertFalse(any(command[0] == "cargo" for command in calls))
+
+            calls.clear()
+            def missing_output(command, **kwargs):
+                calls.append(command)
+                return subprocess.CompletedProcess(command, 0)
+            with patch.object(verification, "ROOT", root), patch.object(
+                    verification, "check_temp_environment"), patch.object(
+                    verification, "observed_run", side_effect=missing_output):
+                with self.assertRaisesRegex(FileNotFoundError, "dist/shares.js"):
+                    verification.run_checks(selection, execution="platform")
+            self.assertFalse(any(command[0] == "cargo" for command in calls))
 
     def test_production_cli_check_follows_build_and_tests_and_propagates_failure(self):
         selection = {"root": True, "engine": False, "browser": False, "focused": []}
         command = ["node", "--experimental-strip-types", "--test",
                    "connect/client/tests/encryption-default.test.ts", "enablement/cli-version.test.ts"]
-        with patch.object(verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
+        with patch.object(verification, "prepare_connect_typescript"), patch.object(
+                verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
             verification.run_checks(selection, execution="platform")
             calls = run.call_args_list
             cli = next(i for i, call in enumerate(calls) if call.args[0] == command)
@@ -161,7 +223,8 @@ class SelectionTests(unittest.TestCase):
             if argv == command:
                 raise subprocess.CalledProcessError(7, argv)
             return subprocess.CompletedProcess(argv, 0)
-        with patch.object(verification.subprocess, "run", side_effect=execute):
+        with patch.object(verification, "prepare_connect_typescript"), patch.object(
+                verification.subprocess, "run", side_effect=execute):
             with self.assertRaises(subprocess.CalledProcessError):
                 verification.run_checks(selection, execution="platform")
 

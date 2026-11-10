@@ -44,8 +44,15 @@ test('package gates execute complete canonical suites including browser and Elec
     assert.ok(plan.some(command => command.cwd === cwd && command.argv.at(-1) === last), `${cwd} ${last}`);
   }
   assert.ok(plan.some(command => command.argv.includes('--run')));
+  assert.ok(!plan.some(command => command.cwd === 'connect/client/typescript'),
+    'the root verifier owns this prerequisite so it is not installed twice');
   assert.ok(!commands(['desktop'], 'base', 'head', 'darwin').some(command => command.argv.includes('xvfb-run')));
   assert.ok(commands(['client'], 'base', 'head', 'darwin').some(command => command.argv[0] === 'taskpolicy'));
+  const clientOnly = commands(['client'], 'base', 'head', 'linux');
+  const clientPrepare = clientOnly.findIndex(command => command.argv.includes('--prepare-connect-typescript'));
+  const clientCargo = clientOnly.findIndex(command => command.argv[0] === 'cargo');
+  assert.ok(clientPrepare >= 0 && clientPrepare < clientCargo,
+    'standalone client verification prepares shares before Cargo');
   const build = plan.findIndex(command => command.argv.includes('--run'));
   const cli = plan.findIndex(command => command.argv.at(-1)?.endsWith('/test_issue_cli.py'));
   assert.ok(cli > build && build >= 0, 'rebuilt application must precede CLI integration');
@@ -53,7 +60,7 @@ test('package gates execute complete canonical suites including browser and Elec
 });
 
 function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {
-  const dir = mkdtempSync('/tmp/apparent-dev-local-hook-');
+  const dir = mkdtempSync(join(process.env.TMPDIR || '/tmp', 'apparent-dev-local-hook-'));
   const env = { ...process.env };
   // cwd cannot isolate Git fixtures from a real push's GIT_DIR / index.
   // The imported production helpers spawn with process.env too; isolate that
