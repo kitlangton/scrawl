@@ -20,7 +20,7 @@ function fixture(t: any) {
   const electron = put('capture/desktop/ui/frontend/node_modules/electron/bin', 'synthetic executable');
   chmodSync(electron, 0o700);
   put('capture/desktop/ui/frontend/node_modules/electron/index.js', 'module.exports = __dirname + "/bin"');
-  for (const file of ['tests/reference-native.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/runtime.cjs', 'electron/storage-policy.cjs']) {
+  for (const file of ['tests/reference-native.cjs', 'electron/main.cjs', 'electron/preload.cjs', 'electron/runtime.cjs', 'electron/connect.cjs', 'electron/storage-policy.cjs']) {
     put('capture/desktop/ui/frontend/' + file);
   }
   return { root, put, electron };
@@ -38,6 +38,11 @@ test('missing Electron download fails before tests can run', t => {
 test('missing generated Storage policy fails before Cargo', t => {
   const f = fixture(t);
   rmSync(resolve(f.root, 'capture/desktop/ui/frontend/electron/storage-policy.cjs'));
+  assert.throws(() => checkNativeInputs(f.root, 'linux'), /ENOENT/);
+});
+test('missing generated Connect transport fails before Cargo', t => {
+  const f = fixture(t);
+  rmSync(resolve(f.root, 'capture/desktop/ui/frontend/electron/connect.cjs'));
   assert.throws(() => checkNativeInputs(f.root, 'linux'), /ENOENT/);
 });
 test('installer/setup failure propagates through Electron resolution', t => {
@@ -62,6 +67,8 @@ test('workflow installs and checks prerequisites before every Cargo command, pre
     assert.ok(rust.indexOf(marker) >= 0 && rust.indexOf(marker) < firstCargo, marker);
   }
   assert.ok(rust.indexOf('scripts/build-storage-policy.ts') < rust.indexOf('enablement/prerequisites/native.ts'));
+  const prerequisite = readFileSync('enablement/prerequisites/native.ts', 'utf8');
+  assert.ok(prerequisite.indexOf("await import('../../capture/desktop/ui/frontend/scripts/build-connect-transport.ts')") < prerequisite.indexOf("console.log('Native prerequisites ready:"));
   assert.equal((rust.match(/npm --prefix capture\/desktop\/ui\/frontend ci/g) || []).length, 1);
   assert.match(rust, /timeout-minutes: 5/);
   assert.match(rust, /_electron_rust_roundtrip -- --ignored --nocapture/);

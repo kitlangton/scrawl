@@ -91,6 +91,14 @@ not enter the renderer. Only an explicit zero-argument **Open browser** command
 can open the current Rust-validated public verification URI; no arbitrary URL is
 accepted from the renderer. Ambiguous commands are never retried automatically.
 
+The transport's authored source is `electron/connect.cts`. Build it with
+`node --experimental-strip-types scripts/build-connect-transport.ts` from this
+directory; this strictly checks TypeScript and emits the existing `electron/connect.cjs`
+consumer path without Cargo. `npm run build` and `npm test` prepare it automatically;
+Settings packaging stages that generated file after the ordinary frontend build.
+The Rust controller and config/queue writer remain authoritative migration debt;
+this conversion does not switch installed Account routing or move auth policy.
+
 `tests/connect/transport.test.cjs` exercises real Unix-stream transport and projection;
 `tests/connect/smoke.cjs` exercises shipped Electron main/preload/renderer against
 an explicitly synthetic socket. `tests/rust-connect.cjs`, launched by the ignored

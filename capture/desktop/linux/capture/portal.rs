@@ -90,6 +90,14 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
     };
     // A token for another output must never silently override the target chosen in the picker.
     let key = screencast_key(output.map(|m| m.name.as_str()), monitors.len());
+    if !portal_request_supported(target.mode, monitors.len(), super::super::hyprland()) {
+        // This backend has no validated identity contract. Asking for consent
+        // cannot make the source verifiable, so refuse before opening a session.
+        save_token(&key, None);
+        const MESSAGE: &str = "This sharing portal cannot verify the selected display with multiple displays connected. Connect only one display and try again. No recording was started.";
+        super::super::shell::notify("Capture not started", MESSAGE);
+        bail!(MESSAGE);
+    }
     let (session, token) = portal_screencast(window, &key, stopping)?;
     if let Some(output) = output
         && !output_still_selected(output, &super::super::monitors(), monitors.len())
@@ -97,14 +105,12 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
         bail!("The display layout changed while screen sharing was chosen; choose the target again");
     }
     if let Some(output) = output
-        && super::super::hyprland()
-        && monitors.len() > 1
+        && !portal_output_verified(target.mode, monitors.len(), super::super::hyprland(),
+            &output.name, session.mapping_id.as_deref())
     {
-        if !selected_output_matches(&output.name, session.mapping_id.as_deref()) {
-            // Discard a stale restore token too, otherwise every retry restores the wrong screen.
-            save_token(&key, None);
-            bail!("The sharing portal selected {:?}, not {}. Choose that screen in the sharing dialog and try again.", session.mapping_id, output.name);
-        }
+        // Discard a stale restore token too, otherwise every retry restores the wrong screen.
+        save_token(&key, None);
+        bail!("The sharing portal selected {:?}, not {}. Choose that screen in the sharing dialog and try again.", session.mapping_id, output.name);
     }
     // Portal positions are in compositor coordinates, not XWayland pixels. Crop relative to
     // the chosen RandR output; its pixel size is the captured stream's pixel size.
@@ -133,6 +139,21 @@ fn screencast_key(output: Option<&str>, count: usize) -> String {
 
 fn selected_output_matches(name: &str, mapping_id: Option<&str>) -> bool {
     mapping_id == Some(name)
+}
+
+fn portal_request_supported(mode: CaptureMode, count: usize, hyprland: bool) -> bool {
+    // Hyprland's mapping ID is an output connector name. Other backends have no
+    // validated equivalent here: KDE 5.27 returns only size/source_type. Neither
+    // equal-sized outputs nor compositor-coordinate rectangles establish which
+    // RandR output was shared. Reject rather than assign another output's pixels
+    // to the selected target. GNOME's direct Mutter path does not use this gate.
+    !matches!(mode, CaptureMode::Display | CaptureMode::Region) || count <= 1 || hyprland
+}
+
+fn portal_output_verified(mode: CaptureMode, count: usize, hyprland: bool, name: &str, mapping_id: Option<&str>) -> bool {
+    portal_request_supported(mode, count, hyprland)
+        && (!matches!(mode, CaptureMode::Display | CaptureMode::Region)
+            || count <= 1 || selected_output_matches(name, mapping_id))
 }
 
 fn selected_monitor(monitors: &[super::super::Monitor], id: u32) -> Option<&super::super::Monitor> {
@@ -209,6 +230,26 @@ mod display_tests {
         assert!(selected_output_matches("HEADLESS-1", Some("HEADLESS-1")));
         assert!(!selected_output_matches("HEADLESS-1", Some("Virtual-1")));
         assert!(!selected_output_matches("HEADLESS-1", None));
+    }
+
+    #[test]
+    fn multi_output_portal_admission_requires_a_validated_identity_contract() {
+        for mode in [CaptureMode::Display, CaptureMode::Region] {
+            // Known unsupported backends are refused before asking for consent;
+            // capable backends still need to verify the actual returned stream.
+            assert!(!portal_request_supported(mode, 2, false));
+            assert!(portal_request_supported(mode, 1, false));
+            assert!(portal_request_supported(mode, 2, true));
+            // KDE 5.27's observed response has size and source_type only. Both
+            // outputs are 1280x800, so neither dimensions nor the token identify it.
+            assert!(!portal_output_verified(mode, 2, false, "Virtual-1", None));
+            // An opaque generic mapping ID is not Hyprland's connector contract.
+            assert!(!portal_output_verified(mode, 2, false, "Virtual-1", Some("Virtual-1")));
+            assert!(portal_output_verified(mode, 2, true, "Virtual-1", Some("Virtual-1")));
+            assert!(!portal_output_verified(mode, 2, true, "Virtual-1", Some("Virtual-2")));
+            assert!(!portal_output_verified(mode, 2, true, "Virtual-1", None));
+            assert!(portal_output_verified(mode, 1, false, "Virtual-1", None));
+        }
     }
 
     #[test]

@@ -2967,6 +2967,12 @@ impl ApparentCoordinator {
     /// The UI loop's tick: advances the springs unless a new capsule window awaits its second
     /// frame (`island_await_frame`).
     pub fn island_tick(&mut self, cx: &mut Context<Self>) {
+        #[cfg(target_os = "linux")]
+        if self.discard_failed_screen_start() {
+            cx.defer(whiteboard::close);
+            self.dismiss_island(cx);
+            return;
+        }
         #[cfg(any(target_os = "macos", target_os = "linux"))]
         self.tick_electron_pill(cx);
         self.tick_hosted_sharing(cx);
@@ -2995,6 +3001,26 @@ impl ApparentCoordinator {
         } else {
             self.step_island(cx);
         }
+    }
+
+    #[cfg(target_os = "linux")]
+    fn discard_failed_screen_start(&mut self) -> bool {
+        // Inspect the current session synchronously: a late failure from an old
+        // producer must never cancel its successor. A pending portal is not failure.
+        if matches!(self.active_recording.as_ref().map(|r| &r.source),
+            Some(CaptureSource::Screen { session, .. }) if session.failed_to_start()) {
+            let failed_id = self.agent_capture_id.clone();
+            self.cancel_capture_attempt();
+            // Cancellation can fail to persist its tombstone; keep that session
+            // active in that case rather than admitting another capture over it.
+            if self.active_recording.is_none() {
+                if let Some(id) = failed_id {
+                    self.agent_captures.set(&id, "failed", None, Some("start_failed"));
+                }
+                return true;
+            }
+        }
+        false
     }
 
     /// Advances the capsule's springs to now. The UI loop calls it every few ms to keep frames
@@ -7445,6 +7471,53 @@ mod tests {
 
         assert!(coordinator.discard_recording().is_none());
         assert_eq!(coordinator.agent_state().capture_id, None);
+    }
+
+    #[cfg(target_os = "linux")]
+    #[test]
+    fn terminal_screen_start_cleanup_preserves_pending_started_and_unrelated_captures() {
+        use std::sync::atomic::Ordering;
+        for (real_frames, journal_fails) in [(false, false), (true, false), (false, true)] {
+            let (sender, _receiver) = flume::unbounded();
+            let mut coordinator = ApparentCoordinator::new(SharedCaptureTelemetry::new(sender), None);
+            let dir = std::env::temp_dir().join(crate::shared::ids::make_bundle_id());
+            if journal_fails { std::fs::write(&dir, b"owned fixture").unwrap(); }
+            else { std::fs::create_dir(&dir).unwrap(); }
+            let (session, failed, seen) = ScreenCaptureSession::test_pending_start();
+            coordinator.agent_captures.begin("old");
+            coordinator.agent_captures.set("old", "saved", None, None);
+            coordinator.agent_captures.begin("current");
+            coordinator.agent_capture_id = Some("current".into());
+            coordinator.active_recording = Some(ActiveRecording {
+                started: Instant::now(),
+                target: region_target(0.0, 0.0, 64.0, 64.0, &[]),
+                bundle_dir: dir.clone(), source: CaptureSource::Screen { session, audio: None, windows: None },
+                _metal_overlay: None, microphone_enabled: false,
+            });
+            assert!(!coordinator.discard_failed_screen_start(), "pending consent stays owned");
+            assert_eq!(coordinator.agent_captures.inspect("current")["status"], "starting");
+            seen.store(real_frames, Ordering::Release);
+            failed.store(true, Ordering::Release);
+            let cleared = !real_frames && !journal_fails;
+            assert_eq!(coordinator.discard_failed_screen_start(), cleared);
+            assert_eq!(coordinator.active_recording.is_none(), cleared);
+            assert_eq!(coordinator.agent_captures.inspect("old")["status"], "saved");
+            if cleared {
+                assert_eq!(coordinator.agent_capture_id, None);
+                assert_eq!(coordinator.agent_captures.inspect("current")["status"], "failed");
+                assert_eq!(coordinator.agent_captures.inspect("current")["error"], "start_failed");
+                assert!(!dir.exists());
+            } else {
+                assert_eq!(coordinator.agent_capture_id.as_deref(), Some("current"));
+                assert!(coordinator.capture_busy());
+                if journal_fails {
+                    assert_eq!(std::fs::read(&dir).unwrap(), b"owned fixture");
+                    std::fs::remove_file(&dir).unwrap();
+                    std::fs::create_dir(&dir).unwrap();
+                }
+                coordinator.discard_recording();
+            }
+        }
     }
 
 

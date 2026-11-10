@@ -74,7 +74,7 @@ Without the `input` group, a capture on Wayland has no clicks, keys or ⇧ ink o
 
 ### Picker and portal limits
 
-Screen and Area work on the tested desktops. Window recording is temporarily disabled on every backend pending original-window lifetime safety (#230); the picker omits it and `record --window` returns an error without starting a recorder or substituting a screen. Choose Screen or Area explicitly. Existing Window bundles remain readable. A portal window source exists internally, but the UI does not offer it. A press of the record shortcut records the display under the pointer once its keys come up, however long they're held; the tray menu's **Choose What to Record…** opens the picker, which stays open until you choose a target or press Esc. The Mac-only iPhone mode is hidden. Screen sharing can ask again if a desktop does not honor the saved restore token. Finishing while the dialog is open cancels the pending session; a failed or empty capture reports an error rather than producing demo imagery, and `latest` skips its unfinished directory.
+Screen and Area work on the tested desktops within the output limits below. Window recording is temporarily disabled on every backend pending original-window lifetime safety (#230); the picker omits it and `record --window` returns an error without starting a recorder or substituting a screen. Choose Screen or Area explicitly. Existing Window bundles remain readable. A portal window source exists internally, but the UI does not offer it. A press of the record shortcut records the display under the pointer once its keys come up, however long they're held; the tray menu's **Choose What to Record…** opens the picker, which stays open until you choose a target or press Esc. The Mac-only iPhone mode is hidden. Screen sharing can ask again if a desktop does not honor the saved restore token. Finishing while the dialog is open cancels the pending session; a failed or empty capture reports an error rather than producing demo imagery, and `latest` skips its unfinished directory.
 
 `apparent capture start --wait --timeout 30` uses the running GUI's normal interaction-aware
 screen path and returns its own request ID. Portal consent still applies; `capture state` reports
@@ -84,6 +84,23 @@ bundle path for that ID; `capture inspect <id>` recovers its process-lifetime re
 See `capture/engine/docs/capture.md` for the same-user GUI control protocol on both supported platforms.
 
 Plasma 5 can report successful GlobalShortcuts binding with an empty result. Apparent validates both returned bindings and uses KGlobalAccel directly on Plasma 5, so the shortcut does not also type into the focused app.
+
+### Multi-output source validation
+
+Multi-output ScreenCast portal capture requires a verified output identity.
+Hyprland supplies its connector name; other portal backends currently have no
+validated equivalent in Apparent and are rejected before opening the sharing
+dialog when multiple outputs are connected, with a notification advising one
+connected display. The selected output's restore token is cleared. Capable
+backends still validate the returned stream and close a rejected session before
+video starts. This does not change X11 or GNOME's direct Mutter capture path.
+On Ubuntu 24.04, KDE Plasma 5.27.12/KWin 5.27.11 returned only stream size and
+source type: choosing Virtual-2 while Apparent selected Virtual-1 previously
+saved Virtual-2's wallpaper with Virtual-1's bundle target. Equal dimensions
+could not identify the output. The single-output fallback is a safety limit,
+not multi-output parity. GNOME 46 direct Screen captures separately saved the
+correct changing synthetic content from both 1280×800 outputs at 1×; that check
+does not establish Area, mixed-scale or relative-pointer acceptance.
 
 ### Hyprland
 
