@@ -149,7 +149,7 @@ class SelectionTests(unittest.TestCase):
     def test_production_cli_check_follows_build_and_tests_and_propagates_failure(self):
         selection = {"root": True, "engine": False, "browser": False, "focused": []}
         command = ["node", "--experimental-strip-types", "--test",
-                   "connect/client/tests/encryption-default.test.ts"]
+                   "connect/client/tests/encryption-default.test.ts", "enablement/cli-version.test.ts"]
         with patch.object(verification.subprocess, "run", return_value=subprocess.CompletedProcess([], 0)) as run:
             verification.run_checks(selection, execution="platform")
             calls = run.call_args_list

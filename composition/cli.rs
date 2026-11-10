@@ -43,6 +43,7 @@ use crate::shared::model::{CaptureMode, InteractionEvent, Shape, parse_clock_ms}
 #[command(
     name = "apparent",
     version,
+    long_version = env!("APPARENT_VERSION_LABEL"),
     about = "Shortcut-triggered screen, voice, and drawing capture for agents"
 )]
 struct Cli {
