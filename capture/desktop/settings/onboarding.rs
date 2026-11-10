@@ -1097,6 +1097,7 @@ pub struct Session {
     practice_board: Option<[f32;4]>,
     practice_completed: bool,
     practice_bundle: Option<std::path::PathBuf>,
+    practice_receipt: Option<(u64, String, Option<String>)>,
     editor: Option<crate::capture::desktop::settings::ShortcutView>,
     pen_picker: bool,
     pen_selected: bool,
@@ -1129,7 +1130,7 @@ impl Session {
             practice: None,
             anchor: None,
             practice_board: None,
-            practice_completed:false,practice_bundle:None,editor:None,pen_picker: false,pen_selected:false,pen_error:false,
+            practice_completed:false,practice_bundle:None,practice_receipt:None,editor:None,pen_picker: false,pen_selected:false,pen_error:false,
         }
     }
 
@@ -1222,7 +1223,7 @@ impl Session {
             practice: shell.then(super::practice::Practice::default),
             anchor: None,
             practice_board: None,
-            practice_completed:false,practice_bundle:None,editor:None,pen_picker: false,pen_selected:false,pen_error:false,
+            practice_completed:false,practice_bundle:None,practice_receipt:None,editor:None,pen_picker: false,pen_selected:false,pen_error:false,
         };
         session.shortcut_changed(shortcut);
         session.sync();
@@ -1398,6 +1399,7 @@ impl Session {
                 Input::CaptureStarted => {
                     self.practice_completed=false;
                     self.practice_bundle=None;
+                    self.practice_receipt=None;
                     self.practice=Some(super::practice::Practice::default());
                 },
                 Input::CaptureEnded { completed:true } => {
@@ -1599,6 +1601,25 @@ impl Session {
     pub fn practice_desktop_stage(&self)->bool {self.practice.as_ref().is_some_and(|p|matches!(p.stage,super::practice::Stage::Note|super::practice::Stage::ScreenInk))}
     pub fn practice_whiteboard(&mut self) {if let Some(p)=self.practice.as_mut(){p.whiteboard();}self.sync();}
     pub fn practice_saved_bundle(&mut self, path: &Path) { if self.practice_active() { self.practice_bundle=Some(path.to_owned()); } }
+    /// A finalizer/clipboard observation, delivered only after the caller's native
+    /// current-generation gate. Capture and request IDs retain their producer identity;
+    /// the renderer cannot manufacture this receipt. This compatible adapter feeds
+    /// the existing lesson until the headless TypeScript consumer is adopted.
+    pub(crate) fn practice_completion(
+        &mut self, generation: u64, capture_id: &str, request_id: Option<&str>,
+        bundle: Option<&Path>, clipboard: Option<bool>,
+    ) {
+        if !self.practice_active() || !self.flow.practice_recording
+            || capture_id.is_empty() || self.practice_receipt.is_some() { return; }
+        self.practice_receipt = Some((generation, capture_id.to_owned(), request_id.map(str::to_owned)));
+        match bundle {
+            Some(path) => {
+                self.practice_saved_bundle(path);
+                self.observe_practice(false, 0, true, Some(clipboard == Some(true)));
+            }
+            None => { self.input(Input::CaptureEnded { completed: false }); }
+        }
+    }
     pub fn practice_opened_bundle(&mut self, path: &Path) { if self.practice_bundle.as_deref()==Some(path) {self.practice_latest();} }
     pub fn practice_latest(&mut self) {if let Some(p)=self.practice.as_mut(){p.opened_latest();}self.sync();}
 
@@ -1842,6 +1863,53 @@ mod tests {
     fn coached_session()->Session {
         let mut session=Session::for_test(Flow::tour(Step::TryIt,Some(grants(&Permission::REQUIRED))).with_first_capture(true, true, true, false));
         session.practice=Some(super::super::practice::Practice::default());session
+    }
+    #[test]
+    fn completion_adapter_preserves_identity_and_actual_clipboard_result() {
+        use super::super::practice::Stage;
+        for (clipboard, stage) in [(Some(true), Stage::Copied), (Some(false), Stage::CopyFailed), (None, Stage::CopyFailed)] {
+            let mut session = coached_session();
+            session.input(Input::ShortcutTriggered);
+            session.input(Input::CaptureStarted);
+            session.practice_completion(7, "capture-a", Some("request-a"), Some(Path::new("/synthetic/a.apparent")), clipboard);
+            assert_eq!(session.practice_receipt, Some((7, "capture-a".into(), Some("request-a".into()))));
+            assert_eq!(session.practice.as_ref().unwrap().stage, stage);
+            assert_eq!(session.practice_bundle.as_deref(), Some(Path::new("/synthetic/a.apparent")));
+            // A duplicate result cannot rewrite known copy success or the saved bundle.
+            session.practice_completion(7, "capture-a", Some("request-a"), None, Some(false));
+            assert_eq!(session.practice.as_ref().unwrap().stage, stage);
+        }
+    }
+
+    #[test]
+    fn completion_adapter_failure_does_not_invent_a_bundle_and_retry_releases_receipt() {
+        use super::super::practice::Stage;
+        let mut session = coached_session();
+        session.input(Input::ShortcutTriggered);
+        session.input(Input::CaptureStarted);
+        session.practice_completion(7, "capture-a", None, None, Some(true));
+        assert!(session.practice_bundle.is_none());
+        assert_eq!(session.practice.as_ref().unwrap().stage, Stage::Retry);
+        session.input(Input::ShortcutTriggered);
+        session.input(Input::CaptureStarted);
+        assert!(session.practice_receipt.is_none());
+        session.practice_completion(8, "capture-b", None, Some(Path::new("/synthetic/b.apparent")), Some(true));
+        assert_eq!(session.practice_receipt, Some((8, "capture-b".into(), None)));
+        assert_eq!(session.practice.as_ref().unwrap().stage, Stage::Copied);
+    }
+
+    #[test]
+    fn completion_adapter_ignores_nonpractice_capture_and_empty_identity() {
+        let mut session = coached_session();
+        session.input(Input::CaptureStarted);
+        session.practice_completion(1, "ordinary", None, Some(Path::new("/synthetic/a.apparent")), Some(true));
+        assert!(session.practice_receipt.is_none());
+        assert!(session.practice_bundle.is_none());
+        session.input(Input::CaptureEnded { completed: false });
+        session.input(Input::ShortcutTriggered);
+        session.input(Input::CaptureStarted);
+        session.practice_completion(2, "", None, Some(Path::new("/synthetic/a.apparent")), Some(true));
+        assert!(session.practice_receipt.is_none());
     }
     #[test]
     fn shared_tour_skips_removed_demo_forward_back_and_on_legacy_resume() {

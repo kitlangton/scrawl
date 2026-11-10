@@ -162,6 +162,36 @@ class AdmissionTests(unittest.TestCase):
             self.assertEqual(self.admit(platform, number), self.sha)
             self.assertEqual(self.admit(platform), self.sha)
 
+    def test_native_artifact_does_not_substitute_for_mac_verification(self):
+        self.runs['macos']['event'] = 'workflow_dispatch'
+        self.jobs['macos'] = [dict(name='native-candidate', status='completed', conclusion='success')]
+        with self.assertRaises(ValueError):
+            self.admit('macos', '84')
+
+    def test_native_artifact_is_explicit_without_changing_ordinary_verification(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/verification-mac.yml').read_text()
+        inputs = workflow.split('\npermissions:', 1)[0]
+        self.assertIn('      native_candidate:', inputs)
+        self.assertIn('        type: boolean\n        default: false', inputs)
+        verify = re.search(r'^  verify:\n(.*?)(?=^  [a-z]|\Z)', workflow, re.M | re.S)[1]
+        self.assertIn('uses: ./.github/workflows/verification-platform.yml', verify)
+        self.assertIn('runner: macos-15-intel', verify)
+        self.assertNotIn('if:', verify)
+        artifact = workflow.split('\n  native-candidate:\n', 1)[1]
+        self.assertIn("github.event_name == 'workflow_dispatch' && inputs.native_candidate", artifact)
+        self.assertIn("APPARENT_NO_LAUNCH: '1'", artifact)
+        self.assertIn('retention-days: 3', artifact)
+        self.assertNotIn('secrets.', artifact)
+        self.assertNotIn('contents: write', workflow)
+
+    def test_native_artifact_prepares_generated_storage_before_native_preflight(self):
+        workflow = (Path(__file__).resolve().parents[2] / '.github/workflows/verification-mac.yml').read_text()
+        artifact = workflow.split('\n  native-candidate:\n', 1)[1]
+        generate = '(cd capture/desktop/ui/frontend && node --experimental-strip-types scripts/build-storage-policy.ts)'
+        self.assertIn(generate, artifact)
+        self.assertLess(artifact.index('npm --prefix capture/desktop/ui/frontend ci'), artifact.index(generate))
+        self.assertLess(artifact.index(generate), artifact.index('node --experimental-strip-types enablement/prerequisites/native.ts'))
+
     def test_manual_main_verification_retains_identity_and_required_job_checks(self):
         for run in self.runs.values():
             run['event'] = 'workflow_dispatch'

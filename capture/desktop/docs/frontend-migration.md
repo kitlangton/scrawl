@@ -67,6 +67,16 @@ When a task touches picker, whiteboard or annotation, include the affected coher
 
 ## Verification and delivery
 
+Post-finalization local handoff now uses the headless TypeScript
+[`record/completion`](../../../record/completion/README.md) owner. The installed
+Electron pill consumes its Saved/Copied/manual-handoff status through the existing
+native presentation bridge; the worker runs without a renderer using the packaged
+runtime. Native finalization, Agent receipts, capture identity admission and
+Connect consent remain independent. Clipboard failure retains Inspect access;
+worker failure retains the saved result with an unavailable-handoff notice.
+There is no automatic paste/send route. Record's isolated package checks do not
+replace installed Mac/Linux handoff or provider/composition acceptance.
+
 For each slice list exact changed files, focused test commands and actual results after source discovery. Use the repository verification selector and existing Clanker build-runner rules for affected Rust builds/tests; rebuild before running the debug app. Run browser type/build/interaction checks for changed web packages, and both-platform native checks for changed desktop behaviour.
 
 Update the relevant owner documentation when visible capability/status changes. Verify the exact diff; preserve unrelated work. Commit, PR publication, merge and release require the applicable explicit authorization. This document has no executed native/performance acceptance evidence.

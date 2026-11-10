@@ -20,6 +20,9 @@ export function checkNativeInputs(root: string, platform = process.platform): st
     'capture/desktop/ui/frontend/electron/runtime.cjs',
     'capture/desktop/ui/frontend/electron/connect.cjs',
     'capture/desktop/ui/frontend/electron/storage-policy.cjs',
+    'capture/desktop/ui/frontend/electron/record-completion/worker.js',
+    'capture/desktop/ui/frontend/electron/record-completion/policy.js',
+    'capture/desktop/ui/frontend/electron/record-completion/package.json',
   ];
   if (platform === 'darwin') inputs.push(
     'capture/desktop/ui/frontend/tests/mac-storage-native.cjs',
@@ -45,5 +48,8 @@ if (process.argv[1] && import.meta.url === pathToFileURL(resolve(process.argv[1]
   // install and before Cargo. Prepare the TS-owned artifact here as well as in
   // owner-local build/test commands; a clean checkout has no committed CJS donor.
   await import('../../capture/desktop/ui/frontend/scripts/build-connect-transport.ts');
+  // Rust-only provider jobs need Record's packaged worker even without a
+  // renderer build. Use the same generator as Desktop build and staging.
+  await import('../../capture/desktop/ui/frontend/scripts/build-pill.ts');
   console.log('Native prerequisites ready: ' + checkNativeInputs(process.cwd()));
 }
