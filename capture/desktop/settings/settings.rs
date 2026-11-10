@@ -1553,12 +1553,19 @@ impl Panel {
                 }
             }
             ("retention", serde_json::Value::String(id)) => {
-                if let Some(preset) = crate::capture::engine::bundle::retention::Preset::ALL
+                if crate::capture::engine::bundle::retention::Preset::ALL
                     .into_iter()
-                    .find(|p| preset_id(*p) == id)
+                    .any(|p| preset_id(p) == id)
                 {
-                    if let Err(error) = preset.policy().save_to(&path) {
-                        crate::capture::engine::runtime::apparent_log(format!("Saving retention failed: {error:#}"));
+                    // The fallback menu uses the same leaf-preserving executor as
+                    // Electron/Linux, not a whole-object Engine config write.
+                    use crate::capture::desktop::workflow::storage_preferences;
+                    let result = storage_preferences::read(&path).and_then(|facts| {
+                        let revision = facts["revision"].as_str().ok_or("config_read_failed")?;
+                        storage_preferences::save(&path, Some(id), revision, || true)
+                    });
+                    if let Err(code) = result {
+                        crate::capture::engine::runtime::apparent_log(format!("Saving retention failed: {code}"));
                     }
                     return Effect::Measure;
                 }
@@ -2478,6 +2485,52 @@ mod tests {
         host.refuse_login = true;
         panel.on(Action::Set { key: "launchAtLogin".into(), value: false.into() }, &mut host);
         assert_eq!(read_json(&host.path)["launchAtLogin"], true, "a failed OS change must not claim success in the file");
+    }
+
+    #[test]
+    fn fallback_retention_preserves_nested_config_and_matches_cleanup_readback() {
+        use crate::capture::engine::bundle::retention::{Policy, Preset};
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new("fallback-retention");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        std::fs::write(&host.path, serde_json::to_vec(&serde_json::json!({
+            "ingestToken": "synthetic-secret", "futureRoot": {"nested": true},
+            "retention": {"mediaDays": null, "futurePolicy": {"version": 42}}
+        })).unwrap()).unwrap();
+        for preset in [Preset::Month, Preset::Forever, Preset::Week] {
+            assert_eq!(panel.on(Action::Set {
+                key: "retention".into(), value: preset_id(preset).into()
+            }, &mut host), Effect::Measure);
+            let saved = read_json(&host.path);
+            assert_eq!(saved["retention"]["futurePolicy"], serde_json::json!({"version": 42}));
+            assert_eq!(saved["ingestToken"], "synthetic-secret");
+            assert_eq!(saved["futureRoot"], serde_json::json!({"nested": true}));
+            assert_eq!(Policy::load_from(&host.path), preset.policy());
+            assert_eq!(panel.view(&host).retention.preset, Some(preset_id(preset)));
+            assert_eq!(std::fs::metadata(&host.path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
+    }
+
+    #[test]
+    fn fallback_retention_refuses_invalid_config_and_unknown_presets() {
+        let dir = TempDir::new("fallback-retention-refusal");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        for original in ["{", r#"{"retention":null,"ingestToken":"synthetic-secret"}"#,
+            r#"{"retention":"future-policy","ingestToken":"synthetic-secret"}"#] {
+            std::fs::write(&host.path, original).unwrap();
+            assert_eq!(panel.on(Action::Set {
+                key: "retention".into(), value: "month".into()
+            }, &mut host), Effect::Measure);
+            assert_eq!(std::fs::read(&host.path).unwrap(), original.as_bytes());
+        }
+        let original = r#"{"retention":{"futurePolicy":42},"ingestToken":"synthetic-secret"}"#;
+        std::fs::write(&host.path, original).unwrap();
+        assert_eq!(panel.on(Action::Set {
+            key: "retention".into(), value: "unrecognized".into()
+        }, &mut host), Effect::None);
+        assert_eq!(std::fs::read(&host.path).unwrap(), original.as_bytes());
     }
 
     #[test]
