@@ -20,7 +20,9 @@ test('real Connect/cloud shares CLI preserves service rows, pagination and safe 
   let mode: 'success' | 'denied' | 'wrong-url' = 'success';
   const requests: string[] = [];
   let origin = '';
-  const cursor = 'opaque /?&+é';
+  const prefix = 'opaque /?&+é';
+  const cursor = prefix + '\0'.repeat(4096 - Buffer.byteLength(prefix));
+  const cursorRoute = '/v1/shares?before=' + encodeURIComponent(cursor);
   const row = () => ({ id: 'a'.repeat(32), captureId: 'b'.repeat(32), status: 'ready',
     url: `${origin}/s/${'c'.repeat(64)}`, title: 'Synthetic recording',
     createdAt: '2026-11-10T00:00:00.000Z', expiresAt: '2026-11-17T00:00:00.000Z',
@@ -37,7 +39,7 @@ test('real Connect/cloud shares CLI preserves service rows, pagination and safe 
       response.end(JSON.stringify({ shares: [{ ...row(), url: `https://other.example/s/${'c'.repeat(64)}` }], nextCursor: null }));
     } else if (request.url === '/v1/shares') {
       response.end(JSON.stringify({ shares: [row()], nextCursor: cursor }));
-    } else if (request.url === '/v1/shares?before=opaque%20%2F%3F%26%2B%C3%A9') {
+    } else if (request.url === cursorRoute) {
       response.end(JSON.stringify({ shares: [{ ...row(), id: 'd'.repeat(32), status: 'expired', url: null }], nextCursor: null }));
     } else {
       response.writeHead(404); response.end('{}');
@@ -70,7 +72,7 @@ test('real Connect/cloud shares CLI preserves service rows, pagination and safe 
       const result = await invoke(name);
       assert.equal(result.code, 0, result.stderr);
       assert.deepEqual(JSON.parse(result.stdout), { shares: [row(), { ...row(), id: 'd'.repeat(32), status: 'expired', url: null }], nextCursor: null });
-      assert.deepEqual(requests, ['/v1/shares', '/v1/shares?before=opaque%20%2F%3F%26%2B%C3%A9']);
+      assert.deepEqual(requests, ['/v1/shares', cursorRoute]);
       assert.ok(!result.stdout.includes('synthetic-cli-read-token'));
     }
     mode = 'wrong-url';

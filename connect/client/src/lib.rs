@@ -855,7 +855,9 @@ impl Client {
                     bail!("{message}");
                 }
                 Some("page") => {
-                    ensure!(line.len() <= 16_384, "Oversized shares page request");
+                    // A 4096-byte opaque cursor can expand sixfold in JSON and
+                    // threefold in the percent-encoded query, plus the envelope.
+                    ensure!(line.len() <= 40_000, "Oversized shares page request");
                     ensure!(
                         request.as_object().is_some_and(|o| o.len() == 3)
                             && request.get("before").is_some()
