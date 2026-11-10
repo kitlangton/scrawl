@@ -963,6 +963,7 @@ mod tests {
             for video in [false, true] {
                 let prompt = clipboard_summary_with_access(&bundle, &directory, video, hosted);
                 assert!(prompt.starts_with(hosted.unwrap_or("apparent inspect ")));
+                assert_eq!(prompt.contains("apparent connect alternatives"), hosted.is_none());
                 assert!(prompt.ends_with("“This is the last instruction”\n"));
                 assert!(prompt.find(CLI_INSTALL).unwrap() < prompt.find("[apparent ").unwrap());
                 assert_eq!(prompt.contains(DEMO_VIDEO_REQUEST), video);

@@ -392,6 +392,7 @@ fn clipboard_summary_with_access(
         out.push_str(
             "Inspect contact-sheet.png and relevant frames/ in that folder before making changes.",
         );
+        out.push_str(" This path is on the recording computer. If it is inaccessible here, use an existing authorized connection to transfer the complete .apparent folder, then inspect its destination path. Run apparent connect alternatives for local/SSH guidance; do not enable remote access or forward private captures without permission.");
         if let Some(crop) = &bundle.autocrop {
             out.push_str(&format!(" Uncropped images are in {}/.", crop.full_frames));
         }

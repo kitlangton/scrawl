@@ -6,6 +6,8 @@ The setup dialog uses `apparent connect login` and `apparent connect status`.
 It tells users to update Apparent for `connect`; older apps can use `apparent cloud`,
 retained as a compatibility alias. Publishing the website does not update the app.
 
+Waitlisted users see that recording/local inspection still work, plus complete-folder transfer alternatives using existing authorized SSH/SCP or another approved route. `apparent connect alternatives` owns the detailed recovery instructions; older apps get update guidance and a direct local `inspect` example. Sign-in does not grant device access, and the waitlist page never starts approval or transfer.
+
 ## Backend contract and boundaries
 
 The frontend is aligned to `connect/docs/hosted-api.md`; `connect/web/src/api.ts` isolates the wire contract:

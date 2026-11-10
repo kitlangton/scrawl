@@ -67,6 +67,15 @@ for dependency tests and need not be valid Rust transport. Production TS callers
 must add those owner validation/publication gates before replacing Rust.
 Current native auth, consent, queue and config writers remain authoritative.
 
+`src/handoff.ts` owns current pending/ready Connect pointer selection and the
+`apparent connect alternatives` local/authorized-transfer guidance. It is a
+dependency-free policy invoked through bounded private stdio by the native
+adapter, with no credentials, filesystem writes or service requests. Terminal or
+unknown jobs use local handoff. The packed-consumer test executes the emitted
+module with Rust, Electron and compilers unavailable; native adapter and platform
+integration remain separate checks. Both platform packagers stage `handoff.js`
+beside the existing `shares.js` module.
+
 Build with `npm run build`. The packed package exports compiled JavaScript and
 declarations from `dist`; ordinary packed consumers need plain Node22.18+, not
 TypeScript loaders, Cargo or rustc. The explicit Rust interoperability lane

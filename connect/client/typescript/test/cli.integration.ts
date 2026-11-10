@@ -1,5 +1,6 @@
 import assert from 'node:assert/strict';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+import os from 'node:os';
 import { chmod, mkdir, mkdtemp, readFile, realpath, rm, stat, writeFile } from 'node:fs/promises';
 import http from 'node:http';
 import path from 'node:path';
@@ -9,6 +10,22 @@ import test from 'node:test';
 // native composition binary. Missing prerequisites fail rather than skip.
 const binary = process.env.APPARENT_CONNECT_TEST_BINARY;
 if (!binary || !path.isAbsolute(binary)) throw Error('Set APPARENT_CONNECT_TEST_BINARY to the rebuilt absolute apparent binary');
+
+test('Connect alternatives runs through the real CLI without login or config writes', async t => {
+  const root = await mkdtemp(path.join(os.tmpdir(), 'connect-alternatives-'));
+  await chmod(root, 0o700);
+  t.after(() => rm(root, { recursive: true, force: true }));
+  const config = path.join(root, 'config.json');
+  for (const name of ['connect', 'cloud']) {
+    const output = execFileSync(binary, [name, 'alternatives'], {
+      encoding: 'utf8', env: { ...process.env, APPARENT_CONFIG: config }, timeout: 10_000,
+    });
+    assert.match(output, /waitlisted accounts cannot approve devices/);
+    assert.match(output, /scp -r/);
+    assert.match(output, /do not enable remote access/);
+  }
+  await assert.rejects(stat(config), { code: 'ENOENT' });
+});
 
 test('real Connect/cloud shares CLI preserves service rows, pagination and safe failures', { timeout: 120_000 }, async () => {
   const installedApp = process.env.APPARENT_CONNECT_TEST_INSTALLED_APP;
@@ -25,6 +42,8 @@ test('real Connect/cloud shares CLI preserves service rows, pagination and safe 
     assert.deepEqual(JSON.parse(await readFile(path.join(packaged, 'package.json'), 'utf8')), { type: 'module' });
     assert.deepEqual(await readFile(path.join(packaged, 'dist/shares.js')),
       await readFile(new URL('../dist/shares.js', import.meta.url)), 'Installed policy must match this source build');
+    assert.deepEqual(await readFile(path.join(packaged, 'dist/handoff.js')),
+      await readFile(new URL('../dist/handoff.js', import.meta.url)), 'Installed handoff policy must match this source build');
   }
   const root = await realpath(await mkdtemp('/tmp/apparent-dev-shares-cli-'));
   await chmod(root, 0o700);

@@ -179,6 +179,8 @@ try {
     { name: 'anonymous', anonymous: true, width: 1440 }, { name: 'anonymous-device', anonymous: true, device: true }, { name: 'loading', loading: true },
     { name: 'desktop-1440', width: 1440 }, { name: 'desktop-1280', width: 1280 }, { name: 'phone-390', width: 390 }, { name: 'empty-account', width: 320 }, { name: 'zoom-200-equivalent', width: 640, height: 450 },
     { name: 'full-waitlist', waitlist: true, full: true, width: 390 },
+    { name: 'full-waitlist-upload', waitlist: true, full: true, device: true, scope: 'upload', width: 320 },
+    { name: 'full-waitlist-read', waitlist: true, full: true, device: true, scope: 'read' },
     { name: 'read-approval', device: true }, { name: 'upload-approval', device: true, scope: 'upload', width: 390, withExpiry: true },
     { name: 'expired', device: true, status: 'expired' }, { name: 'rejected', device: true, status: 'rejected' },
     { name: 'invalid-scope', device: true, scope: 'admin' }, { name: 'no-code', device: true, noCode: true },
@@ -261,6 +263,11 @@ try {
     if (test.anonymous) { const href = await page.getByRole('link', { name: 'Continue with Google' }).getAttribute('href'); assert.equal(href, apiOrigin + (test.device ? '/auth/google/start?returnTo=%2Fconnect%2Fdevice%3Fcode%3DSYNTHETIC' : '/auth/google/start?returnTo=%2Fconnect')) }
     if (test.waitlist) {
       assert.match(await page.locator('main').innerText(), /beta is full/)
+      assert.match(await page.locator('main').innerText(), /Recording still works/)
+      assert.match(await page.locator('main').innerText(), /apparent connect alternatives/)
+      assert.match(await page.locator('main').innerText(), /SSH is optional/)
+      assert.equal(await page.getByRole('button', { name: /^Allow / }).count(), 0)
+      assert.equal(writes.length, 0, 'waitlist never approves or transfers captures')
       await page.getByRole('checkbox').check()
       await page.locator('form').evaluate(e => { e.requestSubmit(); e.requestSubmit() })
       await page.waitForFunction(() => document.querySelector('.hosted-panel')?.getAttribute('aria-busy') === 'false')
@@ -270,7 +277,7 @@ try {
     if (test.clockExpiry) {
       await page.getByRole('heading', { name: 'That code expired' }).waitFor()
       assert.equal(await allow.count(), 0); assert.equal(writes.length, 0)
-    } else if (test.device && !test.anonymous && !test.status && !test.noCode && test.scope !== 'admin') {
+    } else if (test.device && !test.waitlist && !test.anonymous && !test.status && !test.noCode && test.scope !== 'admin') {
       assert.equal(await allow.count(), 1)
       const selectedTab = page.getByRole('tab', { name: test.scope === 'upload' ? 'This computer' : 'Your agent', exact: true })
       assert.equal(await selectedTab.getAttribute('aria-selected'), 'true')
@@ -315,7 +322,7 @@ try {
     }
     results.push(test.name); await page.close()
   }
-  assert.equal(results.length, 36, 'all account/device scenarios must execute')
+  assert.equal(results.length, 38, 'all account/device scenarios must execute')
   for (const test of [
     {name:'shares',width:390},{name:'shares-320',width:320},{name:'shares-empty',empty:true},
     {name:'shares-denied',forbidden:true},{name:'shares-unconfirmed',unconfirmed:true},
@@ -411,7 +418,7 @@ try {
   await recovery.getByRole('link',{name:'Open shared recording'}).waitFor()
   assert.equal(await recovery.getByRole('alert').count(),0);assert.equal(writes.length,0)
   await recovery.close();results.push('shares-load-recovery')
-  assert.equal(results.length,66,'all auth and management scenarios must execute')
+  assert.equal(results.length,68,'all auth and management scenarios must execute')
   assert.equal(routeResults.length,24,'all real dev/preview route variants must execute')
   const receipt = { synthetic: true, routes:routeResults, closures:connectGraphs.map(g=>[...g.keys()]), artifact: root, apiOrigin: apiOrigin || 'same-origin', passed: results, count: results.length, screenshots: evidence, assets: Object.fromEntries(await Promise.all(['hosted/source-pond-v4.png', 'hosted/agent-pond-v4.png', 'hosted/agent-reading-v4.png', 'HostGrotesk-Variable.ttf', 'apparent-wordmark.svg'].map(async name => [name, createHash('sha256').update(await readFile(`${root}/${name}`)).digest('hex')]))), limits: 'Controlled synthetic API only; not live OAuth, service, native, or deployment proof. 640×450 CSS pixels is a 200%-equivalent layout, not browser zoom.' }
   await import('node:fs/promises').then(fs => fs.writeFile(`${evidence}/receipt.json`, JSON.stringify(receipt, null, 2)))

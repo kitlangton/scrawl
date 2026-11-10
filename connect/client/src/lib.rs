@@ -92,6 +92,8 @@ pub enum ConnectCommand {
     },
     /// Explicitly upload one historical capture (requires upload consent).
     Upload { bundle: PathBuf },
+    /// Show local inspection and authorized transfer options when Connect is unavailable.
+    Alternatives,
     /// List or revoke public-by-link access. IDs are management IDs, not capture IDs.
     Shares {
         #[command(subcommand)]
@@ -307,6 +309,10 @@ fn safe_shares_policy_message(message: &str) -> bool {
 }
 
 fn shares_typescript_runtime() -> Result<(PathBuf, PathBuf, bool)> {
+    connect_typescript_runtime("shares")
+}
+
+fn connect_typescript_runtime(name: &str) -> Result<(PathBuf, PathBuf, bool)> {
     let installed = std::env::current_exe()?
         .parent()
         .context("Missing application directory")?
@@ -314,12 +320,12 @@ fn shares_typescript_runtime() -> Result<(PathBuf, PathBuf, bool)> {
     #[cfg(target_os = "macos")]
     let (runtime, module) = (
         installed.join("../Resources/settings/runtime/Electron.app/Contents/MacOS/Electron"),
-        installed.join("../Resources/settings/app/connect-client/dist/shares.js"),
+        installed.join(format!("../Resources/settings/app/connect-client/dist/{name}.js")),
     );
     #[cfg(target_os = "linux")]
     let (runtime, module) = (
         installed.join("../share/apparent/settings/runtime/electron"),
-        installed.join("../share/apparent/settings/app/connect-client/dist/shares.js"),
+        installed.join(format!("../share/apparent/settings/app/connect-client/dist/{name}.js")),
     );
     if runtime.is_file() {
         ensure!(
@@ -330,12 +336,12 @@ fn shares_typescript_runtime() -> Result<(PathBuf, PathBuf, bool)> {
     }
     let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("typescript");
     #[cfg(not(test))]
-    let module = development.join("dist/shares.js");
+    let module = development.join(format!("dist/{name}.js"));
     #[cfg(test)]
-    let module = if development.join("dist/shares.js").is_file() {
-        development.join("dist/shares.js")
+    let module = if development.join(format!("dist/{name}.js")).is_file() {
+        development.join(format!("dist/{name}.js"))
     } else {
-        development.join("src/shares.ts")
+        development.join(format!("src/{name}.ts"))
     };
     #[cfg(target_os = "macos")]
     let runtime = development.join("../../../capture/desktop/ui/frontend/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
@@ -794,6 +800,29 @@ fn config_escape(value: &str) -> Result<String> {
 }
 
 impl Client {
+    /// Pure workflow policy runs in the packaged TypeScript owner. Native code
+    /// supplies bounded stdio and process cleanup, without queue locks or secrets.
+    fn handoff_policy(request: Value) -> Result<Value> {
+        let (runtime, module, electron) = connect_typescript_runtime("handoff")?;
+        let mut command = Command::new(runtime);
+        if electron { command.env("ELECTRON_RUN_AS_NODE", "1"); }
+        else if module.extension().is_some_and(|extension| extension == "ts") {
+            command.arg("--experimental-strip-types");
+        }
+        let mut child = SharesPolicyChild(command.arg(module)
+            .stdin(Stdio::piped()).stdout(Stdio::piped()).stderr(Stdio::null()).spawn()?);
+        let mut input = child.stdin.take().context("Missing handoff policy input")?;
+        let mut output = child.stdout.take().context("Missing handoff policy output")?;
+        shares_policy_write(&mut input, &request)?;
+        drop(input);
+        let line = shares_policy_frame_bounded(&mut output, Duration::from_secs(3), 16_384)?;
+        ensure!(shares_policy_exit(&mut child)?.success(), "Connect handoff policy failed");
+        Ok(serde_json::from_str(&line)?)
+    }
+    pub fn alternatives() -> Result<String> {
+        Self::handoff_policy(json!({"operation":"alternatives"}))?
+            .as_str().map(str::to_owned).context("Invalid Connect alternatives")
+    }
     pub fn shares(&self) -> Result<Value> {
         let server = server_url(&self.settings().server)?;
         let credential = self
@@ -1355,7 +1384,10 @@ impl Client {
         let job = self.jobs().ok()?.into_iter().find(|j| {
             !j.public_copy && j.bundle == bundle && self.active(j) && j.status != "cancelled"
         })?;
-        Some(format!("apparent inspect {}\n", job.id))
+        let result = Self::handoff_policy(json!({"job":{"id":job.id,"status":job.status}})).ok()?;
+        // Reconcile consent/generation after the policy runtime returns.
+        if !self.active(&job) { return None; }
+        result.as_str().map(str::to_owned)
     }
     fn raw_request(
         &self,

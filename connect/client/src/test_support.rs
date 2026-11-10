@@ -1360,9 +1360,18 @@ pub fn hosted_roundtrip_pending_pointer_restart_complete_and_no_overwrite() {
     assert_eq!(pointer, format!("apparent inspect {id}\n"));
     assert!(!pointer.contains("login") && !pointer.contains("secret"));
     assert_eq!(server.state.lock().unwrap().requests, 0);
+    let mut job = f.client.jobs().unwrap().remove(0);
+    for status in ["failed", "expired", "cancelled", "awaiting_share"] {
+        job.status = status.into();
+        f.client.save_job(&job).unwrap();
+        assert!(f.client.pointer(&bundle).is_none(), "{status} advertised Connect");
+    }
+    job.status = "pending".into();
+    f.client.save_job(&job).unwrap();
     let restarted = Client::new(f.client.provider.clone());
     restarted.process_once().unwrap();
     assert_eq!(restarted.jobs().unwrap()[0].status, "ready");
+    assert_eq!(restarted.pointer(&bundle), Some(pointer));
     let out = f.root.join("download.apparent");
     restarted.fetch(&id, &out, 0).unwrap();
     for entry in server.state.lock().unwrap().data.keys() {
@@ -1502,6 +1511,7 @@ pub fn inspect_cli_failure_scenario(
         let stderr = String::from_utf8_lossy(&output.stderr);
         let public_error = stderr.lines().next().unwrap_or_default();
         assert!(public_error.starts_with("Error: "), "{mode}: {output:?}");
+        assert!(public_error.contains("apparent connect alternatives"), "{mode}: {output:?}");
         if mode != "missing-read" {
             let diagnostic = if mode == "inspect-unauthorized" { "auth" } else { "integrity" };
             assert!(public_error.to_lowercase().contains(diagnostic), "{mode}: {output:?}");

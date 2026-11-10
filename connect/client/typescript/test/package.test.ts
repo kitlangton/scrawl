@@ -27,7 +27,7 @@ test('build removes stale generated modules and refuses redirected output',async
   await fs.mkdir(dist);await fs.writeFile(path.join(dist,'obsolete.js'),'obsolete');
   await fs.writeFile(path.join(dist,'obsolete.d.ts'),'obsolete');
   run('npm',['run','build'],source);
-  assert.deepEqual((await fs.readdir(dist)).sort(),['index.d.ts','index.js','shares.d.ts','shares.js']);
+  assert.deepEqual((await fs.readdir(dist)).sort(),['handoff.d.ts','handoff.js','index.d.ts','index.js','shares.d.ts','shares.js']);
   await fs.rm(dist,{recursive:true});
   const external=path.join(root,'external');await fs.mkdir(external);
   await fs.writeFile(path.join(external,'sentinel'),'preserve');
@@ -40,7 +40,10 @@ test('packed consumer installs and runs without Rust, compilers or source resolu
   const {root,source}=await fixture(t);
   const result=JSON.parse(run('npm',['pack','--json','--pack-destination',root],source))[0];
   assert.deepEqual(result.files.map((file:{path:string})=>file.path).sort(),
-    ['README.md','dist/index.d.ts','dist/index.js','dist/shares.d.ts','dist/shares.js','package.json']);
+    ['README.md','dist/handoff.d.ts','dist/handoff.js','dist/index.d.ts','dist/index.js','dist/shares.d.ts','dist/shares.js','package.json']);
+  const policy=path.join(source,'dist/handoff.js');
+  const pointer=execFileSync(process.execPath,[policy],{input:JSON.stringify({job:{id:'a'.repeat(32),status:'pending'}})+'\n',encoding:'utf8'});
+  assert.equal(JSON.parse(pointer),'apparent inspect '+'a'.repeat(32)+'\n');
   const bin=path.join(root,'deny');await fs.mkdir(bin);
   for(const name of ['cargo','rustc','electron','tsc','esbuild']) {
     await fs.writeFile(path.join(bin,name),'#!/bin/sh\necho forbidden-build-tool >&2\nexit 99\n',{mode:0o700});
@@ -60,6 +63,13 @@ test('packed consumer installs and runs without Rust, compilers or source resolu
     assert.equal((await signEnvelope(seed,signed)).length,128);
     assert.equal(await verifyEnvelope(new Uint8Array(32),signed,'00'.repeat(64)),false);
   `],consumer,env);
+  const installedPolicy=path.join(consumer,'node_modules/@apparent/connect-crypto/dist/handoff.js');
+  for(const status of ['pending','ready','failed','expired']) {
+    const output=execFileSync(process.execPath,[installedPolicy],{cwd:consumer,env,input:JSON.stringify({job:{id:'a'.repeat(32),status}})+'\n',encoding:'utf8'});
+    assert.equal(JSON.parse(output),['pending','ready'].includes(status)?'apparent inspect '+'a'.repeat(32)+'\n':null);
+  }
+  const help=execFileSync(process.execPath,[installedPolicy],{cwd:consumer,env,input:'{"operation":"alternatives"}\n',encoding:'utf8'});
+  assert.match(JSON.parse(help),/scp -r/);
   await fs.writeFile(path.join(consumer,'consumer.mts'),`
     import {generateAgeIdentity,encryptAge,type Asset} from '@apparent/connect-crypto';
     const asset:Asset={path:'summary.md',size:1,sha256:'synthetic'};

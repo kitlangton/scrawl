@@ -78,6 +78,12 @@ The Settings controls for recording, shortcuts and retention use `~/.config/appa
 
 ### A Connect capture on another computer
 
+Connect admits 20 accounts; Google sign-in alone grants no device access. A waitlisted account cannot approve upload or read access. Do not repeatedly request login for `beta_required`. Recording and local inspection still work. Use `apparent connect alternatives` for recovery instructions (update older clients if absent).
+
+A local path belongs to the recording computer. If the agent runs there, inspect that path directly. Otherwise, use an existing authorized SSH/SCP connection or another approved transfer route to copy the **complete** `.apparent` folder, including media and subdirectories, then inspect its destination path. For example, replace the host/path in `scp -r recording-host:'/absolute/path/capture.apparent' ./capture.apparent`, then run `apparent inspect ./capture.apparent`. SSH is optional; do not enable remote access, change credentials or forward private captures without permission. If no approved route exists, ask which computer/destination the person authorizes.
+
+Failed/expired uploads use a local path when the sender copies the capture again; previously pasted IDs cannot change. Pending uploads retain Connect IDs without promising readiness. If an ID cannot be fetched, the sender can run `apparent connect status` on the recording computer to find the local original and error, then copy again or transfer the folder through an approved route. A remote agent cannot derive the local bundle path from an opaque ID. Never infer unseen images from the transcript.
+
 A Connect paste starts with `apparent inspect <32-lowercase-hex-id>` (fetches to `./<id>.apparent`, waits up to 120 seconds, then prints the summary); older apps include a `Connect capture:` or `Hosted capture:` header. Reuse the receiving CLI's configured server and existing read grant. Fetch the complete bundle, then inspect it. The duration header and timestamped words/marks are last; the install fallback links to README’s Agents section, which owns the current installation guide. A local-only paste instead starts with `apparent inspect <absolute-path>`; that path belongs to the recording computer and must be accessible here. Only when authorization is missing should a person approve a **separate read grant**. Update Apparent to use `apparent connect`; older apps use `apparent cloud`, which remains a compatibility alias in updated apps:
 
 ```sh

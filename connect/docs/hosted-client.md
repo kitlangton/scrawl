@@ -134,6 +134,18 @@ not substitute for root adoption compilation or native/platform proof.
 
 ## Opt in on the recording computer
 
+### Full beta and local recovery
+
+The 20-place limit admits accounts, not simultaneous connections. Existing active accounts keep access when full. New Google identities are waitlisted and cannot approve upload/read grants; browser sign-in alone never enables uploads. The waitlist page explains that recording still works and offers local/authorized-transfer guidance.
+
+`apparent connect alternatives` prints local inspection and complete-folder SSH/SCP instructions, consent boundaries and error recovery without contacting the service or changing configuration. SSH is optional; use an existing authorized route or ask for the intended destination/access. Older apps need an update for this command; `apparent inspect '/absolute/path/capture.apparent'` remains the local path.
+
+Clipboard handoffs use Connect IDs only for current pending/ready private jobs. Failed, expired, cancelled and unknown states fall back to the original local path, with transfer guidance. Pending is not ready. Copy again after failure; already pasted IDs cannot be rewritten. On the recording computer, `apparent connect status` exposes the local bundle path and queue error. `beta_required` needs admitted account access, not another sign-in; network failures may be retried. The receiver cannot recover a local path from an opaque ID.
+
+Connect's dependency-free `typescript/src/handoff.ts` owns eligibility and recovery text, executed through the existing packaged Node runtime and bounded private stdio. Rust retains consent/generation checks, queue state, process safety and file access; no persistence writer changes. A missing policy runtime falls back to the local pointer. The shared Settings staging script includes `dist/handoff.js` for both platform packagers. Rollback restores the old queue-pointer adapter; the legacy clipboard formatter remains for local image/transcript assembly until its owning workflow is migrated. This slice does not claim the entire client or Desktop is Rust-independent.
+
+### Approve the recorder
+
 Update Apparent to use `apparent connect`. Older apps with Connect support use
 `apparent cloud`, which remains a compatibility alias in updated apps. The name
 change does not move the API, credentials or `cloud` config keys.

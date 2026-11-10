@@ -107,6 +107,8 @@ function Account({ devicePage }: { devicePage: boolean }) {
         {!loading && !error && <>
           {authenticated && !authenticated.beta.access ? <>
             <p>{authenticated.beta.enrolled} of {authenticated.beta.capacity} places occupied. {authenticated.waitlist.joined ? "You're on the waitlist." : "Join the waitlist for access updates."}</p>
+            <p>Recording still works. Captures stay on your computer. Google sign-in alone does not enable Connect uploads or agent access.</p>
+            <p>Use your agent on the recording computer, or transfer the complete <code>.apparent</code> folder through an existing authorized SSH/SCP connection or another approved file-transfer route. SSH is optional. Run <code>apparent connect alternatives</code> for instructions. If your app does not recognize that command, update Apparent or inspect the folder locally with <code>apparent inspect '/absolute/path/capture.apparent'</code>.</p>
             <form onSubmit={event => { event.preventDefault(); void act(async () => { await api.joinWaitlist(authenticated.csrfToken, interested); const next = await api.session(); if (!next.authenticated || !next.waitlist.joined || next.waitlist.interestedAtFiveDollars !== interested) throw new Error("Your waitlist preference could not be confirmed. Reload to check its status."); setAccount(next) }) }}>
               <label className="hosted-check"><input type="checkbox" checked={interested} disabled={busy} onChange={event => setInterested(event.target.checked)} /><span>I'd be interested at $5/month <span className="hosted-quiet">(optional)</span></span></label>
               <p className="hosted-quiet">Interest only. No payment details, subscription, or charge.</p>
