@@ -38,6 +38,14 @@ fn init() -> Result<()> {
     Ok(())
 }
 
+/// The pixels to retain from a verified PipeWire source.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Crop {
+    pub rect: [u32; 4],
+    /// A guarded fallback must receive these exact pixels before cropping.
+    pub source_size: Option<[u32; 2]>,
+}
+
 /// Where a recording's pixels come from.
 pub enum Source {
     #[cfg(test)]
@@ -50,7 +58,7 @@ pub enum Source {
     /// part of the stream to keep (stream pixels), for an area of a display.
     PipeWire {
         session: super::portal::Stream,
-        crop: Option<[u32; 4]>,
+        crop: Option<Crop>,
     },
 }
 
@@ -248,15 +256,27 @@ fn source_launch(source: &Source) -> String {
                 session.fd(),
                 session.node
             );
-            if let Some([x, y, w, h]) = crop {
+            if let Some(crop) = crop {
                 // `videocrop` trims from each edge; the stream's size is only known once it
                 // runs, so `crop_edges` fills them in when the caps arrive.
-                let _ = (x, y, w, h);
-                launch.push_str(" ! videoconvert ! videocrop name=crop");
+                launch.push_str(&crop_launch(crop));
             }
             launch
         }
     }
+}
+
+fn crop_launch(crop: &Crop) -> String {
+    let mut launch = String::new();
+    if let Some([width, height]) = crop.source_size {
+        // No scaler precedes this filter. Portal size is compositor metadata,
+        // not proof of video pixels: incompatible source caps must fail closed.
+        launch.push_str(&format!(
+            " ! video/x-raw,width={width},height={height},pixel-aspect-ratio=1/1"
+        ));
+    }
+    launch.push_str(" ! videoconvert ! videocrop name=crop");
+    launch
 }
 
 /// A running recording: GStreamer pushes frames through; Apparent samples the newest one.
@@ -303,7 +323,7 @@ impl Recorder {
         if let (Source::PipeWire { crop: Some(crop), .. }, Some(element)) =
             (source, pipeline.by_name("crop"))
         {
-            crop_edges(&element, *crop);
+            crop_edges(&element, crop.rect);
         }
         let candidates = pipeline
             .by_name("candidates")
@@ -1020,6 +1040,88 @@ mod tests {
             rect: [100.0, 50.0, 800.0, 600.0],
         });
         assert!(launch.contains("startx=100 starty=50 endx=899 endy=649"), "{launch}");
+    }
+
+    struct CropFixture {
+        pipeline: gst::Pipeline,
+        source: gst_app::AppSrc,
+        sink: gst_app::AppSink,
+    }
+
+    impl Drop for CropFixture {
+        fn drop(&mut self) { let _ = self.pipeline.set_state(gst::State::Null); }
+    }
+
+    impl CropFixture {
+        fn new() -> Self {
+            init().unwrap();
+            let crop = Crop { rect: [410, 240, 420, 260], source_size: Some([1280, 800]) };
+            let pipeline = gst::parse::launch(&format!(
+                "appsrc name=input format=time {} ! appsink name=output sync=false", crop_launch(&crop)
+            )).unwrap().downcast::<gst::Pipeline>().unwrap();
+            let source = pipeline.by_name("input").unwrap().downcast::<gst_app::AppSrc>().unwrap();
+            let sink = pipeline.by_name("output").unwrap().downcast::<gst_app::AppSink>().unwrap();
+            crop_edges(&pipeline.by_name("crop").unwrap(), crop.rect);
+            pipeline.set_state(gst::State::Playing).unwrap();
+            Self { pipeline, source, sink }
+        }
+
+        fn pixel(x: u32, y: u32) -> [u8; 4] {
+            [(x % 251) as u8, (y % 253) as u8, (x / 251) as u8, 255]
+        }
+
+        fn push(&self, width: u32, height: u32, par: gst::Fraction) {
+            self.source.set_caps(Some(&gst::Caps::builder("video/x-raw")
+                .field("format", "RGBA").field("width", width as i32).field("height", height as i32)
+                .field("framerate", gst::Fraction::new(30, 1)).field("pixel-aspect-ratio", par).build()));
+            let mut bytes = Vec::with_capacity((width * height * 4) as usize);
+            for y in 0..height { for x in 0..width { bytes.extend_from_slice(&Self::pixel(x, y)); } }
+            let mut buffer = gst::Buffer::from_mut_slice(bytes);
+            buffer.get_mut().unwrap().set_pts(gst::ClockTime::ZERO);
+            // Negotiation may already have refused the caps; either result must
+            // still leave no output sample and an actual pipeline error below.
+            let _ = self.source.push_buffer(buffer);
+        }
+
+        fn reject(&self) {
+            assert!(self.sink.try_pull_sample(gst::ClockTime::from_mseconds(300)).is_none(),
+                "an incompatible stream escaped the pre-crop guard");
+            assert!(self.pipeline.bus().unwrap().timed_pop_filtered(
+                gst::ClockTime::from_seconds(2), &[gst::MessageType::Error]
+            ).is_some(), "missing negotiation failure");
+        }
+    }
+
+    #[test]
+    fn guarded_portal_crop_preserves_actual_pixel_origin_and_extent() {
+        let fixture = CropFixture::new();
+        fixture.push(1280, 800, gst::Fraction::new(1, 1));
+        let sample = fixture.sink.try_pull_sample(gst::ClockTime::from_seconds(2)).unwrap();
+        let info = gstreamer_video::VideoInfo::from_caps(sample.caps().unwrap()).unwrap();
+        assert_eq!((info.width(), info.height()), (420, 260));
+        let pixels = rgba_of(&sample, 420, 260).unwrap();
+        assert_eq!(&pixels[..4], &CropFixture::pixel(410, 240));
+        assert_eq!(&pixels[pixels.len() - 4..], &CropFixture::pixel(829, 499));
+    }
+
+    #[test]
+    fn guarded_portal_crop_rejects_scaled_rotated_and_nonsquare_streams() {
+        for (width, height, par) in [(2560, 1600, gst::Fraction::new(1, 1)),
+            (800, 1280, gst::Fraction::new(1, 1)), (1280, 800, gst::Fraction::new(2, 1))]
+        {
+            let fixture = CropFixture::new();
+            fixture.push(width, height, par);
+            fixture.reject();
+        }
+    }
+
+    #[test]
+    fn guarded_portal_crop_rejects_changed_dimensions_without_an_uncropped_frame() {
+        let fixture = CropFixture::new();
+        fixture.push(1280, 800, gst::Fraction::new(1, 1));
+        assert!(fixture.sink.try_pull_sample(gst::ClockTime::from_seconds(2)).is_some());
+        fixture.push(2560, 1600, gst::Fraction::new(1, 1));
+        fixture.reject();
     }
 
     #[test]

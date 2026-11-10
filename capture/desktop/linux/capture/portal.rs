@@ -14,7 +14,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, anyhow, bail};
 use futures_lite::StreamExt as _;
 
-use super::media::Source;
+use super::media::{Crop, Source};
 use crate::capture::engine::runtime::apparent_log;
 use crate::shared::model::{CaptureMode, TargetInfo};
 
@@ -28,6 +28,8 @@ pub struct Stream {
     pub rect: Option<[f64; 4]>,
     /// The output name supplied by the portal (Hyprland reports this even when position is 0).
     pub mapping_id: Option<String>,
+    /// Explicit portal Monitor source type; absent/other types cannot use the fallback.
+    pub portal_monitor: bool,
     stop: Option<flume::Sender<()>>,
 }
 
@@ -114,12 +116,9 @@ pub fn source_for(target: &TargetInfo, stopping: &AtomicBool) -> Result<Source> 
     }
     // Portal positions are in compositor coordinates, not XWayland pixels. Crop relative to
     // the chosen RandR output; its pixel size is the captured stream's pixel size.
-    let crop_rect = if super::super::hyprland() {
-        output.map(|m| m.rect)
-    } else {
-        session.rect
-    };
-    let crop = portal_crop(target.mode, rect, crop_rect);
+    let crop = (target.mode == CaptureMode::Region).then(|| {
+        region_crop(rect, output, monitors.len(), super::super::hyprland(), session.rect, session.portal_monitor)
+    }).flatten();
     if target.mode == CaptureMode::Region && crop.is_none() {
         bail!("The selected screen does not contain the capture region (or the portal did not report its position). Choose the screen containing the region and try again.");
     }
@@ -164,6 +163,7 @@ fn output_still_selected(selected: &super::super::Monitor, now: &[super::super::
     now.len() == count
         && selected_monitor(now, super::super::monitor_id(selected)).is_some_and(|current| {
             current.name == selected.name
+                && current.outputs == selected.outputs
                 && current.rect.iter().zip(selected.rect).all(|(a, b)| (a - b).abs() <= 1.0)
         })
 }
@@ -199,6 +199,39 @@ fn portal_crop(mode: CaptureMode, rect: [f64; 4], stream: Option<[f64; 4]>) -> O
         }
         _ => None,
     }
+}
+
+fn region_crop(
+    rect: [f64; 4], output: Option<&super::super::Monitor>, count: usize,
+    hyprland: bool, stream: Option<[f64; 4]>, portal_monitor: bool,
+) -> Option<Crop> {
+    let bounds = if hyprland { output.map(|m| m.rect) } else { stream };
+    if let Some(bounds) = bounds {
+        return portal_crop(CaptureMode::Region, rect, Some(bounds))
+            .map(|rect| Crop { rect, source_size: None });
+    }
+    let output = output?;
+    // Only a sole, real output can identify a positionless Monitor stream.
+    // Synthetic roots, virtual monitor groups and mirrors are not that evidence.
+    // The caller has already revalidated this snapshot after portal consent.
+    if count != 1 || !portal_monitor || output.handle <= 0 || output.name.is_empty()
+        || output.outputs != 1 || !target_fits_output(CaptureMode::Region, rect, output.rect)
+        || !output.rect.iter().chain(rect.iter()).all(|v| v.is_finite())
+    {
+        return None;
+    }
+    let [width, height] = [output.rect[2], output.rect[3]];
+    if [width, height].iter().any(|v| *v < 1.0 || *v > f64::from(i32::MAX) || v.fract() != 0.0) {
+        return None;
+    }
+    let crop = portal_crop(CaptureMode::Region, rect, Some(output.rect))?;
+    if crop[2] == 0 || crop[3] == 0 {
+        return None;
+    }
+    Some(Crop {
+        rect: crop,
+        source_size: Some([width as u32, height as u32]),
+    })
 }
 
 #[cfg(test)]
@@ -266,6 +299,7 @@ mod display_tests {
         let monitor = |handle, name: &str| super::super::super::Monitor {
             handle,
             name: name.into(),
+            outputs: 1,
             rect: [0.0, 0.0, 1920.0, 1080.0],
             work: [0.0, 0.0, 1920.0, 1080.0],
             scale: 1.0,
@@ -286,6 +320,7 @@ mod display_tests {
         let selected = super::super::super::Monitor {
             handle: 100,
             name: "Virtual-1".into(),
+            outputs: 1,
             rect: [0.0, 0.0, 1280.0, 800.0],
             work: [0.0, 0.0, 1280.0, 800.0],
             scale: 1.0,
@@ -295,11 +330,14 @@ mod display_tests {
         moved.rect[0] = 1280.0;
         let mut replaced = selected.clone();
         replaced.handle = 101;
+        let mut mirrored = selected.clone();
+        mirrored.outputs = 2;
         assert!(output_still_selected(&selected, &[selected.clone()], 1));
         assert!(!output_still_selected(&selected, &[selected.clone(), moved.clone()], 1));
         assert!(!output_still_selected(&selected, &[selected.clone()], 2));
         assert!(!output_still_selected(&selected, &[moved], 1));
         assert!(!output_still_selected(&selected, &[replaced], 1));
+        assert!(!output_still_selected(&selected, &[mirrored], 1));
     }
 
     #[test]
@@ -330,6 +368,47 @@ mod display_tests {
             None,
             "unknown stream position must not silently record a whole display"
         );
+    }
+
+    #[test]
+    fn single_output_region_without_portal_position_requires_guarded_pixels() {
+        let output = super::super::super::Monitor {
+            handle: 100, name: "Virtual-1".into(), outputs: 1,
+            rect: [0.0, 0.0, 1280.0, 800.0], work: [0.0, 0.0, 1280.0, 800.0],
+            scale: 1.0, primary: true,
+        };
+        assert_eq!(
+            region_crop([410.0, 240.0, 420.0, 260.0], Some(&output), 1, false, None, true),
+            Some(Crop { rect: [410, 240, 420, 260], source_size: Some([1280, 800]) }),
+            "KDE's explicitly shared sole monitor can crop only with exact incoming pixel bounds"
+        );
+    }
+
+    #[test]
+    fn missing_position_never_guesses_an_ambiguous_or_unvalidated_output() {
+        let output = super::super::super::Monitor {
+            handle: 100, name: "Virtual-1".into(), outputs: 1,
+            rect: [0.0, 0.0, 1280.0, 800.0], work: [0.0, 0.0, 1280.0, 800.0],
+            scale: 1.0, primary: true,
+        };
+        let rect = [410.0, 240.0, 420.0, 260.0];
+        assert_eq!(region_crop(rect, Some(&output), 2, false, None, true), None);
+        assert_eq!(region_crop(rect, Some(&output), 1, false, None, false), None);
+        assert_eq!(region_crop(rect, None, 1, false, None, true), None);
+        for (handle, name, outputs) in [(0, "", 0), (100, "", 1), (100, "Virtual", 0), (100, "Mirrored", 2)] {
+            let mut unknown = output.clone();
+            unknown.handle = handle; unknown.name = name.into(); unknown.outputs = outputs;
+            assert_eq!(region_crop(rect, Some(&unknown), 1, false, None, true), None);
+        }
+        for invalid in [[1400.0, 0.0, 10.0, 10.0], [0.0, 0.0, f64::NAN, 10.0], [1.0, 1.0, 0.5, 0.5]] {
+            assert_eq!(region_crop(invalid, Some(&output), 1, false, None, true), None);
+        }
+        // A contradictory reported rectangle is not permission to use the fallback.
+        assert_eq!(region_crop(rect, Some(&output), 1, false, Some([1920.0, 0.0, 1280.0, 800.0]), true), None);
+        // Existing known-position and Hyprland paths retain their pixel contract.
+        let pixels = Some(Crop { rect: [410, 240, 420, 260], source_size: None });
+        assert_eq!(region_crop(rect, Some(&output), 1, false, Some(output.rect), false), pixels);
+        assert_eq!(region_crop(rect, Some(&output), 2, true, Some([1920.0, 0.0, 1280.0, 800.0]), true), pixels);
     }
 }
 
@@ -407,6 +486,7 @@ fn mutter_area(rect: [f64; 4]) -> Result<Stream> {
         fd: None,
         rect: Some(rect),
         mapping_id: None,
+        portal_monitor: false,
         stop: Some(stop_tx),
     })
 }
@@ -456,7 +536,7 @@ fn portal_screencast(window: bool, key: &str, stopping: &AtomicBool) -> Result<(
     use ashpd::desktop::PersistMode;
     use ashpd::desktop::screencast::{CursorMode, Screencast, SourceType};
 
-    let (ready_tx, ready_rx) = flume::bounded::<Result<(u32, OwnedFd, Option<[f64; 4]>, Option<String>, Option<String>)>>(1);
+    let (ready_tx, ready_rx) = flume::bounded::<Result<(u32, OwnedFd, Option<[f64; 4]>, Option<String>, Option<String>, bool)>>(1);
     let (stop_tx, stop_rx) = flume::bounded::<()>(1);
     let request_key = key.to_owned();
     std::thread::Builder::new()
@@ -492,6 +572,10 @@ fn portal_screencast(window: bool, key: &str, stopping: &AtomicBool) -> Result<(
                         let token = streams.restore_token().map(str::to_owned);
                         let stream = streams.streams().first().context("Nothing was shared")?;
                         validate_source_type(window, stream.source_type())?;
+                        let portal_monitor = stream.source_type() == Some(SourceType::Monitor);
+                        if portal_monitor {
+                            apparent_log(format!("Screen sharing monitor metadata: position={:?}, size={:?}", stream.position(), stream.size()));
+                        }
                         let rect = match (stream.position(), stream.size()) {
                             (Some((x, y)), Some((w, h))) => {
                                 Some([f64::from(x), f64::from(y), f64::from(w), f64::from(h)])
@@ -501,14 +585,14 @@ fn portal_screencast(window: bool, key: &str, stopping: &AtomicBool) -> Result<(
                         let node = stream.pipe_wire_node_id();
                         let mapping_id = stream.mapping_id().map(str::to_owned);
                         let fd = proxy.open_pipe_wire_remote(&session).await?;
-                        anyhow::Ok((node, fd, rect, mapping_id, token))
+                        anyhow::Ok((node, fd, rect, mapping_id, token, portal_monitor))
                     };
                     let cancelled = async {
                         let _ = stop_rx.recv_async().await;
                         bail!("Screen sharing was cancelled")
                     };
                     match futures_lite::future::race(request, cancelled).await {
-                        Ok((node, fd, rect, mapping_id, token)) => anyhow::Ok((proxy, session, node, fd, rect, mapping_id, token)),
+                        Ok((node, fd, rect, mapping_id, token, portal_monitor)) => anyhow::Ok((proxy, session, node, fd, rect, mapping_id, token, portal_monitor)),
                         Err(error) => {
                             let _ = session.close().await;
                             Err(error)
@@ -516,8 +600,8 @@ fn portal_screencast(window: bool, key: &str, stopping: &AtomicBool) -> Result<(
                     }
                 };
                 match run.await {
-                    Ok((_proxy, session, node, fd, rect, mapping_id, token)) => {
-                        let _ = ready_tx.send(Ok((node, fd, rect, mapping_id, token)));
+                    Ok((_proxy, session, node, fd, rect, mapping_id, token, portal_monitor)) => {
+                        let _ = ready_tx.send(Ok((node, fd, rect, mapping_id, token, portal_monitor)));
                         let _ = stop_rx.recv_async().await;
                         let _ = session.close().await;
                     }
@@ -529,7 +613,7 @@ fn portal_screencast(window: bool, key: &str, stopping: &AtomicBool) -> Result<(
         })?;
     // The first time the desktop asks which display, so wait for the person to choose.
     let deadline = std::time::Instant::now() + Duration::from_secs(120);
-    let (node, fd, rect, mapping_id, token) = loop {
+    let (node, fd, rect, mapping_id, token, portal_monitor) = loop {
         if stopping.load(Ordering::Acquire) || std::time::Instant::now() >= deadline {
             let _ = stop_tx.try_send(());
             bail!("Screen sharing was cancelled or the dialog wasn't answered");
@@ -549,6 +633,7 @@ fn portal_screencast(window: bool, key: &str, stopping: &AtomicBool) -> Result<(
         fd: Some(fd),
         rect,
         mapping_id,
+        portal_monitor,
         stop: Some(stop_tx),
     }, token))
 }

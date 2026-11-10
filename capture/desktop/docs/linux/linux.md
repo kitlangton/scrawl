@@ -98,7 +98,15 @@ On Ubuntu 24.04, KDE Plasma 5.27.12/KWin 5.27.11 returned only stream size and
 source type: choosing Virtual-2 while Apparent selected Virtual-1 previously
 saved Virtual-2's wallpaper with Virtual-1's bundle target. Equal dimensions
 could not identify the output. The single-output fallback is a safety limit,
-not multi-output parity. GNOME 46 direct Screen captures separately saved the
+not multi-output parity. For a single real, named output, an Area can also use
+an explicitly returned Monitor stream without position metadata: the native
+adapter requires unchanged topology and exact incoming output dimensions with
+square pixels before cropping. Unknown, mirrored, differently sized or
+renegotiated streams fail rather than recording the whole display. KDE Plasma
+5.27.12/KWin 5.27.11 on Ubuntu 24.04 passed physical Area Finish and Cancel with
+one 1280×800 output; all 465 frames of the saved 420×260 movie and bundle images
+matched the selected changing scene. This does not qualify scaled KDE Areas.
+GNOME 46 direct Screen captures separately saved the
 correct changing synthetic content from both 1280×800 outputs at 1×. A separate
 Ubuntu 24.04/GNOME Shell 46.0/libmutter 46.2 check on `521e5e3c4` used the native
 picker to select a 420×260 Area on the second output. Physical Finish saved
