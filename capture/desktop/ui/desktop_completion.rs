@@ -60,12 +60,14 @@ impl ApparentCoordinator {
         &mut self,
         finalized: CaptureResult,
         duration_ms: u64,
-        facts: Facts,
+        mut facts: Facts,
         cx: &mut Context<Self>,
     ) {
         let generation = self.capture_generation;
         if self.completion_pending == Some(generation) { return; }
         self.completion_pending = Some(generation);
+        facts.image_quality_warning = finalized.as_ref().ok()
+            .and_then(|(_, bundle, _)| bundle.image_quality_warning.clone());
         let capture = facts.capture.clone();
         let outcome = match &finalized {
             Ok((dir, _, _)) => Outcome::Saved { bundle_path: dir.clone() },
@@ -152,17 +154,10 @@ impl ApparentCoordinator {
             *status = None;
         }
         #[cfg(target_os = "linux")]
-        if let Ok(summary) = std::fs::read_to_string(dir.join("summary.md")) {
-            if summary.contains("Image quality: ") {
-                crate::capture::desktop::linux::shell::notify(
-                    "Capture used smaller keyframes",
-                    "Full-quality MP4 decoding failed. Open summary.md for details and Settings › Recording for decoder setup.",
-                );
+        if let Some(state) = state.as_ref() {
+            for notification in &state.notifications {
+                crate::capture::desktop::linux::shell::notify(&notification.title, &notification.body);
             }
-        }
-        #[cfg(target_os = "linux")]
-        if let Some(notification) = state.as_ref().and_then(|s| s.notification.as_ref()) {
-            crate::capture::desktop::linux::shell::notify(&notification.title, &notification.body);
         }
         self.completed_dir = Some(dir.clone());
         self.last_local_capture_ms = crate::shared::clock::now_epoch_ms();

@@ -28,6 +28,7 @@ pub(in crate::capture::desktop) struct Facts {
     pub lab: bool,
     pub hyprland: bool,
     pub wayland: bool,
+    pub image_quality_warning: Option<String>,
 }
 #[derive(Clone, Debug, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -49,7 +50,7 @@ pub(super) struct State {
     connected: bool,
     copy_pending: bool,
     pub status: Option<String>,
-    pub notification: Option<Notification>,
+    pub notifications: Vec<Notification>,
 }
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -151,7 +152,8 @@ impl Worker {
         ensure!(state.context == self.facts && observation.capture == self.facts.capture
             && observation.outcome == self.outcome && observation.current == state.current
             && state.connected && state.status.as_ref().is_some_and(|s| s.len() <= 256)
-            && state.notification.as_ref().is_none_or(|n| n.title.len() <= 256 && n.body.len() <= 16384)
+            && state.notifications.len() <= 2
+            && state.notifications.iter().all(|n| n.title.len() <= 256 && n.body.len() <= 16384)
             && decision.effects.len() <= 1, "Record completion identity mismatch");
         let expected = match self.receipt.as_deref() {
             Some("copied") => Clipboard::Copied,
@@ -219,20 +221,26 @@ mod tests {
             capture: Capture { generation: "9007199254740993".into(), capture_id: "synthetic-a".into(), request_id: Some("request-a".into()) },
             platform: if cfg!(target_os = "linux") { "linux" } else { "macos" }.into(),
             source: "screen".into(), agent_requested: false, automatic_trial_enabled: false, lab: false,
-            hyprland: false, wayland: false,
+            hyprland: false, wayland: false, image_quality_warning: None,
         }
     }
 
     #[test]
     #[ignore = "provider integration: requires built frontend and its locked Electron runtime"]
     fn record_completion_electron_rust_roundtrip() {
-        let facts = facts();
+        let mut facts = facts();
+        facts.image_quality_warning = Some("Some captured-ink stills have no settled post-stroke sample. Full stroke metadata is retained; inspect recording.mp4 for the recorded appearance.".into());
         for receipt in ["copied", "failed", "revoked"] {
             let outcome = Outcome::Saved { bundle_path: "/synthetic/exact-finalized.apparent".into() };
             let mut worker = Worker::open(facts.clone(), outcome.clone()).unwrap();
             let first = worker.read().unwrap();
             assert!(matches!(first.effects.as_slice(), [Effect::Copy { mode: CopyMode::Bundle, .. }]));
             assert_eq!(first.state.observation.unwrap().outcome, outcome);
+            if cfg!(target_os = "linux") {
+                assert_eq!(first.state.notifications.len(), 1);
+                assert_eq!(Some(&first.state.notifications[0].body), facts.image_quality_warning.as_ref());
+                assert!(!first.state.notifications[0].title.contains("decod"));
+            } else { assert!(first.state.notifications.is_empty()); }
             worker.acknowledge(receipt).unwrap();
             let final_state = worker.read().unwrap();
             assert!(final_state.effects.is_empty());

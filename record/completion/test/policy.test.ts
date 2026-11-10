@@ -25,6 +25,26 @@ test('clipboard failure retains the exact saved artifact and offers manual acces
   assert.deepEqual(state.observation?.outcome,saved.outcome);
   assert.equal(state.status,'Saved · open bundle (copy failed)');
 });
+test('saved image warnings preserve finalized facts without implying decoder or capture failure', () => {
+  const warning = 'Some captured-ink stills have no settled post-stroke sample. Full stroke metadata is retained; inspect recording.mp4 for the recorded appearance.';
+  const withWarning = {...context, imageQualityWarning: warning};
+  const decision = reduce(begin(withWarning,true),saved);
+  assert.equal(decision.state.status,'Saved');
+  assert.equal(decision.state.observation?.clipboard,'notRequested');
+  assert.deepEqual(decision.state.notifications,[{title:'Capture image quality warning',body:warning}]);
+  assert.deepEqual(decision.effects,[{type:'copy',capture,mode:'bundle'}]);
+  const copiedState = reduce(decision.state,copied).state;
+  assert.equal(copiedState.status,'Saved · copied');
+  assert.deepEqual(copiedState.notifications,decision.state.notifications);
+  const manual = reduce(reduce(begin({...withWarning,automaticTrialEnabled:true},true),saved).state,copied);
+  assert.deepEqual(manual.state.notifications[0],decision.state.notifications[0]);
+  assert.equal(manual.state.notifications[1]?.title,'Draft paste skipped');
+  for (const state of [begin(withWarning,false), begin({...withWarning,platform:'macos'},true),
+    reduce(begin(withWarning,true),{type:'disconnect'}).state]) {
+    assert.deepEqual(reduce(state,saved).state.notifications,[]);
+  }
+  assert.deepEqual(reduce(begin(withWarning,true),{type:'finalized',capture,outcome:{kind:'failed',message:'publication failed'}}).state.notifications,[]);
+});
 test('finalization failures never copy or become saved', () => {
   for(const message of ['publication failed','No screen frames were captured (privacy gate)']) {
     const decision = reduce(begin(context,true),{type:'finalized',capture,outcome:{kind:'failed',message}});

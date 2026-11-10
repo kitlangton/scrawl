@@ -28,6 +28,12 @@ It acknowledges `copied`, `failed` or `revoked`. Only an actual successful write
 can produce `copied`. The blocked automatic trial requests text only and remains
 manual; there is no paste/send capability in this protocol.
 
+The native adapter also supplies the saved bundle's immutable `imageQualityWarning`.
+Record preserves that exact warning in Linux completion notifications: an unsettled
+ink sample is not evidence that decoding failed. Quality and manual-handoff notices
+remain separate, with at most two bounded notices per completion. Desktop only
+executes those notices after its current-generation check.
+
 The result drives the existing native/installed Electron pill through
 `completed_note`. Its Inspect control retains the saved bundle after copy failure.
 The observations are `{capture:{generation,captureId,requestId}, outcome,

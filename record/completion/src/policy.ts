@@ -13,6 +13,7 @@ export type Context = Readonly<{
   lab: boolean;
   hyprland: boolean;
   wayland: boolean;
+  imageQualityWarning?: string | null;
 }>;
 export type State = Readonly<{
   context: Context;
@@ -21,7 +22,7 @@ export type State = Readonly<{
   connected: boolean;
   copyPending: boolean;
   status: string | null;
-  notification: Readonly<{title: string; body: string}> | null;
+  notifications: readonly Readonly<{title: string; body: string}>[];
 }>;
 export type Event =
   | {type: 'finalized'; capture: Capture; outcome: Outcome}
@@ -31,7 +32,7 @@ export type Effect = Readonly<{type: 'copy'; capture: Capture; mode: 'text' | 'b
 export type Decision = Readonly<{state: State; effects: readonly Effect[]}>;
 
 export function begin(context: Context, current: boolean): State {
-  return {context, observation: null, current, connected: true, copyPending: false, status: null, notification: null};
+  return {context, observation: null, current, connected: true, copyPending: false, status: null, notifications: []};
 }
 export function sameCapture(a: Capture, b: Capture): boolean {
   return a.generation === b.generation && a.captureId === b.captureId && a.requestId === b.requestId;
@@ -57,6 +58,9 @@ export function reduce(previous: State, event: Event): Decision {
       state = {...state, observation: {capture: state.context.capture, outcome: event.outcome,
         clipboard: 'notRequested', current: state.current},
         copyPending: saved && state.current && state.connected,
+        notifications: saved && state.current && state.connected && state.context.platform === 'linux'
+          && state.context.imageQualityWarning
+          ? [{title: 'Capture image quality warning', body: state.context.imageQualityWarning}] : [],
         status: event.outcome.kind === 'saved' ? 'Saved' : event.outcome.message.startsWith('No screen frames were captured')
           ? 'Capture failed — no screen frames' : 'Capture failed'};
       if (state.copyPending) effects.push({type: 'copy', capture: state.context.capture,
@@ -65,9 +69,9 @@ export function reduce(previous: State, event: Event): Decision {
       state = {...state, copyPending: false, observation: {...state.observation, clipboard: event.result},
         status: event.result === 'failed' ? 'Saved · open bundle (copy failed)'
           : manualTrial(state.context) ? 'Saved · paste manually' : 'Saved · copied',
-        notification: manualTrial(state.context) ? {title: 'Draft paste skipped', body: event.result === 'failed'
+        notifications: manualTrial(state.context) ? [...state.notifications, {title: 'Draft paste skipped', body: event.result === 'failed'
           ? 'Could not copy the handoff. Use the saved bundle from the paper tile.'
-          : `No verified attachment observer or stable draft identity; use the manual handoff. Press Ctrl+V for the text; attach contact-sheet.png from ${state.observation.outcome.bundlePath} if needed`} : null};
+          : `No verified attachment observer or stable draft identity; use the manual handoff. Press Ctrl+V for the text; attach contact-sheet.png from ${state.observation.outcome.bundlePath} if needed`}] : state.notifications};
     }
   }
   return {state, effects};

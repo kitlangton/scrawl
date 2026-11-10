@@ -3805,6 +3805,7 @@ impl ApparentCoordinator {
             source: completion_source.into(),
             agent_requested,
             automatic_trial_enabled: crate::shared::handoff::experiment("autoPasteDraft"),
+            image_quality_warning: None, // Filled from the finalizer's immutable result.
             lab: self.lab,
             #[cfg(target_os = "linux")]
             hyprland: crate::capture::desktop::linux::hyprland::running(),
