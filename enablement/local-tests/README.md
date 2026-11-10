@@ -23,6 +23,12 @@ Node options, custom script shells, workspace/global execution and script policy
 overrides use the original fresh npm command, including changes during the build.
 Runtime-loader and dependency-path overrides also use the original fresh command.
 
+Before root Rust verification, the hook runs `npm ci --no-audit --no-fund` and
+`npm run build` in `connect/client/typescript`. The Rust Connect shares tests
+consume that package's policy, and a fresh checkout does not contain its ignored
+`dist/` output. Both commands remain prerequisites: installation or build failure
+stops the hook before Cargo starts.
+
 Qualification also requires a clean checked-out exact HEAD, no hidden index
 flags and integration with the current `origin/main` checkpoint. The runner
 hashes the entire committed tree and actual source bytes, verifies every tracked

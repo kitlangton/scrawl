@@ -74,6 +74,12 @@ export function commands(selected: Owner[], base: string, head: string, platform
   if (selected.includes('capture') || selected.includes('engine')) {
     // Reuse the authoritative conservative Rust verifier, including TMPDIR and jobs.
     // For mixed inputs it broadens to root + staged Engine rather than omit tests.
+    // Root Connect tests execute the shares policy from this independently owned
+    // TypeScript package. Prepare its locked dependencies and generated module
+    // before Cargo; a fresh checkout has no ignored dist/ output to consume.
+    const connectTypescript = 'connect/client/typescript';
+    add(['npm', 'ci', '--no-audit', '--no-fund'], connectTypescript);
+    add(['npm', 'run', 'build'], connectTypescript);
     add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--run']);
   }
   // This real CLI suite needs the exact executable the preceding root check
