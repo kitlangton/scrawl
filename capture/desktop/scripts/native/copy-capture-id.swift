@@ -498,6 +498,20 @@ do {
     report["passed"] = true
     report["nativeProof"] = "Executed installed Rust GPUI on GitHub-hosted macOS; inspect PNG and JSON artifacts"
 } catch { failure = error; report["error"] = String(describing: error) }
+// Preserve a failure-time stack from this exact owned synthetic process before
+// stopping it. No memory dump, foreign process sampling, input or new time budget.
+// Leave room for the existing failure screenshot and cleanup; diagnostics never mask the
+// original failure and are skipped when the remaining budget cannot cover them.
+if failure != nil, let child = owned, child.isRunning, deadline.timeIntervalSinceNow > 11 {
+    let sample = output.appendingPathComponent("failure-owned-app.sample.txt")
+    do {
+        _ = try run("/usr/bin/sample", [String(child.processIdentifier), "1", "1", "-file", sample.path], cap: 4)
+        report["failureSample"] = ["pid": child.processIdentifier, "file": sample.lastPathComponent] as [String: Any]
+    } catch {
+        report["failureSample"] = ["pid": child.processIdentifier, "available": fm.fileExists(atPath: sample.path),
+            "status": "sampling unavailable; original failure preserved"] as [String: Any]
+    }
+}
 // Retain failure pixels when possible, without widening to another window/screen.
 if failure != nil && owned?.isRunning == true && deadline.timeIntervalSinceNow > 0 {
     _ = try? screenshot("failure-owned-window")
