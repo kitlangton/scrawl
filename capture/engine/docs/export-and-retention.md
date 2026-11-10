@@ -94,10 +94,16 @@ and are removed on ordinary success/failure; a killed parent can leave private s
 From this source checkout, explicitly run:
 
 ```sh
-python3 capture/agent/scripts/provision-narrator.py
+node capture/agent/scripts/provision-narrator.ts --check
+# A missing worker requires an explicit source build:
+node capture/agent/scripts/provision-narrator.ts --build-from-source
 ```
 
-Provisioning needs Python 3.10+, Rust 1.92+, a native linker and network access.
+Setup needs Node 22.18+ and Python 3.10+. Missing workers additionally need
+Rust 1.92+, a native linker and network access; current releases do not publish a
+standalone narrator executable. Existing workers are reused without Cargo.
+See the [narrator setup contract](../../agent/narrator/README.md) for readiness
+states, interrupted-download recovery and explicit rebuilds.
 The pinned worker uses embedded English G2P data, not espeak. It downloads assets once and
 builds a separate locked worker; root `Cargo.toml` and `Cargo.lock` are unchanged.
 The worker and assets live at `~/.local/share/apparent/narrator` on both platforms.
