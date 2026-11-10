@@ -76,6 +76,33 @@ test('native integration retains its consent, deadlines, persistence assertions 
  assert.match(source,/prepareStorageChange\(\{/);
  assert.match(source,/APPARENT_STORAGE_NATIVE_CI/);
  assert.match(source,/timeout: 120000/);assert.match(source,/Date\.now\(\) \+ 95000/);
- assert.match(source,/timeout: budget\(3500\)/);
  for(const contract of ['Saved location readback','Cancel changed config bytes','Cancel replaced config','Cancel rewrote config','Reset location readback'])assert.ok(source.includes(contract));
+});
+test('initial AX startup has a bounded allowance while controls and permission failures retain their limits',async()=>{
+ const source=readFileSync('capture/desktop/ui/frontend/tests/mac-storage-native.cjs','utf8');
+ const slice=(start:string,end:string)=>{
+  const from=source.indexOf(start),to=source.indexOf(end,from);
+  assert.ok(from>=0&&to>from,`Missing native fixture boundary: ${start}`);
+  return source.slice(from,to);
+ };
+ // Execute the shipped fixture's helpers and initial assertion with an inert
+ // subprocess boundary. This verifies budgets and refusal, not native macOS.
+ const create=new Function('run','Date','assert','env','deadline',
+  slice('  const budget =','  let home,')+slice('  const osa =','  const panel =')+
+  'return {osa,preflight:async()=>{'+slice('    assert.equal(await osa(', '    report.accessibilityPreflight =')+'}};');
+ let now=0,answer='true',failure:Error|undefined;
+ const calls:Array<{file:string;args:string[];options:{timeout:number;killSignal:string;maxBuffer:number}}>=[];
+ const driver=create(async(file:string,args:string[],options:typeof calls[number]['options'])=>{
+  calls.push({file,args,options});if(failure)throw failure;return {stdout:answer+'\n'};
+ },{now:()=>now},assert,{},95000);
+ await driver.osa('synthetic control');assert.equal(calls.at(-1)!.options.timeout,3500);
+ await driver.preflight();assert.equal(calls.at(-1)!.options.timeout,15000);
+ assert.deepEqual(calls.at(-1)!.args,['-e','tell application "System Events" to get UI elements enabled']);
+ now=94500;await driver.preflight();assert.equal(calls.at(-1)!.options.timeout,500);
+ now=95000;const before=calls.length;
+ await assert.rejects(driver.preflight(),/overall deadline exceeded/);assert.equal(calls.length,before);
+ now=0;answer='false';await assert.rejects(driver.preflight(),/preflight unavailable/);
+ failure=Error('synthetic unavailable System Events');
+ await assert.rejects(driver.preflight(),/synthetic unavailable System Events/);
+ for(const call of calls){assert.equal(call.file,'/usr/bin/osascript');assert.equal(call.options.killSignal,'SIGKILL');assert.equal(call.options.maxBuffer,32768);}
 });
