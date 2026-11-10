@@ -7,6 +7,31 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
 
+#[cfg(target_os = "linux")]
+impl ScreenCaptureSession {
+    /// Controlled producer for coordinator lifecycle tests; no native capture or output.
+    pub(crate) fn test_pending_start() -> (Self, Arc<AtomicBool>, Arc<AtomicBool>) {
+        let stopping = Arc::new(AtomicBool::new(false));
+        let worker_stopping = Arc::clone(&stopping);
+        let failed = Arc::new(AtomicBool::new(false));
+        let seen = Arc::new(AtomicBool::new(false));
+        let worker = thread::spawn(move || {
+            while !worker_stopping.load(Ordering::Acquire) {
+                thread::park_timeout(Duration::from_millis(5));
+            }
+            None
+        });
+        (Self {
+            started_at: Instant::now(), stopping,
+            urgent_snapshot: Arc::new(AtomicBool::new(false)),
+            frames: Arc::new(Mutex::new(CandidateBuffer::new(1 << 20))),
+            real_frame_seen: Arc::clone(&seen), startup_failed: Arc::clone(&failed),
+            video_offset_ms: Arc::new(AtomicU64::new(0)), sampler_thread: Some(worker),
+            _recording: crate::capture::engine::bundle::retention::Recording::start(),
+        }, failed, seen)
+    }
+}
+
 #[cfg(any(target_os = "macos", test))]
 use crate::capture::engine::runtime::sample_real_candidate;
 

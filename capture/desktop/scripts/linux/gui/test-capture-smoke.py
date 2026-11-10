@@ -73,6 +73,15 @@ print(json.dumps(reply))
 
 
 class SyntheticRecipe(smoke.Recipe):
+    def prepare(self):
+        # The synthetic guest has an explicit process snapshot. Restore the real
+        # host census before transport execution and owned-process cleanup.
+        iterdir = Path.iterdir
+        def guest_entries(path):
+            return iter(self.guest_processes) if path == Path('/proc') else iterdir(path)
+        with patch.object(Path, 'iterdir', guest_entries):
+            return super().prepare()
+
     def launch(self, argv, log):
         if '--scene' in argv:
             # Only the scene producer is replaced. CLI calls use actual subprocesses,
@@ -191,7 +200,7 @@ class CleanupTests(unittest.TestCase):
 
 
 class TransportTests(unittest.TestCase):
-    def exercise(self, fail=False, pending=False, no_decoder=False):
+    def exercise(self, fail=False, pending=False, no_decoder=False, existing_process=False):
         # Keep paths short, as required by the real Unix control socket contract.
         with tempfile.TemporaryDirectory(prefix='cs-', dir=os.environ.get('TMPDIR')) as directory:
             root = Path(directory)
@@ -207,6 +216,9 @@ class TransportTests(unittest.TestCase):
             systemctl = tools / 'systemctl'
             authority = runtime / 'xauthority'
             authority.write_text('synthetic session authority')
+            guest_process = root / '123'
+            guest_process.mkdir()
+            (guest_process / 'comm').write_text('apparent\n')
             systemctl.write_text('#!/bin/sh\nprintf "DISPLAY=:synthetic\\nXDG_RUNTIME_DIR=' + str(runtime) +
                                  '\\nXAUTHORITY=' + str(authority) + '\\n"\n')
             systemctl.chmod(0o700)
@@ -225,8 +237,13 @@ class TransportTests(unittest.TestCase):
                 env['PEER_NO_DECODER'] = '1'
             with patch.dict(os.environ, env, clear=True):
                 recipe = SyntheticRecipe(out, binary, 1)
+                recipe.guest_processes = [guest_process] if existing_process else []
+                cleanup_census = Path.iterdir
                 try:
-                    if no_decoder:
+                    if existing_process:
+                        with self.assertRaisesRegex(smoke.Failure, 'existing product process'):
+                            recipe.run()
+                    elif no_decoder:
                         with self.assertRaisesRegex(smoke.Failure, 'H.264 decoder'):
                             recipe.run()
                     elif pending:
@@ -238,10 +255,19 @@ class TransportTests(unittest.TestCase):
                     else:
                         recipe.run()
                 finally:
-                    recipe.cleanup()
+                    try:
+                        self.assertIs(Path.iterdir, cleanup_census, 'prepare must restore the real cleanup census')
+                    finally:
+                        recipe.cleanup()
             self.assertEqual(recipe.env['XAUTHORITY'], str(authority))
             report = json.loads((out / 'capture-smoke-report.json').read_text())
             self.assertEqual(report['gates']['owned_process_cleanup'], 'PASS', report)
+            if existing_process:
+                self.assertEqual(report['requests'], [])
+                self.assertFalse((out / 'scene.json').exists())
+                self.assertEqual(report['gates']['gui_ready'], 'UNRUN')
+                self.assertEqual(report['gates']['h264_decoder'], 'UNRUN')
+                return
             self.assertFalse((out / '.config/apparent/agent-control/capture.sock').exists())
             self.assertFalse((out / '.config/apparent/launch/open.sock').exists())
             self.assertEqual(report['gates']['selected_target_pixels'], 'UNRUN')
@@ -279,6 +305,9 @@ class TransportTests(unittest.TestCase):
 
     def test_whole_recipe_with_real_harmless_transport(self):
         self.exercise()
+
+    def test_existing_guest_product_stops_before_decoder_scene_or_capture(self):
+        self.exercise(existing_process=True)
 
     def test_missing_decoder_stops_before_scene_gui_or_capture(self):
         self.exercise(no_decoder=True)
