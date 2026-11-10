@@ -5,12 +5,14 @@ const path = require('node:path');
 
 const phases = new Set(['idle', 'selecting', 'starting', 'recording', 'processing', 'completed']);
 const reportingCodes = new Set(['invalid_request', 'config_read_failed', 'config_write_failed', 'app_busy', 'admission_expired']);
-const failure = { status: 'error', message: 'The Rust app did not return a valid state. Retry when it is responsive.' };
+// Only bounded classifications cross IPC; never return native payloads/errors or paths.
+const runtimeFailure = (code) => ({ status: 'error', code,
+  message: `The local app state read failed (${code}). Refresh when the app is responsive.` });
 const codes = new Set(['invalid_request', 'invalid_path', 'conflict', 'admission_expired', 'config_write_failed',
   'config_read_failed', 'app_busy', 'app_unresponsive', 'feature_disabled', 'usage_unavailable']);
 const text = (value) => typeof value === 'string' && Buffer.byteLength(value) <= 4096 && !value.includes('\0');
 
-async function exchange(home, request, decode, maxBytes, timeoutMs, timeoutResult) {
+async function exchange(home, request, decode, maxBytes, timeoutMs, timeoutResult, failed = () => decode(null)) {
   let socket;
   let timer;
   let expired = false;
@@ -25,7 +27,7 @@ async function exchange(home, request, decode, maxBytes, timeoutMs, timeoutResul
       const dir = await lstat(directory);
       const entry = await lstat(address);
       if (!dir.isDirectory() || dir.uid !== owner || (dir.mode & 0o077) !== 0 ||
-          !entry.isSocket() || entry.uid !== owner || (entry.mode & 0o777) !== 0o600) return decode(null);
+          !entry.isSocket() || entry.uid !== owner || (entry.mode & 0o777) !== 0o600) return failed('unsafe_endpoint');
       if (expired) return timeoutResult;
       return await new Promise((resolve) => {
         const chunks = [];
@@ -35,22 +37,22 @@ async function exchange(home, request, decode, maxBytes, timeoutMs, timeoutResul
         socket.once('connect', () => socket.write(request));
         socket.on('data', (chunk) => {
           length += chunk.length;
-          if (length > maxBytes) return finish(decode(null));
+          if (length > maxBytes) return finish(failed('response_too_large'));
           chunks.push(chunk);
           const reply = Buffer.concat(chunks);
           const newline = reply.indexOf(10);
           if (newline < 0) return;
-          if (newline !== reply.length - 1) return finish(decode(null));
+          if (newline !== reply.length - 1) return finish(failed('invalid_frame'));
           try { finish(decode(JSON.parse(reply.subarray(0, newline).toString('utf8')))); }
-          catch { finish(decode(null)); }
+          catch { finish(failed('invalid_json')); }
         });
         socket.once('error', (error) => finish(
-          ['ENOENT', 'ECONNREFUSED'].includes(error.code) ? { status: 'disconnected' } : decode(null),
+          ['ENOENT', 'ECONNREFUSED'].includes(error.code) ? { status: 'disconnected' } : failed('transport_error'),
         ));
-        socket.once('end', () => finish(decode(null)));
+        socket.once('end', () => finish(failed('incomplete_response')));
       });
     } catch (error) {
-      return error.code === 'ENOENT' ? { status: 'disconnected' } : decode(null);
+      return error.code === 'ENOENT' ? { status: 'disconnected' } : failed('transport_error');
     }
   };
   try { return await Promise.race([read(), deadline]); }
@@ -59,7 +61,10 @@ async function exchange(home, request, decode, maxBytes, timeoutMs, timeoutResul
 
 function readRuntimeState(home, timeoutMs = 3500) {
   return exchange(home, 'state\n', (value) => !value?.error && phases.has(value?.state?.phase)
-    ? { status: 'connected', phase: value.state.phase } : failure, 4096, timeoutMs, failure);
+    ? { status: 'connected', phase: value.state.phase }
+    : runtimeFailure(['app_busy', 'app_unresponsive', 'invalid_request'].includes(value?.error)
+      ? value.error : 'invalid_response'),
+  4096, timeoutMs, runtimeFailure('request_timeout'), runtimeFailure);
 }
 
 function decodeStorage(value) {

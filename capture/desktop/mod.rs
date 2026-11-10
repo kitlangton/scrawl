@@ -3449,6 +3449,12 @@ impl ApparentCoordinator {
             }
             ov
         });
+        #[cfg(target_os = "linux")]
+        self.telemetry.set_native_note_window(
+            if linux::wayland_session() && linux::hyprland::ink_fade_available() {
+                metal_overlay.as_ref().map(|overlay| overlay.window_number())
+            } else { None }
+        );
         start_metric("metal_open_ms", stage);
         let stage = Instant::now();
         self.publish_capture_busy();
