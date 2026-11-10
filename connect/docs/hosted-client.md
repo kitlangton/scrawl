@@ -69,6 +69,24 @@ when those callers migrate to supported package composition; the `cloud` CLI
 alias remains an external compatibility contract. Clipboard, feedback exclusion,
 current-request cancellation and local fallback remain application policy.
 
+`apparent connect shares list` now delegates pagination, UTF-8 cursor encoding,
+share schema/ID/URL validation and final JSON assembly to the compiled
+`typescript/dist/shares.js` policy through a bounded private stdio protocol. The
+assembled CLI result is capped at 64 MiB; each authenticated page remains capped
+at 2 MiB. Rust
+still selects the read-then-upload credential and performs the fixed authenticated
+page requests, token renewal and 30-second request timeout; it receives only
+allowlisted `page` operations and returns response bodies over the private pipe.
+The installed Electron run-as-Node runtime is resolved from the existing Settings
+runtime. Its package must also stage `connect-client/dist/shares.js` beside that
+runtime (`Resources/connect-client` on macOS, `usr/share/apparent/connect-client`
+on Linux); the current Settings staging script does not yet copy this owner module.
+Until that narrow packaging handoff lands, an installed CLI without the module
+fails closed instead of using the retired Rust listing loop. No credential,
+capability URL or response body is placed in arguments, environment variables or
+logs. The root CLI and owner package remain Rust-dependent overall; this slice
+does not claim Connect client independence.
+
 Provider cloud/experiment reads are fresh at every check, including after client
 construction and at prepared-link delivery. Root experiment reads retain
 `handoff::experiment` overrides and test semantics. Cloud/experiment writes call

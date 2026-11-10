@@ -40,6 +40,11 @@ fn hosted_connect_disabled_upload_suggests_canonical_login() {
     test_support::hosted_connect_disabled_upload_suggests_canonical_login();
 }
 #[test]
+fn hosted_shares_denial_is_sanitized() {
+    setup();
+    test_support::hosted_shares_denial_is_sanitized();
+}
+#[test]
 fn hosted_config_setting_snapshot_cannot_restore_consent() {
     setup();
     test_support::hosted_config_setting_snapshot_cannot_restore_consent();

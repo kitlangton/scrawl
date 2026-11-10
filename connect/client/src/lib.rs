@@ -2,7 +2,7 @@
 //! Secrets go only through curl's stdin config, never argv or diagnostic output.
 use std::collections::BTreeSet;
 use std::fs::{self, File, OpenOptions};
-use std::io::{Read, Write};
+use std::io::{BufRead, Read, Write};
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt};
 use std::path::{Path, PathBuf};
@@ -213,6 +213,167 @@ fn validate_share_url(server: &str, url: &str) -> Result<()> {
         "Invalid share URL"
     );
     Ok(())
+}
+
+fn canonical_query(query: &str) -> bool {
+    if query.is_empty() || query.len() > 12_288 {
+        return false;
+    }
+    let bytes = query.as_bytes();
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index] == b'%' {
+            if index + 2 >= bytes.len()
+                || !bytes[index + 1].is_ascii_hexdigit()
+                || !bytes[index + 2].is_ascii_hexdigit()
+                || bytes[index + 1].is_ascii_lowercase()
+                || bytes[index + 2].is_ascii_lowercase()
+            {
+                return false;
+            }
+            index += 3;
+        } else if bytes[index].is_ascii_alphanumeric() || b"-._~".contains(&bytes[index]) {
+            index += 1;
+        } else {
+            return false;
+        }
+    }
+    true
+}
+
+fn safe_shares_error(message: &str) -> &'static str {
+    if message.starts_with("auth_required:") {
+        return "auth_required";
+    }
+    if message.starts_with("Hosted API temporarily unavailable") {
+        return "temporarily_unavailable";
+    }
+    if message.starts_with("Hosted transport failed") {
+        return "transport_failed";
+    }
+    if message.starts_with("Hosted response exceeds limit") {
+        return "response_limit";
+    }
+    if message.starts_with("Invalid hosted JSON response") {
+        return "invalid_json";
+    }
+    for code in [
+        "file_too_large", "manifest_conflict", "beta_required", "slow_down",
+        "quota_exceeded", "unauthorized", "forbidden", "expired", "rejected",
+        "not_found", "conflict", "authorization_pending", "device_expired",
+        "device_rejected", "reauthorization_required",
+    ] {
+        if message.contains(code) {
+            return code;
+        }
+    }
+    "request_failed"
+}
+
+fn safe_shares_policy_message(message: &str) -> bool {
+    matches!(
+        message,
+        "Invalid shares response"
+            | "Invalid share response"
+            | "Invalid shares cursor"
+            | "Invalid share identity"
+            | "Inactive share exposed a URL"
+            | "Invalid share URL"
+            | "Repeated shares cursor"
+            | "Shares list exceeds the 64 MiB output limit"
+            | "Invalid shares transport response"
+            | "Shares transport closed"
+            | "Hosted API temporarily unavailable; retry later"
+            | "Hosted transport failed (network, timeout or response limit)"
+            | "Hosted response exceeds limit"
+            | "Invalid hosted JSON response"
+            | "Hosted API request failed"
+            | "auth_required: approve this device again with apparent connect login"
+    ) || message == "Hosted API: file_too_large"
+        || message == "Hosted API: manifest_conflict"
+        || message == "Hosted API: beta_required"
+        || message == "Hosted API: slow_down"
+        || message == "Hosted API: quota_exceeded"
+        || message == "Hosted API: unauthorized"
+        || message == "Hosted API: forbidden"
+        || message == "Hosted API: expired"
+        || message == "Hosted API: rejected"
+        || message == "Hosted API: not_found"
+        || message == "Hosted API: conflict"
+        || message == "Hosted API: authorization_pending"
+        || message == "Hosted API: device_expired"
+        || message == "Hosted API: device_rejected"
+        || message == "Hosted API: reauthorization_required"
+}
+
+fn shares_typescript_runtime() -> Result<(PathBuf, PathBuf, bool)> {
+    let installed = std::env::current_exe()?
+        .parent()
+        .context("Missing application directory")?
+        .to_path_buf();
+    #[cfg(target_os = "macos")]
+    let (runtime, module) = (
+        installed.join("../Resources/settings/runtime/Electron.app/Contents/MacOS/Electron"),
+        installed.join("../Resources/connect-client/dist/shares.js"),
+    );
+    #[cfg(target_os = "linux")]
+    let (runtime, module) = (
+        installed.join("../share/apparent/settings/runtime/electron"),
+        installed.join("../share/apparent/connect-client/dist/shares.js"),
+    );
+    if runtime.is_file() {
+        ensure!(
+            module.is_file(),
+            "Packaged Connect shares TypeScript module is missing"
+        );
+        return Ok((runtime, module, true));
+    }
+    let development = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("typescript");
+    #[cfg(not(test))]
+    let module = development.join("dist/shares.js");
+    #[cfg(test)]
+    let module = if development.join("dist/shares.js").is_file() {
+        development.join("dist/shares.js")
+    } else {
+        development.join("src/shares.ts")
+    };
+    #[cfg(target_os = "macos")]
+    let runtime = development.join("../../../capture/desktop/ui/frontend/node_modules/electron/dist/Electron.app/Contents/MacOS/Electron");
+    #[cfg(target_os = "linux")]
+    let runtime = development.join("../../../capture/desktop/ui/frontend/node_modules/electron/dist/electron");
+    if runtime.is_file() && module.is_file() {
+        return Ok((runtime, module, true));
+    }
+    ensure!(
+        module.is_file(),
+        "Connect shares TypeScript package is missing; build/stage the Connect client"
+    );
+    let node = std::env::split_paths(&std::env::var_os("PATH").unwrap_or_default())
+        .map(|path| path.join("node"))
+        .find(|path| path.is_file())
+        .context("Electron Node runtime or supported Node.js runtime is missing")?;
+    Ok((node, module, false))
+}
+
+struct SharesPolicyChild(std::process::Child);
+impl std::ops::Deref for SharesPolicyChild {
+    type Target = std::process::Child;
+    fn deref(&self) -> &Self::Target {
+        &self.0
+    }
+}
+impl std::ops::DerefMut for SharesPolicyChild {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.0
+    }
+}
+impl Drop for SharesPolicyChild {
+    fn drop(&mut self) {
+        if self.0.try_wait().ok().flatten().is_none() {
+            let _ = self.0.kill();
+            let _ = self.0.wait();
+        }
+    }
 }
 
 // Exact allowlist: unknown files are not uploaded, and are rejected on download.
@@ -580,64 +741,108 @@ impl Client {
         let credential = self
             .credential("read", &server)
             .or_else(|_| self.credential("upload", &server))?;
-        self.shares_with(&server, &credential)
+        self.shares_with_typescript(&server, &credential)
     }
-    fn shares_with(&self, server: &str, credential: &Credential) -> Result<Value> {
-        let mut all = Vec::new();
-        let mut cursors = BTreeSet::new();
-        let mut route = "/v1/shares".to_owned();
+    fn shares_with_typescript(&self, server: &str, credential: &Credential) -> Result<Value> {
+        let (runtime, module, electron_runtime) = shares_typescript_runtime()?;
+        let mut command = Command::new(runtime);
+        if electron_runtime {
+            command.env("ELECTRON_RUN_AS_NODE", "1");
+        } else if module.extension().is_some_and(|extension| extension == "ts") {
+            command.arg("--experimental-strip-types");
+        }
+        let mut child = SharesPolicyChild(
+            command
+                .arg(module)
+                .arg(server)
+                .stdin(Stdio::piped())
+                .stdout(Stdio::piped())
+                .stderr(Stdio::null())
+                .spawn()
+                .context("Could not start Connect shares policy runtime")?,
+        );
+        let mut input = child.stdin.take().context("Missing shares policy input")?;
+        let output = child.stdout.take().context("Missing shares policy output")?;
+        let mut output = std::io::BufReader::new(output);
         loop {
-            let reply = self.json_request(
-                server,
-                Some(credential),
-                "GET",
-                &route,
-                None,
-                Duration::from_secs(30),
-                &|| true,
-            )?;
-            let shares = reply["shares"]
-                .as_array()
-                .context("Invalid shares response")?;
-            for share in shares {
-                ensure!(
-                    share["id"].as_str().is_some_and(valid_id)
-                        && share["captureId"].as_str().is_some_and(valid_id),
-                    "Invalid share identity"
-                );
-                if matches!(
-                    share["status"].as_str(),
-                    Some("revoked" | "expired" | "deleted")
-                ) {
-                    ensure!(share["url"].is_null(), "Inactive share exposed a URL");
-                } else {
-                    validate_share_url(
+            let mut line = String::new();
+            ensure!(
+                output.read_line(&mut line)? > 0,
+                "Shares policy exited without a result"
+            );
+            ensure!(
+                line.len() <= 64 * 1024 * 1024 + 1024,
+                "Oversized shares policy frame"
+            );
+            let request: Value = serde_json::from_str(&line)
+                .with_context(|| format!("Invalid shares policy JSON ({} bytes)", line.len()))?;
+            match request["operation"].as_str() {
+                Some("complete") => {
+                    ensure!(
+                        request.as_object().is_some_and(|o| o.len() == 2)
+                            && request.get("result").is_some(),
+                        "Invalid shares policy result"
+                    );
+                    drop(input);
+                    let status = child.wait()?;
+                    ensure!(status.success(), "Shares policy failed");
+                    return Ok(request["result"].clone());
+                }
+                Some("error") => {
+                    let message = request["error"]
+                        .as_str()
+                        .context("Invalid shares policy error")?;
+                    ensure!(
+                        request.as_object().is_some_and(|o| o.len() == 2)
+                            && safe_shares_policy_message(message),
+                        "Invalid shares policy error"
+                    );
+                    drop(input);
+                    let status = child.wait()?;
+                    ensure!(
+                        !status.success(),
+                        "Shares policy error frame exited successfully"
+                    );
+                    bail!("{message}");
+                }
+                Some("page") => {
+                    ensure!(line.len() <= 16_384, "Oversized shares page request");
+                    ensure!(
+                        request.as_object().is_some_and(|o| o.len() == 3)
+                            && request.get("before").is_some()
+                            && request.get("query").is_some(),
+                        "Invalid shares policy frame"
+                    );
+                    let route = match (&request["before"], &request["query"]) {
+                        (Value::Null, Value::Null) => "/v1/shares".to_owned(),
+                        (Value::String(cursor), Value::String(query))
+                            if !cursor.is_empty()
+                                && cursor.len() <= 4096
+                                && canonical_query(query) =>
+                        {
+                            format!("/v1/shares?before={query}")
+                        }
+                        _ => bail!("Invalid shares cursor request"),
+                    };
+                    let reply = self.json_request(
                         server,
-                        share["url"].as_str().context("Missing share URL")?,
-                    )?;
+                        Some(credential),
+                        "GET",
+                        &route,
+                        None,
+                        Duration::from_secs(30),
+                        &|| true,
+                    );
+                    let response = match reply {
+                        Ok(body) => json!({"ok":true,"body":body}),
+                        Err(error) => json!({"ok":false,"error":safe_shares_error(&error.to_string())}),
+                    };
+                    writeln!(input, "{}", response)?;
+                    input.flush()?;
                 }
-                all.push(share.clone());
-            }
-            match reply.get("nextCursor") {
-                Some(Value::Null) => break,
-                Some(Value::String(cursor)) if !cursor.is_empty() && cursor.len() <= 4096 => {
-                    ensure!(cursors.insert(cursor.clone()), "Repeated shares cursor");
-                    let encoded: String = cursor
-                        .bytes()
-                        .map(|byte| {
-                            if byte.is_ascii_alphanumeric() || b"-._~".contains(&byte) {
-                                (byte as char).to_string()
-                            } else {
-                                format!("%{byte:02X}")
-                            }
-                        })
-                        .collect();
-                    route = format!("/v1/shares?before={encoded}");
-                }
-                _ => bail!("Invalid shares cursor"),
+                _ => bail!("Invalid shares policy operation"),
             }
         }
-        Ok(json!({"shares":all,"nextCursor":null}))
     }
     pub fn revoke_share(&self, id: &str) -> Result<()> {
         ensure!(
@@ -656,7 +861,7 @@ impl Client {
             &|| true,
         )?;
         ensure!(reply["ok"] == true, "Share revocation failed");
-        let remaining = self.shares_with(&server, &credential)?;
+        let remaining = self.shares_with_typescript(&server, &credential)?;
         ensure!(
             !remaining["shares"]
                 .as_array()
