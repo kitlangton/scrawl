@@ -164,9 +164,6 @@ jobs:
         with:
           key: release-linux-${{ matrix.arch }}
           cache-on-failure: true
-      - uses: actions/setup-node@v4
-        with:
-          node-version: '22'
       - name: Register PostHog desktop release
         timeout-minutes: 3
         env:
