@@ -42,18 +42,13 @@ declare global {
   }
 }
 
-import type { LocationSnapshot } from './storage/location-contract';
-export type { LocationSnapshot, NativeLocationFacts } from './storage/location-contract';
+import type {CaptureLocation, RetentionPolicy, NativeRetentionResult, UsageResult} from '@apparent/record-storage';
+export type {CaptureLocation, LocationSnapshot, NativeLocationFacts, RetentionPreset, RetentionPolicy, RetentionView, RetentionResult, NativeRetentionResult, UsageResult} from '@apparent/record-storage';
 
 export type CaptureReference =
   | { status: 'connected'; id: string | null; copied: boolean }
   | { status: 'disabled' | 'disconnected' | 'incompatible' | 'cancelled' }
   | { status: 'error'; code: string };
-export type CaptureLocation =
-  | { status: 'connected'; storage: LocationSnapshot }
-  | { status: 'disabled' | 'disconnected' | 'incompatible' | 'cancelled' }
-  | { status: 'error'; code: string };
-
 export type ErrorReporting = { status: 'connected'; enabled: boolean } |
   { status: 'disconnected' | 'incompatible' } | { status: 'error'; code: string };
 export type ConnectAction = 'connect' | 'allow' | 'cancel' | 'check' | 'disable' | 'disconnect' | 'open-browser' | 'request-disable' | 'request-disconnect' | 'open-shared-links';
@@ -70,16 +65,4 @@ export type ConnectSettings =
   | { status: 'connected'; view: ConnectView }
   | { status: 'disabled' | 'disconnected' | 'cancelled' }
   | { status: 'error' };
-type Unavailable = Exclude<CaptureLocation, { status: 'connected' }>;
-export type RetentionPreset = 'week' | 'month' | 'forever';
-export type RetentionPolicy = { mediaDays: number | null; bundleDays: number | null };
-export type RetentionView = { preset: RetentionPreset | null;
-  options: { id: RetentionPreset; label: string }[]; note: string };
-export type RetentionResult = Unavailable | { status: 'connected'; custom: boolean;
-  retention: RetentionView };
-export type NativeRetentionResult = Unavailable | { status: 'connected'; custom: boolean;
-  policy: { mediaDays: { present: boolean; value: number | null }; bundleDays: { present: boolean; value: number | null } } };
-export type UsageResult = Unavailable | { status: 'connected';
-  usage: { effectivePath: string; displayPath: string; formatted: string } };
-
 export type PublicShareResult = { status:'connected'; state:'preparing'|'prepared'|'copied'|'failed'|'cancelled'|'expired' } | {status:'error';code:string} | {status:'cancelled'};

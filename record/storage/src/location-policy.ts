@@ -1,4 +1,4 @@
-import type { LocationSnapshot, NativeLocationFacts } from './location-contract';
+import type { LocationSnapshot, NativeLocationFacts } from './location-contract.js';
 
 export type LocationCandidate = {
   revision: string;

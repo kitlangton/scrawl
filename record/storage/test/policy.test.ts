@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import {
   isLocationSnapshot, isRetentionPolicy, isStoredRetention, retentionForPreset, retentionView,
-} from '../../src/storage/policy.ts';
+} from '../dist/index.js';
 
 test('retention defaults, choices and month policy are owned by TypeScript', () => {
   const defaults = retentionView({
