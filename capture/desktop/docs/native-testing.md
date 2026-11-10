@@ -185,8 +185,12 @@ test account's `gnome-shell`, X11 session type, DISPLAY/runtime environment and
 GNOME identity. It does not require WAYLAND_DISPLAY or change the guest session.
 The released GNOME image below is Wayland; this selector does not convert it or
 qualify X11 capture. Prepared inputs bind the exact desktop/backend selection.
-With `gnome-x11 --outputs 2`, the runner requests two heads on one VirtIO GPU;
-other backends keep the separate-GPU arrangement. Check actual connected and
+With `gnome-x11 --outputs 2`, the runner requests two heads on one VirtIO GPU
+and sends one bounded head-1 UIInfo through QEMU’s private peer D-Bus display
+interface. This profile requires host Python GI (Gio/GLib), checked before
+allocation; it does not use the host session bus or change the guest session.
+Initialization shares the original boot deadline. Other backends keep the
+separate-GPU arrangement. Check actual connected and
 active outputs in XRandR/GDK before treating the request as two-output proof.
 Earlier qualification on GNOME 46/Xorg 21.1.12 verified a local active X11
 session and GdkX11Display without executing Apparent. It exposed only one

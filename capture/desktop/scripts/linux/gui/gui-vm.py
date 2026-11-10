@@ -6,6 +6,7 @@ network forwarding, VNC/QMP sockets, SSH host key cache, and artifact directory.
 """
 
 import argparse
+import array
 import contextlib
 import fcntl
 import json
@@ -20,6 +21,7 @@ import socket
 import subprocess
 import sys
 import time
+import threading
 import uuid
 
 
@@ -250,7 +252,7 @@ def qemu_command(overlay, vars_copy, directory, port, memory, isolated_network=F
         "-drive", "if=pflash,format=raw,readonly=on,file=/usr/share/OVMF/OVMF_CODE_4M.fd",
         "-drive", "if=pflash,format=raw,file=" + str(vars_copy),
         "-drive", "if=virtio,format=qcow2,file=" + str(overlay) + ",cache=none",
-        "-boot", "order=c", "-device", primary, "-display", "none",
+        "-boot", "order=c", "-device", primary, "-display", "dbus,p2p=yes" if x11_heads else "none",
         "-vnc", "unix:" + str(directory / "vnc.sock"),
         "-device", "qemu-xhci", "-device", "usb-tablet", "-device", "usb-kbd",
         "-netdev", f"user,id=net0,hostfwd=tcp:127.0.0.1:{port}-:22" + (",restrict=on" if isolated_network else ""),
@@ -315,6 +317,97 @@ def desktop_probe(desktop):
             'printf "%s\\n" "$desktop_env" | grep -q "^XDG_RUNTIME_DIR=/." && '
             f'printf "%s\\n" "$desktop_env" | grep -qx "XDG_SESSION_TYPE={session}" && '
             f'printf "%s\\n" "$desktop_env" | grep -Eq "^XDG_CURRENT_DESKTOP=([^:]+:)*{identity}(:[^:]+)*$"')
+
+
+def x11_display_support():
+    # Optional native transport dependency; old profiles do not import GI.
+    from gi.repository import Gio, GLib
+    return Gio, GLib
+
+
+def activate_x11_head(directory, process, deadline):
+    """One UIInfo for head 1 over a private peer FD, never the host session bus."""
+    Gio, GLib = x11_display_support()
+
+    def remaining():
+        value = deadline - time.monotonic()
+        if value <= 0:
+            raise TimeoutError('X11 second-head initialization exceeded boot deadline')
+        return value
+
+    with socket.socket(socket.AF_UNIX, socket.SOCK_STREAM) as qmp:
+        while True:
+            if process.poll() is not None:
+                raise RuntimeError('guest exited before X11 head initialization')
+            qmp.settimeout(remaining())
+            try:
+                qmp.connect(str(directory / 'qmp.sock'))
+                break
+            except (FileNotFoundError, ConnectionRefusedError):
+                time.sleep(min(.05, remaining()))
+        with qmp.makefile('rb') as incoming:
+            pending = bytearray()
+            def receive():
+                while b'\n' not in pending:
+                    qmp.settimeout(remaining())
+                    chunk = incoming.read1(4096)
+                    if not chunk or len(pending) + len(chunk) > 65536:
+                        raise RuntimeError('invalid bounded QMP response')
+                    pending.extend(chunk)
+                line, _, rest = pending.partition(b'\n')
+                pending[:] = rest
+                return json.loads(line)
+
+            if 'QMP' not in receive():
+                raise RuntimeError('missing QMP greeting')
+
+            def command(name, arguments=None, fd=None):
+                payload = (json.dumps({'execute': name, 'arguments': arguments or {}, 'id': name}) + '\n').encode()
+                qmp.settimeout(remaining())
+                if fd is None:
+                    qmp.sendall(payload)
+                else:
+                    sent = qmp.sendmsg([payload], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array('i', [fd]))])
+                    qmp.sendall(payload[sent:])
+                while True:
+                    response = receive()
+                    if response.get('id') == name:
+                        if 'error' in response or 'return' not in response:
+                            raise RuntimeError(f'QMP {name} rejected: {response}')
+                        return
+                    if 'event' not in response:
+                        raise RuntimeError('unexpected QMP response identity')
+
+            command('qmp_capabilities')
+            local, remote = socket.socketpair()
+            with local, remote:
+                command('getfd', {'fdname': 'x11-head'}, remote.fileno())
+                command('add_client', {'protocol': '@dbus-display', 'fdname': 'x11-head'})
+                remote.close()  # add_client consumes QEMU's getfd; keep no duplicate peer
+                stream = Gio.Socket.new_from_fd(os.dup(local.fileno())).connection_factory_create_connection()
+                cancellable = Gio.Cancellable()
+                timer = threading.Timer(remaining(), cancellable.cancel)
+                connection = None
+                timer.start()
+                try:
+                    connection = Gio.DBusConnection.new_sync(stream, None,
+                        Gio.DBusConnectionFlags.AUTHENTICATION_CLIENT, None, cancellable)
+                    def call(interface, method, parameters):
+                        return connection.call_sync(None, '/org/qemu/Display1/Console_1', interface,
+                            method, parameters, None, Gio.DBusCallFlags.NONE,
+                            max(1, int(remaining() * 1000)), cancellable)
+                    head = call('org.freedesktop.DBus.Properties', 'Get',
+                        GLib.Variant('(ss)', ('org.qemu.Display1.Console', 'Head'))).unpack()[0]
+                    if head != 1:
+                        raise RuntimeError(f'refusing UIInfo for unexpected QEMU head {head}')
+                    call('org.qemu.Display1.Console', 'SetUIInfo',
+                        GLib.Variant('(qqiiuu)', (325, 203, 1280, 0, 1280, 800)))
+                finally:
+                    try:
+                        stream.close(cancellable)
+                    finally:
+                        timer.cancel()
+                        timer.join()
 
 
 def wait_for_desktop(prefix, process, seconds, desktop='hyprland'):
@@ -413,6 +506,9 @@ def main():
             raise RuntimeError('require memory >= 2048, job-timeout >= 30 and positive boot/scenario timeouts')
         if any(',' in str(path.resolve()) for path in (directory, args.template, args.ovmf_vars)):
             raise RuntimeError('QEMU disk and firmware paths must not contain commas')
+        x11_heads = args.desktop == 'gnome-x11' and args.outputs == 2
+        if x11_heads:
+            x11_display_support()  # fail before any allocation, including preflight
         status['inputs'] = prepared_inputs(args)
         status['candidate_sha256'] = status['inputs']['files'][str(args.binary.absolute())]['sha256']
         if args.prepared_inputs:
@@ -448,7 +544,10 @@ def main():
                     raise
                 prefix = ssh_prefix(port, args.ssh_key.resolve(), directory / "known_hosts", args.ssh_user)
                 try:
-                    wait_for_desktop(prefix, process, min(args.boot_timeout, max(0, deadline - time.monotonic() - 25)), args.desktop)
+                    boot_deadline = min(time.monotonic() + args.boot_timeout, deadline - 25)
+                    if x11_heads:
+                        activate_x11_head(directory, process, boot_deadline)
+                    wait_for_desktop(prefix, process, max(0, boot_deadline - time.monotonic()), args.desktop)
                 except RuntimeError as error:
                     # A QEMU exit is a boot/driver failure, not product evidence.
                     setattr(error, 'cmd', command)
