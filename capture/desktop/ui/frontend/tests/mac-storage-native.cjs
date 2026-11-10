@@ -305,7 +305,17 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     page.setDefaultTimeout(5000);
     const rendererErrors = [];
     page.on('pageerror', error => rendererErrors.push(error.message));
-    await page.getByText('Connected · idle', { exact: true }).waitFor({ timeout: budget(10000) });
+    try {
+      await page.getByText('Connected · idle', { exact: true }).waitFor({ timeout: budget(10000) });
+    } catch (error) {
+      // Retain the initial one-shot result, not a new read that could mask it.
+      // This section renders only the bounded runtime projection, never native payloads.
+      try {
+        report.initialRuntimeRead = await page.locator('section[aria-labelledby="runtime-title"] [role="status"]')
+          .innerText({ timeout: budget(1500) });
+      } catch { report.initialRuntimeRead = 'unavailable'; }
+      throw error;
+    }
     // CDP readiness does not establish that System Events can inspect this
     // native app. Check the exact owned window before any control mutation;
     // otherwise the first AX request can stall with an uninspectable modal open.
