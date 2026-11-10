@@ -23,7 +23,7 @@ if (await realpath(installed) !== await realpath(packageRoot)) {
 const owner = path.join(packageRoot, 'src');
 const source = path.join(owner, 'location-policy.ts');
 const temporary = path.join(root, '.storage-policy-build');
-const program = ts.createProgram([source, path.join(owner, 'location-workflow.ts')], {
+const program = ts.createProgram([source, path.join(owner, 'location-workflow.ts'), path.join(owner, 'retention-workflow.ts')], {
   target: ts.ScriptTarget.ES2022,
   module: ts.ModuleKind.CommonJS,
   moduleResolution: ts.ModuleResolutionKind.Node10,

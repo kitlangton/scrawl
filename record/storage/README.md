@@ -40,6 +40,13 @@ execution, shared mutation admission, window lifetime and presentation. The host
 must hold that gate for `mutate` and supply its current lifetime check; the
 workflow suppresses stale results and never replays writes. A thrown write or
 post-publication resolution failure returns `outcome_unknown` for refresh.
+`RetentionWorkflow` keeps executor revisions private, coalesces same-version
+reads, validates save/reset intent and retires stale preference/usage replies.
+Desktop supplies the shared version/lifetime check and holds the native-operation
+gate for mutations. Invalidation retires pending replies independently; failed or
+uncertain writes require fresh authoritative readback, including when a read
+completed while the write was pending. Both renderer and native transport guards
+consume Record's same bounded retention-policy validator.
 Linux and native fallback retain their existing Settings controller/preset menu;
 capture-time default resolution and cleanup policy interpretation also remain
 native compatibility debt. This package's headless checks prove its policy and

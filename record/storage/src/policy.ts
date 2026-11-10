@@ -37,11 +37,12 @@ export function retentionForPreset(preset: RetentionPreset): RetentionPolicy {
 }
 
 export function isRetentionPolicy(value: unknown): value is RetentionPolicy {
-  if (!value || typeof value !== 'object') return false;
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return false;
   const policy = value as RetentionPolicy;
   const valid = (days: unknown) => days === null ||
     (Number.isInteger(days) && (days as number) >= 0 && (days as number) <= 0xffff_ffff);
-  return Object.keys(policy).length === 2 && valid(policy.mediaDays) && valid(policy.bundleDays);
+  return Object.keys(policy).length === 2 && Object.hasOwn(policy, 'mediaDays') && Object.hasOwn(policy, 'bundleDays') &&
+    valid(policy.mediaDays) && valid(policy.bundleDays);
 }
 
 function effective(field: RetentionField, fallback: number | null): number | null {
