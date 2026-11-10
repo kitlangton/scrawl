@@ -397,6 +397,51 @@ closes this slice's Mac Settings gate, not capture, permissions, overlays,
 performance or replacement of installed Settings. The experiment remains off by
 default; this evidence does not authorize enabling, merging or releasing it.
 
+### Local Settings loop with a prepared provider (Linux)
+
+From this frontend directory, after the locked dependency install:
+
+```sh
+npm run prepare:settings-native
+# Copy the printed private fixture path into subsequent commands:
+npm run test:settings -- /tmp/apparent-dev-sn-EXAMPLE
+# Or run just the genuine provider contract:
+npm run test:settings-provider -- /tmp/apparent-dev-sn-EXAMPLE
+```
+
+Preparation explicitly invokes offline Cargo, copies the root test backend and
+its DSP runtime libraries outside `target`, verifies the linked system-library
+closure, and runs the real Rust/Electron Storage contract before publishing a
+mode-0600 success receipt. Backend/library files are readonly. Receipts bind the
+checkout, Linux architecture/kernel, qualifier sources, native inputs and probe
+tools. They are local test artifacts, not current-app build or release receipts.
+
+`test:settings` verifies that fixture, builds TypeScript, runs unit/contract and
+Electron tests, then runs the same exact ignored Rust provider test directly.
+It invokes neither Cargo nor rustc and has no implicit preparation fallback.
+The conservative input profile covers every tracked nonconsumer input; only the
+positive TS/renderer and Record Storage paths in `scripts/settings-native/inputs.ts`
+are excluded. Unknown extensions remain native inputs. Native dep-info that embeds
+the excluded consumer surface is refused. Native/qualifier/library changes,
+unknown files, changed hashes or missing fixtures require explicit preparation.
+Untracked native inputs must first be admitted or isolated; preparation refuses
+to read them into an unreviewed source fingerprint.
+
+The native provider and probes have bounded, owned GNU-timeout process groups;
+an expired probe is not retried. The provider uses a short private temporary root
+for Unix socket limits and writes only synthetic config/capture-folder fixtures.
+The copied backend, its local libraries and admitted system dependencies are used
+at runtime; Cargo build outputs are not a fallback. Temporary fixtures may be
+cleaned at any time and must then be prepared again.
+
+On Clanker wrap each heavy command once with `t3-build`, exporting the approved
+`ELECTRON_OVERRIDE_DIST_PATH` on the outer invocation for the existing sandboxed
+Controls smoke. This command does not provision Electron, change host sandbox
+permissions or disable the sandbox. It is currently Linux-only; the independent
+Record package commands and existing Mac integration/native gates are unchanged.
+This developer loop does not establish GUI/native capture acceptance, change CI
+selection or claim a measured time saving.
+
 For an actual Electron/libuv → Rust clock and persistence regression (no GUI or
 host config writes), after installing the frontend Electron binary, run from
 the repository root:
