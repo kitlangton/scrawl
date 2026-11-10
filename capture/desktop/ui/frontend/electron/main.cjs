@@ -85,6 +85,8 @@ const path = require('node:path');
 const { pathToFileURL } = require('node:url');
 const { readRuntimeState, storageLocation, errorReporting, captureReference, storagePreference, microphoneEnabled } = require('./runtime.cjs');
 const { LocationWorkflow } = require('./storage-owner/location-workflow.js');
+const { RetentionWorkflow } = require('./storage-owner/retention-workflow.js');
+const { isRetentionPolicy } = require('./storage-owner/policy.js');
 const { ConnectSettings, actions } = require('./connect.cjs');
 const followWindowTheme = require('@apparent/ui/window-theme');
 nativeTheme.themeSource = 'system';
@@ -248,9 +250,12 @@ app.whenReady().then(() => {
   const publicShare = new PublicShare(os.homedir());
   let reference;
   let referencePending;
-  let retentionRevision;
-  let retentionRead;
-  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retentionRevision = undefined; connect.close(); publicShare.close(); };
+  const retention = new RetentionWorkflow({
+    read: () => storagePreference(os.homedir(), 'retention'),
+    write: (operation, fields) => storagePreference(os.homedir(), `${operation}retention`, fields),
+    usage: () => storagePreference(os.homedir(), 'usage'),
+  });
+  const invalidate = () => { generation += 1; storageVersion += 1; reference = undefined; retention.invalidate(); connect.close(); publicShare.close(); };
   window.webContents.on('did-start-navigation', (_event, _url, _inPlace, isMainFrame) => { if (isMainFrame) invalidate(); });
   window.webContents.on('will-navigate', invalidate);
   window.webContents.on('render-process-gone', invalidate);
@@ -363,51 +368,30 @@ app.whenReady().then(() => {
       return publicShare.request(action, reference?.status==='connected'?reference.id:null);
     });
   }
-  const projectRetention = (result) => {
-    if (result.status !== 'connected') return result;
-    retentionRevision = result.revision;
-    const { revision: _revision, ...safe } = result;
-    return safe;
-  };
   ipcMain.handle('apparent:read-retention', async (event, ...args) => {
     validate(event, args);
     const version = storageVersion;
-    if (!retentionRead || retentionRead.version !== version) {
-      const pending = { version, promise: storagePreference(os.homedir(), 'retention') };
-      retentionRead = pending;
-      void pending.promise.finally(() => { if (retentionRead === pending) retentionRead = undefined; });
-    }
-    const result = await retentionRead.promise;
-    if (version !== storageVersion) return { status: 'cancelled' };
-    retentionRevision = undefined;
-    return projectRetention(result);
+    return retention.read(version, () => version === storageVersion);
   });
   ipcMain.handle('apparent:read-capture-usage', async (event, ...args) => {
     validate(event, args);
     const version = storageVersion;
-    const result = await storagePreference(os.homedir(), 'usage');
-    return version === storageVersion ? result : { status: 'cancelled' };
+    return retention.measure(() => version === storageVersion);
   });
   for (const operation of ['save', 'reset']) {
     ipcMain.handle(`apparent:${operation}-retention`, async (event, ...args) => {
       const policy = operation === 'save' ? args[0] : undefined;
       validate(event, operation === 'save' && args.length === 1 ? [] : args);
-      if (operation === 'save' && (!policy || Object.keys(policy).length !== 2 ||
-          !['mediaDays', 'bundleDays'].every(key => Object.hasOwn(policy, key)) ||
-          !['mediaDays', 'bundleDays'].every(key => policy[key] === null ||
-            (Number.isInteger(policy[key]) && policy[key] >= 0 && policy[key] <= 0xffffffff)))) {
+      if (operation === 'save' && !isRetentionPolicy(policy)) {
         throw new Error('Invalid retention policy');
       }
       if (mutation) return { status: 'error', code: 'app_busy' };
-      if (!retentionRevision) return { status: 'error', code: 'refresh_required' };
-      const expected = retentionRevision;
-      retentionRevision = undefined;
+      if (!retention.ready) return { status: 'error', code: 'refresh_required' };
       mutation = true;
       storageVersion += 1;
       const token = generation;
       try {
-        const result = await storagePreference(os.homedir(), `${operation}retention`, { expected, policy });
-        return token === generation ? projectRetention(result) : { status: 'cancelled' };
+        return await retention.mutate(operation, policy, () => token === generation);
       } finally { storageVersion += 1; mutation = false; }
     });
   }
