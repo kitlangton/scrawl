@@ -415,6 +415,17 @@ plus renderer-reload persistence, and explicit re-enable/disable. Synthetic repo
 window images are retained for seven days, including failures. A Linux skip or
 an unexecuted CI definition is not native Mac proof. No Mac rental is required.
 
+The additional reporting read after restart uses the TypeScript native-test
+helper in `enablement/prerequisites/reporting-read.ts`. Only explicit `app_busy`
+read receipts permit re-observation, with 150 ms backoff inside the original
+five-second read and 95-second overall budgets. The exact connected/off assertion
+still must pass; other errors, disconnection, wrong values, timeout and late
+responses fail without retry. No toggle or action is replayed. The native JSON
+retains all `errorReporting.restartReadAttempts`, including the initial busy
+receipt even if a later read succeeds. Headless regressions run with
+`node --experimental-strip-types --test enablement/prerequisites/reporting-read.test.ts`
+from the repository root; they do not replace actual Mac acceptance.
+
 ## Technical error reports
 
 The reporting card is available without an experiment. `readErrorReporting()`
