@@ -1,0 +1,11 @@
+export type {LocationSnapshot, NativeLocationFacts} from './location-contract.js';
+import type {LocationSnapshot} from './location-contract.js';
+export type Unavailable = {status: 'disabled' | 'disconnected' | 'incompatible' | 'cancelled'} | {status: 'error'; code: string};
+export type CaptureLocation = Unavailable | {status: 'connected'; storage: LocationSnapshot};
+export type RetentionPreset = 'week' | 'month' | 'forever';
+export type RetentionPolicy = {mediaDays: number | null; bundleDays: number | null};
+export type RetentionView = {preset: RetentionPreset | null; options: {id: RetentionPreset; label: string}[]; note: string};
+export type NativeRetentionResult = Unavailable | {status: 'connected'; custom: boolean;
+  policy: {mediaDays: {present: boolean; value: number | null}; bundleDays: {present: boolean; value: number | null}}};
+export type RetentionResult = Unavailable | {status: 'connected'; custom: boolean; retention: RetentionView};
+export type UsageResult = Unavailable | {status: 'connected'; usage: {effectivePath: string; displayPath: string; formatted: string}};

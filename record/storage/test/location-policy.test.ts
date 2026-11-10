@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { locationCandidate, normalizeSelectedPath, resolveLocationCandidate } from '../../src/storage/location-policy.ts';
+import { locationCandidate, normalizeSelectedPath, resolveLocationCandidate } from '../dist/index.js';
 
 const facts = (overrides: Record<string, unknown> = {}) => ({
   saved: { kind: 'string', value: '~/Saved captures' },

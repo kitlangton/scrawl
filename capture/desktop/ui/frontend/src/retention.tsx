@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Button } from '@apparent/ui/button';
-import type { RetentionPreset, RetentionResult, UsageResult } from './bridge';
-import { readRetention, resetRetention, saveRetention } from './storage/transport';
+import {RetentionController, type RetentionState, type RetentionResult, type UsageResult} from '@apparent/record-storage';
+import {retentionPorts} from './storage/transport';
 
 function problem(result: RetentionResult | UsageResult | undefined) {
   if (!result || result.status === 'connected' || result.status === 'cancelled') return '';
@@ -18,46 +18,17 @@ function problem(result: RetentionResult | UsageResult | undefined) {
 }
 
 export function Retention({ effectivePath, settings = false }: { effectivePath: string; settings?: boolean }) {
-  const [result, setResult] = useState<RetentionResult>();
-  const [usage, setUsage] = useState<UsageResult>();
-  const [preset, setPreset] = useState<RetentionPreset | ''>('');
-  const [busy, setBusy] = useState(true);
-  const [scanning, setScanning] = useState(false);
-  const order = useRef(0);
-  const usageOrder = useRef(0);
-  async function measure() {
-    const token = ++usageOrder.current;
-    setScanning(true);
-    setUsage(undefined);
-    try {
-      const next = await window.apparent?.readCaptureUsage();
-      if (token === usageOrder.current) setUsage(next?.status === 'connected' && next.usage.effectivePath !== effectivePath
-        ? { status: 'error', code: 'conflict' } : next);
-    } catch { if (token === usageOrder.current) setUsage({ status: 'error', code: 'bridge_failed' }); }
-    finally { if (token === usageOrder.current) setScanning(false); }
-  }
-  async function request(operation: 'read' | 'save' | 'reset') {
-    const token = ++order.current;
-    // Invalidate pre-save usage, including a reply arriving while the mutation runs.
-    usageOrder.current += 1;
-    setUsage(undefined);
-    setScanning(false);
-    setBusy(true);
-    setResult(undefined);
-    try {
-      const next = operation === 'read' ? await readRetention() : operation === 'reset' ? await resetRetention() :
-        preset ? await saveRetention(preset) : { status: 'error' as const, code: 'invalid_request' };
-      if (token !== order.current) return;
-      setResult(next);
-      setPreset(next?.status === 'connected' ? next.retention.preset ?? '' : '');
-    } catch { if (token === order.current) setResult({ status: 'error', code: 'bridge_failed' }); }
-    finally {
-      if (token === order.current) { setBusy(false); void measure(); }
-    }
-  }
+  const [state, setState] = useState<RetentionState>({preset: '', busy: true, scanning: false});
+  const controller = useRef<RetentionController | undefined>(undefined);
+  const {result, usage, preset, busy, scanning} = state;
+  const request = (operation: 'read' | 'save' | 'reset') => controller.current?.request(operation);
+  const measure = () => controller.current?.measure();
   useEffect(() => {
-    void request('read');
-    return () => { order.current += 1; usageOrder.current += 1; };
+    const current = new RetentionController(retentionPorts, effectivePath);
+    controller.current = current;
+    const unsubscribe = current.subscribe(setState);
+    void current.request('read');
+    return () => { unsubscribe(); current.dispose(); if (controller.current === current) controller.current = undefined; };
   }, [effectivePath]);
   const snapshot = result?.status === 'connected' ? result : undefined;
   return <div className="space-y-4 border-t border-border pt-4">
@@ -73,7 +44,7 @@ export function Retention({ effectivePath, settings = false }: { effectivePath: 
     {snapshot && <div className="flex flex-wrap items-end gap-3">
       <label className="grid gap-2 text-sm" htmlFor="retention-preset">Keep recordings
         <select id="retention-preset" className="h-9 rounded-md border border-border bg-surface px-3 text-sm focus-visible:outline-2 focus-visible:outline-primary"
-          disabled={busy || scanning} value={preset} onChange={event => setPreset(event.target.value as RetentionPreset | '')}>
+          disabled={busy || scanning} value={preset} onChange={event => controller.current?.select(event.target.value)}>
           <option value="" disabled>Custom policy (config file)</option>
           {snapshot.retention.options.map(option => <option key={option.id} value={option.id}>{option.label}</option>)}
         </select>

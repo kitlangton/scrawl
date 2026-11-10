@@ -43,6 +43,7 @@ done
 // search other processes, use coordinates, or guess which Return commits a picker.
 // Unknown AX shapes fail with bounded diagnostics from this process alone.
 const { panelScript, prepareStorageChange } = require('../../../../../enablement/prerequisites/mac-picker.ts');
+const { assertReportingRead } = require('../../../../../enablement/prerequisites/reporting-read.ts');
 
 async function within(promise, ms, label) {
   let timer;
@@ -167,9 +168,9 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     }
   };
   let env;
-  const osa = async (script, args = []) => {
+  const osa = async (script, args = [], cap = 3500) => {
     const { stdout } = await run('/usr/bin/osascript', ['-e', script, ...args], {
-      env, timeout: budget(3500), killSignal: 'SIGKILL', maxBuffer: 32768,
+      env, timeout: budget(cap), killSignal: 'SIGKILL', maxBuffer: 32768,
     });
     return stdout.trim();
   };
@@ -219,7 +220,9 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     // The driver may have been started using an Electron binary in Node mode.
     // GUI children must always be normal Electron, never ELECTRON_RUN_AS_NODE.
     delete env.ELECTRON_RUN_AS_NODE;
-    assert.equal(await osa('tell application "System Events" to get UI elements enabled'), 'true',
+    // Initial System Events startup shares the overall deadline, but does not
+    // spend the shorter per-control budget. False or unavailable AX still fails.
+    assert.equal(await osa('tell application "System Events" to get UI elements enabled', [], 15000), 'true',
       'Runner Accessibility/AppleEvents preflight unavailable; do not edit TCC');
     report.accessibilityPreflight = true;
     logHandle = await fs.open(path.join(output, 'rust-storage-native.log'), 'wx', 0o600);
@@ -369,8 +372,11 @@ test('real installed Mac Rust + shipped Electron Storage native Choose/Cancel/Re
     await page.reload({ timeout: budget() });
     await expect(reportingToggle).not.toBeChecked({ timeout: budget() });
     await expect(reportingToggle).toBeEnabled({ timeout: budget() });
-    assert.deepEqual(await within(page.evaluate(() => window.apparent.readErrorReporting()), budget(), 'Restarted reporting read'),
-      { status: 'connected', enabled: false });
+    await assertReportingRead({
+      read: () => page.evaluate(() => window.apparent.readErrorReporting()),
+      enabled: false, label: 'Restarted reporting read', timeoutMs: budget(), deadline,
+      observations: report.errorReporting.restartReadAttempts = [],
+    });
     report.errorReporting.reopenAndRustRestartPersisted = true;
     await reportingToggle.click({ timeout: budget() });
     await expect(reportingToggle).toBeChecked({ timeout: budget() });
