@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { chmodSync, mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, copyFileSync, rmSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { select, selection, owners, changedPaths, captureToolTests, commands, contractTests, execute, root } from './run.ts';
@@ -44,39 +44,19 @@ test('package gates execute complete canonical suites including browser and Elec
     assert.ok(plan.some(command => command.cwd === cwd && command.argv.at(-1) === last), `${cwd} ${last}`);
   }
   assert.ok(plan.some(command => command.argv.includes('--run')));
+  assert.ok(!plan.some(command => command.cwd === 'connect/client/typescript'),
+    'the root verifier owns this prerequisite so it is not installed twice');
   assert.ok(!commands(['desktop'], 'base', 'head', 'darwin').some(command => command.argv.includes('xvfb-run')));
   assert.ok(commands(['client'], 'base', 'head', 'darwin').some(command => command.argv[0] === 'taskpolicy'));
+  const clientOnly = commands(['client'], 'base', 'head', 'linux');
+  const clientPrepare = clientOnly.findIndex(command => command.argv.includes('--prepare-connect-typescript'));
+  const clientCargo = clientOnly.findIndex(command => command.argv[0] === 'cargo');
+  assert.ok(clientPrepare >= 0 && clientPrepare < clientCargo,
+    'standalone client verification prepares shares before Cargo');
   const build = plan.findIndex(command => command.argv.includes('--run'));
-  const connectCi = plan.findIndex(command => command.cwd === 'connect/client/typescript' && command.argv[0] === 'npm' && command.argv[1] === 'ci');
-  const connectBuild = plan.findIndex(command => command.cwd === 'connect/client/typescript' && command.argv[0] === 'npm' && command.argv[2] === 'build');
-  assert.ok(connectCi >= 0 && connectCi < connectBuild && connectBuild < build,
-    'locked Connect shares inputs must be prepared before the Rust consumer');
   const cli = plan.findIndex(command => command.argv.at(-1)?.endsWith('/test_issue_cli.py'));
   assert.ok(cli > build && build >= 0, 'rebuilt application must precede CLI integration');
   assert.ok(plan[cli].env?.APPARENT_BIN.endsWith('/debug/apparent'));
-});
-
-test('Connect TypeScript prerequisite failure stops before the Rust consumer', () => {
-  const tempRoot = mkdtempSync(join(process.env.TMPDIR || '/tmp', 'connect-prerequisite-'));
-  const bin = join(tempRoot, 'bin'); mkdirSync(bin);
-  const log = join(tempRoot, 'commands');
-  const npm = join(bin, 'npm');
-  writeFileSync(npm, '#!/bin/sh\nprintf "%s\\n" "$*" >> "$PREREQUISITE_LOG"\nexit 23\n');
-  chmodSync(npm, 0o755);
-  const originalPath = process.env.PATH;
-  const plan = commands(['capture'], 'base', 'head').filter(command =>
-    command.cwd === 'connect/client/typescript' || command.argv.includes('--run'));
-  try {
-    process.env.PATH = `${bin}:${originalPath || ''}`;
-    process.env.PREREQUISITE_LOG = log;
-    assert.throws(() => execute(plan), /Local test command failed \(23\): npm ci/);
-    assert.equal(readFileSync(log, 'utf8'), 'ci --no-audit --no-fund\n');
-  } finally {
-    if (originalPath === undefined) delete process.env.PATH;
-    else process.env.PATH = originalPath;
-    delete process.env.PREREQUISITE_LOG;
-    rmSync(tempRoot, {recursive: true, force: true});
-  }
 });
 
 function fixture(action: (dir: string, env: NodeJS.ProcessEnv) => void) {

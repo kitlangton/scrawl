@@ -74,12 +74,6 @@ export function commands(selected: Owner[], base: string, head: string, platform
   if (selected.includes('capture') || selected.includes('engine')) {
     // Reuse the authoritative conservative Rust verifier, including TMPDIR and jobs.
     // For mixed inputs it broadens to root + staged Engine rather than omit tests.
-    // Root Connect tests execute the shares policy from this independently owned
-    // TypeScript package. Prepare its locked dependencies and generated module
-    // before Cargo; a fresh checkout has no ignored dist/ output to consume.
-    const connectTypescript = 'connect/client/typescript';
-    add(['npm', 'ci', '--no-audit', '--no-fund'], connectTypescript);
-    add(['npm', 'run', 'build'], connectTypescript);
     add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--run']);
   }
   // This real CLI suite needs the exact executable the preceding root check
@@ -87,6 +81,11 @@ export function commands(selected: Owner[], base: string, head: string, platform
   if (tools.some(command => command.env?.APPARENT_BIN) && !selected.includes('capture')) throw Error('CLI tests require root build coverage');
   result.push(...tools.filter(command => command.env?.APPARENT_BIN));
   if (selected.includes('client')) {
+    // The Rust client-only lane also consumes the compiled shares policy. The
+    // broad root verifier above prepares it when present; this route keeps the
+    // standalone client owner lane safe without duplicating that work.
+    if (!selected.includes('capture') && !selected.includes('engine'))
+      add(['python3', 'enablement/verification.py', '--base', base, '--head', head, '--prepare-connect-typescript']);
     add(['python3', 'enablement/verification.py', '--base', base, '--preflight']);
     const cargo = platform === 'darwin' ? ['taskpolicy', '-c', 'utility', 'cargo'] : ['cargo'];
     for (const action of ['build', 'test']) add([...cargo, action, '--manifest-path', 'connect/client/Cargo.toml',
