@@ -294,18 +294,22 @@ def desktop_probe(desktop):
     if desktop == 'hyprland':
         return ('pgrep -u "$(id -u)" -x Hyprland >/dev/null && '
                 'systemctl --user show-environment | grep -q "^HYPRLAND_INSTANCE_SIGNATURE="')
-    compositor, identity = {'gnome': ('gnome-shell', 'GNOME'),
-                            'kde': ('kwin_wayland', 'KDE')}.get(desktop, (None, None))
+    compositor, identity, session = {
+        'gnome': ('gnome-shell', 'GNOME', 'wayland'),
+        'kde': ('kwin_wayland', 'KDE', 'wayland'),
+        'gnome-x11': ('gnome-shell', 'GNOME', 'x11'),
+    }.get(desktop, (None, None, None))
     if compositor is None:
         raise ValueError(f'unsupported desktop: {desktop}')
     # Probe the test account, not GDM/SDDM's greeter. Do not source the exported
     # environment as shell code; it supplies data only.
+    wayland = 'printf "%s\\n" "$desktop_env" | grep -q "^WAYLAND_DISPLAY=." && ' if session == 'wayland' else ''
     return (f'pgrep -u "$(id -u)" -x {compositor} >/dev/null && '
             'desktop_env=$(systemctl --user show-environment) && '
             'printf "%s\\n" "$desktop_env" | grep -q "^DISPLAY=." && '
-            'printf "%s\\n" "$desktop_env" | grep -q "^WAYLAND_DISPLAY=." && '
+            + wayland +
             'printf "%s\\n" "$desktop_env" | grep -q "^XDG_RUNTIME_DIR=/." && '
-            'printf "%s\\n" "$desktop_env" | grep -qx "XDG_SESSION_TYPE=wayland" && '
+            f'printf "%s\\n" "$desktop_env" | grep -qx "XDG_SESSION_TYPE={session}" && '
             f'printf "%s\\n" "$desktop_env" | grep -Eq "^XDG_CURRENT_DESKTOP=([^:]+:)*{identity}(:[^:]+)*$"')
 
 
@@ -341,8 +345,8 @@ def main():
     parser.add_argument("--ssh-key", type=Path, required=True)
     parser.add_argument("--ssh-user", required=True)
     parser.add_argument("--scenario", type=Path, required=True, help="guest bash script; runs after the selected desktop starts")
-    parser.add_argument("--desktop", choices=('hyprland', 'gnome', 'kde'), default='hyprland',
-                        help="required test-user Wayland desktop (default: hyprland)")
+    parser.add_argument("--desktop", choices=('hyprland', 'gnome', 'kde', 'gnome-x11'), default='hyprland',
+                        help="required test-user desktop (default: hyprland; kde means Wayland)")
     parser.add_argument("--audio-file", type=Path, help="optional WAV stimulus staged inside the guest")
     parser.add_argument("--binary", type=Path, required=True, help="candidate executable (sibling .so files are staged too)")
     parser.add_argument("--results", type=Path, required=True, help="new directory; retained after the run")
