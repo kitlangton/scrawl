@@ -288,10 +288,11 @@
       "group": "finish",
       "name": "Run a command per capture",
       "says": "Runs your own command once each bundle is written, so any agent or script can receive captures.",
-      "status": "review:#43",
+      "status": "main",
       "platforms": ["mac", "windows", "linux"],
       "added": "2026-10-20",
       "pr": 43,
+      "docs": ["README.md#send-captures-anywhere-oncapture", "docs/iphone-and-routing.md"],
       "config": [
         { "key": "onCapture", "value": "[\"/abs/cmd\", \"{bundle}\"]", "does": "Command to run for each capture" },
         { "key": "onCaptureTimeoutSeconds", "value": "120", "does": "Its time limit" }
