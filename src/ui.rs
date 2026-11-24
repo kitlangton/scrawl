@@ -433,6 +433,28 @@ enum MenuAction {
     Settings,
     CheckForUpdates,
     Quit,
+    /// From `scrawl://` links only: the picker on one mode.
+    ChooseMode(SelectionMode),
+    /// From `scrawl://record-device`: the cabled iPhone, as `app --iphone` does.
+    RecordDevice,
+    /// From `scrawl://open-settings?tab=`.
+    SettingsPane(crate::settings::Pane),
+}
+
+impl From<crate::deeplink::Link> for MenuAction {
+    fn from(link: crate::deeplink::Link) -> Self {
+        use crate::deeplink::Link;
+        match link {
+            Link::RecordScreen => MenuAction::ToggleCapture,
+            Link::AllInOne => MenuAction::ChooseTarget,
+            Link::RecordArea => MenuAction::ChooseMode(SelectionMode::Area),
+            Link::RecordWindow => MenuAction::ChooseMode(SelectionMode::Window),
+            Link::RecordDevice => MenuAction::RecordDevice,
+            Link::OpenLatestCapture => MenuAction::OpenLatest,
+            Link::OpenSettings(None) => MenuAction::Settings,
+            Link::OpenSettings(Some(pane)) => MenuAction::SettingsPane(pane),
+        }
+    }
 }
 
 /// Text beside the menu bar icon while a video export runs (`None` goes back to the inbox count).
@@ -2338,6 +2360,13 @@ impl ScrawlCoordinator {
     pub fn begin_target_selection(&mut self, cx: &mut Context<Self>) {
         if self.ready_to_record() {
             self.open_picker(None, cx);
+        }
+    }
+
+    /// `scrawl://record-area` and `record-window`: the picker, opened on `mode`.
+    pub fn begin_target_selection_on(&mut self, mode: SelectionMode, cx: &mut Context<Self>) {
+        if self.ready_to_record() {
+            self.open_picker(Some(mode), cx);
         }
     }
 
@@ -5340,6 +5369,20 @@ pub fn run_app(
     screenshot_out: Option<PathBuf>,
 ) {
     let app = Application::new().with_assets(crate::icons::Assets);
+    // `scrawl://` links (see `deeplink`). Registered before `run` so a link that launches Scrawl
+    // isn't lost; it waits in the channel until the UI loop below picks it up.
+    let (link_sender, link_receiver) = flume::unbounded::<MenuAction>();
+    app.on_open_urls(move |urls| {
+        for url in urls {
+            match crate::deeplink::parse(&url) {
+                Ok(link) => {
+                    scrawl_log(format!("link {url} -> {link:?}"));
+                    let _ = link_sender.send(link.into());
+                }
+                Err(error) => scrawl_log(format!("link ignored: {error}")),
+            }
+        }
+    });
     app.run(move |cx: &mut App| {
         scrawl_log(format!("run_app started pid={}", std::process::id()));
         platform::keep_alive(cx);
@@ -5423,58 +5466,81 @@ pub fn run_app(
                     platform::poll_status_bar();
                     crate::onboarding_window::poll(cx);
                     crate::settings_window::poll(cx);
-                    if let Some(ref rx) = menu_rx {
-                        while let Ok(action) = rx.try_recv() {
-                            match action {
-                                MenuAction::ToggleCapture => {
-                                    loop_coord.update(cx, |coord, cx| coord.record_or_finish(cx));
-                                }
-                                MenuAction::ChooseTarget => {
-                                    loop_coord.update(cx, |coord, cx| {
-                                        if !coord.is_recording()
-                                            && !coord.is_processing()
-                                            && !coord.is_selecting()
-                                        {
-                                            coord.begin_target_selection(cx);
-                                        }
-                                    });
-                                }
-                                MenuAction::OpenLatest => {
-                                    if let Ok((dir, bundle)) =
-                                        crate::handoff::load_bundle(std::path::Path::new("latest"))
+                    // The menu bar and `scrawl://` links send the same actions.
+                    // A link that launches Scrawl can arrive before the launch's permission read
+                    // lands, like `app --record` or an early shortcut press: it meets the same
+                    // gate they do, with Microphone and Camera not yet known.
+                    let actions: Vec<MenuAction> = menu_rx
+                        .iter()
+                        .flat_map(|rx| rx.try_iter())
+                        .chain(link_receiver.try_iter())
+                        .collect();
+                    for action in actions {
+                        match action {
+                            MenuAction::ToggleCapture => {
+                                loop_coord.update(cx, |coord, cx| coord.record_or_finish(cx));
+                            }
+                            MenuAction::ChooseTarget => {
+                                loop_coord.update(cx, |coord, cx| {
+                                    if !coord.is_recording()
+                                        && !coord.is_processing()
+                                        && !coord.is_selecting()
                                     {
-                                        loop_coord.update(cx, |coord, cx| {
-                                            coord.mark_handled(&dir);
-                                            coord.set_review_bundle((dir, bundle), None);
-                                            cx.notify();
-                                        });
-                                        open_review_window(&loop_coord, cx);
+                                        coord.begin_target_selection(cx);
                                     }
-                                }
-                                MenuAction::OpenInbox(path) => {
-                                    let loaded = crate::handoff::load_bundle(&path).ok();
-                                    let opened = loaded.is_some();
+                                });
+                            }
+                            MenuAction::OpenLatest => {
+                                if let Ok((dir, bundle)) =
+                                    crate::handoff::load_bundle(std::path::Path::new("latest"))
+                                {
                                     loop_coord.update(cx, |coord, cx| {
-                                        coord.mark_handled(&path);
-                                        if let Some(bundle) = loaded {
-                                            coord.set_review_bundle(bundle, None);
-                                        }
+                                        coord.mark_handled(&dir);
+                                        coord.set_review_bundle((dir, bundle), None);
                                         cx.notify();
                                     });
-                                    if opened {
-                                        open_review_window(&loop_coord, cx);
+                                    open_review_window(&loop_coord, cx);
+                                }
+                            }
+                            MenuAction::OpenInbox(path) => {
+                                let loaded = crate::handoff::load_bundle(&path).ok();
+                                let opened = loaded.is_some();
+                                loop_coord.update(cx, |coord, cx| {
+                                    coord.mark_handled(&path);
+                                    if let Some(bundle) = loaded {
+                                        coord.set_review_bundle(bundle, None);
                                     }
+                                    cx.notify();
+                                });
+                                if opened {
+                                    open_review_window(&loop_coord, cx);
                                 }
-                                MenuAction::ExportVideo => start_video_export(),
-                                MenuAction::Settings => {
-                                    loop_coord.update(cx, |coord, _| coord.open_settings(None));
-                                }
-                                MenuAction::CheckForUpdates => {
-                                    platform::check_for_updates();
-                                }
-                                MenuAction::Quit => {
-                                    should_quit = true;
-                                }
+                            }
+                            MenuAction::ExportVideo => start_video_export(),
+                            MenuAction::Settings => {
+                                loop_coord.update(cx, |coord, _| coord.open_settings(None));
+                            }
+                            MenuAction::CheckForUpdates => {
+                                platform::check_for_updates();
+                            }
+                            MenuAction::Quit => {
+                                should_quit = true;
+                            }
+                            MenuAction::ChooseMode(mode) => {
+                                loop_coord.update(cx, |coord, cx| {
+                                    if !coord.is_recording()
+                                        && !coord.is_processing()
+                                        && !coord.is_selecting()
+                                    {
+                                        coord.begin_target_selection_on(mode, cx);
+                                    }
+                                });
+                            }
+                            MenuAction::RecordDevice => {
+                                loop_coord.update(cx, |coord, cx| coord.start_recording_iphone(cx));
+                            }
+                            MenuAction::SettingsPane(pane) => {
+                                loop_coord.update(cx, |coord, _| coord.open_settings(Some(pane)));
                             }
                         }
                     }

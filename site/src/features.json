@@ -32,6 +32,16 @@
       "docs": ["README.md#capture-controls", "docs/capture.md"]
     },
     {
+      "id": "url-scheme",
+      "group": "start",
+      "name": "scrawl:// links",
+      "says": "Other apps start captures and open Scrawl's windows with scrawl:// links, so a launcher can give each its own hotkey.",
+      "status": "main",
+      "platforms": ["mac"],
+      "added": "2026-11-24",
+      "docs": ["README.md#links-macos"]
+    },
+    {
       "id": "switch-chips",
       "group": "start",
       "name": "Switch target as it starts",

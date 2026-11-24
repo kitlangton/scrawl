@@ -225,6 +225,26 @@ While picking a target, the island shows the modes **Area**, **Window**, **Scree
   clicking the selected mode again starts recording (`⏎`/`⌥⇧S` record the full screen from Area and
   Window too)
 
+### Links (macOS)
+
+Other apps can start captures and open Scrawl's windows with `scrawl://` links, so a launcher
+(Raycast, Alfred, Shortcuts, Keyboard Maestro, a Stream Deck) can give each one its own hotkey.
+Each link does exactly what its menu item, picker mode or command-line flag does, and capture
+links use the same permission checks. A link opens Scrawl if it isn't running. Names follow
+[CleanShot X's](https://cleanshot.com/docs-api) where the action is the same.
+
+| Link | Does |
+|---|---|
+| `scrawl://record-screen` | **Record Screen**: start recording the display under the pointer (or, with the picker open, what it has selected), or finish the capture running |
+| `scrawl://all-in-one` | **Choose What to Record…**: the picker, on the mode you used last |
+| `scrawl://record-area` | The picker on Area |
+| `scrawl://record-window` | The picker on Window |
+| `scrawl://record-device` | Record the cabled iPhone or iPad, as `scrawl app --iphone` does: asks for Camera if it's off, and records without narration if Microphone is off |
+| `scrawl://open-latest-capture` | **Open Latest Capture** |
+| `scrawl://open-settings` | **Settings…**; `?tab=general`, `recording`, `storage`, `permissions`, `agents` or `about` opens that pane |
+
+Try one with `open scrawl://record-screen`. Links Scrawl doesn't know are ignored and logged.
+
 ## Sending captures of a dev site to its session
 
 A capture that ends with a browser in front showing a project's dev site goes straight to that
