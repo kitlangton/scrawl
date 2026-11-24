@@ -25,14 +25,6 @@ pub enum Link {
     OpenSettings(Option<Pane>),
 }
 
-/// Whether a link may run. Any app or web page can open a link, so the ones that start or
-/// finish a recording by themselves wait for Settings › Agents › "Let other apps record"
-/// (`recordingLinks`, off by default). Picker links still need a click or a drag to record, and
-/// the rest open windows.
-pub fn allowed(link: Link, recording_links: bool) -> bool {
-    recording_links || !matches!(link, Link::RecordScreen | Link::RecordDevice)
-}
-
 /// Reads one `scrawl://` URL. Case doesn't matter, a trailing `/` is allowed, and unknown query
 /// parameters are ignored (as CleanShot does). An unknown `tab` opens Settings on its usual pane.
 pub fn parse(url: &str) -> Result<Link, String> {
@@ -144,28 +136,5 @@ mod tests {
         assert!(parse("cleanshot://record-screen").is_err());
         assert!(parse("https://scrawl.kitlangton.com/record-screen").is_err());
         assert!(parse("record-screen").is_err());
-    }
-
-    #[test]
-    fn only_recording_links_need_the_setting() {
-        let all = [
-            Link::RecordScreen,
-            Link::AllInOne,
-            Link::RecordArea,
-            Link::RecordWindow,
-            Link::RecordDevice,
-            Link::OpenLatestCapture,
-            Link::OpenSettings(None),
-            Link::OpenSettings(Some(Pane::Permissions)),
-        ];
-        for link in all {
-            assert!(allowed(link, true), "{link:?} with recordingLinks on");
-            let records = matches!(link, Link::RecordScreen | Link::RecordDevice);
-            assert_eq!(
-                allowed(link, false),
-                !records,
-                "{link:?} with recordingLinks off"
-            );
-        }
     }
 }

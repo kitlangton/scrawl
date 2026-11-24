@@ -457,6 +457,17 @@ impl From<crate::deeplink::Link> for MenuAction {
     }
 }
 
+/// What a link does: its own action while Settings › Agents & API › Allow URL scheme API
+/// (`urlScheme`) is on, else that pane, so the person sees why nothing else happened. Any app
+/// or web page can open a link, so the API is off until it's turned on.
+fn link_action(link: crate::deeplink::Link, url_scheme: bool) -> MenuAction {
+    if url_scheme {
+        link.into()
+    } else {
+        MenuAction::SettingsPane(crate::settings::Pane::Agents)
+    }
+}
+
 /// Text beside the menu bar icon while a video export runs (`None` goes back to the inbox count).
 static EXPORT_STATUS: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
 static EXPORTING: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
@@ -5378,19 +5389,15 @@ pub fn run_app(
                 Ok(link) => {
                     let config =
                         crate::handoff::load_config_from(&crate::handoff::default_config_path());
-                    let allowed =
-                        crate::deeplink::allowed(link, config.recording_links == Some(true));
-                    // A link that may not record opens the setting that would let it.
-                    let action = if allowed {
+                    let on = config.url_scheme == Some(true);
+                    if on {
                         scrawl_log(format!("link {url} -> {link:?}"));
-                        link.into()
                     } else {
                         scrawl_log(format!(
-                            "link {url} not run: Let other apps record is off in Settings › Agents"
+                            "link {url} not run: Allow URL scheme API is off in Settings › Agents & API"
                         ));
-                        MenuAction::SettingsPane(crate::settings::Pane::Agents)
-                    };
-                    let _ = link_sender.send(action);
+                    }
+                    let _ = link_sender.send(link_action(link, on));
                 }
                 Err(error) => scrawl_log(format!("link ignored: {error}")),
             }
@@ -5636,6 +5643,34 @@ pub fn run_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn links_run_only_with_the_url_scheme_api_on() {
+        use crate::deeplink::Link;
+        use crate::settings::Pane;
+        let all = [
+            Link::RecordScreen,
+            Link::AllInOne,
+            Link::RecordArea,
+            Link::RecordWindow,
+            Link::RecordDevice,
+            Link::OpenLatestCapture,
+            Link::OpenSettings(None),
+            Link::OpenSettings(Some(Pane::Recording)),
+        ];
+        for link in all {
+            assert_eq!(
+                link_action(link, true),
+                MenuAction::from(link),
+                "{link:?} on"
+            );
+            assert_eq!(
+                link_action(link, false),
+                MenuAction::SettingsPane(Pane::Agents),
+                "{link:?} off"
+            );
+        }
+    }
 
     #[test]
     fn island_geometry_is_concentric() {

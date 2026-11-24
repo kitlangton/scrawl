@@ -1572,7 +1572,7 @@ fn main() -> Result<()> {
     let cli = Cli::parse();
     let command = match cli.command {
         Some(command) => command,
-        // `scrawl` typed in a terminal (on PATH through Settings › Agents or Homebrew) would
+        // `scrawl` typed in a terminal (on PATH through Settings › Agents & API or Homebrew) would
         // start a second menu-bar app. macOS opens the app with stdin on /dev/null.
         // On Windows `scrawl.exe` is a console program and Explorer gives it a console too, so a
         // bare launch always starts the app.

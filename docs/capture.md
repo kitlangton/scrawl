@@ -14,7 +14,7 @@ Carbon hotkeys and the key event tap report presses through `emit_capture_shortc
 
 `scrawl://` links (README › Links) are parsed by `deeplink::parse`, a pure function with its own tests, and turned into the `MenuAction` the menu sends (`From<Link> for MenuAction`), so a link never does anything its menu item or picker mode doesn't. `run_app` registers GPUI's `on_open_urls` before `run`, so a link that launches Scrawl waits in a channel until the UI loop drains it beside the menu's. The scheme is declared in the Info.plist that `scripts/install-app.sh` and `scripts/release-app.sh` write. Names follow CleanShot X's URL scheme where the action is the same; add a link only for something the menu, the shortcut or the picker already does.
 
-Any app or web page can open a link, so `deeplink::allowed` holds back the links that start or finish a recording by themselves (`record-screen`, `record-device`) until `recordingLinks` is on (Settings › Agents › Let other apps record, off by default). The callback in `run_app` reads the config for each link and sends a held-back one to that pane instead. A new link that records without a further click belongs in `allowed` too.
+Any app or web page can open a link, so links run only while `urlScheme` is on (Settings › Agents & API › Allow URL scheme API, off until turned on, like CleanShot X's switch of the same name). The callback in `run_app` reads the config for each link, and `link_action` sends it to that pane while the API is off.
 
 ## Mac captures (`src/capture.rs`)
 
