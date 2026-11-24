@@ -5,14 +5,15 @@ use std::ffi::c_void;
 use std::path::PathBuf;
 use std::ptr;
 use std::sync::atomic::{AtomicBool, AtomicI32, AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Condvar, Mutex, mpsc};
 use std::thread;
 use std::time::{Duration, Instant};
 
+use screencapturekit::cv::CVPixelBufferLockFlags;
 use screencapturekit::prelude::*;
 use screencapturekit::recording_output::{
     SCRecordingOutput, SCRecordingOutputCodec, SCRecordingOutputConfiguration,
-    SCRecordingOutputFileType,
+    SCRecordingOutputDelegate, SCRecordingOutputFileType,
 };
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
@@ -1012,8 +1013,451 @@ pub fn frontmost_app_info() -> Option<(i32, String, Option<String>)> {
     None
 }
 
-/// The ScreenCaptureKit sampler: the recording stream writes `recording.mp4` while candidate
-/// screenshots are taken every `buffer.interval()` (or at once when urgent).
+const BGRA_PIXEL_FORMAT: u32 = u32::from_be_bytes(*b"BGRA");
+const RECORDING_FINISH_TIMEOUT: Duration = Duration::from_secs(15);
+const RECORDING_UNSTARTED_FINISH_TIMEOUT: Duration = Duration::from_millis(800);
+const STOP_CAPTURE_GRACE: Duration = Duration::from_secs(1);
+
+#[derive(Default)]
+struct RecordingLifecycleState {
+    started: bool,
+    finished: bool,
+    failed: Option<String>,
+    stop_done: Option<Result<(), String>>,
+}
+
+struct RecordingLifecycle {
+    state: Mutex<RecordingLifecycleState>,
+    cv: Condvar,
+    started_at: Instant,
+    video_offset_ms: Arc<AtomicU64>,
+}
+
+impl RecordingLifecycle {
+    fn new(started_at: Instant, video_offset_ms: Arc<AtomicU64>) -> Arc<Self> {
+        Arc::new(Self {
+            state: Mutex::new(RecordingLifecycleState::default()),
+            cv: Condvar::new(),
+            started_at,
+            video_offset_ms,
+        })
+    }
+
+    fn is_started(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .started
+    }
+
+    fn is_failed(&self) -> bool {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .failed
+            .is_some()
+    }
+
+    fn mark_stop_done(&self, res: Result<(), String>) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.stop_done = Some(res);
+        self.cv.notify_all();
+    }
+}
+
+struct LifecycleDelegate(Arc<RecordingLifecycle>);
+
+impl SCRecordingOutputDelegate for LifecycleDelegate {
+    fn recording_did_start(&self) {
+        let offset = self.0.started_at.elapsed().as_millis() as u64;
+        self.0.video_offset_ms.store(offset, Ordering::Release);
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.started = true;
+        self.0.cv.notify_all();
+    }
+
+    fn recording_did_fail(&self, error: String) {
+        scrawl_log(format!("SCRecordingOutput failed: {error}"));
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.failed = Some(error);
+        self.0.cv.notify_all();
+    }
+
+    fn recording_did_finish(&self) {
+        let mut state = self
+            .0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        state.finished = true;
+        self.0.cv.notify_all();
+    }
+}
+
+struct StreamSamplerState {
+    started_at: Instant,
+    stopping: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
+    urgent: Arc<AtomicBool>,
+    paused: AtomicBool,
+    interval_ms: AtomicU64,
+    last_sample_ms: AtomicU64,
+    frames_seen: AtomicU64,
+    frames: Arc<Mutex<super::CandidateBuffer>>,
+    candidate_w: u32,
+    candidate_h: u32,
+}
+
+impl StreamSamplerState {
+    fn new(
+        started_at: Instant,
+        stopping: Arc<AtomicBool>,
+        cancelled: Arc<AtomicBool>,
+        urgent: Arc<AtomicBool>,
+        frames: Arc<Mutex<super::CandidateBuffer>>,
+        candidate_w: u32,
+        candidate_h: u32,
+    ) -> Arc<Self> {
+        let initial_interval = frames
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .interval()
+            .as_millis() as u64;
+        Arc::new(Self {
+            started_at,
+            stopping,
+            cancelled,
+            urgent,
+            paused: AtomicBool::new(false),
+            interval_ms: AtomicU64::new(initial_interval),
+            last_sample_ms: AtomicU64::new(u64::MAX),
+            frames_seen: AtomicU64::new(0),
+            frames,
+            candidate_w,
+            candidate_h,
+        })
+    }
+}
+
+struct StreamFrameSampler {
+    state: Arc<StreamSamplerState>,
+}
+
+impl SCStreamOutputTrait for StreamFrameSampler {
+    fn did_output_sample_buffer(&self, sample: CMSampleBuffer, output_type: SCStreamOutputType) {
+        if output_type != SCStreamOutputType::Screen {
+            return;
+        }
+        if self.state.stopping.load(Ordering::Acquire)
+            || self.state.cancelled.load(Ordering::Acquire)
+            || self.state.paused.load(Ordering::Acquire)
+        {
+            return;
+        }
+        if let Some(status) = sample.frame_status()
+            && !status.is_complete()
+        {
+            return;
+        }
+        let now_ms = self.state.started_at.elapsed().as_millis() as u64;
+        let urgent_pending = self.state.urgent.load(Ordering::Acquire);
+        let last_ms = self.state.last_sample_ms.load(Ordering::Acquire);
+        let interval_ms = self.state.interval_ms.load(Ordering::Acquire);
+        if !urgent_pending && last_ms != u64::MAX && now_ms.saturating_sub(last_ms) < interval_ms {
+            return;
+        }
+
+        let Some(pixel_buffer) = sample.pixel_buffer() else {
+            return;
+        };
+        let Ok(guard) = pixel_buffer.lock(CVPixelBufferLockFlags::READ_ONLY) else {
+            return;
+        };
+        if guard.pixel_format() != BGRA_PIXEL_FORMAT {
+            return;
+        }
+        let src_w = u32::try_from(guard.width()).unwrap_or(0);
+        let src_h = u32::try_from(guard.height()).unwrap_or(0);
+        let bytes_per_row = guard.bytes_per_row();
+        let Some(bgra) = (unsafe { guard.as_slice() }) else {
+            return;
+        };
+        let Some(rgba) = downsample_bgra_strided(
+            bgra,
+            src_w,
+            src_h,
+            bytes_per_row,
+            self.state.candidate_w,
+            self.state.candidate_h,
+        ) else {
+            return;
+        };
+        drop(guard);
+
+        let was_urgent = self.state.urgent.swap(false, Ordering::AcqRel);
+        let frame = RgbaFrame::new(now_ms, self.state.candidate_w, self.state.candidate_h, rgba);
+        let next_interval = {
+            let mut buffer = self
+                .state
+                .frames
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            buffer.push(frame, was_urgent);
+            buffer.interval().as_millis() as u64
+        };
+        self.state
+            .interval_ms
+            .store(next_interval, Ordering::Release);
+        self.state.last_sample_ms.store(now_ms, Ordering::Release);
+        self.state.frames_seen.fetch_add(1, Ordering::Release);
+    }
+}
+
+/// Downsamples a padded BGRA pixel buffer to `dst_w`×`dst_h` packed RGBA (`A = 255`),
+/// respecting `bytes_per_row` stride padding.
+pub(crate) fn downsample_bgra_strided(
+    bgra: &[u8],
+    src_w: u32,
+    src_h: u32,
+    bytes_per_row: usize,
+    dst_w: u32,
+    dst_h: u32,
+) -> Option<Vec<u8>> {
+    if src_w == 0 || src_h == 0 || dst_w == 0 || dst_h == 0 {
+        return None;
+    }
+    let src_wu = src_w as usize;
+    let src_hu = src_h as usize;
+    let dst_wu = dst_w as usize;
+    let dst_hu = dst_h as usize;
+    let row_bytes = src_wu.checked_mul(4)?;
+    if bytes_per_row < row_bytes {
+        return None;
+    }
+    let min_len = (src_hu - 1)
+        .checked_mul(bytes_per_row)?
+        .checked_add(row_bytes)?;
+    if bgra.len() < min_len {
+        return None;
+    }
+    let out_len = dst_wu.checked_mul(dst_hu)?.checked_mul(4)?;
+    let mut out = vec![0_u8; out_len];
+
+    if dst_wu == src_wu && dst_hu == src_hu {
+        for y in 0..src_hu {
+            let src_row = &bgra[y * bytes_per_row..y * bytes_per_row + row_bytes];
+            let dst_row = &mut out[y * row_bytes..(y + 1) * row_bytes];
+            for (src_px, dst_px) in src_row
+                .as_chunks::<4>()
+                .0
+                .iter()
+                .zip(dst_row.as_chunks_mut::<4>().0)
+            {
+                dst_px[0] = src_px[2];
+                dst_px[1] = src_px[1];
+                dst_px[2] = src_px[0];
+                dst_px[3] = 255;
+            }
+        }
+        return Some(out);
+    }
+
+    let x_spans: Vec<(usize, usize)> = (0..dst_wu)
+        .map(|dx| {
+            let x0 = (dx * src_wu) / dst_wu;
+            let x1 = (((dx + 1) * src_wu) / dst_wu).clamp(x0 + 1, src_wu);
+            (x0, x1)
+        })
+        .collect();
+
+    for dy in 0..dst_hu {
+        let y0 = (dy * src_hu) / dst_hu;
+        let y1 = (((dy + 1) * src_hu) / dst_hu).clamp(y0 + 1, src_hu);
+        let dst_row = &mut out[dy * dst_wu * 4..(dy + 1) * dst_wu * 4];
+        for (dx, &(x0, x1)) in x_spans.iter().enumerate() {
+            let count = ((y1 - y0) * (x1 - x0)) as u32;
+            let mut sum_r = 0_u32;
+            let mut sum_g = 0_u32;
+            let mut sum_b = 0_u32;
+            for sy in y0..y1 {
+                let row_off = sy * bytes_per_row;
+                for sx in x0..x1 {
+                    let i = row_off + sx * 4;
+                    sum_b += u32::from(bgra[i]);
+                    sum_g += u32::from(bgra[i + 1]);
+                    sum_r += u32::from(bgra[i + 2]);
+                }
+            }
+            let out_i = dx * 4;
+            dst_row[out_i] = ((sum_r + count / 2) / count) as u8;
+            dst_row[out_i + 1] = ((sum_g + count / 2) / count) as u8;
+            dst_row[out_i + 2] = ((sum_b + count / 2) / count) as u8;
+            dst_row[out_i + 3] = 255;
+        }
+    }
+
+    Some(out)
+}
+
+trait SckTeardownOps: Send + 'static {
+    fn has_recording_output(&self) -> bool;
+    fn stop_capture(&self) -> Result<(), String>;
+    fn remove_output_handler(&mut self);
+}
+
+struct RealSckTeardown {
+    stream: SCStream,
+    recording_output: Option<SCRecordingOutput>,
+    screen_handler_id: Option<usize>,
+}
+
+impl SckTeardownOps for RealSckTeardown {
+    fn has_recording_output(&self) -> bool {
+        self.recording_output.is_some()
+    }
+
+    fn stop_capture(&self) -> Result<(), String> {
+        self.stream.stop_capture().map_err(|err| format!("{err:?}"))
+    }
+
+    fn remove_output_handler(&mut self) {
+        if let Some(id) = self.screen_handler_id.take() {
+            let _ = self
+                .stream
+                .remove_output_handler(id, SCStreamOutputType::Screen);
+        }
+    }
+}
+
+/// Tears down `SCStream` and `SCRecordingOutput` by calling `stop_capture` FIRST (so `replayd`
+/// halts `SLContentStream`, stops sender `SCRemoteQueue`s, finalizes `SCAssetWriter`, and fires
+/// `recordingOutputDidFinishRecording` before the client queue is torn down), then calling
+/// `remove_output_handler`, all on a helper thread with bounded waits.
+fn teardown_sck_capture<O: SckTeardownOps>(
+    mut ops: O,
+    lifecycle: Arc<RecordingLifecycle>,
+    video_path: Option<PathBuf>,
+    cancelled: bool,
+    finish_timeout: Duration,
+    stop_grace: Duration,
+) -> Option<PathBuf> {
+    let has_rec = ops.has_recording_output();
+    let skip_recording_flush = cancelled || lifecycle.is_failed();
+    let (stop_done_tx, stop_done_rx) = mpsc::channel();
+    let helper_lifecycle = Arc::clone(&lifecycle);
+
+    if thread::Builder::new()
+        .name("scrawl-sck-teardown".into())
+        .spawn(move || {
+            let stop_res = ops.stop_capture();
+            helper_lifecycle.mark_stop_done(stop_res.clone());
+            ops.remove_output_handler();
+            drop(ops);
+            let _ = stop_done_tx.send(stop_res);
+        })
+        .is_err()
+    {
+        scrawl_log("Failed to spawn scrawl-sck-teardown worker");
+        return None;
+    }
+
+    if cancelled || !has_rec {
+        if !cancelled {
+            let _ = stop_done_rx.recv_timeout(stop_grace);
+        }
+        return None;
+    }
+
+    let deadline = Instant::now() + finish_timeout;
+    let mut unstarted_deadline: Option<Instant> = None;
+    let recording_ok = if skip_recording_flush {
+        false
+    } else {
+        let mut guard = lifecycle
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        loop {
+            if guard.failed.is_some() {
+                break false;
+            }
+            if guard.finished {
+                break true;
+            }
+            if let Some(Err(ref err)) = guard.stop_done {
+                scrawl_log(format!("SCStream stop_capture failed: {err}"));
+                break guard.finished;
+            }
+            let mut effective_deadline = deadline;
+            if guard.stop_done.is_some() && !guard.started && !guard.finished {
+                let unstarted = *unstarted_deadline
+                    .get_or_insert_with(|| Instant::now() + RECORDING_UNSTARTED_FINISH_TIMEOUT);
+                effective_deadline = effective_deadline.min(unstarted);
+            }
+            let Some(remaining) = effective_deadline.checked_duration_since(Instant::now()) else {
+                if guard.finished {
+                    break true;
+                }
+                scrawl_log(format!(
+                    "SCRecordingOutput teardown timed out after {}ms; falling back to candidate frames",
+                    finish_timeout.as_millis()
+                ));
+                break false;
+            };
+            let (next_guard, wait_res) = lifecycle
+                .cv
+                .wait_timeout(guard, remaining)
+                .unwrap_or_else(|e| e.into_inner());
+            guard = next_guard;
+            if wait_res.timed_out() && Instant::now() >= effective_deadline {
+                let ok = guard.finished;
+                if !ok {
+                    scrawl_log(format!(
+                        "SCRecordingOutput teardown timed out after {}ms; falling back to candidate frames",
+                        finish_timeout.as_millis()
+                    ));
+                }
+                break ok;
+            }
+        }
+    };
+
+    if recording_ok {
+        match stop_done_rx.recv_timeout(stop_grace) {
+            Ok(Ok(())) => {}
+            Ok(Err(err)) => {
+                scrawl_log(format!(
+                    "SCStream stop_capture returned error after MP4 finalized: {err}"
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                scrawl_log(format!(
+                    "SCStream stop_capture exceeded {}ms grace after MP4 finalized; detaching teardown worker",
+                    stop_grace.as_millis()
+                ));
+            }
+            Err(mpsc::RecvTimeoutError::Disconnected) => {}
+        }
+        video_path
+    } else {
+        None
+    }
+}
+
+/// The ScreenCaptureKit sampler: the recording stream writes `recording.mp4` and feeds candidate
+/// frames through `SCStreamOutputType::Screen`, with `SCScreenshotManager` used only when the
+/// stream has no video output or zero frames arrived on a completely static screen.
 pub(super) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
     let Sampler {
         target: sampler_target,
@@ -1021,22 +1465,39 @@ pub(super) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         excluded_window_ids,
         started_at,
         stopping: thread_stopping,
+        cancelled: thread_cancelled,
         urgent: thread_urgent,
         frames: thread_frames,
         video_offset_ms: thread_offset,
     } = sampler;
+    if thread_cancelled.load(Ordering::Acquire) || thread_stopping.load(Ordering::Acquire) {
+        return None;
+    }
     let initial_excluded = excluded_window_ids
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .clone();
+    let (candidate_w, candidate_h) = capture_size(&sampler_target, CANDIDATE_EDGE);
+    let sampler_state = StreamSamplerState::new(
+        started_at,
+        Arc::clone(&thread_stopping),
+        Arc::clone(&thread_cancelled),
+        Arc::clone(&thread_urgent),
+        Arc::clone(&thread_frames),
+        candidate_w,
+        candidate_h,
+    );
+    let lifecycle = RecordingLifecycle::new(started_at, Arc::clone(&thread_offset));
     // Keep SCK initialization, capture and teardown on the owning worker.
     // stop() joins even if it arrives while setup is still in progress.
-    let (stream, recording_output, video_path, filter) = setup_sck_capture(
+    let (stream, screen_handler_id, recording_output, video_path, filter) = setup_sck_capture(
         &sampler_target,
         video_output_path,
         &initial_excluded,
         started_at,
         &thread_offset,
+        Arc::clone(&sampler_state),
+        Arc::clone(&lifecycle),
     );
     crate::ui::start_metric("sck_ready_ms", started_at);
     let shot_edge = if video_path.is_some() {
@@ -1050,9 +1511,13 @@ pub(super) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         .checked_sub(FRAME_SAMPLE_INTERVAL)
         .unwrap_or_else(Instant::now);
     let mut phase = 0_u32;
-    let mut last_excluded = initial_excluded.clone();
+    let mut last_excluded = initial_excluded;
     let mut prompts = SystemPrompts::new(&sampler_target);
-    while !thread_stopping.load(Ordering::Acquire) {
+    let mut last_stream_frames = sampler_state.frames_seen.load(Ordering::Acquire);
+    let mut urgent_fallback_at: Option<Instant> = None;
+    let mut static_fallback_taken = false;
+
+    while !thread_stopping.load(Ordering::Acquire) && !thread_cancelled.load(Ordering::Acquire) {
         let mut cur_excluded = excluded_window_ids
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
@@ -1081,17 +1546,67 @@ pub(super) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
                 filter_and_config = Some((new_filter, sck_config(&sampler_target, shot_edge)));
             }
         }
+        // A system prompt ScreenCaptureKit can't leave out: no candidates until
+        // it's answered.
+        let prompts_showing = prompts.showing();
+        sampler_state
+            .paused
+            .store(prompts_showing, Ordering::Release);
+        if prompts_showing {
+            urgent_fallback_at = None;
+            thread::park_timeout(Duration::from_millis(30));
+            continue;
+        }
+
+        if stream.is_some() {
+            let cur_stream_frames = sampler_state.frames_seen.load(Ordering::Acquire);
+            if cur_stream_frames != last_stream_frames {
+                last_stream_frames = cur_stream_frames;
+                urgent_fallback_at = None;
+            }
+            if thread_urgent.load(Ordering::Acquire) {
+                urgent_fallback_at
+                    .get_or_insert_with(|| Instant::now() + Duration::from_millis(60));
+            } else {
+                urgent_fallback_at = None;
+            }
+            let urgent_due = urgent_fallback_at.is_some_and(|at| Instant::now() >= at);
+            let initial_static_due = cur_stream_frames == 0
+                && !static_fallback_taken
+                && started_at.elapsed() >= Duration::from_millis(350);
+            if urgent_due || initial_static_due {
+                let was_urgent = thread_urgent.swap(false, Ordering::AcqRel);
+                urgent_fallback_at = None;
+                static_fallback_taken = true;
+                let t_ms = started_at.elapsed().as_millis() as u64;
+                if was_urgent {
+                    phase = phase.saturating_add(1);
+                }
+                if let Some((ref filter, ref config)) = filter_and_config
+                    && let Some(frame) = capture_sck_frame(filter, config, t_ms)
+                {
+                    let next_interval = {
+                        let mut buffer = thread_frames
+                            .lock()
+                            .unwrap_or_else(std::sync::PoisonError::into_inner);
+                        buffer.push(frame, was_urgent);
+                        buffer.interval().as_millis() as u64
+                    };
+                    sampler_state
+                        .interval_ms
+                        .store(next_interval, Ordering::Release);
+                    sampler_state.last_sample_ms.store(t_ms, Ordering::Release);
+                }
+            }
+            thread::park_timeout(Duration::from_millis(30));
+            continue;
+        }
+
         let urgent = thread_urgent.swap(false, Ordering::AcqRel);
         let interval = thread_frames
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
             .interval();
-        // A system prompt ScreenCaptureKit can't leave out: no candidates until
-        // it's answered.
-        if prompts.showing() {
-            thread::park_timeout(Duration::from_millis(30));
-            continue;
-        }
         if urgent || last_sample.elapsed() >= interval {
             last_sample = Instant::now();
             let t_ms = started_at.elapsed().as_millis() as u64;
@@ -1112,13 +1627,36 @@ pub(super) fn run_sampler(sampler: Sampler) -> Option<PathBuf> {
         }
         thread::park_timeout(Duration::from_millis(30));
     }
-    if let Some(stream) = stream {
-        let _ = stream.stop_capture();
-        if let Some(ref output) = recording_output {
-            let _ = stream.remove_recording_output(output);
-        }
+
+    sampler_state.paused.store(true, Ordering::Release);
+    let cancelled = thread_cancelled.load(Ordering::Acquire);
+    let stream = stream?;
+    if !cancelled
+        && sampler_state.frames_seen.load(Ordering::Acquire) == 0
+        && !static_fallback_taken
+        && !prompts.showing()
+        && let Some((ref filter, ref config)) = filter_and_config
+        && let Some(frame) =
+            capture_sck_frame(filter, config, started_at.elapsed().as_millis() as u64)
+    {
+        thread_frames
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .push(frame, false);
     }
-    video_path
+
+    teardown_sck_capture(
+        RealSckTeardown {
+            stream,
+            recording_output,
+            screen_handler_id,
+        },
+        lifecycle,
+        video_path,
+        cancelled,
+        RECORDING_FINISH_TIMEOUT,
+        STOP_CAPTURE_GRACE,
+    )
 }
 
 fn build_sck_filter_and_config(
@@ -1190,7 +1728,8 @@ fn sck_config(target: &TargetInfo, long_edge: f64) -> SCStreamConfiguration {
     let mut config = SCStreamConfiguration::new()
         .with_width(width)
         .with_height(height)
-        .with_shows_cursor(true);
+        .with_shows_cursor(true)
+        .with_pixel_format(PixelFormat::BGRA);
     if target.mode == CaptureMode::Region {
         // `sourceRect` is in the display's own points, not global ones.
         let b = core_graphics::display::CGDisplay::new(target.display_id).bounds();
@@ -1211,51 +1750,92 @@ fn sck_config(target: &TargetInfo, long_edge: f64) -> SCStreamConfiguration {
     config
 }
 
-/// Starts the recording stream; returns it with the filter for candidate screenshots. Stores
-/// when the recording started (ms since `started_at`) into `video_offset_ms`.
+type SckCaptureSetup = (
+    Option<SCStream>,
+    Option<usize>,
+    Option<SCRecordingOutput>,
+    Option<PathBuf>,
+    Option<SCContentFilter>,
+);
+
+/// Starts the recording stream with a live `SCStreamOutputType::Screen` candidate sampler;
+/// returns it with the filter for fallback screenshots.
 fn setup_sck_capture(
     target: &TargetInfo,
     video_output_path: Option<PathBuf>,
     excluded_window_ids: &[u32],
     started_at: Instant,
     video_offset_ms: &AtomicU64,
-) -> (
-    Option<SCStream>,
-    Option<SCRecordingOutput>,
-    Option<PathBuf>,
-    Option<SCContentFilter>,
-) {
+    sampler_state: Arc<StreamSamplerState>,
+    lifecycle: Arc<RecordingLifecycle>,
+) -> SckCaptureSetup {
+    let cancel_flag = Arc::clone(&sampler_state.cancelled);
+    let stop_flag = Arc::clone(&sampler_state.stopping);
+    if cancel_flag.load(Ordering::Acquire) || stop_flag.load(Ordering::Acquire) {
+        return (None, None, None, None, None);
+    }
     let Some((filter, config)) = build_sck_filter_and_config(target, excluded_window_ids) else {
-        return (None, None, None, None);
+        return (None, None, None, None, None);
     };
+    if cancel_flag.load(Ordering::Acquire) || stop_flag.load(Ordering::Acquire) {
+        return (None, None, None, None, Some(filter));
+    }
 
-    if let Some(video_path) = video_output_path {
-        if let Ok(rec_cfg_builder) = SCRecordingOutputConfiguration::new()
-            && let Ok(rec_cfg) = rec_cfg_builder.with_output_url(&video_path).map(|c| {
-                c.with_video_codec(SCRecordingOutputCodec::H264)
-                    .with_output_file_type(SCRecordingOutputFileType::MP4)
-            })
-            && let Some(rec_output) = SCRecordingOutput::new(&rec_cfg)
-            && let Ok(stream) = SCStream::new(&filter, &config)
+    if let Some(video_path) = video_output_path
+        && let Ok(rec_cfg_builder) = SCRecordingOutputConfiguration::new()
+        && let Ok(rec_cfg) = rec_cfg_builder.with_output_url(&video_path).map(|c| {
+            c.with_video_codec(SCRecordingOutputCodec::H264)
+                .with_output_file_type(SCRecordingOutputFileType::MP4)
+        })
+        && let Some(rec_output) = SCRecordingOutput::new_with_delegate(
+            &rec_cfg,
+            LifecycleDelegate(Arc::clone(&lifecycle)),
+        )
+        && let Ok(mut stream) = SCStream::new(&filter, &config)
+    {
+        let queue = DispatchQueue::new(
+            "dev.kitlangton.scrawl.frame-sampler",
+            DispatchQoS::UserInitiated,
+        );
+        let handler_id = match stream.add_output_handler_with_queue(
+            StreamFrameSampler {
+                state: sampler_state,
+            },
+            SCStreamOutputType::Screen,
+            Some(&queue),
+        ) {
+            Ok(id) => id,
+            Err(error) => {
+                scrawl_log(format!("SCStream Screen output handler failed: {error:?}"));
+                return (None, None, None, None, Some(filter));
+            }
+        };
+        if !cancel_flag.load(Ordering::Acquire)
+            && !stop_flag.load(Ordering::Acquire)
             && stream.add_recording_output(&rec_output).is_ok()
+            && !cancel_flag.load(Ordering::Acquire)
+            && !stop_flag.load(Ordering::Acquire)
         {
-            // The movie's clock starts while `start_capture` runs; its midpoint is the closest
-            // estimate this side of the recording delegate.
             let before = started_at.elapsed();
             if stream.start_capture().is_ok() {
                 let after = started_at.elapsed();
-                video_offset_ms.store(((before + after) / 2).as_millis() as u64, Ordering::Release);
+                if !lifecycle.is_started() {
+                    video_offset_ms
+                        .store(((before + after) / 2).as_millis() as u64, Ordering::Release);
+                }
                 return (
                     Some(stream),
+                    Some(handler_id),
                     Some(rec_output),
                     Some(video_path),
                     Some(filter),
                 );
             }
         }
+        let _ = stream.remove_output_handler(handler_id, SCStreamOutputType::Screen);
     }
 
-    (None, None, None, Some(filter))
+    (None, None, None, None, Some(filter))
 }
 
 fn capture_sck_frame(
@@ -2094,5 +2674,398 @@ mod tests {
     fn the_mouse_monitor_installs_without_a_permission() {
         let (sender, _receiver) = flume::unbounded();
         assert!(install_mouse_monitor(SharedCaptureTelemetry::new(sender)));
+    }
+
+    #[test]
+    fn downsample_bgra_strided_handles_stride_padding_and_odd_sizes() {
+        let src_w = 10_u32;
+        let src_h = 5_u32;
+        let row_bytes = src_w as usize * 4;
+        let bytes_per_row = row_bytes + 24;
+        let mut bgra = vec![0xff_u8; src_h as usize * bytes_per_row];
+        for y in 0..src_h as usize {
+            for x in 0..src_w as usize {
+                let i = y * bytes_per_row + x * 4;
+                bgra[i] = 10 + y as u8 * 10; // B
+                bgra[i + 1] = 20 + x as u8 * 5; // G
+                bgra[i + 2] = 200; // R
+                bgra[i + 3] = 0; // input alpha intentionally zero
+            }
+        }
+        let rgba = downsample_bgra_strided(&bgra, src_w, src_h, bytes_per_row, 5, 3).unwrap();
+        assert_eq!(rgba.len(), 5 * 3 * 4);
+        for px in rgba.as_chunks::<4>().0 {
+            assert_eq!(px[0], 200, "R channel must preserve BGRA->RGBA swap");
+            assert!(px[1] < 100, "trailing 0xff stride padding leaked into G");
+            assert!(px[2] < 100, "trailing 0xff stride padding leaked into B");
+            assert_eq!(px[3], 255, "alpha must be forced opaque");
+        }
+
+        // Exact-size conversion without scaling also strips padding and zeroes alpha->255.
+        let same =
+            downsample_bgra_strided(&bgra, src_w, src_h, bytes_per_row, src_w, src_h).unwrap();
+        assert_eq!(same.len(), (src_w * src_h * 4) as usize);
+        assert_eq!(&same[0..4], &[200, 20, 10, 255]);
+
+        // Larger 64x36 -> 32x18 with 64-byte row padding.
+        let large = vec![0x40_u8; 36 * (64 * 4 + 64)];
+        let large_out = downsample_bgra_strided(&large, 64, 36, 64 * 4 + 64, 32, 18).unwrap();
+        assert_eq!(large_out.len(), 32 * 18 * 4);
+        assert_eq!(&large_out[0..4], &[0x40, 0x40, 0x40, 255]);
+
+        // Invalid dimensions, stride, or truncated buffer are rejected cleanly.
+        assert!(downsample_bgra_strided(&bgra, 0, src_h, bytes_per_row, 5, 3).is_none());
+        assert!(downsample_bgra_strided(&bgra, src_w, src_h, bytes_per_row, 0, 3).is_none());
+        assert!(downsample_bgra_strided(&bgra, src_w, src_h, row_bytes - 4, 5, 3).is_none());
+        assert!(
+            downsample_bgra_strided(&bgra[..bytes_per_row], src_w, src_h, bytes_per_row, 5, 3)
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn teardown_sck_capture_mock_handles_happy_and_adversarial_failures() {
+        use std::sync::atomic::AtomicUsize;
+
+        type StopHook = Mutex<Option<Box<dyn FnOnce() -> Result<(), String> + Send>>>;
+
+        struct StatefulMockOps {
+            log: Arc<Mutex<Vec<&'static str>>>,
+            stop_calls: Arc<AtomicUsize>,
+            has_rec: bool,
+            on_stop: StopHook,
+            stop_sleep: Duration,
+        }
+
+        impl SckTeardownOps for StatefulMockOps {
+            fn has_recording_output(&self) -> bool {
+                self.has_rec
+            }
+
+            fn stop_capture(&self) -> Result<(), String> {
+                self.log.lock().unwrap().push("stop_capture");
+                self.stop_calls.fetch_add(1, Ordering::AcqRel);
+                let res = if let Some(cb) = self.on_stop.lock().unwrap().take() {
+                    cb()
+                } else {
+                    Ok(())
+                };
+                if !self.stop_sleep.is_zero() {
+                    thread::sleep(self.stop_sleep);
+                }
+                res
+            }
+
+            fn remove_output_handler(&mut self) {
+                self.log.lock().unwrap().push("remove_output_handler");
+            }
+        }
+
+        // (a1) Happy normal teardown completes `stop_capture` before removing output handler.
+        let lifecycle = RecordingLifecycle::new(Instant::now(), Arc::new(AtomicU64::new(0)));
+        let delegate_lifecycle = Arc::clone(&lifecycle);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let ops = StatefulMockOps {
+            log: Arc::clone(&log),
+            stop_calls: Arc::clone(&stop_calls),
+            has_rec: true,
+            on_stop: Mutex::new(Some(Box::new(move || {
+                let d = LifecycleDelegate(delegate_lifecycle);
+                d.recording_did_start();
+                thread::sleep(Duration::from_millis(20));
+                d.recording_did_finish();
+                Ok(())
+            }))),
+            stop_sleep: Duration::ZERO,
+        };
+        let res = teardown_sck_capture(
+            ops,
+            lifecycle,
+            Some(PathBuf::from("/tmp/ok-fast.mp4")),
+            false,
+            Duration::from_millis(500),
+            Duration::from_millis(100),
+        );
+        assert_eq!(res, Some(PathBuf::from("/tmp/ok-fast.mp4")));
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["stop_capture", "remove_output_handler"]
+        );
+        assert_eq!(stop_calls.load(Ordering::Acquire), 1);
+
+        // (a2) Happy MP4 finish + hung SCStream::stop_capture (simulating macOS XPC reply drop):
+        // did_finish arrives while stop_capture hasn't returned yet, and caller returns cleanly without blocking 4s.
+        let lifecycle = RecordingLifecycle::new(Instant::now(), Arc::new(AtomicU64::new(0)));
+        let delegate_lifecycle = Arc::clone(&lifecycle);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let ops = StatefulMockOps {
+            log: Arc::clone(&log),
+            stop_calls: Arc::clone(&stop_calls),
+            has_rec: true,
+            on_stop: Mutex::new(Some(Box::new(move || {
+                let d = LifecycleDelegate(delegate_lifecycle);
+                d.recording_did_start();
+                thread::sleep(Duration::from_millis(20));
+                d.recording_did_finish();
+                Ok(())
+            }))),
+            stop_sleep: Duration::from_secs(4),
+        };
+        let t0 = Instant::now();
+        let res = teardown_sck_capture(
+            ops,
+            lifecycle,
+            Some(PathBuf::from("/tmp/ok.mp4")),
+            false,
+            Duration::from_millis(500),
+            Duration::from_millis(60),
+        );
+        assert_eq!(res, Some(PathBuf::from("/tmp/ok.mp4")));
+        assert!(
+            t0.elapsed() < Duration::from_millis(1_500),
+            "hung stop_capture should detach after grace, took {:?}",
+            t0.elapsed()
+        );
+        thread::sleep(Duration::from_millis(30));
+        assert_eq!(*log.lock().unwrap(), vec!["stop_capture"]);
+        assert_eq!(stop_calls.load(Ordering::Acquire), 1);
+
+        // (b) Mid-stream recording_did_fail aborts MP4 cleanly and falls back to candidates (`None`).
+        let lifecycle = RecordingLifecycle::new(Instant::now(), Arc::new(AtomicU64::new(0)));
+        let delegate_lifecycle = Arc::clone(&lifecycle);
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let ops = StatefulMockOps {
+            log: Arc::clone(&log),
+            stop_calls: Arc::clone(&stop_calls),
+            has_rec: true,
+            on_stop: Mutex::new(Some(Box::new(move || {
+                LifecycleDelegate(delegate_lifecycle).recording_did_fail("writer error".into());
+                Ok(())
+            }))),
+            stop_sleep: Duration::ZERO,
+        };
+        let res = teardown_sck_capture(
+            ops,
+            lifecycle,
+            Some(PathBuf::from("/tmp/fail.mp4")),
+            false,
+            Duration::from_secs(2),
+            Duration::from_millis(50),
+        );
+        assert_eq!(res, None);
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(stop_calls.load(Ordering::Acquire), 1);
+
+        // (c) Total replayd hang inside stop_capture hits finish_timeout and returns None.
+        let lifecycle = RecordingLifecycle::new(Instant::now(), Arc::new(AtomicU64::new(0)));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let ops = StatefulMockOps {
+            log: Arc::clone(&log),
+            stop_calls: Arc::clone(&stop_calls),
+            has_rec: true,
+            on_stop: Mutex::new(None),
+            stop_sleep: Duration::from_millis(800),
+        };
+        let t0 = Instant::now();
+        let res = teardown_sck_capture(
+            ops,
+            lifecycle,
+            Some(PathBuf::from("/tmp/hang.mp4")),
+            false,
+            Duration::from_millis(50),
+            Duration::from_millis(20),
+        );
+        assert_eq!(res, None);
+        assert!(t0.elapsed() < Duration::from_millis(600));
+
+        // (d) Cancelled session calls stop_capture before remove_output_handler and returns None immediately.
+        let lifecycle = RecordingLifecycle::new(Instant::now(), Arc::new(AtomicU64::new(0)));
+        let log = Arc::new(Mutex::new(Vec::new()));
+        let stop_calls = Arc::new(AtomicUsize::new(0));
+        let ops = StatefulMockOps {
+            log: Arc::clone(&log),
+            stop_calls: Arc::clone(&stop_calls),
+            has_rec: true,
+            on_stop: Mutex::new(None),
+            stop_sleep: Duration::ZERO,
+        };
+        let res = teardown_sck_capture(
+            ops,
+            lifecycle,
+            Some(PathBuf::from("/tmp/cancel.mp4")),
+            true,
+            Duration::from_secs(2),
+            Duration::from_millis(50),
+        );
+        assert_eq!(res, None);
+        thread::sleep(Duration::from_millis(20));
+        assert_eq!(
+            *log.lock().unwrap(),
+            vec!["stop_capture", "remove_output_handler"]
+        );
+        assert_eq!(stop_calls.load(Ordering::Acquire), 1);
+    }
+
+    #[test]
+    fn run_sampler_returns_none_immediately_when_pre_cancelled() {
+        let target = TargetInfo {
+            mode: CaptureMode::Display,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
+            display_id: main_display_id(),
+            frame: crate::model::TargetFrame {
+                x: 0.0,
+                y: 0.0,
+                width: 640.0,
+                height: 360.0,
+                scale: 1.0,
+            },
+        };
+        let sampler = Sampler {
+            target,
+            video_output_path: None,
+            excluded_window_ids: Arc::new(Mutex::new(Vec::new())),
+            started_at: Instant::now(),
+            stopping: Arc::new(AtomicBool::new(false)),
+            cancelled: Arc::new(AtomicBool::new(true)),
+            urgent: Arc::new(AtomicBool::new(false)),
+            frames: Arc::new(Mutex::new(super::super::CandidateBuffer::new(1 << 20))),
+            video_offset_ms: Arc::new(AtomicU64::new(0)),
+        };
+        let t0 = Instant::now();
+        assert_eq!(run_sampler(sampler), None);
+        assert!(t0.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    #[ignore = "live macOS ScreenCaptureKit test (run with SCRAWL_LIVE_SCK_TEST=1)"]
+    fn live_sck_25s_capture_and_teardown() {
+        if std::env::var_os("SCRAWL_LIVE_SCK_TEST").is_none() {
+            return;
+        }
+        assert!(
+            screen_capture_granted(),
+            "Screen Recording permission must be granted to run live SCK test"
+        );
+        let id = main_display_id();
+        let bounds = core_graphics::display::CGDisplay::new(id).bounds();
+        let target = TargetInfo {
+            mode: CaptureMode::Display,
+            app: None,
+            bundle_id: None,
+            window_title: None,
+            window_id: None,
+            display_id: id,
+            frame: crate::model::TargetFrame {
+                x: bounds.origin.x,
+                y: bounds.origin.y,
+                width: bounds.size.width,
+                height: bounds.size.height,
+                scale: 2.0,
+            },
+        };
+
+        let root =
+            std::env::temp_dir().join(format!("scrawl-live-sck-{}", crate::make_bundle_id()));
+        std::fs::create_dir_all(&root).unwrap();
+
+        // Rapid cancel/restart cycles must never block the caller or fail subsequent sessions.
+        let (cancel_tx, cancel_rx) = mpsc::channel();
+        for (idx, hold_ms) in [100_u64, 50, 25].into_iter().enumerate() {
+            let cancel_mp4 = root.join(format!("cancel-{idx}.mp4"));
+            let session = super::super::ScreenCaptureSession::start(
+                target.clone(),
+                Some(cancel_mp4.clone()),
+                Arc::new(Mutex::new(Vec::new())),
+            );
+            thread::sleep(Duration::from_millis(hold_ms));
+            let tx = cancel_tx.clone();
+            let t_cancel = Instant::now();
+            session.cancel(move || {
+                let _ = std::fs::remove_file(cancel_mp4);
+                let _ = tx.send(idx);
+            });
+            let cancel_elapsed = t_cancel.elapsed();
+            assert!(
+                cancel_elapsed < Duration::from_millis(150),
+                "cancel cycle {idx} blocked caller for {cancel_elapsed:?}"
+            );
+        }
+        drop(cancel_tx);
+        for _ in 0..3 {
+            cancel_rx
+                .recv_timeout(Duration::from_secs(15))
+                .expect("rapid cancel reaper should finish cleanly");
+        }
+
+        let live_mp4 = root.join("live-25s.mp4");
+        let session = super::super::ScreenCaptureSession::start(
+            target,
+            Some(live_mp4.clone()),
+            Arc::new(Mutex::new(Vec::new())),
+        );
+        let ready_t0 = Instant::now();
+        while !live_mp4.is_file() && ready_t0.elapsed() < Duration::from_secs(5) {
+            thread::sleep(Duration::from_millis(50));
+        }
+        let started = Instant::now();
+        while started.elapsed() < Duration::from_secs(25) {
+            session.request_immediate_frame();
+            thread::sleep(Duration::from_millis(1_500));
+        }
+
+        let stop_t0 = Instant::now();
+        let recording = session.stop();
+        let stop_ms = stop_t0.elapsed().as_millis();
+        let video_bytes = std::fs::metadata(&live_mp4).map(|m| m.len()).unwrap_or(0);
+        eprintln!(
+            "LIVE_25S_METRICS stop_ms={stop_ms} candidate_frames={} video_present={} video_bytes={video_bytes}",
+            recording.frames.len(),
+            recording.video.is_some()
+        );
+        assert!(
+            stop_ms < 15_000,
+            "SCStream stop took {stop_ms}ms (expected < 15000ms)"
+        );
+        assert!(
+            recording.frames.len() >= 10,
+            "expected >= 10 candidate frames over 25s, got {}",
+            recording.frames.len()
+        );
+        let video = recording
+            .video
+            .expect("live 25s recording.mp4 should finalize");
+        assert!(
+            video.is_file() && video_bytes > 10_000,
+            "unexpected mp4 size: {video_bytes}"
+        );
+
+        let probe = crate::helper::probe(&video).expect("scrawl-helper probe should read live mp4");
+        assert!(
+            probe.duration_ms >= 20_000,
+            "expected >= 20s probed video duration, got {}ms",
+            probe.duration_ms
+        );
+        let decoded = crate::helper::frames(&video, crate::helper::FrameTimes::Every(5_000), 480)
+            .expect("scrawl-helper frames should decode live mp4");
+        assert!(
+            !decoded.is_empty()
+                && decoded.iter().any(|f| f
+                    .rgba
+                    .as_chunks::<4>()
+                    .0
+                    .iter()
+                    .any(|px| px[0] != 0 || px[1] != 0 || px[2] != 0)),
+            "decoded keyframes must be non-empty and non-blank"
+        );
+
+        let _ = std::fs::remove_dir_all(&root);
     }
 }

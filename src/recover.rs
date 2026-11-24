@@ -536,4 +536,81 @@ mod tests {
             "the last keyframe shows the blue scene: {r} {b}"
         );
     }
+
+    #[test]
+    fn recover_handles_corrupted_truncated_mp4_without_panicking_or_retrying_forever() {
+        let captures = temp_dir("corrupt-mp4");
+        let dir = orphan(&captures, "corrupt.scrawl");
+        let corrupt_bytes = b"\x00\x00\x00\x18ftypmp42\x00corrupt-truncated";
+        std::fs::write(dir.join(VIDEO), corrupt_bytes).unwrap();
+        write(&dir, &unfinished());
+
+        fn probe_corrupt(path: &Path) -> Result<crate::helper::Probe> {
+            let bytes = std::fs::read(path)?;
+            if bytes.len() < 64 {
+                anyhow::bail!("truncated mp4 ({} bytes)", bytes.len());
+            }
+            fake_probe(path)
+        }
+        fn frames_corrupt(
+            path: &Path,
+            _: crate::helper::FrameTimes,
+            _: u32,
+        ) -> Result<Vec<crate::model::RgbaFrame>> {
+            let bytes = std::fs::read(path)?;
+            anyhow::bail!("corrupt mp4 stream ({} bytes)", bytes.len())
+        }
+        let corrupt_media = Media {
+            probe: probe_corrupt,
+            frames: frames_corrupt,
+            ..FAKE
+        };
+
+        // Journaled capture fails frame decode cleanly, writes `.recovering`, and stops retrying.
+        let err = rebuild(&dir, &corrupt_media).unwrap_err();
+        assert!(err.to_string().contains("corrupt mp4 stream"), "{err:#}");
+        assert!(!dir.join("scrawl.json").exists());
+        assert!(dir.join(RECOVERING).exists());
+
+        // Journal-less orphan fails probe cleanly and stops retrying.
+        let orphan_dir = orphan(&captures, "corrupt-orphan.scrawl");
+        std::fs::write(orphan_dir.join(VIDEO), corrupt_bytes).unwrap();
+        let err = rebuild(&orphan_dir, &corrupt_media).unwrap_err();
+        assert!(err.to_string().contains("truncated mp4"), "{err:#}");
+        assert!(orphan_dir.join(RECOVERING).exists());
+        assert!(pending(&captures, SystemTime::now() + ORPHAN_SETTLE * 2).is_empty());
+
+        // Real AVFoundation decoder (when helper is available) also rejects corrupt bytes safely.
+        if crate::helper::path().is_ok() {
+            let dir_real = orphan(&captures, "corrupt-real.scrawl");
+            std::fs::write(
+                dir_real.join(VIDEO),
+                b"\x00\x00\x00\x18ftypmp42\x00corrupt-truncated-avf",
+            )
+            .unwrap();
+            let real_corrupt = Media {
+                transcribe: fake_transcript,
+                ..Media::SYSTEM
+            };
+            assert!(rebuild(&dir_real, &real_corrupt).is_err());
+            assert!(dir_real.join(RECOVERING).exists());
+        }
+    }
+
+    #[test]
+    fn recover_handles_corrupted_truncated_wav_audio_gracefully() {
+        let captures = temp_dir("corrupt-wav");
+        let dir = orphan(&captures, "corrupt-wav.scrawl");
+        // Truncated WAV header with invalid/missing data chunk.
+        std::fs::write(dir.join("audio.wav"), b"RIFF\x04\x00\x00\x00WAVEfmt ").unwrap();
+        write(&dir, &unfinished());
+
+        let err = rebuild(&dir, &FAKE).unwrap_err();
+        assert!(
+            !dir.join("scrawl.json").exists(),
+            "corrupt rebuild must not write scrawl.json: {err:#}"
+        );
+        assert!(dir.join(RECOVERING).exists());
+        assert!(pending(&captures, SystemTime::now() + ORPHAN_SETTLE * 2).is_empty());
+    }
 }
