@@ -39,6 +39,9 @@
       "status": "main",
       "platforms": ["mac"],
       "added": "2026-11-24",
+      "config": [
+        { "key": "recordingLinks", "value": "true", "does": "Let record-screen (start or finish) and record-device (start) links record (Settings › Agents › Let other apps record)" }
+      ],
       "docs": ["README.md#links-macos"]
     },
     {

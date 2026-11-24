@@ -243,7 +243,14 @@ links use the same permission checks. A link opens Scrawl if it isn't running. N
 | `scrawl://open-latest-capture` | **Open Latest Capture** |
 | `scrawl://open-settings` | **Settings…**; `?tab=general`, `recording`, `storage`, `permissions`, `agents` or `about` opens that pane |
 
-Try one with `open scrawl://record-screen`. Links Scrawl doesn't know are ignored and logged.
+Any app or web page can open a link, so the two that record by themselves, `record-screen`
+(start or finish) and `record-device` (start), only work once **Let other apps record** is on in
+Settings › Agents (`"recordingLinks": true` in `~/.config/scrawl/config.json`). Until then they
+open that pane instead. The picker links still need you to click, drag or press ⏎ to record, and
+the others only open windows, so they always work.
+
+Try one with `open scrawl://open-settings?tab=agents`. Links Scrawl doesn't know are ignored and
+logged.
 
 ## Sending captures of a dev site to its session
 

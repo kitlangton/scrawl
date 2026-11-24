@@ -5376,8 +5376,21 @@ pub fn run_app(
         for url in urls {
             match crate::deeplink::parse(&url) {
                 Ok(link) => {
-                    scrawl_log(format!("link {url} -> {link:?}"));
-                    let _ = link_sender.send(link.into());
+                    let config =
+                        crate::handoff::load_config_from(&crate::handoff::default_config_path());
+                    let allowed =
+                        crate::deeplink::allowed(link, config.recording_links == Some(true));
+                    // A link that may not record opens the setting that would let it.
+                    let action = if allowed {
+                        scrawl_log(format!("link {url} -> {link:?}"));
+                        link.into()
+                    } else {
+                        scrawl_log(format!(
+                            "link {url} not run: Let other apps record is off in Settings › Agents"
+                        ));
+                        MenuAction::SettingsPane(crate::settings::Pane::Agents)
+                    };
+                    let _ = link_sender.send(action);
                 }
                 Err(error) => scrawl_log(format!("link ignored: {error}")),
             }

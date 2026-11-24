@@ -160,6 +160,7 @@ struct SettingsState: Decodable, Equatable {
   var videoExport = false
   var lowerPlayback = false
   var playbackLevel = 20
+  var recordingLinks = false
   var retention = SettingsRetention()
   var capturesSize: String?
   var capturesDir = SettingsCapturesDir()
@@ -1109,6 +1110,13 @@ struct SettingsView: View {
       SettingsHeader("Agent skill")
       SettingsGroup { CopyLine(text: state.skillCommand) }
       SettingsCaption(text: "Run it in a terminal. It teaches Claude Code, OpenCode, Codex and other agents to read your captures and use scrawl.")
+      SettingsHeader("Links")
+      SettingsGroup {
+        SettingsRow(title: "Let other apps record") {
+          SettingsSwitch(on: state.recordingLinks) { model.set("recordingLinks", $0) }
+        }
+      }
+      SettingsCaption(text: "Lets launchers like Raycast record with scrawl://record-screen and record-device. Links that open the picker or Settings always work.")
     }
   }
 
