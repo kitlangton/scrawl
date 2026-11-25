@@ -423,6 +423,20 @@ fn island_content_width(
     inner + 2.0 * ISLAND_INSET
 }
 
+/// What starts a capture. Each goes through `ScrawlCoordinator::held_for_launch`, so none
+/// starts before the launch's permission read has landed.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+enum Start {
+    /// The capture shortcut went down.
+    Shortcut,
+    /// The menu's Record Screen, `app --record` and `scrawl://record-screen`.
+    Record,
+    /// The picker, on one mode or on the mode last used.
+    Picker(Option<SelectionMode>),
+    /// The cabled iPhone: `app --iphone` and `scrawl://record-device`.
+    Iphone,
+}
+
 #[derive(Clone, Debug, Eq, PartialEq)]
 enum MenuAction {
     ToggleCapture,
@@ -787,6 +801,10 @@ pub struct ScrawlCoordinator {
     settings: Option<crate::settings::Session>,
     /// The last fresh read of what macOS has granted (at launch, then while onboarding is open).
     grants: Option<crate::onboarding::Grants>,
+    /// Holds a capture asked for before the launch's permission read has landed.
+    launch: crate::onboarding::LaunchRead<Start>,
+    /// When the launch's permission read went out.
+    launch_read_since: Instant,
     /// Holds the permissions window until the shortcut's modifiers are up.
     gate: crate::onboarding::Gate,
     /// ⌥⇧S waiting for its keys to come up (`crate::shortcut`).
@@ -869,6 +887,8 @@ impl ScrawlCoordinator {
             onboarding_openings: crate::onboarding::Openings::default(),
             settings: None,
             grants: None,
+            launch: crate::onboarding::LaunchRead::default(),
+            launch_read_since: Instant::now(),
             gate: crate::onboarding::Gate::default(),
             shortcut: crate::shortcut::Shortcut::default(),
             hold_mods: 0,
@@ -1111,6 +1131,48 @@ impl ScrawlCoordinator {
         false
     }
 
+    /// The launch's permission read went out: captures wait for it (`held_for_launch`).
+    fn await_launch_read(&mut self) {
+        self.launch.begin();
+        self.launch_read_since = Instant::now();
+    }
+
+    /// Whether `start` has to wait for the launch's permission read. Until it lands Microphone
+    /// and Camera aren't known, so nothing starts; `run_held` runs it afterwards.
+    fn held_for_launch(&mut self, start: Start) -> bool {
+        let held = self.launch.hold(start);
+        if held {
+            scrawl_log(format!("{start:?} waits for the launch's permission read"));
+        }
+        held
+    }
+
+    /// The launch's permission read landed, failed or took too long: what waited for it runs.
+    fn run_held(&mut self, start: Option<Start>, cx: &mut Context<Self>) {
+        let Some(start) = start else {
+            return;
+        };
+        scrawl_log(format!("{start:?} goes on after the launch's read"));
+        match start {
+            Start::Shortcut => self.press_shortcut(cx),
+            Start::Record => self.record_or_finish(cx),
+            Start::Picker(None) => self.begin_target_selection(cx),
+            Start::Picker(Some(mode)) => self.begin_target_selection_on(mode, cx),
+            Start::Iphone => self.start_recording_iphone(cx),
+        }
+    }
+
+    /// Polled while the launch's permission read is out, so a read that never comes back
+    /// doesn't keep a capture waiting.
+    pub fn tick_launch(&mut self, cx: &mut Context<Self>) {
+        let waited_ms = self.launch_read_since.elapsed().as_millis() as u64;
+        let held = self.launch.tick(waited_ms);
+        if !self.launch.is_waiting() {
+            scrawl_log("The launch's permission read is slow; captures no longer wait for it");
+        }
+        self.run_held(held, cx);
+    }
+
     /// Polled while the gate holds a request: shows the permissions window once ⌥⇧ is up.
     pub fn tick_gate(&mut self) {
         use crate::onboarding::{Flow, Input, Mode, Permission};
@@ -1158,6 +1220,15 @@ impl ScrawlCoordinator {
                 {
                     self.open_onboarding(flow);
                 }
+                // After the launch's own window, so a capture that's still blocked brings that
+                // window forward instead of opening before it.
+                let held = self.launch.finish();
+                self.run_held(held, cx);
+                Effect::None
+            }
+            Event::LaunchFailed => {
+                let held = self.launch.finish();
+                self.run_held(held, cx);
                 Effect::None
             }
             Event::Grants(grants) => {
@@ -1229,6 +1300,9 @@ impl ScrawlCoordinator {
             return;
         }
         if !self.shortcut.is_pending() && activity == crate::shortcut::Activity::Free {
+            if self.held_for_launch(Start::Shortcut) {
+                return;
+            }
             // No picker or overlay before the permissions are on: they sit above
             // macOS's permission prompts and take the clicks meant for them.
             let missing = self.missing_to_record();
@@ -1284,7 +1358,7 @@ impl ScrawlCoordinator {
             self.finish_recording(cx);
         } else if self.is_selecting() {
             self.record_selected_mode(cx);
-        } else if !self.is_processing() {
+        } else if !self.is_processing() && !self.held_for_launch(Start::Record) {
             self.record_screen_now(cx);
         }
     }
@@ -2383,14 +2457,14 @@ impl ScrawlCoordinator {
 
     /// The menu bar's picker, opening on the mode the last recording used.
     pub fn begin_target_selection(&mut self, cx: &mut Context<Self>) {
-        if self.ready_to_record() {
+        if !self.held_for_launch(Start::Picker(None)) && self.ready_to_record() {
             self.open_picker(None, cx);
         }
     }
 
     /// `scrawl://record-area` and `record-window`: the picker, opened on `mode`.
     pub fn begin_target_selection_on(&mut self, mode: SelectionMode, cx: &mut Context<Self>) {
-        if self.ready_to_record() {
+        if !self.held_for_launch(Start::Picker(Some(mode))) && self.ready_to_record() {
             self.open_picker(Some(mode), cx);
         }
     }
@@ -2698,7 +2772,7 @@ impl ScrawlCoordinator {
     /// window's on-screen rect is the capture target, so the laser, ink, pins and clicks over it
     /// normalize straight into phone-screen coordinates (kept current as the window moves).
     pub fn start_recording_iphone(&mut self, cx: &mut Context<Self>) {
-        if self.is_recording() || self.is_processing() {
+        if self.is_recording() || self.is_processing() || self.held_for_launch(Start::Iphone) {
             return;
         }
         scrawl_log("start_recording_iphone invoked");
@@ -5435,18 +5509,25 @@ pub fn run_app(
         crate::speech_model::ensure();
         let menu_rx = install_status_bar();
 
-        // Onboarding opens on first launch, or for a permission that went away.
-        if screenshot_out.is_none() && std::env::var_os("SCRAWL_NO_ONBOARDING").is_none() {
+        // Onboarding opens on first launch, or for a permission that went away. The read runs
+        // off the UI loop (the helper may take seconds), and captures wait for it.
+        let reads_grants =
+            screenshot_out.is_none() && std::env::var_os("SCRAWL_NO_ONBOARDING").is_none();
+        if reads_grants {
             let sender = telemetry.ui_sender.clone();
             std::thread::spawn(move || {
-                if let Some(grants) = crate::onboarding::read_grants() {
-                    let event = crate::onboarding::Event::Launch(grants);
-                    let _ = sender.send(LiveOverlayEvent::Onboarding(None, event));
-                }
+                let event = crate::onboarding::launch_event(crate::onboarding::read_grants());
+                let _ = sender.send(LiveOverlayEvent::Onboarding(None, event));
             });
         }
         let has_initial = initial_bundle.is_some();
-        let coordinator = cx.new(|_| ScrawlCoordinator::new(telemetry, initial_bundle));
+        let coordinator = cx.new(|_| {
+            let mut coord = ScrawlCoordinator::new(telemetry, initial_bundle);
+            if reads_grants {
+                coord.await_launch_read();
+            }
+            coord
+        });
         set_status_inbox_count(coordinator.read(cx).inbox.len());
 
         if has_initial {
@@ -5502,8 +5583,8 @@ pub fn run_app(
                     crate::settings_window::poll(cx);
                     // The menu bar and `scrawl://` links send the same actions.
                     // A link that launches Scrawl can arrive before the launch's permission read
-                    // lands, like `app --record` or an early shortcut press: it meets the same
-                    // gate they do, with Microphone and Camera not yet known.
+                    // lands, like `app --record` or an early shortcut press: all three wait for
+                    // it (`held_for_launch`).
                     let actions: Vec<MenuAction> = menu_rx
                         .iter()
                         .flat_map(|rx| rx.try_iter())
@@ -5635,6 +5716,9 @@ pub fn run_app(
                         // The picker may not have the keys (another app is active), but the
                         // key tap sees Esc anyway.
                         loop_coord.update(cx, |coord, cx| coord.cancel_recording(cx));
+                    }
+                    if loop_coord.read(cx).launch.is_waiting() {
+                        loop_coord.update(cx, |coord, cx| coord.tick_launch(cx));
                     }
                     if loop_coord.read(cx).gate.is_pending() {
                         loop_coord.update(cx, |coord, _| coord.tick_gate());

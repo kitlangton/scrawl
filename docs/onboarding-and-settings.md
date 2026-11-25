@@ -4,7 +4,9 @@ Read this before changing `src/onboarding.rs`, `src/settings.rs`, `src/command_l
 
 ## Onboarding (`src/onboarding.rs`, `helper/Onboarding.swift`)
 
-Rust decides what shows (`Flow`, `launch_plan`, `Gate`, tested) and stores progress under `"onboarding"` in `~/.config/scrawl/config.json`, including the tour's current step (`resume`), so any quit (macOS's "Quit & Reopen" too) picks up there; the SwiftUI window in `scrawl-helper onboarding` only renders the state it's sent and reports buttons (`grant:<permission>` for a row).
+Rust decides what shows (`Flow`, `launch_plan`, `Gate`, `LaunchRead`, tested) and stores progress under `"onboarding"` in `~/.config/scrawl/config.json`, including the tour's current step (`resume`), so any quit (macOS's "Quit & Reopen" too) picks up there; the SwiftUI window in `scrawl-helper onboarding` only renders the state it's sent and reports buttons (`grant:<permission>` for a row).
+
+Microphone and Camera are only known once the launch's permission read lands (`run_app` reads on a background thread and sends `Event::Launch`, or `Event::LaunchFailed`); until then `missing_to_record` and `ready_for` let them pass. So everything that starts a capture (the shortcut, the menu, `app --record` and `--iphone`, `scrawl://` links) goes through `ScrawlCoordinator::held_for_launch`: while the read is out, `LaunchRead` keeps the first one asked for and runs it once the read lands or fails, or after `LAUNCH_READ_MS` (3 s) if it never comes back. Don't read the grants on the UI loop instead: the helper is allowed 5 s and a ScreenCaptureKit probe can follow it. The welcome window's events carry the number of the opening that sent them (`Openings`), so the exit of a window that was replaced doesn't close its replacement.
 
 Tour: Welcome → HowItWorks → Permissions (one checklist of three required rows, Screen Recording first, then Microphone and Accessibility; any order works) → TryIt → Done. Camera (iPhone) is never in the tour: its first use opens `Flow::fix(vec![Camera])`, the same screen with one row.
 
