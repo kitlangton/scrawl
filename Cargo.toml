@@ -31,7 +31,7 @@ objc2-core-foundation = "0.3.2"
 objc2-foundation = { version = "0.3.2", features = ["NSArray", "NSData", "NSString"] }
 objc2-quartz-core = { version = "0.3.2", features = ["CALayer"] }
 metal = "0.29.0"
-screencapturekit = { version = "=11.0.0", features = ["macos_15_0"] }
+screencapturekit = { version = "=11.1.2", features = ["macos_15_0"] }
 
 [target.'cfg(target_os = "windows")'.dependencies]
 ab_glyph = "0.2.32"

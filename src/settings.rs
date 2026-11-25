@@ -2720,4 +2720,238 @@ mod tests {
             row.caption
         );
     }
+
+    #[test]
+    fn multi_entity_microphone_transitions_and_active_unplug_fall_back_in_place() {
+        let dir = TempDir::new("mic-transitions");
+        let mut host = fake(&dir);
+        let mut grants = Grants::default();
+        grants
+            .statuses
+            .insert(Permission::Microphone, Status::Granted);
+        let mut panel = Panel::default();
+        panel.set_grants(grants);
+
+        let mic_a = crate::mic::Input {
+            id: "mic-a".into(),
+            name: "Studio Mic A".into(),
+        };
+        let mic_b = crate::mic::Input {
+            id: "mic-b".into(),
+            name: "USB Mic B".into(),
+        };
+        let mic_c = crate::mic::Input {
+            id: "mic-c".into(),
+            name: "Hotplug Mic C".into(),
+        };
+        panel.set_inputs(crate::mic::Inputs {
+            devices: vec![mic_a.clone(), mic_b.clone()],
+            default: Some(mic_a.id.clone()),
+        });
+
+        let set_mic = |panel: &mut Panel, host: &mut Fake, id: &str| {
+            panel.on(
+                Action::Set {
+                    key: "microphone".into(),
+                    value: id.into(),
+                },
+                host,
+            );
+        };
+
+        // Switch active selection A -> B -> A without reloading Panel, verifying persisted config.
+        set_mic(&mut panel, &mut host, "mic-b");
+        let view_b = panel.view(&host).microphone;
+        assert_eq!(view_b.selected, "mic-b");
+        assert_eq!(view_b.value, "USB Mic B");
+        assert_eq!(view_b.meter.as_deref(), Some("mic-b"));
+        assert_eq!(read_json(&host.path)["microphone"]["id"], "mic-b");
+        assert!(view_b.options.iter().any(|o| o.id == "mic-b" && o.enabled));
+
+        set_mic(&mut panel, &mut host, "mic-a");
+        let view_a = panel.view(&host).microphone;
+        assert_eq!(view_a.selected, "mic-a");
+        assert_eq!(view_a.value, "Studio Mic A");
+        assert_eq!(view_a.meter.as_deref(), Some("mic-a"));
+        assert_eq!(read_json(&host.path)["microphone"]["id"], "mic-a");
+
+        // Unplug currently active Mic A while keeping Panel alive: Mic A must become disabled
+        // ("not connected"), never active/ready, while fallback & meter point to remaining default.
+        panel.set_inputs(crate::mic::Inputs {
+            devices: vec![mic_b.clone()],
+            default: Some(mic_b.id.clone()),
+        });
+        let after_unplug = panel.view(&host).microphone;
+        assert_eq!(after_unplug.meter.as_deref(), Some("mic-b"));
+        assert!(
+            after_unplug
+                .note
+                .as_deref()
+                .is_some_and(|n| n.contains("Studio Mic A") && n.contains("USB Mic B")),
+            "expected fallback note, got {:?}",
+            after_unplug.note
+        );
+        let disconnected_opt = after_unplug
+            .options
+            .iter()
+            .find(|o| o.id == "mic-a")
+            .expect("unplugged chosen mic stays visible as disabled option");
+        assert!(!disconnected_opt.enabled);
+        assert!(disconnected_opt.title.contains("not connected"));
+
+        // Hot-plug Mic C updates available options immediately without restarting.
+        panel.set_inputs(crate::mic::Inputs {
+            devices: vec![mic_b, mic_c],
+            default: Some("mic-b".into()),
+        });
+        assert!(
+            panel
+                .view(&host)
+                .microphone
+                .options
+                .iter()
+                .any(|o| o.id == "mic-c" && o.enabled)
+        );
+
+        // Zero inputs connected coerces cleanly with meter = None.
+        panel.set_inputs(crate::mic::Inputs::default());
+        assert_eq!(panel.view(&host).microphone.meter, None);
+    }
+
+    #[test]
+    fn capability_mismatch_and_unusable_transcriber_coerce_safely() {
+        let dir = TempDir::new("transcriber-coerce");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+
+        // Configured Hex with no running server/models never shows active/checked.
+        std::fs::write(&host.path, r#"{"transcriber":"hex","hexModel":"tiny"}"#).unwrap();
+        let hex_menu =
+            crate::transcribe::menu_state(crate::transcribe::Engine::Hex, None, Some("tiny"));
+        assert!(!hex_menu.hex_enabled);
+        assert!(!hex_menu.hex_checked);
+
+        // Configured command with relative/missing command path never exposes command engine as active.
+        std::fs::write(
+            &host.path,
+            r#"{"transcriber":"command","transcribeCommand":["relative-only-bin"]}"#,
+        )
+        .unwrap();
+        let cmd_view = panel.view(&host).transcriber;
+        assert_eq!(cmd_view.command, None);
+        assert_ne!(cmd_view.engine, "command");
+
+        // Invalid/unsupported locale or injection attempts are rejected while valid switches persist.
+        panel.on(
+            Action::Set {
+                key: "appleLocale".into(),
+                value: "fr-FR".into(),
+            },
+            &mut host,
+        );
+        assert_eq!(read_json(&host.path)["appleLocale"], "fr-FR");
+        assert_eq!(
+            panel.on(
+                Action::Set {
+                    key: "appleLocale".into(),
+                    value: "en-US;rm -rf /".into(),
+                },
+                &mut host,
+            ),
+            Effect::None
+        );
+        assert_eq!(read_json(&host.path)["appleLocale"], "fr-FR");
+        panel.on(
+            Action::Set {
+                key: "hexLanguage".into(),
+                value: "invalid lang!".into(),
+            },
+            &mut host,
+        );
+        assert!(read_json(&host.path).get("hexLanguage").is_none());
+    }
+
+    #[test]
+    fn live_helper_settings_accepts_in_place_multi_entity_state_updates() {
+        use std::io::Write;
+        use std::process::{Command, Stdio};
+        use std::time::{Duration, Instant};
+
+        let Ok(helper) = crate::helper::path() else {
+            return;
+        };
+        let dir = TempDir::new("live-helper-settings");
+        let mut host = fake(&dir);
+        let mut panel = Panel::default();
+        let mic_a = crate::mic::Input {
+            id: "mic-a".into(),
+            name: "Mic A".into(),
+        };
+        let mic_b = crate::mic::Input {
+            id: "mic-b".into(),
+            name: "Mic B".into(),
+        };
+        panel.set_inputs(crate::mic::Inputs {
+            devices: vec![mic_a.clone(), mic_b.clone()],
+            default: Some(mic_a.id.clone()),
+        });
+
+        let mut child = Command::new(helper)
+            .arg("settings")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn scrawl-helper settings");
+        let mut stdin = child.stdin.take().expect("helper stdin");
+
+        let push_state = |stdin: &mut std::process::ChildStdin, panel: &Panel, host: &Fake| {
+            let mut state = serde_json::to_value(panel.view(host)).unwrap();
+            state["type"] = "state".into();
+            state["transcriber"]["speech"] =
+                serde_json::to_value(crate::speech_model::Status::default()).unwrap();
+            writeln!(stdin, "{state}").unwrap();
+            stdin.flush().unwrap();
+        };
+
+        // Send initial state, switch mic A -> mic B, then unplug mic A in-place without reloading.
+        push_state(&mut stdin, &panel, &host);
+        panel.on(
+            Action::Set {
+                key: "microphone".into(),
+                value: "mic-b".into(),
+            },
+            &mut host,
+        );
+        push_state(&mut stdin, &panel, &host);
+        panel.set_inputs(crate::mic::Inputs {
+            devices: vec![mic_b],
+            default: Some("mic-b".into()),
+        });
+        push_state(&mut stdin, &panel, &host);
+
+        std::thread::sleep(Duration::from_millis(80));
+        assert!(
+            child.try_wait().unwrap().is_none(),
+            "helper exited unexpectedly during in-place state transitions"
+        );
+
+        writeln!(stdin, r#"{{"type":"close"}}"#).unwrap();
+        stdin.flush().unwrap();
+        drop(stdin);
+
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let status = loop {
+            if let Some(status) = child.try_wait().unwrap() {
+                break status;
+            }
+            if Instant::now() >= deadline {
+                let _ = child.kill();
+                let _ = child.wait();
+                panic!("scrawl-helper settings did not exit on close");
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        };
+        assert!(status.success(), "helper exited with {status}");
+    }
 }

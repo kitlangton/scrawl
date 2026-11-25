@@ -686,6 +686,9 @@ pub struct ScrawlCoordinator {
     island_morph: Morph,
     /// Switch chips on a tap-started recording (`crate::shortcut::Reveal`).
     reveal: crate::shortcut::Reveal,
+    /// Monotonically incremented whenever a picker/capture/cancel starts, guarding async
+    /// `finish_recording` and routing callbacks against clobbering newer state.
+    session_epoch: u64,
     /// When the chips last opened or folded, for the in-place swap of the trailing group.
     reveal_since: f64,
     /// The trailing group fading out after that change: `Some(true)` the chips, `Some(false)` the
@@ -796,6 +799,7 @@ impl ScrawlCoordinator {
             island_opacity: 0.0,
             island_morph: Morph::Phase,
             reveal: crate::shortcut::Reveal::default(),
+            session_epoch: 0,
             reveal_since: motion::now(),
             reveal_outgoing: None,
             reveal_prev_chips: false,
@@ -1336,6 +1340,7 @@ impl ScrawlCoordinator {
             // Recording → Recording: the chips fold into the pill as the phone starts.
             self.fold_reveal();
             drop(overlay);
+            self.telemetry.set_active_overlay_window(None);
             self.start_recording_iphone(cx);
             return;
         }
@@ -1353,22 +1358,40 @@ impl ScrawlCoordinator {
         }
     }
 
-    /// Stops the active recording and deletes its bundle, leaving the island as it is. Returns
-    /// its target and overlay.
+    /// Stops the active recording off the main thread and schedules cleanup of its bundle,
+    /// returning its target and overlay immediately.
     fn discard_recording(&mut self) -> Option<(TargetInfo, Option<LaserOverlay>)> {
         let rec = self.active_recording.take()?;
         let _ = self.telemetry.finish_session();
+        let bundle_dir = rec.bundle_dir;
         match rec.source {
-            CaptureSource::Screen { session, audio, .. } => {
-                let _ = session.stop();
-                if let Some(audio) = audio {
-                    let _ = audio.stop();
+            CaptureSource::Screen {
+                session,
+                audio,
+                windows,
+            } => {
+                session.cancel(move || {
+                    if let Some(windows) = windows {
+                        let _ = windows.stop();
+                    }
+                    if let Some(audio) = audio {
+                        let _ = audio.stop();
+                    }
+                    if !bundle_dir.as_os_str().is_empty() {
+                        let _ = std::fs::remove_dir_all(bundle_dir);
+                    }
+                });
+            }
+            CaptureSource::Phone(session) => {
+                session.cancel();
+                if !bundle_dir.as_os_str().is_empty() {
+                    crate::capture::spawn_reaper_or_run("scrawl-phone-cleanup", move || {
+                        let _ = std::fs::remove_dir_all(bundle_dir);
+                    });
                 }
             }
-            CaptureSource::Phone(session) => session.cancel(),
             CaptureSource::Lab => return Some((rec.target, rec._metal_overlay)),
         }
-        let _ = std::fs::remove_dir_all(rec.bundle_dir);
         Some((rec.target, rec._metal_overlay))
     }
 
@@ -1845,13 +1868,7 @@ impl ScrawlCoordinator {
         match crate::native::pill::NativePill::open() {
             Ok(pill) => {
                 let num = pill.window_number();
-                if num > 0 {
-                    self.telemetry
-                        .excluded_window_ids
-                        .lock()
-                        .unwrap_or_else(std::sync::PoisonError::into_inner)
-                        .push(num);
-                }
+                self.telemetry.register_hud_window(num);
                 self.native_pill = Some(pill);
             }
             Err(err) => {
@@ -1934,16 +1951,22 @@ impl ScrawlCoordinator {
             .store(false, std::sync::atomic::Ordering::Release);
         self.telemetry.set_picker_rect(None);
         self.picker_metal_overlay = None;
+        self.telemetry.set_active_overlay_window(None);
         self.iphone_preview = None;
         self.selection_drag = None;
         self.hovered_window = None;
         self.animated_window_rect = None;
         self.set_island_phase(IslandPhase::Dismissing);
-        cx.defer(close_picker_window);
+        let entity = cx.entity().clone();
+        cx.defer(move |cx| {
+            close_picker_window(cx);
+            entity.update(cx, |coord, _| coord.telemetry.set_picker_window(None));
+        });
         cx.notify();
     }
 
     pub fn dismiss_completed_bundle(&mut self, cx: &mut Context<Self>) {
+        self.bump_session_epoch();
         if let Some(dir) = self.completed_dir.clone() {
             self.keep_pending_send(&dir);
             self.mark_handled(&dir);
@@ -1970,6 +1993,7 @@ impl ScrawlCoordinator {
         click_target: Option<[f32; 2]>,
         cx: &mut Context<Self>,
     ) {
+        self.bump_session_epoch();
         let dir = self
             .completed_dir
             .clone()
@@ -2341,11 +2365,17 @@ impl ScrawlCoordinator {
         }
     }
 
+    fn bump_session_epoch(&mut self) -> u64 {
+        self.session_epoch = self.session_epoch.wrapping_add(1);
+        self.session_epoch
+    }
+
     /// Opens the picker on `mode`, else on the mode the last recording used.
     fn open_picker(&mut self, mode: Option<SelectionMode>, cx: &mut Context<Self>) {
         if self.is_recording() || self.is_processing() {
             return;
         }
+        self.bump_session_epoch();
         scrawl_log(format!("open_picker invoked (mode: {mode:?})"));
         let started = Instant::now();
         self.recording_shortcut_key = false;
@@ -2446,24 +2476,16 @@ impl ScrawlCoordinator {
         self.sync_picker_overlay();
         if self.picker_metal_overlay.is_none() && !self.lab {
             let [x, y, w, h] = self.display_rect.map(f64::from);
-            let overlay =
+            self.picker_metal_overlay =
                 platform::open_overlay(Arc::clone(&self.telemetry), Some([x, y, w, h]), cx)
                     .map_err(|error| scrawl_log(format!("Metal overlay failed: {error}")))
                     .ok();
-            if let Some(ref ov) = overlay {
-                self.telemetry
-                    .excluded_window_ids
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(ov.window_number());
-                self.telemetry
-                    .passthrough_window_ids
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(ov.window_number());
-            }
-            self.picker_metal_overlay = overlay;
         }
+        self.telemetry.set_active_overlay_window(
+            self.picker_metal_overlay
+                .as_ref()
+                .map(LaserOverlay::window_number),
+        );
 
         let entity = cx.entity().clone();
         cx.defer(move |cx| {
@@ -2501,6 +2523,8 @@ impl ScrawlCoordinator {
             return;
         }
         self.begin_playback();
+        self.bump_session_epoch();
+        self.routing = None;
         let started = Instant::now();
         scrawl_log(format!(
             "start_recording_with_target invoked: mode={:?} frame={:?}",
@@ -2539,28 +2563,20 @@ impl ScrawlCoordinator {
         if let Some(ref pill) = self.native_pill {
             pill.place_on([f.x + f.width / 2.0, f.y + f.height / 2.0]);
         }
-        let metal_overlay = self.picker_metal_overlay.take().map(|mut overlay| {
-            overlay.move_to(target_rect);
-            overlay
-        });
-        let metal_overlay = metal_overlay.or_else(|| {
-            let ov = platform::open_overlay(Arc::clone(&self.telemetry), Some(target_rect), cx)
-                .map_err(|error| scrawl_log(format!("Metal overlay failed: {error}")))
-                .ok();
-            if let Some(ref o) = ov {
-                self.telemetry
-                    .excluded_window_ids
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(o.window_number());
-                self.telemetry
-                    .passthrough_window_ids
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(o.window_number());
-            }
-            ov
-        });
+        let metal_overlay = self
+            .picker_metal_overlay
+            .take()
+            .map(|mut overlay| {
+                overlay.move_to(target_rect);
+                overlay
+            })
+            .or_else(|| {
+                platform::open_overlay(Arc::clone(&self.telemetry), Some(target_rect), cx)
+                    .map_err(|error| scrawl_log(format!("Metal overlay failed: {error}")))
+                    .ok()
+            });
+        self.telemetry
+            .set_active_overlay_window(metal_overlay.as_ref().map(LaserOverlay::window_number));
         start_metric("metal_open_ms", stage);
         let stage = Instant::now();
         let audio_recorder = AudioRecorder::start().ok();
@@ -2615,6 +2631,7 @@ impl ScrawlCoordinator {
         cx.defer(move |cx| {
             close_review_window(cx);
             close_picker_window(cx);
+            entity.update(cx, |coord, _| coord.telemetry.set_picker_window(None));
             ensure_hud_pill_open(&entity, cx);
         });
         cx.notify();
@@ -2623,6 +2640,8 @@ impl ScrawlCoordinator {
     /// `scrawl lab pill`: a pretend recording with no capture, microphone, files or overlay, so
     /// the capsule goes through exactly the states a real one does.
     fn start_lab_recording(&mut self, target: TargetInfo, cx: &mut Context<Self>) {
+        self.bump_session_epoch();
+        self.telemetry.set_active_overlay_window(None);
         if let IslandPhase::Selecting { mode } = self.island_phase {
             motion::trace_event(format!("record:{}", mode.label()));
         }
@@ -2657,6 +2676,8 @@ impl ScrawlCoordinator {
             return;
         }
         self.begin_playback();
+        self.bump_session_epoch();
+        self.routing = None;
         self.remember_mode(SelectionMode::Iphone);
         self.recording_shortcut_key = false;
         self.selection_drag = None;
@@ -2729,6 +2750,8 @@ impl ScrawlCoordinator {
                 .map_err(|error| scrawl_log(format!("Metal overlay failed: {error}")))
                 .ok()
         });
+        self.telemetry
+            .set_active_overlay_window(metal_overlay.as_ref().map(LaserOverlay::window_number));
         self.active_recording = Some(ActiveRecording {
             started: Instant::now(),
             target,
@@ -2763,7 +2786,12 @@ impl ScrawlCoordinator {
     pub fn cancel_recording(&mut self, cx: &mut Context<Self>) {
         self.playback.take();
         scrawl_log("cancel_recording invoked");
-        self.discard_recording();
+        self.bump_session_epoch();
+        self.routing = None;
+        if let Some((_, overlay)) = self.discard_recording() {
+            drop(overlay);
+        }
+        self.telemetry.set_active_overlay_window(None);
         self.dismiss_island(cx);
     }
 
@@ -2773,6 +2801,7 @@ impl ScrawlCoordinator {
         let Some(rec) = self.active_recording.take() else {
             return;
         };
+        let finish_epoch = self.session_epoch;
         let (events, strokes) = self.telemetry.finish_session();
         let bundle_dir = rec.bundle_dir;
         let target = rec.target;
@@ -2781,6 +2810,7 @@ impl ScrawlCoordinator {
         // and morph the Dynamic Island into the compact spinning "Processing…" state while
         // media teardown, transcription, and PNG encoding run on a background worker.
         drop(rec._metal_overlay);
+        self.telemetry.set_active_overlay_window(None);
         self.set_island_phase(IslandPhase::Processing);
         self.completed_note = None;
         self.route_chips.clear();
@@ -2791,6 +2821,11 @@ impl ScrawlCoordinator {
             cx.spawn(async move |entity, cx| {
                 cx.background_executor().timer(wait).await;
                 let _ = entity.update(cx, |coord, cx| {
+                    if coord.session_epoch != finish_epoch
+                        || !matches!(coord.island_phase, IslandPhase::Processing)
+                    {
+                        return;
+                    }
                     coord.set_island_phase(IslandPhase::Completed {
                         finished_at: Instant::now(),
                         frame_count: 6,
@@ -2831,6 +2866,7 @@ impl ScrawlCoordinator {
             })
         });
 
+        let cleanup_dir = bundle_dir.clone();
         cx.spawn(async move |entity, cx| {
             let result = cx
                 .background_executor()
@@ -2900,28 +2936,73 @@ impl ScrawlCoordinator {
             let routed = entity
                 .update(cx, |coord, cx| {
                     let (finalized, duration_ms) = result;
-                    let mut frame_count = 1;
-                    let mut routed = None;
-                    coord.completed_dir = None;
-                    if let Ok((dir, bundle, _)) = finalized {
-                        frame_count = bundle.keyframes.len();
-                        let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
-                        coord.completed_dir = Some(dir.clone());
-                        coord.last_local_capture_ms = crate::now_epoch_ms();
-                        if route.is_some() || look.is_some() {
-                            coord.routing = Some(dir.clone());
-                            routed = Some((dir.clone(), look.is_some().then(|| bundle.clone())));
+                    let has_route = route.is_some() || look.is_some();
+                    match decide_finish_transition(
+                        coord.session_epoch,
+                        finish_epoch,
+                        finalized.as_ref().map(|(_, b, _)| b.keyframes.len()),
+                    ) {
+                        FinishTransition::ApplySuccess { frame_count } => {
+                            let Ok((dir, bundle, _)) = finalized else {
+                                unreachable!();
+                            };
+                            let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
+                            coord.completed_dir = Some(dir.clone());
+                            coord.last_local_capture_ms = crate::now_epoch_ms();
+                            let routed = if has_route {
+                                coord.routing = Some(dir.clone());
+                                Some((dir.clone(), look.is_some().then(|| bundle.clone())))
+                            } else {
+                                None
+                            };
+                            coord.set_review_bundle((dir, bundle), coord.completed_note.clone());
+                            coord.set_island_phase(IslandPhase::Completed {
+                                finished_at: Instant::now(),
+                                frame_count,
+                                duration_ms,
+                                inbox_count: 0,
+                            });
+                            cx.notify();
+                            routed
                         }
-                        coord.set_review_bundle((dir, bundle), coord.completed_note.clone());
+                        FinishTransition::DismissError => {
+                            if let Err(error) = finalized {
+                                scrawl_log(format!("finish_recording failed: {error:#}"));
+                            }
+                            coord.completed_dir = None;
+                            coord.routing = None;
+                            coord.route_chips.clear();
+                            if !cleanup_dir.as_os_str().is_empty()
+                                && !cleanup_dir.join(crate::recover::UNFINISHED).exists()
+                                && !cleanup_dir.join("recording.mp4").exists()
+                                && !cleanup_dir.join("audio.wav").exists()
+                            {
+                                let _ = std::fs::remove_dir_all(&cleanup_dir);
+                            }
+                            coord.dismiss_island(cx);
+                            None
+                        }
+                        FinishTransition::IgnoreStale => {
+                            match finalized {
+                                Ok((dir, bundle, _)) => {
+                                    scrawl_log(format!(
+                                        "finish_recording completed after newer session started: {}",
+                                        dir.display()
+                                    ));
+                                    let _ = crate::handoff::copy_bundle_to_clipboard(&dir);
+                                    if coord.review_bundle.is_none() {
+                                        coord.set_review_bundle((dir, bundle), None);
+                                    }
+                                }
+                                Err(error) => {
+                                    scrawl_log(format!(
+                                        "finish_recording failed after newer session started: {error:#}"
+                                    ));
+                                }
+                            }
+                            None
+                        }
                     }
-                    coord.set_island_phase(IslandPhase::Completed {
-                        finished_at: Instant::now(),
-                        frame_count,
-                        duration_ms,
-                        inbox_count: 0,
-                    });
-                    cx.notify();
-                    routed
                 })
                 .ok()
                 .flatten();
@@ -2950,15 +3031,30 @@ impl ScrawlCoordinator {
                 "finish: copied at {copied_ms}ms · routed at {}ms",
                 finish_started.elapsed().as_millis()
             ));
-            let _ = entity.update(cx, |coord, cx| coord.route_arrived(dir, route, cx));
+            let _ = entity.update(cx, |coord, cx| {
+                coord.route_arrived(finish_epoch, dir, route, cx)
+            });
         })
         .detach();
     }
 
-    /// Acts on a local capture's route once it's worked out, unless ✕ or Paste on the Completed
-    /// island kept the capture on the clipboard first.
-    fn route_arrived(&mut self, dir: PathBuf, route: RouteOutcome, cx: &mut Context<Self>) {
-        if self.routing.as_deref() != Some(dir.as_path()) {
+    /// Acts on a local capture's route once it's worked out, unless ✕, Paste, or a newer session
+    /// replaced it first.
+    fn route_arrived(
+        &mut self,
+        epoch: u64,
+        dir: PathBuf,
+        route: RouteOutcome,
+        cx: &mut Context<Self>,
+    ) {
+        if !can_apply_route(
+            self.session_epoch,
+            epoch,
+            self.island_phase,
+            self.completed_dir.as_deref(),
+            self.routing.as_deref(),
+            &dir,
+        ) {
             if !matches!(route, RouteOutcome::None) {
                 scrawl_log(format!(
                     "routing: {} was kept on the clipboard before its route arrived",
@@ -2975,6 +3071,43 @@ impl ScrawlCoordinator {
         }
         cx.notify();
     }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FinishTransition {
+    ApplySuccess { frame_count: usize },
+    DismissError,
+    IgnoreStale,
+}
+
+fn decide_finish_transition<E>(
+    current_epoch: u64,
+    finish_epoch: u64,
+    finalized_frame_count: Result<usize, E>,
+) -> FinishTransition {
+    if current_epoch != finish_epoch {
+        return FinishTransition::IgnoreStale;
+    }
+    match finalized_frame_count {
+        Ok(frame_count) => FinishTransition::ApplySuccess {
+            frame_count: frame_count.max(1),
+        },
+        Err(_) => FinishTransition::DismissError,
+    }
+}
+
+fn can_apply_route(
+    current_epoch: u64,
+    route_epoch: u64,
+    phase: IslandPhase,
+    completed_dir: Option<&std::path::Path>,
+    routing: Option<&std::path::Path>,
+    dir: &std::path::Path,
+) -> bool {
+    current_epoch == route_epoch
+        && matches!(phase, IslandPhase::Completed { .. })
+        && completed_dir == Some(dir)
+        && routing == Some(dir)
 }
 
 /// A session offered one click away on the Completed island.
@@ -5056,13 +5189,7 @@ fn open_picker_windows(coord_entity: &Entity<ScrawlCoordinator>, cx: &mut App) {
             // The display the picker was opened for, or has since followed the pointer to.
             let frame = picker_coord.read(cx).display_rect.map(f64::from);
             if let Some(num) = platform::configure_picker_window(window, lab, frame, cx) {
-                picker_coord
-                    .read(cx)
-                    .telemetry
-                    .excluded_window_ids
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(num);
+                picker_coord.read(cx).telemetry.set_picker_window(Some(num));
             }
             let focus = cx.focus_handle();
             if !lab {
@@ -5173,13 +5300,7 @@ fn ensure_hud_pill_open(coord_entity: &Entity<ScrawlCoordinator>, cx: &mut App) 
         move |window, cx| {
             let chrome = PillChrome::open(window, cx);
             if let Some(num) = chrome.window_number() {
-                pill_coord
-                    .read(cx)
-                    .telemetry
-                    .excluded_window_ids
-                    .lock()
-                    .unwrap_or_else(std::sync::PoisonError::into_inner)
-                    .push(num);
+                pill_coord.read(cx).telemetry.register_hud_window(num);
             }
             let focus = cx.focus_handle();
             window.focus(&focus);
@@ -5848,5 +5969,76 @@ mod tests {
             title: "SCRAWL".into(),
         };
         assert_eq!(completed_delivery_note(&sent, "SCRAWL"), "Sent to SCRAWL");
+    }
+
+    #[test]
+    fn finish_transition_and_route_guard_prevent_phantom_completed_and_stale_clobber() {
+        // Error on active epoch must dismiss rather than showing phantom "Completed".
+        assert_eq!(
+            decide_finish_transition::<&str>(5, 5, Err("corrupt mp4")),
+            FinishTransition::DismissError
+        );
+        // Stale async completion after epoch advanced must be ignored cleanly.
+        assert_eq!(
+            decide_finish_transition::<&str>(6, 5, Ok(14)),
+            FinishTransition::IgnoreStale
+        );
+        assert_eq!(
+            decide_finish_transition::<&str>(6, 5, Err("late error")),
+            FinishTransition::IgnoreStale
+        );
+        assert_eq!(
+            decide_finish_transition::<&str>(6, 6, Ok(14)),
+            FinishTransition::ApplySuccess { frame_count: 14 }
+        );
+
+        let dir_a = std::path::Path::new("/tmp/a.scrawl");
+        let dir_b = std::path::Path::new("/tmp/b.scrawl");
+        let completed = || IslandPhase::Completed {
+            finished_at: std::time::Instant::now(),
+            frame_count: 5,
+            duration_ms: 1_000,
+            inbox_count: 0,
+        };
+        assert!(can_apply_route(
+            3,
+            3,
+            completed(),
+            Some(dir_a),
+            Some(dir_a),
+            dir_a
+        ));
+        assert!(!can_apply_route(
+            4,
+            3,
+            completed(),
+            Some(dir_a),
+            Some(dir_a),
+            dir_a
+        ));
+        assert!(!can_apply_route(
+            3,
+            3,
+            IslandPhase::Hidden,
+            None,
+            Some(dir_a),
+            dir_a
+        ));
+        assert!(!can_apply_route(
+            3,
+            3,
+            IslandPhase::Recording,
+            None,
+            None,
+            dir_a
+        ));
+        assert!(!can_apply_route(
+            3,
+            3,
+            completed(),
+            Some(dir_b),
+            Some(dir_b),
+            dir_a
+        ));
     }
 }

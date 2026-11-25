@@ -567,6 +567,8 @@ pub(crate) struct Sampler {
     pub excluded_window_ids: Arc<Mutex<Vec<u32>>>,
     pub started_at: Instant,
     pub stopping: Arc<AtomicBool>,
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub cancelled: Arc<AtomicBool>,
     pub urgent: Arc<AtomicBool>,
     pub frames: Arc<Mutex<CandidateBuffer>>,
     pub video_offset_ms: Arc<AtomicU64>,
@@ -577,11 +579,12 @@ pub(crate) struct Sampler {
 pub struct ScreenCaptureSession {
     started_at: Instant,
     stopping: Arc<AtomicBool>,
+    cancelled: Arc<AtomicBool>,
     urgent_snapshot: Arc<AtomicBool>,
     frames: Arc<Mutex<CandidateBuffer>>,
     video_offset_ms: Arc<AtomicU64>,
     sampler_thread: Option<JoinHandle<Option<PathBuf>>>,
-    _recording: crate::retention::Recording,
+    _recording: Option<crate::retention::Recording>,
 }
 
 impl ScreenCaptureSession {
@@ -592,11 +595,13 @@ impl ScreenCaptureSession {
     ) -> Self {
         let started_at = Instant::now();
         let stopping = Arc::new(AtomicBool::new(false));
+        let cancelled = Arc::new(AtomicBool::new(false));
         let urgent_snapshot = Arc::new(AtomicBool::new(true));
         let frames = Arc::new(Mutex::new(CandidateBuffer::new(CANDIDATE_BUDGET_BYTES)));
         let video_offset_ms = Arc::new(AtomicU64::new(0));
 
         let thread_stopping = Arc::clone(&stopping);
+        let thread_cancelled = Arc::clone(&cancelled);
         let thread_urgent = Arc::clone(&urgent_snapshot);
         let thread_frames = Arc::clone(&frames);
         let thread_offset = Arc::clone(&video_offset_ms);
@@ -610,6 +615,7 @@ impl ScreenCaptureSession {
                     excluded_window_ids,
                     started_at,
                     stopping: thread_stopping,
+                    cancelled: thread_cancelled,
                     urgent: thread_urgent,
                     frames: thread_frames,
                     video_offset_ms: thread_offset,
@@ -620,11 +626,12 @@ impl ScreenCaptureSession {
         Self {
             started_at,
             stopping,
+            cancelled,
             urgent_snapshot,
             frames,
             video_offset_ms,
             sampler_thread,
-            _recording: crate::retention::Recording::start(),
+            _recording: Some(crate::retention::Recording::start()),
         }
     }
 
@@ -670,14 +677,63 @@ impl ScreenCaptureSession {
             video_offset_ms: self.video_offset_ms.load(Ordering::Acquire),
         }
     }
+
+    /// Discards the capture immediately and runs `cleanup` on a detached reaper thread after the
+    /// sampler worker finishes unwinding, never blocking the UI thread.
+    pub fn cancel(mut self, cleanup: impl FnOnce() + Send + 'static) {
+        self.cancelled.store(true, Ordering::Release);
+        self.stopping.store(true, Ordering::Release);
+        let handle = self.sampler_thread.take();
+        let retention = self._recording.take();
+        if let Some(ref h) = handle {
+            h.thread().unpark();
+        }
+        spawn_reaper_or_run("scrawl-cancel-reaper", move || {
+            if let Some(handle) = handle {
+                let _ = handle.join();
+            }
+            cleanup();
+            drop(retention);
+        });
+    }
+}
+
+/// Runs `job` on a detached named reaper thread, falling back to inline execution if thread
+/// spawning fails so cleanup and retention guards are never leaked.
+pub(crate) fn spawn_reaper_or_run(name: &str, job: impl FnOnce() + Send + 'static) {
+    let slot = Arc::new(Mutex::new(Some(job)));
+    let worker_slot = Arc::clone(&slot);
+    if let Err(err) = thread::Builder::new().name(name.into()).spawn(move || {
+        if let Some(job) = worker_slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            job();
+        }
+    }) {
+        scrawl_log(format!("{name} spawn failed: {err}"));
+        if let Some(job) = slot
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .take()
+        {
+            job();
+        }
+    }
 }
 
 impl Drop for ScreenCaptureSession {
     fn drop(&mut self) {
+        self.cancelled.store(true, Ordering::Release);
         self.stopping.store(true, Ordering::Release);
         if let Some(handle) = self.sampler_thread.take() {
+            let retention = self._recording.take();
             handle.thread().unpark();
-            let _ = handle.join();
+            spawn_reaper_or_run("scrawl-drop-reaper", move || {
+                let _ = handle.join();
+                drop(retention);
+            });
         }
     }
 }
@@ -702,6 +758,9 @@ pub struct SharedCaptureTelemetry {
     pub strokes: Mutex<Vec<Stroke>>,
     pub active_laser: Mutex<Option<Stroke>>,
     pub live_ink: Mutex<Option<Stroke>>,
+    hud_window_ids: Mutex<Vec<u32>>,
+    picker_window_id: Mutex<Option<u32>>,
+    active_overlay_window_id: Mutex<Option<u32>>,
     pub excluded_window_ids: Arc<Mutex<Vec<u32>>>,
     /// Raised when a click, ink stroke or shortcut starts, so the Screen-mode window log takes
     /// a snapshot right away.
@@ -772,6 +831,9 @@ impl SharedCaptureTelemetry {
             strokes: Mutex::new(Vec::new()),
             active_laser: Mutex::new(None),
             live_ink: Mutex::new(None),
+            hud_window_ids: Mutex::new(Vec::new()),
+            picker_window_id: Mutex::new(None),
+            active_overlay_window_id: Mutex::new(None),
             excluded_window_ids: Arc::new(Mutex::new(Vec::new())),
             window_log_request: Arc::new(AtomicBool::new(false)),
             ui_sender,
@@ -931,10 +993,7 @@ impl SharedCaptureTelemetry {
             .shift_press
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner) = None;
-        self.excluded_window_ids
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .clear();
+        self.sync_overlay_windows();
         self.shift_held.store(false, Ordering::Release);
         self.window_log_request.store(false, Ordering::Release);
         let agent_context = crate::handoff::experiment(crate::handoff::AGENT_CONTEXT);
@@ -959,6 +1018,87 @@ impl SharedCaptureTelemetry {
     /// Whether Esc went down since the last call (a pending shortcut or an open picker cancels on it).
     pub fn take_escape(&self) -> bool {
         self.escape_pressed.swap(false, Ordering::AcqRel)
+    }
+
+    fn sync_overlay_windows(&self) {
+        let mut excluded = self
+            .hud_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone();
+        if let Some(picker_id) = *self
+            .picker_window_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            && picker_id > 0
+            && !excluded.contains(&picker_id)
+        {
+            excluded.push(picker_id);
+        }
+        let active_overlay = *self
+            .active_overlay_window_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(overlay_id) = active_overlay
+            && overlay_id > 0
+            && !excluded.contains(&overlay_id)
+        {
+            excluded.push(overlay_id);
+        }
+        *self
+            .excluded_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = excluded;
+
+        let mut passthrough = self
+            .passthrough_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        passthrough.clear();
+        if let Some(overlay_id) = active_overlay
+            && overlay_id > 0
+        {
+            passthrough.push(overlay_id);
+        }
+    }
+
+    /// Registers a persistent HUD window (such as the floating capsule) so it stays excluded
+    /// from screen captures across sessions.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn register_hud_window(&self, window_id: u32) {
+        if window_id == 0 {
+            return;
+        }
+        let mut hud = self
+            .hud_window_ids
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if !hud.contains(&window_id) {
+            hud.push(window_id);
+        }
+        drop(hud);
+        self.sync_overlay_windows();
+    }
+
+    /// Tracks the current picker window ID so it stays excluded while open without leaking old IDs.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn set_picker_window(&self, window_id: Option<u32>) {
+        *self
+            .picker_window_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = window_id.filter(|&id| id > 0);
+        self.sync_overlay_windows();
+    }
+
+    /// Tracks the active click-through Metal overlay window ID across both exclusions and
+    /// passthrough click-testing without retaining stale IDs from closed overlays.
+    #[cfg_attr(target_os = "windows", allow(dead_code))]
+    pub fn set_active_overlay_window(&self, window_id: Option<u32>) {
+        *self
+            .active_overlay_window_id
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = window_id.filter(|&id| id > 0);
+        self.sync_overlay_windows();
     }
 
     pub fn elapsed_ms(&self) -> u64 {
@@ -1536,11 +1676,12 @@ mod tests {
         let session = ScreenCaptureSession {
             started_at: Instant::now(),
             stopping,
+            cancelled: Arc::new(AtomicBool::new(false)),
             urgent_snapshot: Arc::new(AtomicBool::new(false)),
             frames,
             video_offset_ms: Arc::new(AtomicU64::new(120)),
             sampler_thread: Some(worker),
-            _recording: crate::retention::Recording::start(),
+            _recording: Some(crate::retention::Recording::start()),
         };
         let recording = session.stop();
         let frames = recording.frames;
@@ -2104,5 +2245,124 @@ mod tests {
         );
         assert!(selectable_window_at(&windows, -101.0, 50.0).is_none());
         assert!(selectable_window_at(&[], 0.0, 0.0).is_none());
+    }
+
+    #[test]
+    fn multi_session_overlay_and_hud_windows_exclude_active_and_clear_on_transition() {
+        let (sender, _receiver) = flume::unbounded();
+        let telemetry = SharedCaptureTelemetry::new(sender);
+        let frame = TargetFrame {
+            x: 0.0,
+            y: 0.0,
+            width: 1440.0,
+            height: 900.0,
+            scale: 2.0,
+        };
+        telemetry.register_hud_window(9001);
+        telemetry.set_picker_window(Some(9002));
+        telemetry.reset_for_session(frame);
+        telemetry.set_active_overlay_window(Some(9101));
+
+        let sorted = |ids: &Mutex<Vec<u32>>| {
+            let mut v = ids.lock().unwrap().clone();
+            v.sort_unstable();
+            v
+        };
+        assert_eq!(
+            sorted(&telemetry.excluded_window_ids),
+            vec![9001, 9002, 9101]
+        );
+        assert_eq!(sorted(&telemetry.passthrough_window_ids), vec![9101]);
+
+        // Picker closes, Window mode reuses overlay 9101, then Area switches to overlay 9102.
+        telemetry.set_picker_window(None);
+        telemetry.reset_for_session(frame);
+        telemetry.set_active_overlay_window(Some(9101));
+        assert_eq!(sorted(&telemetry.excluded_window_ids), vec![9001, 9101]);
+        assert_eq!(sorted(&telemetry.passthrough_window_ids), vec![9101]);
+
+        telemetry.set_active_overlay_window(Some(9102));
+        assert_eq!(sorted(&telemetry.excluded_window_ids), vec![9001, 9102]);
+        assert_eq!(sorted(&telemetry.passthrough_window_ids), vec![9102]);
+
+        // Dismiss/Phone clears active overlay without losing persistent HUD window 9001.
+        telemetry.set_active_overlay_window(None);
+        assert_eq!(sorted(&telemetry.excluded_window_ids), vec![9001]);
+        assert!(telemetry.passthrough_window_ids.lock().unwrap().is_empty());
+    }
+
+    #[test]
+    fn rapid_cancel_and_restart_leaves_active_session_intact_and_returns_fast() {
+        let root =
+            std::env::temp_dir().join(format!("scrawl-cancel-stress-{}", crate::make_bundle_id()));
+        let active_dir = root.join("active.scrawl");
+        std::fs::create_dir_all(&active_dir).unwrap();
+        let active_file = active_dir.join("recording.mp4");
+        std::fs::write(&active_file, b"keep-me").unwrap();
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        for i in 0..20 {
+            let old_dir = root.join(format!("cancelled-{i}.scrawl"));
+            std::fs::create_dir_all(&old_dir).unwrap();
+            let stopping = Arc::new(AtomicBool::new(false));
+            let cancelled = Arc::new(AtomicBool::new(false));
+            let worker_stop = Arc::clone(&stopping);
+            let worker_cancel = Arc::clone(&cancelled);
+            let worker = thread::spawn(move || {
+                while !worker_stop.load(Ordering::Acquire) && !worker_cancel.load(Ordering::Acquire)
+                {
+                    thread::park_timeout(Duration::from_millis(50));
+                }
+                thread::sleep(Duration::from_millis(15));
+                None
+            });
+            let session = ScreenCaptureSession {
+                started_at: Instant::now(),
+                stopping,
+                cancelled,
+                urgent_snapshot: Arc::new(AtomicBool::new(false)),
+                frames: Arc::new(Mutex::new(CandidateBuffer::new(1 << 20))),
+                video_offset_ms: Arc::new(AtomicU64::new(0)),
+                sampler_thread: Some(worker),
+                _recording: Some(crate::retention::Recording::start()),
+            };
+            let tx = done_tx.clone();
+            let t0 = Instant::now();
+            session.cancel(move || {
+                let _ = std::fs::remove_dir_all(&old_dir);
+                let _ = tx.send(i);
+            });
+            assert!(
+                t0.elapsed() < Duration::from_millis(100),
+                "cancel iteration {i} should never block caller"
+            );
+        }
+        drop(done_tx);
+
+        let mut finished = 0;
+        while done_rx.recv_timeout(Duration::from_secs(5)).is_ok() {
+            finished += 1;
+        }
+        assert_eq!(finished, 20, "all detached reapers must complete cleanup");
+        assert!(
+            active_file.is_file(),
+            "reapers must never touch newer active bundle"
+        );
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn mic_missing_with_no_default_gracefully_coerces_without_panicking() {
+        let missing = crate::mic::Choice {
+            id: "missing-usb-mic".into(),
+            name: "Blue Yeti".into(),
+        };
+        let empty = crate::mic::Inputs::default();
+        let pick = crate::mic::Pick::new(Some(&missing), &empty);
+        assert!(pick.device().is_none());
+        assert_eq!(
+            pick.note().as_deref(),
+            Some("Blue Yeti isn't connected, and there's no other microphone.")
+        );
     }
 }
