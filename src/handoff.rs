@@ -456,6 +456,10 @@ pub struct Config {
     /// Lower the output volume while recording (`playback`) to `playbackLevel` percent of it.
     #[serde(default)]
     pub lower_playback: Option<bool>,
+    /// Allow URL scheme API: let other apps control Scrawl with `scrawl://` links
+    /// (`ui::link_action`). Off unless set.
+    #[serde(default)]
+    pub url_scheme: Option<bool>,
     #[serde(default)]
     pub playback_level: Option<u8>,
     /// The Hex model to use when `transcriber` is `"hex"` (default: the first ready one of

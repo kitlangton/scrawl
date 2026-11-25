@@ -31,7 +31,7 @@ bunx skills add kitlangton/scrawl
 ```
 
 The `scrawl` command is the binary inside Scrawl.app. The Homebrew cask links it onto your PATH, or click
-**Install** beside Command-line tool in Settings › Agents, which links it into `/opt/homebrew/bin`
+**Install** beside Command-line tool in Settings › Agents & API, which links it into `/opt/homebrew/bin`
 or `/usr/local/bin` when you can write there, else `~/.local/bin`. The link always runs the app's
 current copy, so it updates with the app.
 
@@ -174,8 +174,9 @@ granted and each on-demand sheet: `target/debug/scrawl-helper onboarding --rende
 - **Storage**: how long recordings are kept, where new captures go (Change…/Reset on macOS, `"capturesDir"` in
   `~/.config/scrawl/config.json` everywhere; captures already made stay put, and an unusable folder falls back to the built-in one), how much space they take, and Show in Finder.
 - **Permissions**: the onboarding checklist, so a permission can be turned on later.
-- **Agents**: Install or Uninstall the `scrawl` command (see [Agents](#agents)), and the skill's
-  install command with Copy. A `scrawl` that belongs to another program is left alone.
+- **Agents & API**: Install or Uninstall the `scrawl` command (see [Agents](#agents)), the skill's
+  install command with Copy, and **Allow URL scheme API** (see [Links](#links-macos)). A `scrawl`
+  that belongs to another program is left alone. (On Windows the pane is **Agents**.)
 - **About**: the version, Check for Updates…, links, and the welcome tour.
 
 To change a shortcut, click its keys and press the new combination; `Esc` cancels. It needs ⌘, ⌥
@@ -224,6 +225,31 @@ While picking a target, the island shows the modes **Area**, **Window**, **Scree
 - Area: drag a region. Window: click a window. Screen and iPhone: `⏎`, `S`, `⌥⇧S`, **Record**, or
   clicking the selected mode again starts recording (`⏎`/`⌥⇧S` record the full screen from Area and
   Window too)
+
+### Links (macOS)
+
+Other apps can start captures and open Scrawl's windows with `scrawl://` links, so a launcher
+(Raycast, Alfred, Shortcuts, Keyboard Maestro, a Stream Deck) can give each one its own hotkey.
+Each link does exactly what its menu item, picker mode or command-line flag does, and capture
+links use the same permission checks. A link opens Scrawl if it isn't running. Names follow
+[CleanShot X's](https://cleanshot.com/docs-api) where the action is the same.
+
+| Link | Does |
+|---|---|
+| `scrawl://record-screen` | **Record Screen**: start recording the display under the pointer (or, with the picker open, what it has selected), or finish the capture running |
+| `scrawl://all-in-one` | **Choose What to Record…**: the picker, on the mode you used last |
+| `scrawl://record-area` | The picker on Area |
+| `scrawl://record-window` | The picker on Window |
+| `scrawl://record-device` | Record the cabled iPhone or iPad, as `scrawl app --iphone` does: asks for Camera if it's off, and records without narration if Microphone is off |
+| `scrawl://open-latest-capture` | **Open Latest Capture** |
+| `scrawl://open-settings` | **Settings…**; `?tab=general`, `recording`, `storage`, `permissions`, `agents` or `about` opens that pane |
+
+Any app or web page can open a link, so links only work once **Allow URL scheme API** is on in
+Settings › Agents & API (`"urlScheme": true` in `~/.config/scrawl/config.json`). It's off until
+you turn it on. While it's off, every link opens that pane instead, and the log says why.
+
+Try one with `open scrawl://open-settings?tab=agents`. Links Scrawl doesn't know are ignored and
+logged.
 
 ## Sending captures of a dev site to its session
 

@@ -1,4 +1,4 @@
-//! `scrawl` on PATH. Settings › Agents links the binary inside Scrawl.app into a folder on PATH,
+//! `scrawl` on PATH. Settings › Agents & API (Agents on Windows) links the binary inside Scrawl.app into a folder on PATH,
 //! so agents and terminals run the app's own copy and it updates with the app. The binary finds
 //! `scrawl-helper` through its real path (`helper::path`), so it works through the link.
 //! Homebrew's cask (`binary "#{appdir}/Scrawl.app/Contents/MacOS/scrawl"`) makes the same link,

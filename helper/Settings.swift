@@ -160,6 +160,7 @@ struct SettingsState: Decodable, Equatable {
   var videoExport = false
   var lowerPlayback = false
   var playbackLevel = 20
+  var urlScheme = false
   var retention = SettingsRetention()
   var capturesSize: String?
   var capturesDir = SettingsCapturesDir()
@@ -182,7 +183,7 @@ enum SettingsPane: String, CaseIterable {
     case .recording: "Recording"
     case .storage: "Storage"
     case .permissions: "Permissions"
-    case .agents: "Agents"
+    case .agents: "Agents & API"
     case .about: "About"
     }
   }
@@ -1109,6 +1110,13 @@ struct SettingsView: View {
       SettingsHeader("Agent skill")
       SettingsGroup { CopyLine(text: state.skillCommand) }
       SettingsCaption(text: "Run it in a terminal. It teaches Claude Code, OpenCode, Codex and other agents to read your captures and use scrawl.")
+      SettingsHeader("API")
+      SettingsGroup {
+        SettingsRow(title: "Allow URL scheme API") {
+          SettingsSwitch(on: state.urlScheme) { model.set("urlScheme", $0) }
+        }
+      }
+      SettingsCaption(text: "Allow other apps, like Raycast, to control Scrawl with scrawl:// links. Off by default. When off, links open this pane instead.")
     }
   }
 

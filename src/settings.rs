@@ -5,8 +5,8 @@
 //!
 //! Panes: General (launch at login, sending dev-site captures, the two shortcuts), Recording
 //! (transcriber, video export), Storage (how long recordings are kept), Permissions (the
-//! onboarding checklist, to fix things later), Agents (`scrawl` on PATH, the skill's install
-//! command) and About.
+//! onboarding checklist, to fix things later), Agents & API (`scrawl` on PATH, the skill's install
+//! command, and Allow URL scheme API for `scrawl://` links; Agents on Windows) and About.
 //!
 //! Shortcuts live under `"shortcuts"` (`{"record": {"keyCode", "modifiers", "label"}}`, Carbon
 //! modifier bits; absent means the default, and `"paste": null` turns paste off). While the window records one, Scrawl's hotkeys are
@@ -627,6 +627,8 @@ pub struct View {
     pub lower_playback: bool,
     pub playback_level: u8,
     pub video_export: bool,
+    /// Agents & API › API: `urlScheme`.
+    pub url_scheme: bool,
     pub retention: RetentionView,
     /// How much the captures folder takes, once measured.
     pub captures_size: Option<String>,
@@ -958,7 +960,8 @@ fn shortcut_view(
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(tag = "action", rename_all = "kebab-case")]
 pub enum Action {
-    /// A settings control: `launchAtLogin`, `autoSend`, `videoExport`, `lowerPlayback` (bool),
+    /// A settings control: `launchAtLogin`, `autoSend`, `videoExport`, `lowerPlayback`,
+    /// `urlScheme` (bool),
     /// `playbackLevel` (u8), `microphone` ("default" or a device id), `transcriber`
     /// ("apple"/"hex"/"command"), `hexModel` (an id), `hexLanguage` (a code), `appleLocale`
     /// (a locale id or "auto"), `retention` (a preset id).
@@ -1193,9 +1196,10 @@ impl Panel {
                     return Effect::OpenLoginItems;
                 }
             }
-            ("autoSend" | "videoExport" | "lowerPlayback", serde_json::Value::Bool(on)) => {
-                write(key, (*on).into())
-            }
+            (
+                "autoSend" | "videoExport" | "lowerPlayback" | "urlScheme",
+                serde_json::Value::Bool(on),
+            ) => write(key, (*on).into()),
             ("playbackLevel", serde_json::Value::Number(level))
                 if level.as_u64().is_some_and(|n| n <= 100) =>
             {
@@ -1350,6 +1354,7 @@ impl Panel {
             ),
             lower_playback: config.lower_playback.unwrap_or(false),
             playback_level: config.recording_volume(),
+            url_scheme: config.url_scheme.unwrap_or(false),
             transcriber: TranscriberView {
                 engine: match engine {
                     crate::transcribe::Engine::Command if command.is_some() => "command",
@@ -2312,6 +2317,9 @@ mod tests {
         set(&mut panel, &mut host, "playbackLevel", 0.5.into());
         assert!(Panel::default().view(&host).lower_playback);
         assert_eq!(Panel::default().view(&host).playback_level, 35);
+        assert!(!panel.view(&host).url_scheme);
+        set(&mut panel, &mut host, "urlScheme", true.into());
+        assert!(Panel::default().view(&host).url_scheme);
         set(&mut panel, &mut host, "autoSend", false.into());
         set(&mut panel, &mut host, "videoExport", true.into());
         set(&mut panel, &mut host, "transcriber", "hex".into());

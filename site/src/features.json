@@ -32,6 +32,19 @@
       "docs": ["README.md#capture-controls", "docs/capture.md"]
     },
     {
+      "id": "url-scheme",
+      "group": "start",
+      "name": "scrawl:// links",
+      "says": "Other apps start captures and open Scrawl's windows with scrawl:// links, so a launcher can give each its own hotkey.",
+      "status": "main",
+      "platforms": ["mac"],
+      "added": "2026-11-24",
+      "config": [
+        { "key": "urlScheme", "value": "true", "does": "Let other apps control Scrawl with scrawl:// links (Settings › Agents & API › Allow URL scheme API)" }
+      ],
+      "docs": ["README.md#links-macos"]
+    },
+    {
       "id": "switch-chips",
       "group": "start",
       "name": "Switch target as it starts",
@@ -590,7 +603,7 @@
       "id": "settings-window",
       "group": "settings",
       "name": "Settings window",
-      "says": "General, Recording, Storage, Permissions, Agents and About, from the menu's Settings….",
+      "says": "General, Recording, Storage, Permissions, Agents & API (Agents on Windows) and About, from the menu's Settings….",
       "status": "stable@0.3.4",
       "platforms": ["mac", "windows", "linux"],
       "docs": ["README.md#settings", "docs/onboarding-and-settings.md"]
@@ -684,7 +697,7 @@
       "id": "cli-install",
       "group": "cli",
       "name": "Command-line tool",
-      "says": "Settings › Agents links scrawl onto PATH and it always runs the app's current copy; Homebrew links it too.",
+      "says": "Settings › Agents & API (Agents on Windows) links scrawl onto PATH and it always runs the app's current copy; Homebrew links it too.",
       "status": "stable@0.3.4",
       "platforms": ["mac", "windows", "linux"],
       "note": "Windows gets a scrawl.cmd shim.",
