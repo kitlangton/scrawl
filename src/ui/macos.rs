@@ -18,7 +18,10 @@ use objc2_app_kit::{
     NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowCollectionBehavior,
     NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSData, NSObject, NSPoint, NSRect, NSSize, NSString};
+use objc2_foundation::{
+    MainThreadMarker, NSData, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSPoint,
+    NSRect, NSSize, NSString,
+};
 use screencapturekit::prelude::*;
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
@@ -635,7 +638,7 @@ fn rebuild_recent_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
                 &capture.dir.display().to_string(),
             )));
         }
-        let row = RecentCaptureRow::new(mtm, capture, now, target.ivars().sender.clone());
+        let row = RecentCaptureRow::new(mtm, capture, target.ivars().sender.clone());
         item.setView(Some(&row));
         rows.push(item);
     }
@@ -659,18 +662,30 @@ fn rebuild_recent_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
 /// A Recent Captures row is this wide, so a long title doesn't widen the menu (CleanShot's rows
 /// are fixed the same way), and this tall, to fit the thumbnail.
 const RECENT_ROW_W: f64 = 320.0;
-const RECENT_ROW_H: f64 = 34.0;
+const RECENT_ROW_H: f64 = 40.0;
 /// Every thumbnail is this size, cut from its source to fill it, so the rows line up.
 const RECENT_THUMB_W: f64 = 42.0;
 const RECENT_THUMB_H: f64 = 28.0;
 /// Where the row's content starts, matching a standard menu item's inset.
 const RECENT_INSET: f64 = 14.0;
-const RECENT_BUTTON: f64 = 24.0;
+const RECENT_BUTTON: f64 = 20.0;
 
 thread_local! {
     /// Thumbnails by source image, so reopening the menu doesn't decode the frames again.
     static RECENT_THUMBNAILS: RefCell<std::collections::HashMap<PathBuf, Retained<NSImage>>> =
         RefCell::new(std::collections::HashMap::new());
+}
+
+/// When a capture was made, in the system's own words and locale: "Today, 8:55 AM",
+/// "Yesterday, 2:21 PM", else the short date and time.
+fn capture_time(created_at_ms: u64) -> Retained<NSString> {
+    let formatter = NSDateFormatter::new();
+    formatter.setDateStyle(NSDateFormatterStyle::ShortStyle);
+    formatter.setTimeStyle(NSDateFormatterStyle::ShortStyle);
+    formatter.setDoesRelativeDateFormatting(true);
+    formatter.stringFromDate(&NSDate::dateWithTimeIntervalSince1970(
+        created_at_ms as f64 / 1000.0,
+    ))
 }
 
 /// Drops thumbnails for captures no longer listed.
@@ -742,6 +757,7 @@ struct RecentRowIvars {
     sender: flume::Sender<MenuAction>,
     label: Retained<NSTextField>,
     details: Retained<NSTextField>,
+    when: Retained<NSTextField>,
     copy: Retained<RecentCopyButton>,
     /// The highlight the subviews were last colored for, so drawing doesn't recolor every pass.
     highlighted: std::cell::Cell<bool>,
@@ -828,7 +844,7 @@ impl RecentCopyButton {
             &NSString::from_str("doc.on.clipboard"),
             Some(&NSString::from_str("Copy for Agent")),
         );
-        let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(11.0, unsafe {
+        let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(10.0, unsafe {
             NSFontWeightRegular
         });
         let symbol = symbol.and_then(|symbol| symbol.imageWithSymbolConfiguration(&config));
@@ -886,6 +902,7 @@ objc2::define_class!(
                 };
                 ivars.label.setTextColor(Some(&text));
                 ivars.details.setTextColor(Some(&secondary));
+                ivars.when.setTextColor(Some(&secondary));
                 ivars.copy.setContentTintColor(Some(&secondary));
                 ivars.copy.set_on_highlight(highlighted);
             }
@@ -917,7 +934,6 @@ impl RecentCaptureRow {
     fn new(
         mtm: MainThreadMarker,
         capture: &crate::recent::RecentCapture,
-        now_ms: u64,
         sender: flume::Sender<MenuAction>,
     ) -> Retained<Self> {
         // The title is cut short when it has to be; the length and age beside it never are.
@@ -925,10 +941,18 @@ impl RecentCaptureRow {
         label.setFont(Some(&NSFont::menuFontOfSize(0.0)));
         label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
         label.setTextColor(Some(&NSColor::labelColor()));
-        let details =
-            NSTextField::labelWithString(&NSString::from_str(&capture.details(now_ms)), mtm);
+        // Line one: the title, then the length at the right. Line two: when it was made, written
+        // the way the system writes dates ("Today, 8:55 AM"), like Dropover's recent shelves.
+        let details = NSTextField::labelWithString(
+            &NSString::from_str(&crate::model::format_clock(capture.duration_ms)),
+            mtm,
+        );
         details.setFont(Some(&NSFont::menuFontOfSize(0.0)));
         details.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        let when = NSTextField::labelWithString(&capture_time(capture.created_at_ms), mtm);
+        when.setFont(Some(&NSFont::menuFontOfSize(11.0)));
+        when.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        when.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
         let button_x = RECENT_ROW_W - RECENT_INSET - RECENT_BUTTON;
         let copy = RecentCopyButton::new(
             mtm,
@@ -943,6 +967,7 @@ impl RecentCaptureRow {
             sender,
             label: label.clone(),
             details: details.clone(),
+            when: when.clone(),
             copy: copy.clone(),
             highlighted: std::cell::Cell::new(false),
         });
@@ -972,21 +997,31 @@ impl RecentCaptureRow {
         // The text lines up whether or not there's a thumbnail.
         x += RECENT_THUMB_W + 10.0;
         let label_h = 17.0;
+        let when_h = 14.0;
+        // AppKit's y runs up: the title line sits above the middle, the time line below it.
+        let title_y = RECENT_ROW_H / 2.0;
+        let when_y = title_y - when_h - 1.0;
         let details_w = details.fittingSize().width.ceil();
-        let details_x = button_x - 6.0 - details_w;
+        let details_x = button_x - 8.0 - details_w;
         details.setFrame(NSRect::new(
-            NSPoint::new(details_x, (RECENT_ROW_H - label_h) / 2.0),
+            NSPoint::new(details_x, title_y),
             NSSize::new(details_w, label_h),
         ));
+        when.setFrame(NSRect::new(
+            NSPoint::new(x, when_y),
+            NSSize::new((details_x - 8.0 - x).max(40.0), when_h),
+        ));
         label.setFrame(NSRect::new(
-            NSPoint::new(x, (RECENT_ROW_H - label_h) / 2.0),
+            NSPoint::new(x, title_y),
             NSSize::new((details_x - 8.0 - x).max(40.0), label_h),
         ));
         label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         details.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+        when.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         copy.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
         this.addSubview(&label);
         this.addSubview(&details);
+        this.addSubview(&when);
         this.addSubview(&copy);
         this
     }
