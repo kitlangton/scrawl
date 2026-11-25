@@ -675,6 +675,28 @@ impl Gate {
     }
 }
 
+/// Numbers each opening of the welcome window. Its events carry the number, so one from a
+/// window that has since been replaced (its helper exits as the next window opens) isn't taken
+/// for the new window's.
+#[derive(Debug, Default)]
+pub struct Openings {
+    latest: u64,
+}
+
+impl Openings {
+    /// A window is opening: the number its events carry.
+    pub fn next(&mut self) -> u64 {
+        self.latest += 1;
+        self.latest
+    }
+
+    /// Whether an event is for the window open now. The launch read (`None`) comes from no
+    /// window and always counts.
+    pub fn current(&self, from: Option<u64>) -> bool {
+        from.is_none_or(|id| id == self.latest)
+    }
+}
+
 /// Onboarding progress, under `"onboarding"` in `~/.config/scrawl/config.json`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -1651,6 +1673,22 @@ mod tests {
         assert_eq!(tour.step(), Step::Permissions);
         // Unknown grants (the launch read failed): only what's read here blocks.
         assert!(missing_to_record(None, true, true).is_empty());
+    }
+
+    #[test]
+    fn an_exit_from_a_replaced_window_is_not_the_new_windows() {
+        let mut openings = Openings::default();
+        let first = openings.next();
+        assert!(openings.current(Some(first)));
+        // ⌥⇧S with a permission off again: the fix opens anew, and the old helper exits.
+        let second = openings.next();
+        assert!(
+            !openings.current(Some(first)),
+            "the old window's exit must not close the new one"
+        );
+        assert!(openings.current(Some(second)));
+        // The launch read belongs to no window.
+        assert!(openings.current(None));
     }
 
     #[test]

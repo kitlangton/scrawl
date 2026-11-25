@@ -781,6 +781,8 @@ pub struct ScrawlCoordinator {
     open_iphone_when_found: bool,
     /// The welcome window, while it's open (`crate::onboarding`).
     onboarding: Option<crate::onboarding::Session>,
+    /// Tells the open welcome window's events from those of one it replaced.
+    onboarding_openings: crate::onboarding::Openings,
     /// The Settings window, while it's open (`crate::settings`).
     settings: Option<crate::settings::Session>,
     /// The last fresh read of what macOS has granted (at launch, then while onboarding is open).
@@ -864,6 +866,7 @@ impl ScrawlCoordinator {
             last_mode: SelectionMode::load_last_used(),
             open_iphone_when_found: false,
             onboarding: None,
+            onboarding_openings: crate::onboarding::Openings::default(),
             settings: None,
             grants: None,
             gate: crate::onboarding::Gate::default(),
@@ -988,9 +991,10 @@ impl ScrawlCoordinator {
     pub fn open_onboarding(&mut self, flow: crate::onboarding::Flow) {
         // Drop the old window before the new one opens.
         self.onboarding = None;
+        let opening = self.onboarding_openings.next();
         let sender = self.telemetry.ui_sender.clone();
         let events = move |event| {
-            let _ = sender.send(LiveOverlayEvent::Onboarding(event));
+            let _ = sender.send(LiveOverlayEvent::Onboarding(Some(opening), event));
         };
         match crate::onboarding::Session::open(flow, &self.shortcut_label(), events) {
             Ok(session) => self.onboarding = Some(session),
@@ -1129,8 +1133,18 @@ impl ScrawlCoordinator {
         }
     }
 
-    fn onboarding_event(&mut self, event: crate::onboarding::Event, cx: &mut Context<Self>) {
+    fn onboarding_event(
+        &mut self,
+        from: Option<u64>,
+        event: crate::onboarding::Event,
+        cx: &mut Context<Self>,
+    ) {
         use crate::onboarding::{Effect, Event, Progress};
+        // A window that was replaced still reports: its helper exits as the new one opens, and
+        // that exit must not close the new window.
+        if !self.onboarding_openings.current(from) {
+            return;
+        }
         let effect = match event {
             Event::Launch(grants) => {
                 self.note_grants(&grants);
@@ -5427,7 +5441,7 @@ pub fn run_app(
             std::thread::spawn(move || {
                 if let Some(grants) = crate::onboarding::read_grants() {
                     let event = crate::onboarding::Event::Launch(grants);
-                    let _ = sender.send(LiveOverlayEvent::Onboarding(event));
+                    let _ = sender.send(LiveOverlayEvent::Onboarding(None, event));
                 }
             });
         }
@@ -5582,8 +5596,8 @@ pub fn run_app(
                                 cx.notify();
                             }
                             LiveOverlayEvent::PhoneEnded => coord.phone_ended(cx),
-                            LiveOverlayEvent::Onboarding(event) => {
-                                coord.onboarding_event(event, cx)
+                            LiveOverlayEvent::Onboarding(from, event) => {
+                                coord.onboarding_event(from, event, cx)
                             }
                             LiveOverlayEvent::Settings(event) => coord.settings_event(event, cx),
                             LiveOverlayEvent::IngestedBundle {
