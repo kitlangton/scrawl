@@ -28,9 +28,13 @@ pub struct RecentCapture {
 impl RecentCapture {
     /// `Header jumps on expand · 0:09 · 3 min ago`
     pub fn label(&self, now_ms: u64) -> String {
+        format!("{} · {}", self.title, self.details(now_ms))
+    }
+
+    /// `0:09 · 3 min ago`: the part of the label a row keeps whole when the title is cut short.
+    pub fn details(&self, now_ms: u64) -> String {
         format!(
-            "{} · {} · {}",
-            self.title,
+            "{} · {}",
             crate::model::format_clock(self.duration_ms),
             relative_age(now_ms.saturating_sub(self.created_at_ms)),
         )

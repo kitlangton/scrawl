@@ -739,6 +739,7 @@ struct RecentRowIvars {
     dir: PathBuf,
     sender: flume::Sender<MenuAction>,
     label: Retained<NSTextField>,
+    details: Retained<NSTextField>,
     copy: Retained<NSButton>,
     /// The highlight the subviews were last colored for, so drawing doesn't recolor every pass.
     highlighted: std::cell::Cell<bool>,
@@ -772,7 +773,7 @@ objc2::define_class!(
             }
             let ivars = self.ivars();
             if ivars.highlighted.replace(highlighted) != highlighted {
-                let (text, icon) = if highlighted {
+                let (text, secondary) = if highlighted {
                     (
                         NSColor::selectedMenuItemTextColor(),
                         NSColor::selectedMenuItemTextColor(),
@@ -781,7 +782,8 @@ objc2::define_class!(
                     (NSColor::labelColor(), NSColor::secondaryLabelColor())
                 };
                 ivars.label.setTextColor(Some(&text));
-                ivars.copy.setContentTintColor(Some(&icon));
+                ivars.details.setTextColor(Some(&secondary));
+                ivars.copy.setContentTintColor(Some(&secondary));
             }
         }
 
@@ -814,10 +816,15 @@ impl RecentCaptureRow {
         now_ms: u64,
         sender: flume::Sender<MenuAction>,
     ) -> Retained<Self> {
-        let label = NSTextField::labelWithString(&NSString::from_str(&capture.label(now_ms)), mtm);
+        // The title is cut short when it has to be; the length and age beside it never are.
+        let label = NSTextField::labelWithString(&NSString::from_str(&capture.title), mtm);
         label.setFont(Some(&NSFont::menuFontOfSize(0.0)));
         label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
         label.setTextColor(Some(&NSColor::labelColor()));
+        let details =
+            NSTextField::labelWithString(&NSString::from_str(&capture.details(now_ms)), mtm);
+        details.setFont(Some(&NSFont::menuFontOfSize(0.0)));
+        details.setTextColor(Some(&NSColor::secondaryLabelColor()));
         let symbol = NSImage::imageWithSystemSymbolName_accessibilityDescription(
             &NSString::from_str("doc.on.clipboard"),
             Some(&NSString::from_str("Copy for Agent")),
@@ -834,6 +841,7 @@ impl RecentCaptureRow {
             dir: capture.dir.clone(),
             sender,
             label: label.clone(),
+            details: details.clone(),
             copy: copy.clone(),
             highlighted: std::cell::Cell::new(false),
         });
@@ -861,15 +869,22 @@ impl RecentCaptureRow {
         x += RECENT_THUMB_W + 10.0;
         let button_x = RECENT_ROW_W - RECENT_INSET - RECENT_BUTTON;
         let label_h = 17.0;
+        let details_w = details.fittingSize().width.ceil();
+        let details_x = button_x - 6.0 - details_w;
+        details.setFrame(NSRect::new(
+            NSPoint::new(details_x, (RECENT_ROW_H - label_h) / 2.0),
+            NSSize::new(details_w, label_h),
+        ));
         label.setFrame(NSRect::new(
             NSPoint::new(x, (RECENT_ROW_H - label_h) / 2.0),
-            NSSize::new(button_x - 6.0 - x, label_h),
+            NSSize::new((details_x - 8.0 - x).max(40.0), label_h),
         ));
         copy.setFrame(NSRect::new(
             NSPoint::new(button_x, (RECENT_ROW_H - RECENT_BUTTON) / 2.0),
             NSSize::new(RECENT_BUTTON, RECENT_BUTTON),
         ));
         this.addSubview(&label);
+        this.addSubview(&details);
         this.addSubview(&copy);
         this
     }
