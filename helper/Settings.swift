@@ -859,24 +859,25 @@ struct SettingsView: View {
   private func item(_ pane: SettingsPane) -> some View {
     let theme = SettingsTheme(scheme)
     let selected = model.pane == pane
-    return HStack(spacing: 10) {
-      IconTile(symbol: pane.symbol, tint: pane.tint)
-      Text(pane.title)
-        .font(.system(size: 14))
-        .foregroundStyle(theme.text)
-      Spacer(minLength: 0)
+    // A real Button, not a mouse-down gesture: a trackpad's Tap to Click sends its click as one
+    // mouse-down-then-up pair with nothing in between for a press gesture to see, so `perform`
+    // never ran and the tab stayed stuck (#99, #117). A button's own click handling sees it fine.
+    return Button(action: { select(pane) }) {
+      HStack(spacing: 10) {
+        IconTile(symbol: pane.symbol, tint: pane.tint)
+        Text(pane.title)
+          .font(.system(size: 14))
+          .foregroundStyle(theme.text)
+        Spacer(minLength: 0)
+      }
+      .padding(.horizontal, 8)
+      .frame(height: 36)
+      .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(selected ? theme.selection : .clear))
+      .contentShape(Rectangle())
     }
-    .padding(.horizontal, 8)
-    .frame(height: 36)
-    .background(RoundedRectangle(cornerRadius: 9, style: .continuous).fill(selected ? theme.selection : .clear))
-    .contentShape(Rectangle())
-    // Selects on mouse-down, as a sidebar does, rather than a button's mouse-up.
-    .onLongPressGesture(minimumDuration: 0, perform: {}, onPressingChanged: { down in
-      if down { select(pane) }
-    })
+    .buttonStyle(.plain)
     .accessibilityElement(children: .combine)
     .accessibilityAddTraits(selected ? [.isButton, .isSelected] : .isButton)
-    .accessibilityAction { select(pane) }
   }
 
   private func select(_ pane: SettingsPane) {
