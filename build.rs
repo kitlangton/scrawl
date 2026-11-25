@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 
 fn main() {
@@ -27,6 +27,16 @@ fn main() {
     }
 }
 
+/// The profile folder (`<target>/<profile>`) that the build script's `OUT_DIR` sits under.
+/// `OUT_DIR` is `<target>/<profile>/build/scrawl-<hash>/out`, and Cargo 1.100 adds a level
+/// (`build/scrawl/<hash>/out`), so find the `build` folder instead of counting ancestors.
+fn profile_dir(out_dir: &Path) -> Option<&Path> {
+    out_dir
+        .ancestors()
+        .find(|path| path.file_name().is_some_and(|name| name == "build"))
+        .and_then(Path::parent)
+}
+
 /// transcribe.cpp's DLLs (`dynamic-backends`: `transcribe.dll`, `ggml*.dll`) beside `scrawl.exe`
 /// and the test binaries, which load them at start. Its own build script copies them there too,
 /// but only when it runs, and a build restored from CI's cache skips it.
@@ -37,8 +47,7 @@ fn stage_transcribe_dlls() {
         return;
     };
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    // OUT_DIR is <target>/<profile>/build/scrawl-<hash>/out.
-    let Some(profile) = out_dir.ancestors().nth(3) else {
+    let Some(profile) = profile_dir(&out_dir) else {
         return;
     };
     let dlls: Vec<PathBuf> = std::fs::read_dir(&runtime)
@@ -176,12 +185,9 @@ fn compile_helper() {
     }
     let plist = helper_dir.join("Info.plist");
     println!("cargo:rerun-if-changed={}", plist.display());
-    // OUT_DIR is target/<profile>/build/scrawl-<hash>/out.
     let out_dir = PathBuf::from(std::env::var_os("OUT_DIR").unwrap());
-    let profile_dir = out_dir
-        .ancestors()
-        .nth(3)
-        .expect("Unexpected OUT_DIR layout");
+    let profile =
+        profile_dir(&out_dir).expect("Unexpected OUT_DIR layout: no `build` folder above it");
     let arch = match std::env::var("CARGO_CFG_TARGET_ARCH").as_deref() {
         Ok("aarch64") => "arm64",
         Ok(other) => other,
@@ -211,7 +217,7 @@ fn compile_helper() {
         status.success(),
         "scrawl-helper failed to compile (needs the macOS 26 SDK; the result runs on macOS 15)"
     );
-    let dest = profile_dir.join("scrawl-helper");
+    let dest = profile.join("scrawl-helper");
     let _ = std::fs::remove_file(&dest);
     std::fs::copy(&built, dest).expect("Could not place scrawl-helper");
 }
