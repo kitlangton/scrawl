@@ -785,8 +785,10 @@ objc2::define_class!(
                 self.removeTrackingArea(&area);
             }
             // ActiveAlways: a menu tracks the mouse itself, so the app is never "active" here.
+            // EnabledDuringMouseDrag: a press on the menu bar icon can drag straight onto it.
             let options = NSTrackingAreaOptions::MouseEnteredAndExited
                 | NSTrackingAreaOptions::ActiveAlways
+                | NSTrackingAreaOptions::EnabledDuringMouseDrag
                 | NSTrackingAreaOptions::InVisibleRect;
             let area = unsafe {
                 NSTrackingArea::initWithRect_options_owner_userInfo(
