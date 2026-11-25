@@ -11,10 +11,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSBezierPath, NSButton, NSCellImagePosition, NSColor, NSCompositingOperation,
-    NSEvent, NSFont, NSImage, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem,
-    NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSTextField, NSView, NSWindow, NSWindowButton,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSCellImagePosition, NSColor,
+    NSCompositingOperation, NSEvent, NSFont, NSFontWeightRegular, NSImage,
+    NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSTextField, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
 use objc2_foundation::{MainThreadMarker, NSData, NSObject, NSPoint, NSRect, NSSize, NSString};
 use screencapturekit::prelude::*;
@@ -740,9 +742,108 @@ struct RecentRowIvars {
     sender: flume::Sender<MenuAction>,
     label: Retained<NSTextField>,
     details: Retained<NSTextField>,
-    copy: Retained<NSButton>,
+    copy: Retained<RecentCopyButton>,
     /// The highlight the subviews were last colored for, so drawing doesn't recolor every pass.
     highlighted: std::cell::Cell<bool>,
+}
+
+struct CopyButtonIvars {
+    /// The pointer is over the button.
+    hovered: std::cell::Cell<bool>,
+    /// Its row is highlighted, so the circle sits on the accent color.
+    on_highlight: std::cell::Cell<bool>,
+}
+
+objc2::define_class!(
+    /// The clipboard button at the end of a Recent Captures row: an icon in a circle that lights
+    /// up while the pointer is over it, like the link button on CleanShot X's recent captures.
+    #[unsafe(super = NSButton)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = CopyButtonIvars]
+    struct RecentCopyButton;
+
+    unsafe impl NSObjectProtocol for RecentCopyButton {}
+
+    impl RecentCopyButton {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, dirty: NSRect) {
+            let ivars = self.ivars();
+            let fill = match (ivars.on_highlight.get(), ivars.hovered.get()) {
+                (true, true) => NSColor::whiteColor().colorWithAlphaComponent(0.35),
+                (true, false) => NSColor::whiteColor().colorWithAlphaComponent(0.18),
+                (false, true) => NSColor::tertiaryLabelColor(),
+                (false, false) => NSColor::quaternaryLabelColor(),
+            };
+            fill.setFill();
+            NSBezierPath::bezierPathWithOvalInRect(self.bounds()).fill();
+            let _: () = unsafe { msg_send![super(self), drawRect: dirty] };
+        }
+
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            for area in self.trackingAreas().iter() {
+                self.removeTrackingArea(&area);
+            }
+            // ActiveAlways: a menu tracks the mouse itself, so the app is never "active" here.
+            let options = NSTrackingAreaOptions::MouseEnteredAndExited
+                | NSTrackingAreaOptions::ActiveAlways
+                | NSTrackingAreaOptions::InVisibleRect;
+            let area = unsafe {
+                NSTrackingArea::initWithRect_options_owner_userInfo(
+                    NSTrackingArea::alloc(),
+                    self.bounds(),
+                    options,
+                    Some(self),
+                    None,
+                )
+            };
+            self.addTrackingArea(&area);
+            let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            self.ivars().hovered.set(true);
+            NSView::setNeedsDisplay(self, true);
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.ivars().hovered.set(false);
+            NSView::setNeedsDisplay(self, true);
+        }
+    }
+);
+
+impl RecentCopyButton {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(CopyButtonIvars {
+            hovered: std::cell::Cell::new(false),
+            on_highlight: std::cell::Cell::new(false),
+        });
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        let symbol = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("doc.on.clipboard"),
+            Some(&NSString::from_str("Copy for Agent")),
+        );
+        let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(11.0, unsafe {
+            NSFontWeightRegular
+        });
+        let symbol = symbol.and_then(|symbol| symbol.imageWithSymbolConfiguration(&config));
+        this.setImage(symbol.as_deref());
+        this.setImagePosition(NSCellImagePosition::ImageOnly);
+        this.setBordered(false);
+        this.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+        this.setToolTip(Some(&NSString::from_str("Copy for Agent")));
+        unsafe { this.setAction(Some(sel!(copyForAgent:))) };
+        this
+    }
+
+    /// Follows its row's highlight, so the circle stays visible on the accent color.
+    fn set_on_highlight(&self, on: bool) {
+        self.ivars().on_highlight.set(on);
+        NSView::setNeedsDisplay(self, true);
+    }
 }
 
 objc2::define_class!(
@@ -784,6 +885,7 @@ objc2::define_class!(
                 ivars.label.setTextColor(Some(&text));
                 ivars.details.setTextColor(Some(&secondary));
                 ivars.copy.setContentTintColor(Some(&secondary));
+                ivars.copy.set_on_highlight(highlighted);
             }
         }
 
@@ -825,17 +927,14 @@ impl RecentCaptureRow {
             NSTextField::labelWithString(&NSString::from_str(&capture.details(now_ms)), mtm);
         details.setFont(Some(&NSFont::menuFontOfSize(0.0)));
         details.setTextColor(Some(&NSColor::secondaryLabelColor()));
-        let symbol = NSImage::imageWithSystemSymbolName_accessibilityDescription(
-            &NSString::from_str("doc.on.clipboard"),
-            Some(&NSString::from_str("Copy for Agent")),
-        )
-        .unwrap_or_else(NSImage::new);
-        let copy = unsafe {
-            NSButton::buttonWithImage_target_action(&symbol, None, Some(sel!(copyForAgent:)), mtm)
-        };
-        copy.setBordered(false);
-        copy.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
-        copy.setToolTip(Some(&NSString::from_str("Copy for Agent")));
+        let button_x = RECENT_ROW_W - RECENT_INSET - RECENT_BUTTON;
+        let copy = RecentCopyButton::new(
+            mtm,
+            NSRect::new(
+                NSPoint::new(button_x, (RECENT_ROW_H - RECENT_BUTTON) / 2.0),
+                NSSize::new(RECENT_BUTTON, RECENT_BUTTON),
+            ),
+        );
 
         let this = mtm.alloc::<Self>().set_ivars(RecentRowIvars {
             dir: capture.dir.clone(),
@@ -851,6 +950,9 @@ impl RecentCaptureRow {
         );
         let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
         unsafe { copy.setTarget(Some(&this)) };
+        // The menu stretches the row to its own width: the title takes the extra space, and the
+        // length, age and button stay at the right edge.
+        this.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
 
         let mut x = RECENT_INSET;
         if let Some(thumbnail) = capture
@@ -867,7 +969,6 @@ impl RecentCaptureRow {
         }
         // The text lines up whether or not there's a thumbnail.
         x += RECENT_THUMB_W + 10.0;
-        let button_x = RECENT_ROW_W - RECENT_INSET - RECENT_BUTTON;
         let label_h = 17.0;
         let details_w = details.fittingSize().width.ceil();
         let details_x = button_x - 6.0 - details_w;
@@ -879,10 +980,9 @@ impl RecentCaptureRow {
             NSPoint::new(x, (RECENT_ROW_H - label_h) / 2.0),
             NSSize::new((details_x - 8.0 - x).max(40.0), label_h),
         ));
-        copy.setFrame(NSRect::new(
-            NSPoint::new(button_x, (RECENT_ROW_H - RECENT_BUTTON) / 2.0),
-            NSSize::new(RECENT_BUTTON, RECENT_BUTTON),
-        ));
+        label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+        details.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+        copy.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
         this.addSubview(&label);
         this.addSubview(&details);
         this.addSubview(&copy);
