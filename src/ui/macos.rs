@@ -11,11 +11,17 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSCellImagePosition, NSColor, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
-    NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSWindow, NSWindowButton,
-    NSWindowCollectionBehavior, NSWindowStyleMask,
+    NSApplication, NSAutoresizingMaskOptions, NSBezierPath, NSButton, NSCellImagePosition, NSColor,
+    NSCompositingOperation, NSEvent, NSFont, NSFontWeightRegular, NSImage,
+    NSImageSymbolConfiguration, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSTextField, NSTrackingArea,
+    NSTrackingAreaOptions, NSView, NSWindow, NSWindowButton, NSWindowCollectionBehavior,
+    NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSData, NSObject, NSSize, NSString};
+use objc2_foundation::{
+    MainThreadMarker, NSData, NSDate, NSDateFormatter, NSDateFormatterStyle, NSObject, NSPoint,
+    NSRect, NSSize, NSString,
+};
 use screencapturekit::prelude::*;
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
@@ -440,6 +446,14 @@ objc2::define_class!(
             let _ = self.ivars().sender.try_send(MenuAction::Quit);
         }
 
+        #[unsafe(method(showAllCaptures:))]
+        fn show_all_captures(&self, _sender: &AnyObject) {
+            let dir = crate::handoff::default_captures_dir();
+            if let Err(error) = crate::handoff::open_path(&dir) {
+                crate::capture::scrawl_log(format!("Show All Captures failed: {error:#}"));
+            }
+        }
+
         #[unsafe(method(openInboxItem:))]
         fn open_inbox_item(&self, sender: &NSMenuItem) {
             let path = sender
@@ -456,6 +470,7 @@ objc2::define_class!(
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
             rebuild_inbox_menu_items(menu, self);
+            rebuild_recent_menu_items(menu, self);
             if let Some(item) = menu.itemWithTag(RECORD_MENU_TAG) {
                 item.setTitle(&NSString::from_str(&record_menu_title()));
             }
@@ -472,6 +487,8 @@ const INBOX_MENU_TAG: isize = 0x5c4a;
 const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
 /// Tag on **Record Screen**, whose title carries the record shortcut.
 const RECORD_MENU_TAG: isize = 0x5c4d;
+/// Tag on the status menu's Recent Captures rows, so each open can replace them.
+const RECENT_MENU_TAG: isize = 0x5c4f;
 
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
 fn record_menu_title() -> String {
@@ -543,6 +560,464 @@ fn rebuild_inbox_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
     for (index, item) in rows.iter().enumerate() {
         item.setTag(INBOX_MENU_TAG);
         menu.insertItem_atIndex(item, index as isize);
+    }
+}
+
+/// Lists the newest captures below **Open Latest Capture**, each with its contact sheet, read fresh
+/// from disk so the titles and ages are current. Clicking one opens it in the review window, the
+/// same path as an iPhone row. Captures already listed under From iPhone are left out.
+fn rebuild_recent_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    for index in (0..menu.numberOfItems()).rev() {
+        if menu
+            .itemAtIndex(index)
+            .is_some_and(|item| item.tag() == RECENT_MENU_TAG)
+        {
+            menu.removeItemAtIndex(index);
+        }
+    }
+    // Behind the `recentCaptures` experiment until Kit turns it on for everyone (AGENTS.md).
+    if !crate::handoff::experiment("recentCaptures") {
+        return;
+    }
+    let inbox = crate::inbox::Inbox::load_default();
+    let skip: Vec<PathBuf> = inbox
+        .entries()
+        .iter()
+        .map(|entry| entry.dir.clone())
+        .collect();
+    let captures = crate::recent::recent_captures(
+        &crate::handoff::default_captures_dir(),
+        crate::recent::MENU_LIMIT,
+        &skip,
+    );
+    if captures.is_empty() {
+        return;
+    }
+    // Below Export Last Capture as Video… (present even while hidden), in its own section.
+    let anchor = menu.indexOfItemWithTag(EXPORT_VIDEO_MENU_TAG);
+    if anchor < 0 {
+        return;
+    }
+    let now = crate::now_epoch_ms();
+    let mut rows = vec![NSMenuItem::separatorItem(mtm)];
+    let has_section_header: bool = unsafe {
+        msg_send![objc2::class!(NSMenuItem), respondsToSelector: sel!(sectionHeaderWithTitle:)]
+    };
+    let title = NSString::from_str("Recent Captures");
+    rows.push(if has_section_header {
+        NSMenuItem::sectionHeaderWithTitle(&title, mtm)
+    } else {
+        let header = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &title,
+                None,
+                &NSString::new(),
+            )
+        };
+        header.setEnabled(false);
+        header
+    });
+    for capture in &captures {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&capture.label(now)),
+                Some(sel!(openInboxItem:)),
+                &NSString::new(),
+            )
+        };
+        // The item keeps its title and action for VoiceOver and the keyboard (↵ opens it); the
+        // row view draws it like CleanShot's: thumbnail, title, and a copy button.
+        unsafe {
+            item.setTarget(Some(target));
+            item.setRepresentedObject(Some(&NSString::from_str(
+                &capture.dir.display().to_string(),
+            )));
+        }
+        let row = RecentCaptureRow::new(mtm, capture, target.ivars().sender.clone());
+        item.setView(Some(&row));
+        rows.push(item);
+    }
+    let show_all = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Show All Captures in Finder"),
+            Some(sel!(showAllCaptures:)),
+            &NSString::new(),
+        )
+    };
+    unsafe { show_all.setTarget(Some(target)) };
+    rows.push(show_all);
+    prune_recent_thumbnails(&captures);
+    for (offset, item) in rows.iter().enumerate() {
+        item.setTag(RECENT_MENU_TAG);
+        menu.insertItem_atIndex(item, anchor + 1 + offset as isize);
+    }
+}
+
+/// A Recent Captures row is this wide, so a long title doesn't widen the menu (CleanShot's rows
+/// are fixed the same way), and this tall, to fit the thumbnail.
+const RECENT_ROW_W: f64 = 320.0;
+const RECENT_ROW_H: f64 = 40.0;
+/// Every thumbnail is this size, cut from its source to fill it, so the rows line up.
+const RECENT_THUMB_W: f64 = 42.0;
+const RECENT_THUMB_H: f64 = 28.0;
+/// Where the row's content starts, matching a standard menu item's inset.
+const RECENT_INSET: f64 = 14.0;
+const RECENT_BUTTON: f64 = 20.0;
+
+thread_local! {
+    /// Thumbnails by source image, so reopening the menu doesn't decode the frames again.
+    static RECENT_THUMBNAILS: RefCell<std::collections::HashMap<PathBuf, Retained<NSImage>>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// When a capture was made, in the system's own words and locale: "Today, 8:55 AM",
+/// "Yesterday, 2:21 PM", else the short date and time.
+fn capture_time(created_at_ms: u64) -> Retained<NSString> {
+    let formatter = NSDateFormatter::new();
+    formatter.setDateStyle(NSDateFormatterStyle::ShortStyle);
+    formatter.setTimeStyle(NSDateFormatterStyle::ShortStyle);
+    formatter.setDoesRelativeDateFormatting(true);
+    formatter.stringFromDate(&NSDate::dateWithTimeIntervalSince1970(
+        created_at_ms as f64 / 1000.0,
+    ))
+}
+
+/// Drops thumbnails for captures no longer listed.
+fn prune_recent_thumbnails(captures: &[crate::recent::RecentCapture]) {
+    RECENT_THUMBNAILS.with(|cache| {
+        cache.borrow_mut().retain(|source, _| {
+            captures
+                .iter()
+                .any(|capture| capture.thumbnail_source.as_ref() == Some(source))
+        })
+    });
+}
+
+/// A `RECENT_THUMB_W` × `RECENT_THUMB_H` thumbnail with rounded corners, cut from the middle of
+/// `source` (the top, for a tall source, where a window's content starts) so it fills the space
+/// without stretching.
+fn recent_thumbnail(source: &std::path::Path) -> Option<Retained<NSImage>> {
+    if let Some(cached) = RECENT_THUMBNAILS.with(|cache| cache.borrow().get(source).cloned()) {
+        return Some(cached);
+    }
+    let image = NSImage::initWithContentsOfFile(
+        NSImage::alloc(),
+        &NSString::from_str(&source.display().to_string()),
+    )?;
+    let size = image.size();
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return None;
+    }
+    let target = RECENT_THUMB_W / RECENT_THUMB_H;
+    // AppKit image coordinates start at the bottom left.
+    let crop = if size.width / size.height > target {
+        let width = size.height * target;
+        NSRect::new(
+            NSPoint::new((size.width - width) / 2.0, 0.0),
+            NSSize::new(width, size.height),
+        )
+    } else {
+        let height = size.width / target;
+        NSRect::new(
+            NSPoint::new(0.0, size.height - height),
+            NSSize::new(size.width, height),
+        )
+    };
+    let draw = block2::RcBlock::new(move |rect: NSRect| -> objc2::runtime::Bool {
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 4.0, 4.0).addClip();
+        image.drawInRect_fromRect_operation_fraction(
+            rect,
+            crop,
+            NSCompositingOperation::SourceOver,
+            1.0,
+        );
+        objc2::runtime::Bool::YES
+    });
+    let thumbnail = NSImage::imageWithSize_flipped_drawingHandler(
+        NSSize::new(RECENT_THUMB_W, RECENT_THUMB_H),
+        false,
+        &draw,
+    );
+    RECENT_THUMBNAILS.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(source.to_path_buf(), thumbnail.clone())
+    });
+    Some(thumbnail)
+}
+
+struct RecentRowIvars {
+    dir: PathBuf,
+    sender: flume::Sender<MenuAction>,
+    label: Retained<NSTextField>,
+    when: Retained<NSTextField>,
+    copy: Retained<RecentCopyButton>,
+    /// The highlight the subviews were last colored for, so drawing doesn't recolor every pass.
+    highlighted: std::cell::Cell<bool>,
+}
+
+struct CopyButtonIvars {
+    /// The pointer is over the button.
+    hovered: std::cell::Cell<bool>,
+    /// Its row is highlighted, so the circle sits on the accent color.
+    on_highlight: std::cell::Cell<bool>,
+}
+
+objc2::define_class!(
+    /// The clipboard button at the end of a Recent Captures row: an icon in a circle that lights
+    /// up while the pointer is over it, like the link button on CleanShot X's recent captures.
+    #[unsafe(super = NSButton)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = CopyButtonIvars]
+    struct RecentCopyButton;
+
+    unsafe impl NSObjectProtocol for RecentCopyButton {}
+
+    impl RecentCopyButton {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, dirty: NSRect) {
+            let ivars = self.ivars();
+            let fill = match (ivars.on_highlight.get(), ivars.hovered.get()) {
+                (true, true) => NSColor::whiteColor().colorWithAlphaComponent(0.35),
+                (true, false) => NSColor::whiteColor().colorWithAlphaComponent(0.18),
+                (false, true) => NSColor::tertiaryLabelColor(),
+                (false, false) => NSColor::quaternaryLabelColor(),
+            };
+            fill.setFill();
+            NSBezierPath::bezierPathWithOvalInRect(self.bounds()).fill();
+            let _: () = unsafe { msg_send![super(self), drawRect: dirty] };
+        }
+
+        #[unsafe(method(updateTrackingAreas))]
+        fn update_tracking_areas(&self) {
+            for area in self.trackingAreas().iter() {
+                self.removeTrackingArea(&area);
+            }
+            // ActiveAlways: a menu tracks the mouse itself, so the app is never "active" here.
+            // EnabledDuringMouseDrag: a press on the menu bar icon can drag straight onto it.
+            let options = NSTrackingAreaOptions::MouseEnteredAndExited
+                | NSTrackingAreaOptions::ActiveAlways
+                | NSTrackingAreaOptions::EnabledDuringMouseDrag
+                | NSTrackingAreaOptions::InVisibleRect;
+            let area = unsafe {
+                NSTrackingArea::initWithRect_options_owner_userInfo(
+                    NSTrackingArea::alloc(),
+                    self.bounds(),
+                    options,
+                    Some(self),
+                    None,
+                )
+            };
+            self.addTrackingArea(&area);
+            let _: () = unsafe { msg_send![super(self), updateTrackingAreas] };
+        }
+
+        #[unsafe(method(mouseEntered:))]
+        fn mouse_entered(&self, _event: &NSEvent) {
+            self.ivars().hovered.set(true);
+            NSView::setNeedsDisplay(self, true);
+        }
+
+        #[unsafe(method(mouseExited:))]
+        fn mouse_exited(&self, _event: &NSEvent) {
+            self.ivars().hovered.set(false);
+            NSView::setNeedsDisplay(self, true);
+        }
+    }
+);
+
+impl RecentCopyButton {
+    fn new(mtm: MainThreadMarker, frame: NSRect) -> Retained<Self> {
+        let this = mtm.alloc::<Self>().set_ivars(CopyButtonIvars {
+            hovered: std::cell::Cell::new(false),
+            on_highlight: std::cell::Cell::new(false),
+        });
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        let symbol = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("doc.on.clipboard"),
+            Some(&NSString::from_str("Copy for Agent")),
+        );
+        let config = NSImageSymbolConfiguration::configurationWithPointSize_weight(10.0, unsafe {
+            NSFontWeightRegular
+        });
+        let symbol = symbol.and_then(|symbol| symbol.imageWithSymbolConfiguration(&config));
+        this.setImage(symbol.as_deref());
+        this.setImagePosition(NSCellImagePosition::ImageOnly);
+        this.setBordered(false);
+        this.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+        this.setToolTip(Some(&NSString::from_str("Copy for Agent")));
+        unsafe { this.setAction(Some(sel!(copyForAgent:))) };
+        this
+    }
+
+    /// Follows its row's highlight, so the circle stays visible on the accent color.
+    fn set_on_highlight(&self, on: bool) {
+        self.ivars().on_highlight.set(on);
+        NSView::setNeedsDisplay(self, true);
+    }
+}
+
+objc2::define_class!(
+    /// One Recent Captures row: thumbnail, `title · length · age`, and a button that copies the
+    /// capture for an agent. A click elsewhere on the row opens the capture in the review window.
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = RecentRowIvars]
+    struct RecentCaptureRow;
+
+    unsafe impl NSObjectProtocol for RecentCaptureRow {}
+
+    impl RecentCaptureRow {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            // A menu draws no highlight behind a view, so the row draws the standard one.
+            let highlighted = self
+                .enclosingMenuItem()
+                .is_some_and(|item| item.isHighlighted());
+            if highlighted {
+                let bounds = self.bounds();
+                let rect = NSRect::new(
+                    NSPoint::new(5.0, 0.0),
+                    NSSize::new(bounds.size.width - 10.0, bounds.size.height),
+                );
+                NSColor::selectedContentBackgroundColor().setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 5.0, 5.0).fill();
+            }
+            let ivars = self.ivars();
+            if ivars.highlighted.replace(highlighted) != highlighted {
+                let (text, secondary) = if highlighted {
+                    (
+                        NSColor::selectedMenuItemTextColor(),
+                        NSColor::selectedMenuItemTextColor(),
+                    )
+                } else {
+                    (NSColor::labelColor(), NSColor::secondaryLabelColor())
+                };
+                ivars.label.setTextColor(Some(&text));
+                ivars.when.setTextColor(Some(&secondary));
+                ivars.copy.setContentTintColor(Some(&secondary));
+                ivars.copy.set_on_highlight(highlighted);
+            }
+        }
+
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            let ivars = self.ivars();
+            let _ = ivars.sender.try_send(MenuAction::OpenInbox(ivars.dir.clone()));
+            self.close_menu();
+        }
+
+        #[unsafe(method(copyForAgent:))]
+        fn copy_for_agent(&self, _sender: &AnyObject) {
+            if let Err(error) = crate::handoff::copy_bundle_to_clipboard(&self.ivars().dir) {
+                crate::capture::scrawl_log(format!("Recent Captures copy failed: {error:#}"));
+            }
+            self.close_menu();
+        }
+    }
+);
+
+impl RecentCaptureRow {
+    fn new(
+        mtm: MainThreadMarker,
+        capture: &crate::recent::RecentCapture,
+        sender: flume::Sender<MenuAction>,
+    ) -> Retained<Self> {
+        // The title is cut short when it has to be; the length and age beside it never are.
+        let label = NSTextField::labelWithString(&NSString::from_str(&capture.title), mtm);
+        label.setFont(Some(&NSFont::menuFontOfSize(0.0)));
+        label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        label.setTextColor(Some(&NSColor::labelColor()));
+        // Line one: the title. Line two: when it was made, written the way the system writes
+        // dates ("Today, 8:55 AM"), like Dropover's recent shelves.
+        let when = NSTextField::labelWithString(&capture_time(capture.created_at_ms), mtm);
+        when.setFont(Some(&NSFont::menuFontOfSize(11.0)));
+        when.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        when.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        let button_x = RECENT_ROW_W - RECENT_INSET - RECENT_BUTTON;
+        let copy = RecentCopyButton::new(
+            mtm,
+            NSRect::new(
+                NSPoint::new(button_x, (RECENT_ROW_H - RECENT_BUTTON) / 2.0),
+                NSSize::new(RECENT_BUTTON, RECENT_BUTTON),
+            ),
+        );
+
+        let this = mtm.alloc::<Self>().set_ivars(RecentRowIvars {
+            dir: capture.dir.clone(),
+            sender,
+            label: label.clone(),
+            when: when.clone(),
+            copy: copy.clone(),
+            highlighted: std::cell::Cell::new(false),
+        });
+        let frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(RECENT_ROW_W, RECENT_ROW_H),
+        );
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        unsafe { copy.setTarget(Some(&this)) };
+        // The menu stretches the row to its own width: the title takes the extra space, and the
+        // length, age and button stay at the right edge.
+        this.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+
+        let mut x = RECENT_INSET;
+        if let Some(thumbnail) = capture
+            .thumbnail_source
+            .as_deref()
+            .and_then(recent_thumbnail)
+        {
+            let view = NSImageView::imageViewWithImage(&thumbnail, mtm);
+            view.setFrame(NSRect::new(
+                NSPoint::new(x, (RECENT_ROW_H - RECENT_THUMB_H) / 2.0),
+                NSSize::new(RECENT_THUMB_W, RECENT_THUMB_H),
+            ));
+            this.addSubview(&view);
+        }
+        // The text lines up whether or not there's a thumbnail.
+        x += RECENT_THUMB_W + 10.0;
+        let label_h = 17.0;
+        let when_h = 14.0;
+        // AppKit's y runs up: the title line sits above the middle, the time line below it.
+        let title_y = RECENT_ROW_H / 2.0;
+        let when_y = title_y - when_h - 1.0;
+        let text_w = (button_x - 10.0 - x).max(40.0);
+        when.setFrame(NSRect::new(
+            NSPoint::new(x, when_y),
+            NSSize::new(text_w, when_h),
+        ));
+        label.setFrame(NSRect::new(
+            NSPoint::new(x, title_y),
+            NSSize::new(text_w, label_h),
+        ));
+        label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+        when.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
+        copy.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
+        this.addSubview(&label);
+        this.addSubview(&when);
+        this.addSubview(&copy);
+        this
+    }
+
+    /// Closes the status menu, as clicking an ordinary menu item does.
+    fn close_menu(&self) {
+        if let Some(menu) = self
+            .enclosingMenuItem()
+            .and_then(|item| unsafe { item.menu() })
+        {
+            menu.cancelTracking();
+        }
     }
 }
 
