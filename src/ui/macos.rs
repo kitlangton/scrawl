@@ -756,7 +756,6 @@ struct RecentRowIvars {
     dir: PathBuf,
     sender: flume::Sender<MenuAction>,
     label: Retained<NSTextField>,
-    details: Retained<NSTextField>,
     when: Retained<NSTextField>,
     copy: Retained<RecentCopyButton>,
     /// The highlight the subviews were last colored for, so drawing doesn't recolor every pass.
@@ -901,7 +900,6 @@ objc2::define_class!(
                     (NSColor::labelColor(), NSColor::secondaryLabelColor())
                 };
                 ivars.label.setTextColor(Some(&text));
-                ivars.details.setTextColor(Some(&secondary));
                 ivars.when.setTextColor(Some(&secondary));
                 ivars.copy.setContentTintColor(Some(&secondary));
                 ivars.copy.set_on_highlight(highlighted);
@@ -941,14 +939,8 @@ impl RecentCaptureRow {
         label.setFont(Some(&NSFont::menuFontOfSize(0.0)));
         label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
         label.setTextColor(Some(&NSColor::labelColor()));
-        // Line one: the title, then the length at the right. Line two: when it was made, written
-        // the way the system writes dates ("Today, 8:55 AM"), like Dropover's recent shelves.
-        let details = NSTextField::labelWithString(
-            &NSString::from_str(&crate::model::format_clock(capture.duration_ms)),
-            mtm,
-        );
-        details.setFont(Some(&NSFont::menuFontOfSize(0.0)));
-        details.setTextColor(Some(&NSColor::secondaryLabelColor()));
+        // Line one: the title. Line two: when it was made, written the way the system writes
+        // dates ("Today, 8:55 AM"), like Dropover's recent shelves.
         let when = NSTextField::labelWithString(&capture_time(capture.created_at_ms), mtm);
         when.setFont(Some(&NSFont::menuFontOfSize(11.0)));
         when.setTextColor(Some(&NSColor::secondaryLabelColor()));
@@ -966,7 +958,6 @@ impl RecentCaptureRow {
             dir: capture.dir.clone(),
             sender,
             label: label.clone(),
-            details: details.clone(),
             when: when.clone(),
             copy: copy.clone(),
             highlighted: std::cell::Cell::new(false),
@@ -1001,26 +992,19 @@ impl RecentCaptureRow {
         // AppKit's y runs up: the title line sits above the middle, the time line below it.
         let title_y = RECENT_ROW_H / 2.0;
         let when_y = title_y - when_h - 1.0;
-        let details_w = details.fittingSize().width.ceil();
-        let details_x = button_x - 8.0 - details_w;
-        details.setFrame(NSRect::new(
-            NSPoint::new(details_x, title_y),
-            NSSize::new(details_w, label_h),
-        ));
+        let text_w = (button_x - 10.0 - x).max(40.0);
         when.setFrame(NSRect::new(
             NSPoint::new(x, when_y),
-            NSSize::new((details_x - 8.0 - x).max(40.0), when_h),
+            NSSize::new(text_w, when_h),
         ));
         label.setFrame(NSRect::new(
             NSPoint::new(x, title_y),
-            NSSize::new((details_x - 8.0 - x).max(40.0), label_h),
+            NSSize::new(text_w, label_h),
         ));
         label.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
-        details.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
         when.setAutoresizingMask(NSAutoresizingMaskOptions::ViewWidthSizable);
         copy.setAutoresizingMask(NSAutoresizingMaskOptions::ViewMinXMargin);
         this.addSubview(&label);
-        this.addSubview(&details);
         this.addSubview(&when);
         this.addSubview(&copy);
         this
