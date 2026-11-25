@@ -11,11 +11,12 @@ use objc2::rc::Retained;
 use objc2::runtime::{AnyObject, NSObjectProtocol};
 use objc2::{AnyThread, DefinedClass, MainThreadOnly, msg_send, sel};
 use objc2_app_kit::{
-    NSApplication, NSCellImagePosition, NSColor, NSImage, NSMenu, NSMenuDelegate, NSMenuItem,
-    NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSWindow, NSWindowButton,
+    NSApplication, NSBezierPath, NSButton, NSCellImagePosition, NSColor, NSCompositingOperation,
+    NSEvent, NSFont, NSImage, NSImageView, NSLineBreakMode, NSMenu, NSMenuDelegate, NSMenuItem,
+    NSStatusBar, NSStatusItem, NSStatusWindowLevel, NSTextField, NSView, NSWindow, NSWindowButton,
     NSWindowCollectionBehavior, NSWindowStyleMask,
 };
-use objc2_foundation::{MainThreadMarker, NSData, NSObject, NSSize, NSString};
+use objc2_foundation::{MainThreadMarker, NSData, NSObject, NSPoint, NSRect, NSSize, NSString};
 use screencapturekit::prelude::*;
 use screencapturekit::screenshot_manager::{CGImageExt, SCScreenshotManager};
 
@@ -440,6 +441,14 @@ objc2::define_class!(
             let _ = self.ivars().sender.try_send(MenuAction::Quit);
         }
 
+        #[unsafe(method(showAllCaptures:))]
+        fn show_all_captures(&self, _sender: &AnyObject) {
+            let dir = crate::handoff::default_captures_dir();
+            if let Err(error) = crate::handoff::open_path(&dir) {
+                crate::capture::scrawl_log(format!("Show All Captures failed: {error:#}"));
+            }
+        }
+
         #[unsafe(method(openInboxItem:))]
         fn open_inbox_item(&self, sender: &NSMenuItem) {
             let path = sender
@@ -475,8 +484,6 @@ const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
 const RECORD_MENU_TAG: isize = 0x5c4d;
 /// Tag on the status menu's Recent Captures rows, so each open can replace them.
 const RECENT_MENU_TAG: isize = 0x5c4f;
-/// Height of a Recent Captures thumbnail, in points (a menu row is about 22).
-const RECENT_THUMB_H: f64 = 22.0;
 
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
 fn record_menu_title() -> String {
@@ -618,35 +625,263 @@ fn rebuild_recent_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
                 &NSString::new(),
             )
         };
+        // The item keeps its title and action for VoiceOver and the keyboard (↵ opens it); the
+        // row view draws it like CleanShot's: thumbnail, title, and a copy button.
         unsafe {
             item.setTarget(Some(target));
             item.setRepresentedObject(Some(&NSString::from_str(
                 &capture.dir.display().to_string(),
             )));
         }
-        let thumbnail = capture.contact_sheet.as_ref().and_then(|sheet| {
-            NSImage::initWithContentsOfFile(
-                NSImage::alloc(),
-                &NSString::from_str(&sheet.display().to_string()),
-            )
-        });
-        if let Some(image) = thumbnail {
-            // Keep the sheet's shape, between square and three rows wide.
-            let size = image.size();
-            let aspect = if size.height > 0.0 {
-                size.width / size.height
-            } else {
-                1.0
-            };
-            let width = (RECENT_THUMB_H * aspect).clamp(RECENT_THUMB_H, RECENT_THUMB_H * 3.0);
-            image.setSize(NSSize::new(width, RECENT_THUMB_H));
-            item.setImage(Some(&image));
-        }
+        let row = RecentCaptureRow::new(mtm, capture, now, target.ivars().sender.clone());
+        item.setView(Some(&row));
         rows.push(item);
     }
+    let show_all = unsafe {
+        NSMenuItem::initWithTitle_action_keyEquivalent(
+            NSMenuItem::alloc(mtm),
+            &NSString::from_str("Show All Captures in Finder"),
+            Some(sel!(showAllCaptures:)),
+            &NSString::new(),
+        )
+    };
+    unsafe { show_all.setTarget(Some(target)) };
+    rows.push(show_all);
+    prune_recent_thumbnails(&captures);
     for (offset, item) in rows.iter().enumerate() {
         item.setTag(RECENT_MENU_TAG);
         menu.insertItem_atIndex(item, anchor + 1 + offset as isize);
+    }
+}
+
+/// A Recent Captures row is this wide, so a long title doesn't widen the menu (CleanShot's rows
+/// are fixed the same way), and this tall, to fit the thumbnail.
+const RECENT_ROW_W: f64 = 320.0;
+const RECENT_ROW_H: f64 = 34.0;
+/// Every thumbnail is this size, cut from its source to fill it, so the rows line up.
+const RECENT_THUMB_W: f64 = 42.0;
+const RECENT_THUMB_H: f64 = 28.0;
+/// Where the row's content starts, matching a standard menu item's inset.
+const RECENT_INSET: f64 = 14.0;
+const RECENT_BUTTON: f64 = 24.0;
+
+thread_local! {
+    /// Thumbnails by source image, so reopening the menu doesn't decode the frames again.
+    static RECENT_THUMBNAILS: RefCell<std::collections::HashMap<PathBuf, Retained<NSImage>>> =
+        RefCell::new(std::collections::HashMap::new());
+}
+
+/// Drops thumbnails for captures no longer listed.
+fn prune_recent_thumbnails(captures: &[crate::recent::RecentCapture]) {
+    RECENT_THUMBNAILS.with(|cache| {
+        cache.borrow_mut().retain(|source, _| {
+            captures
+                .iter()
+                .any(|capture| capture.thumbnail_source.as_ref() == Some(source))
+        })
+    });
+}
+
+/// A `RECENT_THUMB_W` × `RECENT_THUMB_H` thumbnail with rounded corners, cut from the middle of
+/// `source` (the top, for a tall source, where a window's content starts) so it fills the space
+/// without stretching.
+fn recent_thumbnail(source: &std::path::Path) -> Option<Retained<NSImage>> {
+    if let Some(cached) = RECENT_THUMBNAILS.with(|cache| cache.borrow().get(source).cloned()) {
+        return Some(cached);
+    }
+    let image = NSImage::initWithContentsOfFile(
+        NSImage::alloc(),
+        &NSString::from_str(&source.display().to_string()),
+    )?;
+    let size = image.size();
+    if size.width <= 0.0 || size.height <= 0.0 {
+        return None;
+    }
+    let target = RECENT_THUMB_W / RECENT_THUMB_H;
+    // AppKit image coordinates start at the bottom left.
+    let crop = if size.width / size.height > target {
+        let width = size.height * target;
+        NSRect::new(
+            NSPoint::new((size.width - width) / 2.0, 0.0),
+            NSSize::new(width, size.height),
+        )
+    } else {
+        let height = size.width / target;
+        NSRect::new(
+            NSPoint::new(0.0, size.height - height),
+            NSSize::new(size.width, height),
+        )
+    };
+    let draw = block2::RcBlock::new(move |rect: NSRect| -> objc2::runtime::Bool {
+        NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 4.0, 4.0).addClip();
+        image.drawInRect_fromRect_operation_fraction(
+            rect,
+            crop,
+            NSCompositingOperation::SourceOver,
+            1.0,
+        );
+        objc2::runtime::Bool::YES
+    });
+    let thumbnail = NSImage::imageWithSize_flipped_drawingHandler(
+        NSSize::new(RECENT_THUMB_W, RECENT_THUMB_H),
+        false,
+        &draw,
+    );
+    RECENT_THUMBNAILS.with(|cache| {
+        cache
+            .borrow_mut()
+            .insert(source.to_path_buf(), thumbnail.clone())
+    });
+    Some(thumbnail)
+}
+
+struct RecentRowIvars {
+    dir: PathBuf,
+    sender: flume::Sender<MenuAction>,
+    label: Retained<NSTextField>,
+    copy: Retained<NSButton>,
+    /// The highlight the subviews were last colored for, so drawing doesn't recolor every pass.
+    highlighted: std::cell::Cell<bool>,
+}
+
+objc2::define_class!(
+    /// One Recent Captures row: thumbnail, `title · length · age`, and a button that copies the
+    /// capture for an agent. A click elsewhere on the row opens the capture in the review window.
+    #[unsafe(super = NSView)]
+    #[thread_kind = MainThreadOnly]
+    #[ivars = RecentRowIvars]
+    struct RecentCaptureRow;
+
+    unsafe impl NSObjectProtocol for RecentCaptureRow {}
+
+    impl RecentCaptureRow {
+        #[unsafe(method(drawRect:))]
+        fn draw_rect(&self, _dirty: NSRect) {
+            // A menu draws no highlight behind a view, so the row draws the standard one.
+            let highlighted = self
+                .enclosingMenuItem()
+                .is_some_and(|item| item.isHighlighted());
+            if highlighted {
+                let bounds = self.bounds();
+                let rect = NSRect::new(
+                    NSPoint::new(5.0, 0.0),
+                    NSSize::new(bounds.size.width - 10.0, bounds.size.height),
+                );
+                NSColor::selectedContentBackgroundColor().setFill();
+                NSBezierPath::bezierPathWithRoundedRect_xRadius_yRadius(rect, 5.0, 5.0).fill();
+            }
+            let ivars = self.ivars();
+            if ivars.highlighted.replace(highlighted) != highlighted {
+                let (text, icon) = if highlighted {
+                    (
+                        NSColor::selectedMenuItemTextColor(),
+                        NSColor::selectedMenuItemTextColor(),
+                    )
+                } else {
+                    (NSColor::labelColor(), NSColor::secondaryLabelColor())
+                };
+                ivars.label.setTextColor(Some(&text));
+                ivars.copy.setContentTintColor(Some(&icon));
+            }
+        }
+
+        #[unsafe(method(acceptsFirstMouse:))]
+        fn accepts_first_mouse(&self, _event: Option<&NSEvent>) -> bool {
+            true
+        }
+
+        #[unsafe(method(mouseUp:))]
+        fn mouse_up(&self, _event: &NSEvent) {
+            let ivars = self.ivars();
+            let _ = ivars.sender.try_send(MenuAction::OpenInbox(ivars.dir.clone()));
+            self.close_menu();
+        }
+
+        #[unsafe(method(copyForAgent:))]
+        fn copy_for_agent(&self, _sender: &AnyObject) {
+            if let Err(error) = crate::handoff::copy_bundle_to_clipboard(&self.ivars().dir) {
+                crate::capture::scrawl_log(format!("Recent Captures copy failed: {error:#}"));
+            }
+            self.close_menu();
+        }
+    }
+);
+
+impl RecentCaptureRow {
+    fn new(
+        mtm: MainThreadMarker,
+        capture: &crate::recent::RecentCapture,
+        now_ms: u64,
+        sender: flume::Sender<MenuAction>,
+    ) -> Retained<Self> {
+        let label = NSTextField::labelWithString(&NSString::from_str(&capture.label(now_ms)), mtm);
+        label.setFont(Some(&NSFont::menuFontOfSize(0.0)));
+        label.setLineBreakMode(NSLineBreakMode::ByTruncatingTail);
+        label.setTextColor(Some(&NSColor::labelColor()));
+        let symbol = NSImage::imageWithSystemSymbolName_accessibilityDescription(
+            &NSString::from_str("doc.on.clipboard"),
+            Some(&NSString::from_str("Copy for Agent")),
+        )
+        .unwrap_or_else(NSImage::new);
+        let copy = unsafe {
+            NSButton::buttonWithImage_target_action(&symbol, None, Some(sel!(copyForAgent:)), mtm)
+        };
+        copy.setBordered(false);
+        copy.setContentTintColor(Some(&NSColor::secondaryLabelColor()));
+        copy.setToolTip(Some(&NSString::from_str("Copy for Agent")));
+
+        let this = mtm.alloc::<Self>().set_ivars(RecentRowIvars {
+            dir: capture.dir.clone(),
+            sender,
+            label: label.clone(),
+            copy: copy.clone(),
+            highlighted: std::cell::Cell::new(false),
+        });
+        let frame = NSRect::new(
+            NSPoint::new(0.0, 0.0),
+            NSSize::new(RECENT_ROW_W, RECENT_ROW_H),
+        );
+        let this: Retained<Self> = unsafe { msg_send![super(this), initWithFrame: frame] };
+        unsafe { copy.setTarget(Some(&this)) };
+
+        let mut x = RECENT_INSET;
+        if let Some(thumbnail) = capture
+            .thumbnail_source
+            .as_deref()
+            .and_then(recent_thumbnail)
+        {
+            let view = NSImageView::imageViewWithImage(&thumbnail, mtm);
+            view.setFrame(NSRect::new(
+                NSPoint::new(x, (RECENT_ROW_H - RECENT_THUMB_H) / 2.0),
+                NSSize::new(RECENT_THUMB_W, RECENT_THUMB_H),
+            ));
+            this.addSubview(&view);
+        }
+        // The text lines up whether or not there's a thumbnail.
+        x += RECENT_THUMB_W + 10.0;
+        let button_x = RECENT_ROW_W - RECENT_INSET - RECENT_BUTTON;
+        let label_h = 17.0;
+        label.setFrame(NSRect::new(
+            NSPoint::new(x, (RECENT_ROW_H - label_h) / 2.0),
+            NSSize::new(button_x - 6.0 - x, label_h),
+        ));
+        copy.setFrame(NSRect::new(
+            NSPoint::new(button_x, (RECENT_ROW_H - RECENT_BUTTON) / 2.0),
+            NSSize::new(RECENT_BUTTON, RECENT_BUTTON),
+        ));
+        this.addSubview(&label);
+        this.addSubview(&copy);
+        this
+    }
+
+    /// Closes the status menu, as clicking an ordinary menu item does.
+    fn close_menu(&self) {
+        if let Some(menu) = self
+            .enclosingMenuItem()
+            .and_then(|item| unsafe { item.menu() })
+        {
+            menu.cancelTracking();
+        }
     }
 }
 

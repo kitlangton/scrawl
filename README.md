@@ -212,8 +212,10 @@ Preview every pane, dark and light, with the recorder listening and a combinatio
 - **Choose What to Record…** in the menu bar: the picker (Area, Window, Screen, iPhone) opens on
   the display under the pointer. Click a mode, click a window or drag an area; `Esc` cancels.
 - **Recent Captures** in the menu bar (experiment `recentCaptures`, off by default): the five
-  newest captures, each with its contact sheet, its note or first words, its length and how long
-  ago it was made. Click one to open it in the review window.
+  newest captures, each with a thumbnail of the keyframe you marked, its note or first words, its
+  length and how long ago it was made. Click one to open it in the review window, or its clipboard
+  button to copy its summary for an agent (the text, with the bundle's path, so the agent can open
+  the images). **Show All Captures in Finder** opens the captures folder.
 - `⌥⇧V`: Paste both `contact-sheet.png` and `summary.md` into the active app or terminal (`⌃⌥⇧V` also works while it's the default)
 - **Normal pointer**: Clicks and scrolls pass straight through to the app underneath
 - **Hold `⇧` (Shift) + move**: Draw a persistent red marker stroke (`#ff3b30`) on screen that fades out after release

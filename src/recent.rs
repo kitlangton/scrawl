@@ -20,6 +20,9 @@ pub struct RecentCapture {
     /// The note, else the first words said, else the app and window recorded.
     pub title: String,
     pub contact_sheet: Option<PathBuf>,
+    /// The picture the row's thumbnail is cut from: the keyframe the first mark was drawn on (it
+    /// carries the ink), else the first keyframe, else the contact sheet.
+    pub thumbnail_source: Option<PathBuf>,
 }
 
 impl RecentCapture {
@@ -104,12 +107,24 @@ fn read_capture(dir: &Path) -> Option<RecentCapture> {
             .and_then(|value| value.as_str())
             .unwrap_or("contact-sheet.png"),
     );
+    let contact_sheet = sheet.is_file().then_some(sheet);
+    let marked = json
+        .get("marks")
+        .and_then(|marks| marks.as_array())
+        .into_iter()
+        .flatten()
+        .filter_map(|mark| mark.get("frame")?.as_str())
+        .map(|frame| dir.join(frame))
+        .find(|frame| frame.is_file());
+    let first = Some(dir.join("frames").join("frame-01.png")).filter(|frame| frame.is_file());
+    let thumbnail_source = marked.or(first).or_else(|| contact_sheet.clone());
     Some(RecentCapture {
         dir: dir.to_path_buf(),
         created_at_ms,
         duration_ms,
         title,
-        contact_sheet: sheet.is_file().then_some(sheet),
+        contact_sheet,
+        thumbnail_source,
     })
 }
 
@@ -245,6 +260,41 @@ mod tests {
             .map(|c| c.title)
             .collect();
         assert_eq!(titles, ["Mac"]);
+    }
+
+    #[test]
+    fn thumbnail_prefers_the_marked_keyframe_then_the_first_then_the_sheet() {
+        let f = Fixture::new();
+        let frame = |dir: &PathBuf, name: &str| {
+            std::fs::create_dir_all(dir.join("frames")).unwrap();
+            std::fs::write(dir.join("frames").join(name), b"png").unwrap();
+        };
+        let marked = f.bundle(
+            "marked",
+            r#"{"createdAtMs": 3, "marks": [{"id": "m1"}, {"id": "m2", "frame": "frames/frame-02.png"}]}"#,
+            true,
+        );
+        frame(&marked, "frame-01.png");
+        frame(&marked, "frame-02.png");
+        let first = f.bundle(
+            "first",
+            r#"{"createdAtMs": 2, "marks": [{"frame": "frames/gone.png"}]}"#,
+            true,
+        );
+        frame(&first, "frame-01.png");
+        let sheet = f.bundle("sheet", r#"{"createdAtMs": 1}"#, true);
+        let sources: Vec<Option<PathBuf>> = recent_captures(&f.root, 5, &[])
+            .into_iter()
+            .map(|c| c.thumbnail_source)
+            .collect();
+        assert_eq!(
+            sources,
+            [
+                Some(marked.join("frames/frame-02.png")),
+                Some(first.join("frames/frame-01.png")),
+                Some(sheet.join("contact-sheet.png")),
+            ]
+        );
     }
 
     #[test]

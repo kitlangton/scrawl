@@ -281,7 +281,7 @@
       "id": "menu-recent-captures",
       "group": "finish",
       "name": "Recent captures in the menu",
-      "says": "The menu bar lists the five newest captures with their contact sheets; clicking one opens it in the review window.",
+      "says": "The menu bar lists the five newest captures with thumbnails; clicking one opens it in the review window, and its clipboard button copies its summary for an agent.",
       "status": "experiment:recentCaptures",
       "platforms": ["mac"],
       "added": "2026-11-25",
