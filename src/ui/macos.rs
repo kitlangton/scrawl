@@ -456,6 +456,7 @@ objc2::define_class!(
         #[unsafe(method(menuNeedsUpdate:))]
         fn menu_needs_update(&self, menu: &NSMenu) {
             rebuild_inbox_menu_items(menu, self);
+            rebuild_recent_menu_items(menu, self);
             if let Some(item) = menu.itemWithTag(RECORD_MENU_TAG) {
                 item.setTitle(&NSString::from_str(&record_menu_title()));
             }
@@ -472,6 +473,10 @@ const INBOX_MENU_TAG: isize = 0x5c4a;
 const EXPORT_VIDEO_MENU_TAG: isize = 0x5c4e;
 /// Tag on **Record Screen**, whose title carries the record shortcut.
 const RECORD_MENU_TAG: isize = 0x5c4d;
+/// Tag on the status menu's Recent Captures rows, so each open can replace them.
+const RECENT_MENU_TAG: isize = 0x5c4f;
+/// Height of a Recent Captures thumbnail, in points (a menu row is about 22).
+const RECENT_THUMB_H: f64 = 22.0;
 
 /// "Record Screen" with the record shortcut as it is now (Settings can change it).
 fn record_menu_title() -> String {
@@ -543,6 +548,105 @@ fn rebuild_inbox_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
     for (index, item) in rows.iter().enumerate() {
         item.setTag(INBOX_MENU_TAG);
         menu.insertItem_atIndex(item, index as isize);
+    }
+}
+
+/// Lists the newest captures below **Open Latest Capture**, each with its contact sheet, read fresh
+/// from disk so the titles and ages are current. Clicking one opens it in the review window, the
+/// same path as an iPhone row. Captures already listed under From iPhone are left out.
+fn rebuild_recent_menu_items(menu: &NSMenu, target: &ScrawlMenuTarget) {
+    let Some(mtm) = MainThreadMarker::new() else {
+        return;
+    };
+    for index in (0..menu.numberOfItems()).rev() {
+        if menu
+            .itemAtIndex(index)
+            .is_some_and(|item| item.tag() == RECENT_MENU_TAG)
+        {
+            menu.removeItemAtIndex(index);
+        }
+    }
+    // Behind the `recentCaptures` experiment until Kit turns it on for everyone (AGENTS.md).
+    if !crate::handoff::experiment("recentCaptures") {
+        return;
+    }
+    let inbox = crate::inbox::Inbox::load_default();
+    let skip: Vec<PathBuf> = inbox
+        .entries()
+        .iter()
+        .map(|entry| entry.dir.clone())
+        .collect();
+    let captures = crate::recent::recent_captures(
+        &crate::handoff::default_captures_dir(),
+        crate::recent::MENU_LIMIT,
+        &skip,
+    );
+    if captures.is_empty() {
+        return;
+    }
+    // Below Export Last Capture as Video… (present even while hidden), in its own section.
+    let anchor = menu.indexOfItemWithTag(EXPORT_VIDEO_MENU_TAG);
+    if anchor < 0 {
+        return;
+    }
+    let now = crate::now_epoch_ms();
+    let mut rows = vec![NSMenuItem::separatorItem(mtm)];
+    let has_section_header: bool = unsafe {
+        msg_send![objc2::class!(NSMenuItem), respondsToSelector: sel!(sectionHeaderWithTitle:)]
+    };
+    let title = NSString::from_str("Recent Captures");
+    rows.push(if has_section_header {
+        NSMenuItem::sectionHeaderWithTitle(&title, mtm)
+    } else {
+        let header = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &title,
+                None,
+                &NSString::new(),
+            )
+        };
+        header.setEnabled(false);
+        header
+    });
+    for capture in &captures {
+        let item = unsafe {
+            NSMenuItem::initWithTitle_action_keyEquivalent(
+                NSMenuItem::alloc(mtm),
+                &NSString::from_str(&capture.label(now)),
+                Some(sel!(openInboxItem:)),
+                &NSString::new(),
+            )
+        };
+        unsafe {
+            item.setTarget(Some(target));
+            item.setRepresentedObject(Some(&NSString::from_str(
+                &capture.dir.display().to_string(),
+            )));
+        }
+        let thumbnail = capture.contact_sheet.as_ref().and_then(|sheet| {
+            NSImage::initWithContentsOfFile(
+                NSImage::alloc(),
+                &NSString::from_str(&sheet.display().to_string()),
+            )
+        });
+        if let Some(image) = thumbnail {
+            // Keep the sheet's shape, between square and three rows wide.
+            let size = image.size();
+            let aspect = if size.height > 0.0 {
+                size.width / size.height
+            } else {
+                1.0
+            };
+            let width = (RECENT_THUMB_H * aspect).clamp(RECENT_THUMB_H, RECENT_THUMB_H * 3.0);
+            image.setSize(NSSize::new(width, RECENT_THUMB_H));
+            item.setImage(Some(&image));
+        }
+        rows.push(item);
+    }
+    for (offset, item) in rows.iter().enumerate() {
+        item.setTag(RECENT_MENU_TAG);
+        menu.insertItem_atIndex(item, anchor + 1 + offset as isize);
     }
 }
 

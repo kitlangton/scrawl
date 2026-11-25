@@ -64,7 +64,7 @@ pub fn relative_age(age_ms: u64) -> String {
     }
 }
 
-fn same_dir(a: &Path, b: &Path) -> bool {
+pub(crate) fn same_dir(a: &Path, b: &Path) -> bool {
     a == b
         || matches!(
             (a.canonicalize(), b.canonicalize()),
