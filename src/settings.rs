@@ -624,6 +624,7 @@ pub struct View {
     pub shortcuts: Vec<ShortcutView>,
     pub microphone: MicrophoneView,
     pub transcriber: TranscriberView,
+    pub what_to_record: String,
     pub lower_playback: bool,
     pub playback_level: u8,
     pub video_export: bool,
@@ -1193,6 +1194,11 @@ impl Panel {
                     return Effect::OpenLoginItems;
                 }
             }
+            ("whatToRecord", serde_json::Value::String(mode))
+                if matches!(mode.as_str(), "screen" | "window" | "area" | "recent-area") =>
+            {
+                write(key, value.clone());
+            }
             ("autoSend" | "videoExport" | "lowerPlayback", serde_json::Value::Bool(on)) => {
                 write(key, (*on).into())
             }
@@ -1348,6 +1354,7 @@ impl Panel {
                 self.inputs.as_ref(),
                 self.status(Permission::Microphone) == Status::Granted,
             ),
+            what_to_record: config.what_to_record.clone().filter(|m| matches!(m.as_str(), "screen" | "window" | "area" | "recent-area")).unwrap_or_else(|| "screen".into()),
             lower_playback: config.lower_playback.unwrap_or(false),
             playback_level: config.recording_volume(),
             transcriber: TranscriberView {
@@ -2302,6 +2309,13 @@ mod tests {
                 host,
             )
         };
+        assert_eq!(panel.view(&host).what_to_record, "screen");
+        for mode in ["window", "area", "recent-area", "screen", "recent-area"] {
+            set(&mut panel, &mut host, "whatToRecord", mode.into());
+            assert_eq!(Panel::default().view(&host).what_to_record, mode);
+        }
+        set(&mut panel, &mut host, "whatToRecord", "invalid".into());
+        assert_eq!(Panel::default().view(&host).what_to_record, "recent-area");
         assert!(panel.view(&host).auto_send);
         assert!(!panel.view(&host).lower_playback);
         assert_eq!(panel.view(&host).playback_level, 20);
