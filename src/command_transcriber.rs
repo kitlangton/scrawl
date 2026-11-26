@@ -44,11 +44,13 @@ const MAX_TIMEOUT_SECONDS: f64 = 7.0 * 24.0 * 3_600.0;
 const LEFTOVER_GRACE: Duration = Duration::from_secs(1);
 const POLL: Duration = Duration::from_millis(10);
 
-/// The configured program: `transcribeCommand` and `transcribeTimeoutSeconds`.
+/// The configured program: `transcribeCommand`, `transcribeTimeoutSeconds` and the optional
+/// `transcribeCommandDisplayName`.
 #[derive(Clone, PartialEq, Eq)]
 pub struct Program {
     argv: Vec<String>,
     timeout: Option<Duration>,
+    display_name: Option<String>,
 }
 
 impl std::fmt::Debug for Program {
@@ -124,6 +126,13 @@ impl std::fmt::Display for Failure {
 
 impl std::error::Error for Failure {}
 
+/// `transcribeCommandDisplayName`, trimmed. It only labels the menu, so anything but a non-blank string
+/// counts as unset instead of making the command unusable.
+fn display_name(value: Option<&Value>) -> Option<String> {
+    let name = value?.as_str()?.trim();
+    (!name.is_empty()).then(|| name.to_owned())
+}
+
 impl Program {
     /// `argv[0]` must be an absolute path; `timeout` replaces the default limit.
     fn new(argv: Vec<String>, timeout: Option<Duration>) -> Result<Self, Unusable> {
@@ -134,7 +143,11 @@ impl Program {
         if !Path::new(program).is_absolute() {
             return Err(Unusable::NotAbsolute);
         }
-        Ok(Self { argv, timeout })
+        Ok(Self {
+            argv,
+            timeout,
+            display_name: None,
+        })
     }
 
     /// Reads only the command keys of the config file at `path`, so a malformed one never
@@ -162,7 +175,17 @@ impl Program {
                 _ => return Err(Unusable::BadTimeout),
             },
         };
-        Self::new(argv, timeout)
+        let mut program = Self::new(argv, timeout)?;
+        program.display_name = display_name(config.get("transcribeCommandDisplayName"));
+        Ok(program)
+    }
+
+    /// What a settings menu calls this engine: `transcribeCommandDisplayName`, else
+    /// "Command (<file name>)".
+    pub fn title(&self) -> String {
+        self.display_name
+            .clone()
+            .unwrap_or_else(|| format!("Command ({})", self.name()))
     }
 
     /// The file name of `argv[0]`, as in `source: "command:<name>"`.
@@ -728,6 +751,34 @@ mod tests {
                 "{timeout}"
             );
         }
+    }
+
+    #[test]
+    fn the_display_name_is_a_trimmed_label_and_never_makes_the_command_unusable() {
+        let dir = Dir::new();
+        let named = |name: &str| {
+            config(
+                &dir,
+                &format!(
+                    r#"{{"transcribeCommand":["/opt/stt/whisper-scrawl"],"transcribeCommandDisplayName":{name}}}"#
+                ),
+            )
+            .unwrap()
+        };
+        let shown = named(r#""Whisper Large V3""#);
+        assert_eq!(shown.title(), "Whisper Large V3");
+        assert_eq!(shown.name(), "whisper-scrawl");
+        assert_eq!(named(r#""  Parakeet\t""#).title(), "Parakeet");
+        for unset in [r#""""#, r#""   ""#, "null", "7", "[]", r#"["Parakeet"]"#] {
+            assert_eq!(named(unset).title(), "Command (whisper-scrawl)", "{unset}");
+        }
+        let plain = config(&dir, r#"{"transcribeCommand":["/opt/stt/whisper-scrawl"]}"#).unwrap();
+        assert_eq!(plain.title(), "Command (whisper-scrawl)");
+        // A label without a command is still no command.
+        assert_eq!(
+            config(&dir, r#"{"transcribeCommandDisplayName":"Parakeet"}"#),
+            Err(Unusable::Missing)
+        );
     }
 
     #[test]
