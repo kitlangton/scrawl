@@ -9,6 +9,8 @@
 //! transcripts come from SFSpeechRecognizer, Speech Recognition is an optional fourth row, so
 //! its prompt comes up here rather than after the first capture. Until the required ones
 //! are on, ⌥⇧S starts nothing: it brings this window forward once the keys are up (`Gate`).
+//! Microphone and Camera are only known once the launch's permission read lands, so a capture
+//! asked for before then waits for it (`LaunchRead`).
 //!
 //! A Screen Recording grant may only reach a running copy of Scrawl after it relaunches, and
 //! macOS offers "Quit & Reopen" the moment it's granted. Whatever the user picks there, nobody
@@ -675,6 +677,91 @@ impl Gate {
     }
 }
 
+/// The longest a capture asked for at launch waits for the launch's permission read. The read
+/// usually lands well inside a second, but the helper is allowed 5 s and a ScreenCaptureKit
+/// probe can follow it.
+pub const LAUNCH_READ_MS: u64 = 3_000;
+
+/// Holds a capture asked for while the launch's permission read is still out: `app --record`,
+/// a `scrawl://` link that launched Scrawl, or the shortcut in the first second. Until the read
+/// lands Microphone and Camera aren't known and pass as granted (`missing_to_record`), so a
+/// capture started then would skip their check. It starts once the read has landed or failed,
+/// or after `LAUNCH_READ_MS`, whichever comes first, so it never waits for good.
+#[derive(Debug)]
+pub struct LaunchRead<A> {
+    waiting: bool,
+    held: Option<A>,
+}
+
+impl<A> Default for LaunchRead<A> {
+    /// No read is out, so nothing waits (the lab, `SCRAWL_NO_ONBOARDING`).
+    fn default() -> Self {
+        Self {
+            waiting: false,
+            held: None,
+        }
+    }
+}
+
+impl<A> LaunchRead<A> {
+    /// The launch's read went out.
+    pub fn begin(&mut self) {
+        self.waiting = true;
+    }
+
+    pub fn is_waiting(&self) -> bool {
+        self.waiting
+    }
+
+    /// Whether `start` has to wait for the read. If so it's kept, and `finish` or `tick` hands
+    /// it back. Only the first one asked for is kept: a second would start on top of it.
+    pub fn hold(&mut self, start: A) -> bool {
+        if !self.waiting {
+            return false;
+        }
+        self.held.get_or_insert(start);
+        true
+    }
+
+    /// The read landed or failed: what waited for it, to run now.
+    pub fn finish(&mut self) -> Option<A> {
+        self.waiting = false;
+        self.held.take()
+    }
+
+    /// Polled while waiting, with how long the read has been out: past `LAUNCH_READ_MS` what
+    /// waited runs without it, as it did before there was anything to wait for.
+    pub fn tick(&mut self, waited_ms: u64) -> Option<A> {
+        if self.waiting && waited_ms >= LAUNCH_READ_MS {
+            self.finish()
+        } else {
+            None
+        }
+    }
+}
+
+/// Numbers each opening of the welcome window. Its events carry the number, so one from a
+/// window that has since been replaced (its helper exits as the next window opens) isn't taken
+/// for the new window's.
+#[derive(Debug, Default)]
+pub struct Openings {
+    latest: u64,
+}
+
+impl Openings {
+    /// A window is opening: the number its events carry.
+    pub fn next(&mut self) -> u64 {
+        self.latest += 1;
+        self.latest
+    }
+
+    /// Whether an event is for the window open now. The launch read (`None`) comes from no
+    /// window and always counts.
+    pub fn current(&self, from: Option<u64>) -> bool {
+        from.is_none_or(|id| id == self.latest)
+    }
+}
+
 /// Onboarding progress, under `"onboarding"` in `~/.config/scrawl/config.json`.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -784,10 +871,17 @@ pub fn launch_plan(progress: &Progress, grants: &Grants) -> Option<Flow> {
 pub enum Event {
     /// Grants read at launch, to decide whether onboarding opens (`launch_plan`).
     Launch(Grants),
+    /// The launch's read failed; whatever waited for it goes on without it (`LaunchRead`).
+    LaunchFailed,
     Grants(Grants),
     /// A button: `continue`, `back`, `later`, `close`, `settings` or `grant:<permission>`.
     Action(String),
     Exited,
+}
+
+/// What the launch's read reports, landed or not, so a capture waiting for it always hears back.
+pub fn launch_event(grants: Option<Grants>) -> Event {
+    grants.map_or(Event::LaunchFailed, Event::Launch)
 }
 
 /// Reads what's granted now from a fresh helper, plus whether this process can use a Screen
@@ -1651,6 +1745,77 @@ mod tests {
         assert_eq!(tour.step(), Step::Permissions);
         // Unknown grants (the launch read failed): only what's read here blocks.
         assert!(missing_to_record(None, true, true).is_empty());
+    }
+
+    #[test]
+    fn a_capture_asked_for_before_the_launch_read_waits_for_it() {
+        // Why it waits: with Microphone denied, only a landed read says so.
+        let denied = grants(&[ScreenRecording, Accessibility]);
+        assert!(missing_to_record(None, true, true).is_empty());
+        assert_eq!(missing_to_record(Some(&denied), true, true), [Microphone]);
+
+        let mut launch = LaunchRead::default();
+        // No read out (the lab, SCRAWL_NO_ONBOARDING): nothing waits.
+        assert!(!launch.hold("record"));
+        launch.begin();
+        assert!(launch.is_waiting());
+        assert!(launch.hold("record"), "held while the read is out");
+        // A second ask while the first waits doesn't replace or follow it.
+        assert!(launch.hold("iphone"));
+        assert_eq!(launch.tick(LAUNCH_READ_MS - 1), None);
+        // The read lands: what waited runs, once.
+        assert!(matches!(launch_event(Some(denied)), Event::Launch(_)));
+        assert_eq!(launch.finish(), Some("record"));
+        assert_eq!(launch.finish(), None);
+        assert_eq!(launch.tick(LAUNCH_READ_MS), None);
+        // After the read, a capture goes straight on.
+        assert!(!launch.is_waiting());
+        assert!(!launch.hold("record"));
+    }
+
+    #[test]
+    fn a_failed_or_slow_launch_read_never_keeps_a_capture_waiting() {
+        // The read fails: the coordinator still hears back, and what waited runs.
+        assert!(matches!(launch_event(None), Event::LaunchFailed));
+        let mut launch = LaunchRead::default();
+        launch.begin();
+        assert!(launch.hold("record"));
+        assert_eq!(launch.finish(), Some("record"));
+        assert!(!launch.hold("record"));
+
+        // The read never comes back: what waited runs at the deadline, once.
+        let mut launch = LaunchRead::default();
+        launch.begin();
+        assert!(launch.hold("shortcut"));
+        assert_eq!(launch.tick(LAUNCH_READ_MS - 1), None);
+        assert_eq!(launch.tick(LAUNCH_READ_MS), Some("shortcut"));
+        assert_eq!(launch.tick(LAUNCH_READ_MS + 8), None);
+        assert!(!launch.hold("shortcut"));
+        // A read that lands after all finds nothing left to run.
+        assert_eq!(launch.finish(), None);
+
+        // Nothing asked for by the deadline: later captures don't wait either.
+        let mut launch = LaunchRead::<&str>::default();
+        launch.begin();
+        assert_eq!(launch.tick(LAUNCH_READ_MS), None);
+        assert!(!launch.is_waiting());
+        assert!(!launch.hold("record"));
+    }
+
+    #[test]
+    fn an_exit_from_a_replaced_window_is_not_the_new_windows() {
+        let mut openings = Openings::default();
+        let first = openings.next();
+        assert!(openings.current(Some(first)));
+        // ⌥⇧S with a permission off again: the fix opens anew, and the old helper exits.
+        let second = openings.next();
+        assert!(
+            !openings.current(Some(first)),
+            "the old window's exit must not close the new one"
+        );
+        assert!(openings.current(Some(second)));
+        // The launch read belongs to no window.
+        assert!(openings.current(None));
     }
 
     #[test]

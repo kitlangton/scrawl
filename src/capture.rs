@@ -128,8 +128,9 @@ pub enum LiveOverlayEvent {
     RequestSnapshot,
     /// The iPhone mirror ended on its own (unplugged, never found, or access denied).
     PhoneEnded,
-    /// The welcome window: a button, fresh permission states, or the helper exiting.
-    Onboarding(crate::onboarding::Event),
+    /// The welcome window: a button, fresh permission states, or the helper exiting, with the
+    /// number of the window that sent it (`onboarding::Openings`; `None` for the launch read).
+    Onboarding(Option<u64>, crate::onboarding::Event),
     /// The Settings window: an action, fresh permission states, or the helper exiting.
     Settings(crate::settings::Event),
     /// A ScrawlKit recording was ingested from an iPhone and compiled into a `.scrawl` bundle.
