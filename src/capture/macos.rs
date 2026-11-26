@@ -1744,7 +1744,6 @@ pub fn post_synthetic_click(screen_x: f64, screen_y: f64) {
 fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
     let mut prev_shift_ink = false;
     let mut await_shift_release = false;
-    let mut prev_mod_mask = 0_u8;
     let mut prev_buttons = [false; 2];
     let mut last_tap_check: Option<Instant> = None;
     loop {
@@ -1764,14 +1763,6 @@ fn run_global_hid_poller(telemetry: Arc<SharedCaptureTelemetry>) {
             await_shift_release = false;
         } else if cmd || ctrl || alt {
             await_shift_release = true;
-        }
-        let mod_mask =
-            (u8::from(cmd) << 3) | (u8::from(ctrl) << 2) | (u8::from(alt) << 1) | u8::from(shift);
-        if mod_mask != prev_mod_mask {
-            scrawl_log(format!(
-                "hid_poller: cmd={cmd} ctrl={ctrl} alt={alt} shift={shift}"
-            ));
-            prev_mod_mask = mod_mask;
         }
 
         let buttons = unsafe {
