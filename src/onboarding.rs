@@ -232,6 +232,8 @@ pub enum Effect {
     Close,
     /// Close the tour and open the Settings window.
     Settings,
+    /// Open the Settings window (⌘,) and leave the tour or fix where it is.
+    ShowSettings,
     /// Screen Recording works: list the screen's content once now, so macOS's "bypass the
     /// system private window picker" question comes up here, explained, rather than over the
     /// first recording.
@@ -377,7 +379,7 @@ impl Flow {
             }
             Input::Later | Input::Closed => Effect::Close,
             Input::Settings if self.step == Step::Done => Effect::Settings,
-            Input::Settings => Effect::None,
+            Input::Settings => Effect::ShowSettings,
             Input::Skip | Input::Watched | Input::Practiced
                 if self.step != Step::HowItWorks || self.mode == Mode::Fix =>
             {
@@ -1674,6 +1676,13 @@ mod tests {
         assert_eq!(flow.on(Input::Later), Effect::Close);
         // A fix never steps back into the tour.
         assert_eq!(flow.on(Input::Back), Effect::None);
+        assert_eq!(flow.step(), Step::Permissions);
+    }
+
+    #[test]
+    fn command_comma_mid_tour_opens_settings_and_keeps_the_step() {
+        let mut flow = Flow::tour(Step::Permissions, None);
+        assert_eq!(flow.on(Input::Settings), Effect::ShowSettings);
         assert_eq!(flow.step(), Step::Permissions);
     }
 

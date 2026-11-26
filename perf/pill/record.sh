@@ -2,7 +2,7 @@
 # Plays `scrawl lab pill` scenes with one binary and records each: a motion-lint trace of every
 # capsule frame and a 60 fps screen recording of the capsule's region, then runs motion-lint.
 #
-#   perf/pill/record.sh <scrawl-binary> <out-dir> [--time-scale 0.25] [scene ...]
+#   perf/pill/record.sh <scrawl-binary> <out-dir> [--time-scale 0.25] [--rune] [scene ...]
 #
 # Writes <out-dir>/runs/<scene>/trace/<scene>.jsonl (one motion-lint test per scene),
 # <out-dir>/<scene>.mov and motion-lint's candidates.json.
@@ -14,10 +14,14 @@ bin=$1
 out=$2
 shift 2
 scale_args=()
-if [[ ${1:-} == --time-scale ]]; then
-  scale_args=(--time-scale "$2")
-  shift 2
-fi
+while [[ ${1:-} == --* ]]; do
+  case $1 in
+    --time-scale) scale_args+=(--time-scale "$2"); shift 2 ;;
+    # The Rune capsule (`scrawl lab pill --rune`), left in captures so the recorder sees it.
+    --rune) scale_args+=(--rune); export SCRAWL_LAB_EXCLUDE=none; shift ;;
+    *) echo "unknown option $1" >&2; exit 2 ;;
+  esac
+done
 scenes=("$@")
 if [[ ${#scenes[@]} -eq 0 ]]; then
   scenes=(tap-then-area tap-then-window tap-then-screen picker finish cancel dismiss)
