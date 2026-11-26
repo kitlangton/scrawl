@@ -10,6 +10,12 @@ Smart routing is an experiment, on with `"experiments": {"smartRouting": true}` 
    - A send shows "Sending to DESKTOP…" for `SMART_SEND_UNDO` (3 s), with the runner-up as a "Send to OPENCODE IOS" chip beside Paste. ✕ or Paste cancels the send; the chip sends there instead, at once. Then the destination is written to `scrawl.json` and `summary.md` and sent through `send_completed` (and so `delivery::deliver`, with its retries).
    - An offer asks: the Completed island keeps "Copied" and adds "Send to DESKTOP" and the runner-up ("OPENCODE IOS") beside Paste, which stays the default. Nothing is sent until a chip is clicked; a click is the user's choice (`via: "chosen"`). The review window's status names the suggestions too.
 
+## Site rules
+
+Some sites always belong to one project, whatever their tab title says (Problems titles its tabs "<project> · Problems"). `"routing": {"sites": {"<URL prefix>": "<folder or session ID>"}}` in config.json says so: `{"https://problems.kitlangton.com": "~/code/worktrees/team-board"}`. A prefix covers its host and any path below it, query and fragment aside; without a scheme it covers `http` and `https`, and without a port any port. The longest prefix wins. `routing::site_rule` matches it, and `look::url_clues` turns it into a `Rule` clue: a session ID as it is, a folder as the folder (its repository when it's in one) with every folder below counting.
+
+`smart::decide` obeys the rule after an address and before weighing: the session it names, or the newest open session in the folder (else anywhere in its repository, worktrees included) is sent to with no undo-window runner-up, recorded `via: "rule"`. A folder no open session works in leaves the capture to weighing. With smart routing off, `routing::route_with_sites` sends to the newest open session under the folder (or its repository's root) ahead of the ladder; it doesn't look in sibling worktrees.
+
 ## Pages from a file server
 
 A server can serve files that aren't its project's: GPU Gallery (`gpu-gallery/server/serve.ts`, behind `:8444`) serves `/raw/<path>` and `/<path>` from `~/code/home/artifacts`, where any session publishes. Its working directory says nothing about who made such a page, so `look::look_at_page` (after the sessions are read) finds the page's file with `served::locate`:
