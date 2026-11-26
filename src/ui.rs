@@ -76,8 +76,12 @@ const PILL_WINDOW_H: f32 = 84.0;
 
 mod lab;
 pub(crate) mod motion;
+#[cfg(target_os = "macos")]
+pub(crate) mod rune_pill;
 
 pub use lab::{Options as LabOptions, Scene as LabScene, run as run_lab};
+#[cfg(target_os = "macos")]
+pub use rune_pill::{Options as RuneLabOptions, run as run_rune_lab};
 pub(crate) use motion::{TuneAction, tune_command};
 
 #[derive(Clone, Copy, Debug, PartialEq)]
