@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Installs the current `main` as ~/Applications/Scrawl.app on another Mac over SSH (default: pro).
+# Installs the current `main` as /Applications/Scrawl.app on another Mac over SSH (default: pro).
 #
 # Two macOS rules shape this. Signing needs the login keychain, which only processes in the GUI
 # session can use, so the build and signing run as a one-off launchd job there. App Management
@@ -52,7 +52,7 @@ if ! grep -q "STAGE-EXIT=0" "${LOG}" 2>/dev/null; then
   exit 1
 fi
 
-APP="${HOME}/Applications/Scrawl.app"
+APP="/Applications/Scrawl.app"
 mkdir -p "${APP}"
 /usr/bin/ditto "${STAGE}" "${APP}"
 codesign --verify --deep --strict "${APP}"
@@ -70,6 +70,7 @@ if [[ "${status}" != 1 ]]; then
   echo "the old Scrawl is still running (pgrep exit ${status}); quit it and run this again" >&2
   exit 1
 fi
+rm -rf "${HOME}/Applications/Scrawl.app"
 open -a "${APP}"
 sleep 2
 pgrep -fl "Scrawl.app/Contents/MacOS/scrawl"

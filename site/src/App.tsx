@@ -14,8 +14,8 @@ const REPO = "https://github.com/kitlangton/scrawl"
 const ZIP = `https://scrawl.kitlangton.com${MAC_ZIP}`
 
 const INSTALL = `curl -LO ${ZIP}
-unzip Scrawl-latest-arm64.zip -d ~/Applications
-open ~/Applications/Scrawl.app`
+unzip Scrawl-latest-arm64.zip -d /Applications
+open /Applications/Scrawl.app`
 
 const CONTROLS: [string[], string][] = [
   [["⌥", "⇧", "S"], "Start or finish"],
